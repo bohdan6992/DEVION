@@ -1,5 +1,14 @@
 import Parser from "rss-parser";
-import type { NewsItem } from "@/types/news";
+
+export type NewsItem = {
+  id: string;
+  title: string;
+  link?: string;
+  pubDate: string;        // ISO або будь-який валідний date string
+  isoDate?: string;
+  source: string;
+  categories: string[];
+};
 
 const parser = new Parser();
 
@@ -30,7 +39,7 @@ export function isImportant(title: string): boolean {
 export function normalizeItem(i: any, source: string): NewsItem {
   return {
     id: i.guid || i.link || i.isoDate || i.pubDate || `${source}-${i.title}`,
-    title: i.title?.trim() ?? "",
+    title: i.title?.trim?.() ?? "",
     link: i.link,
     pubDate: i.pubDate || i.isoDate || new Date().toISOString(),
     isoDate: i.isoDate,
@@ -42,18 +51,22 @@ export function normalizeItem(i: any, source: string): NewsItem {
 export function dedupe(items: NewsItem[]): NewsItem[] {
   const map = new Map<string, NewsItem>();
   for (const it of items) {
-    const key = it.title.toLowerCase().replace(/\s+/g, " ").trim();
+    const key = (it.title || "").toLowerCase().replace(/\s+/g, " ").trim();
     if (!map.has(key)) map.set(key, it);
   }
   return [...map.values()];
 }
 
-export async function fetchInvestingNews(feeds = INVESTING_FEEDS): Promise<NewsItem[]> {
+export async function fetchInvestingNews(
+  feeds = INVESTING_FEEDS
+): Promise<NewsItem[]> {
   const results = await Promise.all(
     feeds.map(async (url) => {
       try {
         const feed = await parser.parseURL(url);
-        return (feed.items || []).map((i) => normalizeItem(i, feed.title || "Investing.com"));
+        return (feed.items || []).map((i) =>
+          normalizeItem(i, feed.title || "Investing.com")
+        );
       } catch {
         return [] as NewsItem[];
       }
