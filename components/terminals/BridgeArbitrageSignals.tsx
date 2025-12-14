@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
 import { useUi } from "@/components/UiProvider";
 
 /* =========================
@@ -151,6 +153,67 @@ const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localh
 
 const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
 const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
+
+type MinMaxProps = {
+  label: string;
+  min: string;
+  max: string;
+  setMin: (v: string) => void;
+  setMax: (v: string) => void;
+  minPh?: string;
+  maxPh?: string;
+  startEditing: () => void;
+  stopEditing: () => void;
+};
+
+export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
+  return (
+    <div
+      className={`group flex flex-col gap-1 p-2 rounded-xl border transition-all ${
+        props.min || props.max
+          ? "border-emerald-500/30 bg-emerald-500/[0.05]"
+          : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
+      }`}
+      onFocusCapture={props.startEditing}
+      onBlurCapture={(e) => {
+        const next = e.relatedTarget as Node | null;
+        if (next && e.currentTarget.contains(next)) return;
+        props.stopEditing();
+      }}
+    >
+      <div className="flex justify-between items-center">
+        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1">
+          {props.label}
+        </span>
+        {(props.min || props.max) && (
+          <button
+            type="button"
+            onClick={() => { props.setMin(""); props.setMax(""); }}
+            className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
+          >
+            CLR
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <input
+          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 tabular-nums text-center"
+          value={props.min}
+          placeholder={props.minPh ?? "min"}
+          onChange={(e) => props.setMin(e.target.value)}
+        />
+        <input
+          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 tabular-nums text-center"
+          value={props.max}
+          placeholder={props.maxPh ?? "max"}
+          onChange={(e) => props.setMax(e.target.value)}
+        />
+      </div>
+    </div>
+  );
+});
+
 
 /* =========================
    HELPERS
@@ -499,15 +562,9 @@ const MultiSelectFilter = ({
   color?: "amber" | "emerald" | "rose";
 }) => {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const fn = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", fn);
-    return () => document.removeEventListener("mousedown", fn);
-  }, []);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null); // dropdown button
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const toggleOption = (val: string) => {
     const next = new Set(selected);
@@ -516,55 +573,68 @@ const MultiSelectFilter = ({
     setSelected(next);
   };
 
-  // In active mode: Solid oval for name (similar to Red/Green), arrow remains available.
   const activeNameClass = `bg-${color}-500 text-black shadow-[0_0_15px_${color}] border-transparent`;
   const inactiveNameClass = `text-${color}-500 border-transparent hover:bg-${color}-500/10`;
-
-  // Arrow style
   const arrowClass = `text-${color}-500 hover:text-${color}-400 hover:bg-${color}-500/10`;
 
-  return (
-    <div className="relative flex items-center bg-black/20 rounded-full border border-white/5" ref={ref}>
-      {/* Left: Toggle Enabled */}
-      <button
-        onClick={toggleEnabled}
-        className={`px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
-          enabled ? activeNameClass : inactiveNameClass
-        }`}
-      >
-        {label} {selected.size > 0 && <span className="opacity-70 ml-1">({selected.size})</span>}
-      </button>
+  const recomputePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      left: r.left,
+      top: r.bottom + 8, // mt-2
+      width: Math.max(200, r.width),
+    });
+  };
 
-      {/* Separator */}
-      <div className={`w-px h-4 bg-${color}-500/20`} />
+  // close on outside click (works with portal)
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideWrap = !!wrapRef.current?.contains(target);
+      // menu is in portal -> detect by id
+      const menuEl = document.getElementById(`msf-${label}`);
+      const insideMenu = !!menuEl?.contains(target);
+      if (!insideWrap && !insideMenu) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [label]);
 
-      {/* Right: Dropdown Toggle */}
-      <button
-        onClick={() => setOpen(!open)}
-        className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${arrowClass}`}
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={`transition-transform ${open ? "rotate-180" : ""}`}
+  // when open, pin position and keep it updated
+  useEffect(() => {
+    if (!open) return;
+    recomputePos();
+    const onScroll = () => recomputePos();
+    const onResize = () => recomputePos();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open]);
+
+  const menu = open && pos
+    ? createPortal(
+        <div
+          id={`msf-${label}`}
+          style={{
+            position: "fixed",
+            left: pos.left,
+            top: pos.top,
+            width: pos.width,
+            zIndex: 999999, // ✅ поверх active panel
+          }}
+          className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto custom-scrollbar"
         >
-          <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-      </button>
-
-      {open && (
-        <div className="absolute top-full mt-2 left-0 min-w-[200px] bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-50 p-2 max-h-60 overflow-y-auto custom-scrollbar">
           <div className="flex flex-col gap-1">
             {options.map((opt, i) => (
               <button
-                key={opt}
+                key={opt || `na-${i}`}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()} // ✅ не забирати фокус/не закривати випадково
                 onClick={() => toggleOption(opt)}
                 className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors ${
                   selected.has(opt)
@@ -581,17 +651,61 @@ const MultiSelectFilter = ({
                     {selected.has(opt) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
                   </div>
                   <span className="truncate">{opt || "N/A"}</span>
-                  <span className="ml-auto text-[9px] text-zinc-600">{(i * 3 + 7) % 50}</span> {/* Dummy count */}
                 </div>
               </button>
             ))}
-            {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
+            {options.length === 0 && (
+              <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>
+            )}
           </div>
-        </div>
-      )}
-    </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <>
+      <div className="relative flex items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
+        <button
+          type="button"
+          onClick={toggleEnabled}
+          className={`px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
+            enabled ? activeNameClass : inactiveNameClass
+          }`}
+        >
+          {label} {selected.size > 0 && <span className="opacity-70 ml-1">({selected.size})</span>}
+        </button>
+
+        <div className={`w-px h-4 bg-${color}-500/20`} />
+
+        <button
+          ref={btnRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${arrowClass}`}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${open ? "rotate-180" : ""}`}
+          >
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      {menu}
+    </>
   );
 };
+
 
 /* =========================
    COMPONENT
@@ -886,7 +1000,6 @@ export default function BridgeArbitrageSignals() {
     isEditingRef.current = false;
     setIsEditing(false);
     // опційно: одразу підтягнути свіжі дані після завершення вводу
-    fetchSignals();
   };
 
   useEffect(() => {
@@ -1478,31 +1591,23 @@ export default function BridgeArbitrageSignals() {
 
 
   // Filter change effect
-  useEffect(() => {
-    fetchSignals();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    cls,
-    type,
-    mode,
-    minRate,
-    minTotal,
-    limit,
-    offset,
-    tickersFilterNorm,
-    listMode,
-    ignoreSet,
-    applySet,
-    // Add all other dependencies that trigger a refresh
-    adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
-    avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
-    lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
-    clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax,
-    marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax,
-    excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap, excludeActive,
-    includeUSA, includeChina, selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
-    filterReport, accountNonEmptyFirst, equityType
-  ]);
+useEffect(() => {
+  if (isEditingRef.current) return; // <-- НЕ фетчимо поки друкуємо
+  fetchSignals();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [
+  cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
+  listMode, ignoreSet, applySet,
+  adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
+  avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
+  lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
+  clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax,
+  marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax,
+  excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap, excludeActive,
+  includeUSA, includeChina, selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
+  filterReport, accountNonEmptyFirst, equityType
+]);
+
 
   /* =========================
      Active ticker is derived from /signals items
@@ -1650,58 +1755,8 @@ export default function BridgeArbitrageSignals() {
   };
 
   // UI helper for min/max pairs (Tailwind conversion)
-  const MinMax = (props: {
-    label: string;
-    min: string;
-    max: string;
-    setMin: (v: string) => void;
-    setMax: (v: string) => void;
-    minPh?: string;
-    maxPh?: string;
-  }) => (
-    <div
-      className={`group flex flex-col gap-1 p-2 rounded-xl border transition-all ${
-        props.min || props.max
-          ? "border-emerald-500/30 bg-emerald-500/[0.05]"
-          : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
-      }`}
-    >
-      <div className="flex justify-between items-center">
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1" title={props.label}>
-          {props.label}
-        </span>
-        {(props.min || props.max) && (
-          <button
-            onClick={() => {
-              props.setMin("");
-              props.setMax("");
-            }}
-            className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
-          >
-            CLR
-          </button>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <input
-          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-emerald-500/50 transition-colors tabular-nums text-center"
-          value={props.min}
-          placeholder={props.minPh ?? "min"}
-          onFocus={startEditing}
-          onBlur={stopEditing}
-          onChange={(e) => props.setMin(e.target.value)}
-        />
-        <input
-          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-emerald-500/50 transition-colors tabular-nums text-center"
-          value={props.max}
-          placeholder={props.maxPh ?? "max"}
-          onFocus={startEditing}
-          onBlur={stopEditing}
-          onChange={(e) => props.setMax(e.target.value)}
-        />
-      </div>
-    </div>
-  );
+
+
 
   // Helper for Class/Mode/Type buttons
   const FilterButton = ({ active, label, onClick, color = "emerald" }: { active: boolean; label: string; onClick: () => void; color?: string }) => (
@@ -1967,33 +2022,37 @@ export default function BridgeArbitrageSignals() {
 
         {/* =========================
           THRESHOLDS GRID
-      ========================= */}
+        ========================= */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-          <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} />
-          <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} />
-          <MinMax label="ADV90" min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} />
-          <MinMax label="ADV90NF" min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} />
-          <MinMax label="AvPreMhv" min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} />
-          <MinMax label="RoundLot" min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} />
-          <MinMax label="VWAP" min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} />
-          <MinMax label="Spread" min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} />
-          <MinMax label="LstPrcL" min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} />
-          <MinMax label="LstCls" min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} />
-          <MinMax label="YCls" min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} />
-          <MinMax label="TCls" min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} />
-          <MinMax label="ClsToCls%" min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} />
-          <MinMax label="Lo" min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} />
-          <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} />
-          <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} />
-          <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} />
+          <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="ADV90" min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="ADV90NF" min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="AvPreMhv" min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="RoundLot" min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="VWAP" min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="Spread" min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="LstPrcL" min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
+
+          <MinMax label="LstCls" min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="YCls" min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="TCls" min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="ClsToCls%" min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="Lo" min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
+          <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
           <MinMax
             label="VolNFfromLstCls"
             min={volNFfromLstClsMin}
             max={volNFfromLstClsMax}
             setMin={setVolNFfromLstClsMin}
             setMax={setVolNFfromLstClsMax}
+            startEditing={startEditing}
+            stopEditing={stopEditing}
           />
         </div>
+
 
         {/* =========================
           BOOLEAN & MULTI-SELECT FILTERS

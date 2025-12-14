@@ -1,22 +1,31 @@
 // pages/signals/[strategy].tsx
-"use client";
-
+import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
-import BridgeArbitrageSignals from "@/components/terminals/BridgeArbitrageSignals";
+import React from "react";
+
+const BridgeArbitrageSignals = dynamic(
+  () => import("@/components/terminals/BridgeArbitrageSignals"),
+  {
+    ssr: false,
+    loading: () => null, // важливо: щоб не було різного fallback HTML
+  }
+);
 
 export default function StrategySignalsPage() {
-  const { query } = useRouter();
-  const strategy = String(query.strategy ?? "").toLowerCase();
+  const router = useRouter();
 
-  // Якщо це не арбітраж, повертаємо null (або порожній фрагмент),
-  // оскільки ви просили прибрати текстові пояснення про відсутність стратегії.
-  if (strategy !== "arbitrage") {
-    return null; 
-  }
+  // На SSR query немає. На CSR теж спочатку може бути порожньо.
+  if (!router.isReady) return null;
 
+  const strategy = String(router.query.strategy ?? "").toLowerCase();
+  if (strategy !== "arbitrage") return null;
+
+  // Додаємо Suspense boundary, щоб прибрати “outside of a Suspense boundary”
   return (
     <main className="w-full">
-      <BridgeArbitrageSignals />
+      <React.Suspense fallback={null}>
+        <BridgeArbitrageSignals />
+      </React.Suspense>
     </main>
   );
 }

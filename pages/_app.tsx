@@ -3,21 +3,18 @@ import type { AppProps, AppContext } from "next/app";
 import App from "next/app";
 import Script from "next/script";
 import Head from "next/head";
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 
-// Порядок імпортів стилів важливий
 import "@/styles/themes.css";
-
 import "@/styles/layout.css";
 import "@/styles/globals.css";
 
-// Масштабування полотна
 import { useAutoScale } from "@/hooks/useAutoScale";
-
-// UI / TopBar
 import UiProvider from "@/components/UiProvider";
 import TopBarMaybe from "@/components/TopBar";
-const SafeTopBar: React.FC = (TopBarMaybe as any) || (() => null);
+
+// краще так, без дивних типів
+const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 
 type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
@@ -36,21 +33,25 @@ export default function MyApp({
   initialTheme = "light",
   initialLang = "UA",
 }: MyAppProps) {
-  // Масштабуємо “полотно” і тримаємо змінні :root в синхроні
+  // ✅ ключ: перший клієнтський рендер має не відрізнятись від SSR
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  // ці хуки хай працюють тільки на клієнті, після mount
   useAutoScale({
     baseWidth: 1920,
     targetId: "app-scale",
     headerSelector: ".tt-topbar",
   });
 
-  // Увімкнути zoom-mode для ширинних оверрайдів
   useEffect(() => {
+    if (!mounted) return;
     document.body.classList.add("zoom-mode");
     return () => document.body.classList.remove("zoom-mode");
-  }, []);
+  }, [mounted]);
 
-  // Синхрон класу .dark з data-theme
   useEffect(() => {
+    if (!mounted) return;
     const root = document.documentElement;
     const darkThemes = new Set([
       "dark","neon","cyberpunk","solaris","sakura","oceanic",
@@ -65,7 +66,7 @@ export default function MyApp({
     const obs = new MutationObserver(apply);
     obs.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     return () => obs.disconnect();
-  }, [initialTheme]);
+  }, [mounted, initialTheme]);
 
   return (
     <>
@@ -101,7 +102,6 @@ export default function MyApp({
         })();
       `}</Script>
 
-      {/* TradingView */}
       <Script
         id="tv-js"
         src="https://s3.tradingview.com/tv.js"
@@ -109,19 +109,16 @@ export default function MyApp({
         crossOrigin="anonymous"
       />
 
-      <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
-        {/* fixed topbar — ВАЖЛИВО: не всередині #app-scale */}
-        <SafeTopBar />
-
-        {/* ✅ Прокладка, що гарантує відступ під fixed-топбаром */}
-        <div id="tt-offset" aria-hidden="true" />
-
-        {/* Масштабоване «полотно» */}
-        <div id="app-scale">
-          <Component {...pageProps} />
-        </div>
-      </UiProvider>
-
+      {/* ✅ оце прибирає hydration mismatch */}
+      {!mounted ? null : (
+        <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
+          <SafeTopBar />
+          <div id="tt-offset" aria-hidden="true" />
+          <div id="app-scale">
+            <Component {...pageProps} />
+          </div>
+        </UiProvider>
+      )}
     </>
   );
 }
