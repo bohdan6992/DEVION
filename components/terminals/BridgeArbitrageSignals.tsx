@@ -13,6 +13,11 @@ export type ArbitrageSignal = {
   betaBucket?: string | null;
   direction?: "up" | "down" | "none";
   sig?: number | null;
+  "BidLstClsΔ%"?: number | string | null;
+  "AskLstClsΔ%"?: number | string | null;
+  Bid?: number | string | null;
+  Ask?: number | string | null;
+
 
   zapS?: number | null;
   zapSsigma?: number | null;
@@ -241,11 +246,14 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
   };
 };
 
-const getCountryStr = (s: any) => String(s?.country ?? s?.Country ?? "").trim().toUpperCase();
+const getCountryStr = (s: any) => String(getCountry(s) ?? "").trim().toUpperCase();
+
 const isUSA = (s: any) => {
   const c = getCountryStr(s);
   return c === "UNITED STATES" || c === "USA" || c === "US" || c === "UNITED STATES OF AMERICA";
 };
+
+
 
 const getMeta = (d: any) => d?.meta ?? d?.Meta ?? null;
 const getBestObj = (d: any) => d?.best ?? d?.Best ?? null;
@@ -373,6 +381,16 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
 
   const zapS = typeof raw.zapS === "number" ? raw.zapS : typeof raw.zap_s === "number" ? raw.zap_s : null;
   const zapL = typeof raw.zapL === "number" ? raw.zapL : typeof raw.zap_l === "number" ? raw.zap_l : null;
+
+  const Bid = toNum(raw.Bid ?? raw.bid ?? null);
+  const Ask = toNum(raw.Ask ?? raw.ask ?? null);
+
+  const BidLstClsDeltaPct =
+    toNum(raw["BidLstClsΔ%"] ?? raw["BidLstClsDeltaPct"] ?? raw.BidLstClsDeltaPct ?? raw.bidLstClsDeltaPct ?? null);
+
+  const AskLstClsDeltaPct =
+    toNum(raw["AskLstClsΔ%"] ?? raw["AskLstClsDeltaPct"] ?? raw.AskLstClsDeltaPct ?? raw.askLstClsDeltaPct ?? null);
+
 
   const kindStr = String(raw.type ?? raw.Type ?? raw.kind ?? raw.Kind ?? raw.normType ?? "").toLowerCase();
   const kind: "hard" | "soft" | "any" = kindStr.includes("hard") ? "hard" : kindStr.includes("soft") ? "soft" : "any";
@@ -734,9 +752,71 @@ export default function BridgeArbitrageSignals() {
   }, [items]);
 
   /* =========================
-     Ref-based Fetching (Fixes Input Reset Issue)
+    Ref-based Fetching (Fixes stale closure in interval)
   ========================= */
-  const filtersRef = useRef({
+  type FiltersSnapshot = {
+    cls: ArbClass;
+    type: ArbType;
+    mode: Mode;
+    minRate: string;
+    minTotal: string;
+    limit: string;
+    offset: string;
+    tickersFilterNorm: string;
+
+    listMode: ListMode;
+    ignoreSet: Set<string>;
+    applySet: Set<string>;
+
+    // Thresholds
+    adv20Min: string; adv20Max: string;
+    adv20NFMin: string; adv20NFMax: string;
+    adv90Min: string; adv90Max: string;
+    adv90NFMin: string; adv90NFMax: string;
+    avPreMhvMin: string; avPreMhvMax: string;
+    roundLotMin: string; roundLotMax: string;
+    vwapMin: string; vwapMax: string;
+    spreadMin: string; spreadMax: string;
+    lstPrcLMin: string; lstPrcLMax: string;
+    lstClsMin: string; lstClsMax: string;
+    yClsMin: string; yClsMax: string;
+    tClsMin: string; tClsMax: string;
+    clsToClsPctMin: string; clsToClsPctMax: string;
+    loMin: string; loMax: string;
+    lstClsNewsCntMin: string; lstClsNewsCntMax: string;
+    marketCapMMin: string; marketCapMMax: string;
+    preMhVolNFMin: string; preMhVolNFMax: string;
+    volNFfromLstClsMin: string; volNFfromLstClsMax: string;
+
+    // Booleans
+    excludeDividend: boolean;
+    excludeNews: boolean;
+    excludePTP: boolean;
+    excludeSSR: boolean;
+    excludeReport: boolean;
+    excludeETF: boolean;
+    excludeCrap: boolean;
+    excludeActive: boolean;
+
+    includeUSA: boolean;
+    includeChina: boolean;
+
+    // Multi-selects
+    selCountries: Set<string>;
+    countryEnabled: boolean;
+
+    selExchanges: Set<string>;
+    exchangeEnabled: boolean;
+
+    selSectors: Set<string>;
+    sectorEnabled: boolean;
+
+    // Misc
+    filterReport: "ALL" | "YES" | "NO";
+    equityType: string;
+  };
+
+  const filtersRef = useRef<FiltersSnapshot>({
     cls,
     type,
     mode,
@@ -745,10 +825,69 @@ export default function BridgeArbitrageSignals() {
     limit,
     offset,
     tickersFilterNorm,
+
     listMode,
     ignoreSet,
     applySet,
+
+    adv20Min, adv20Max,
+    adv20NFMin, adv20NFMax,
+    adv90Min, adv90Max,
+    adv90NFMin, adv90NFMax,
+    avPreMhvMin, avPreMhvMax,
+    roundLotMin, roundLotMax,
+    vwapMin, vwapMax,
+    spreadMin, spreadMax,
+    lstPrcLMin, lstPrcLMax,
+    lstClsMin, lstClsMax,
+    yClsMin, yClsMax,
+    tClsMin, tClsMax,
+    clsToClsPctMin, clsToClsPctMax,
+    loMin, loMax,
+    lstClsNewsCntMin, lstClsNewsCntMax,
+    marketCapMMin, marketCapMMax,
+    preMhVolNFMin, preMhVolNFMax,
+    volNFfromLstClsMin, volNFfromLstClsMax,
+
+    excludeDividend,
+    excludeNews,
+    excludePTP,
+    excludeSSR,
+    excludeReport,
+    excludeETF,
+    excludeCrap,
+    excludeActive,
+
+    includeUSA,
+    includeChina,
+
+    selCountries,
+    countryEnabled,
+
+    selExchanges,
+    exchangeEnabled,
+
+    selSectors,
+    sectorEnabled,
+
+    filterReport,
+    equityType,
   });
+
+  const isEditingRef = useRef(false);
+  const [isEditing, setIsEditing] = useState(false);
+
+  const startEditing = () => {
+    isEditingRef.current = true;
+    setIsEditing(true);
+  };
+
+  const stopEditing = () => {
+    isEditingRef.current = false;
+    setIsEditing(false);
+    // опційно: одразу підтягнути свіжі дані після завершення вводу
+    fetchSignals();
+  };
 
   useEffect(() => {
     filtersRef.current = {
@@ -760,11 +899,111 @@ export default function BridgeArbitrageSignals() {
       limit,
       offset,
       tickersFilterNorm,
+
       listMode,
       ignoreSet,
       applySet,
+
+      adv20Min, adv20Max,
+      adv20NFMin, adv20NFMax,
+      adv90Min, adv90Max,
+      adv90NFMin, adv90NFMax,
+      avPreMhvMin, avPreMhvMax,
+      roundLotMin, roundLotMax,
+      vwapMin, vwapMax,
+      spreadMin, spreadMax,
+      lstPrcLMin, lstPrcLMax,
+      lstClsMin, lstClsMax,
+      yClsMin, yClsMax,
+      tClsMin, tClsMax,
+      clsToClsPctMin, clsToClsPctMax,
+      loMin, loMax,
+      lstClsNewsCntMin, lstClsNewsCntMax,
+      marketCapMMin, marketCapMMax,
+      preMhVolNFMin, preMhVolNFMax,
+      volNFfromLstClsMin, volNFfromLstClsMax,
+
+      excludeDividend,
+      excludeNews,
+      excludePTP,
+      excludeSSR,
+      excludeReport,
+      excludeETF,
+      excludeCrap,
+      excludeActive,
+
+      includeUSA,
+      includeChina,
+
+      selCountries,
+      countryEnabled,
+
+      selExchanges,
+      exchangeEnabled,
+
+      selSectors,
+      sectorEnabled,
+
+      filterReport,
+      equityType,
     };
-  }, [cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm, listMode, ignoreSet, applySet]);
+  }, [
+    cls,
+    type,
+    mode,
+    minRate,
+    minTotal,
+    limit,
+    offset,
+    tickersFilterNorm,
+
+    listMode,
+    ignoreSet,
+    applySet,
+
+    adv20Min, adv20Max,
+    adv20NFMin, adv20NFMax,
+    adv90Min, adv90Max,
+    adv90NFMin, adv90NFMax,
+    avPreMhvMin, avPreMhvMax,
+    roundLotMin, roundLotMax,
+    vwapMin, vwapMax,
+    spreadMin, spreadMax,
+    lstPrcLMin, lstPrcLMax,
+    lstClsMin, lstClsMax,
+    yClsMin, yClsMax,
+    tClsMin, tClsMax,
+    clsToClsPctMin, clsToClsPctMax,
+    loMin, loMax,
+    lstClsNewsCntMin, lstClsNewsCntMax,
+    marketCapMMin, marketCapMMax,
+    preMhVolNFMin, preMhVolNFMax,
+    volNFfromLstClsMin, volNFfromLstClsMax,
+
+    excludeDividend,
+    excludeNews,
+    excludePTP,
+    excludeSSR,
+    excludeReport,
+    excludeETF,
+    excludeCrap,
+    excludeActive,
+
+    includeUSA,
+    includeChina,
+
+    selCountries,
+    countryEnabled,
+
+    selExchanges,
+    exchangeEnabled,
+
+    selSectors,
+    sectorEnabled,
+
+    filterReport,
+    equityType,
+  ]);
 
   /* =========================
      localStorage load/save
@@ -1031,9 +1270,10 @@ export default function BridgeArbitrageSignals() {
         if (!isUSA(s)) return false;
       }
       if (includeChina) {
-        const c = getCountryStr(s);
+        const c = getCountryStr(s); // тепер це вже через getCountry(s) => meta/root
         if (!c.includes("CHINA") && !c.includes("HONG KONG")) return false;
       }
+
 
       // YELLOW Group (Multi-select)
       if (countryEnabled && selCountries.size > 0) {
@@ -1114,30 +1354,32 @@ export default function BridgeArbitrageSignals() {
   };
 
   // Helper to filter data based on a config object (from Ref)
-  const filterData = (arr: ArbitrageSignal[], f: typeof filtersRef.current) => {
-    // 1. Min Rate/Total
-    let out = arr;
+  // Helper to filter data based on a config object (from Ref)
+  const filterData = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
+    // 1) Min Rate/Total (bugfix: if threshold set, missing values should FAIL)
+    let out = arr ?? [];
     const mr = toNum(f.minRate);
     const mt = toNum(f.minTotal);
+
     if (mr != null || mt != null) {
       out = out.filter((s) => {
         const r = getBestRating(s);
         const t = getBestTotal(s);
-        if (mr != null && r != null && r < mr) return false;
-        if (mt != null && t != null && t < mt) return false;
+        if (mr != null && (r == null || r < mr)) return false;
+        if (mt != null && (t == null || t < mt)) return false;
         return true;
       });
     }
 
-    // 2. List Mode
+    // 2) List Mode (use ref sets)
     if (f.listMode === "ignore") {
       out = out.filter((x) => !f.ignoreSet.has(normalizeTicker(x.ticker) || ""));
     } else if (f.listMode === "apply") {
       out = out.filter((x) => f.applySet.has(normalizeTicker(x.ticker) || ""));
     }
 
+    // 3) Thresholds + bools + multiselects
     return out.filter((s) => {
-      // Helper for Ref-based checks
       const nCheck = (val: number | null, minStr: string, maxStr: string) => {
         const min = toNum(minStr);
         const max = toNum(maxStr);
@@ -1148,75 +1390,92 @@ export default function BridgeArbitrageSignals() {
         return true;
       };
 
-      if (!nCheck(numADV20(s), adv20Min, adv20Max)) return false;
-      if (!nCheck(numADV20NF(s), adv20NFMin, adv20NFMax)) return false;
-      if (!nCheck(numADV90(s), adv90Min, adv90Max)) return false;
-      if (!nCheck(numADV90NF(s), adv90NFMin, adv90NFMax)) return false;
-      if (!nCheck(numAvPreMh(s), avPreMhvMin, avPreMhvMax)) return false;
-      if (!nCheck(numRoundLot(s), roundLotMin, roundLotMax)) return false;
-      if (!nCheck(numVWAP(s), vwapMin, vwapMax)) return false;
-      if (!nCheck(numSpread(s), spreadMin, spreadMax)) return false;
-      if (!nCheck(numLstPrcL(s), lstPrcLMin, lstPrcLMax)) return false;
-      if (!nCheck(numLastClose(s), lstClsMin, lstClsMax)) return false;
-      if (!nCheck(numYCls(s), yClsMin, yClsMax)) return false;
-      if (!nCheck(numTCls(s), tClsMin, tClsMax)) return false;
-      if (!nCheck(numClsToClsPct(s), clsToClsPctMin, clsToClsPctMax)) return false;
-      if (!nCheck(numLo(s), loMin, loMax)) return false;
-      if (!nCheck(numLstClsNewsCnt(s), lstClsNewsCntMin, lstClsNewsCntMax)) return false;
-      if (!nCheck(numMarketCapM(s), marketCapMMin, marketCapMMax)) return false;
-      if (!nCheck(numPreMktVolNF(s), preMhVolNFMin, preMhVolNFMax)) return false;
-      if (!nCheck(numVolNFfromLstCls(s), volNFfromLstClsMin, volNFfromLstClsMax)) return false;
+      // IMPORTANT: use f.* for all filters (fix stale closure in interval)
+      if (!nCheck(numADV20(s), f.adv20Min, f.adv20Max)) return false;
+      if (!nCheck(numADV20NF(s), f.adv20NFMin, f.adv20NFMax)) return false;
+      if (!nCheck(numADV90(s), f.adv90Min, f.adv90Max)) return false;
+      if (!nCheck(numADV90NF(s), f.adv90NFMin, f.adv90NFMax)) return false;
+      if (!nCheck(numAvPreMh(s), f.avPreMhvMin, f.avPreMhvMax)) return false;
+      if (!nCheck(numRoundLot(s), f.roundLotMin, f.roundLotMax)) return false;
+      if (!nCheck(numVWAP(s), f.vwapMin, f.vwapMax)) return false;
+      if (!nCheck(numSpread(s), f.spreadMin, f.spreadMax)) return false;
+      if (!nCheck(numLstPrcL(s), f.lstPrcLMin, f.lstPrcLMax)) return false;
+      if (!nCheck(numLastClose(s), f.lstClsMin, f.lstClsMax)) return false;
+      if (!nCheck(numYCls(s), f.yClsMin, f.yClsMax)) return false;
+      if (!nCheck(numTCls(s), f.tClsMin, f.tClsMax)) return false;
+      if (!nCheck(numClsToClsPct(s), f.clsToClsPctMin, f.clsToClsPctMax)) return false;
+      if (!nCheck(numLo(s), f.loMin, f.loMax)) return false;
+      if (!nCheck(numLstClsNewsCnt(s), f.lstClsNewsCntMin, f.lstClsNewsCntMax)) return false;
+      if (!nCheck(numMarketCapM(s), f.marketCapMMin, f.marketCapMMax)) return false;
+      if (!nCheck(numPreMktVolNF(s), f.preMhVolNFMin, f.preMhVolNFMax)) return false;
+      if (!nCheck(numVolNFfromLstCls(s), f.volNFfromLstClsMin, f.volNFfromLstClsMax)) return false;
 
-      // Booleans
-      if (excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) return false;
-      if (excludeNews) {
+      // Booleans (exclude)
+      if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) return false;
+
+      if (f.excludeNews) {
         const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
         if (nn > 0) return false;
       }
-      if (excludePTP && ((s as any)._isPTP ?? boolIsPTP(s)) === true) return false;
-      if (excludeSSR && ((s as any)._isSSR ?? boolIsSSR(s)) === true) return false;
-      if (excludeReport && hasValue(pickAny(s, ["report", "Report"]))) return false;
-      if (excludeETF) {
+
+      if (f.excludePTP && ((s as any)._isPTP ?? boolIsPTP(s)) === true) return false;
+      if (f.excludeSSR && ((s as any)._isSSR ?? boolIsSSR(s)) === true) return false;
+      if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) return false;
+
+      if (f.excludeETF) {
         if (boolIsETF(s) === true) return false;
         const eqt = strEquityType(s).toLowerCase();
         if (eqt && eqt.includes("etf")) return false;
       }
-      if (excludeCrap) {
+
+      if (f.excludeCrap) {
         const px = numLastClose(s);
         if (px != null && px < 5) return false;
       }
-      if (excludeActive && ((s as any)._isActive ?? boolIsActive(s)) === true) return false;
 
-      if (includeUSA && !isUSA(s)) return false;
-      if (includeChina) {
+      if (f.excludeActive && ((s as any)._isActive ?? boolIsActive(s)) === true) return false;
+
+      // Booleans (include-only)
+      if (f.includeUSA && !isUSA(s)) return false;
+      if (f.includeChina) {
         const c = getCountryStr(s);
         if (!c.includes("CHINA") && !c.includes("HONG KONG")) return false;
       }
 
-      if (countryEnabled && selCountries.size > 0 && !selCountries.has(getCountry(s))) return false;
-      if (exchangeEnabled && selExchanges.size > 0 && !selExchanges.has(getExchange(s))) return false;
-      if (sectorEnabled && selSectors.size > 0 && !selSectors.has(getSector(s))) return false;
+      // Multi-selects
+      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) return false;
+      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) return false;
+      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) return false;
 
-      if (filterReport !== "ALL") {
+      // Report tri-state
+      if (f.filterReport !== "ALL") {
         const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-        if (filterReport === "YES" && rep !== true) return false;
-        if (filterReport === "NO" && rep !== false) return false;
+        if (f.filterReport === "YES" && rep !== true) return false;
+        if (f.filterReport === "NO" && rep !== false) return false;
       }
 
-      if (equityType.trim()) {
+      // Equity type search
+      if (f.equityType.trim()) {
         const et = strEquityType(s).toLowerCase();
-        if (!et.includes(equityType.toLowerCase().trim())) return false;
+        if (!et.includes(f.equityType.toLowerCase().trim())) return false;
       }
 
       return true;
     });
   };
 
+
   // Auto-refresh interval (independent of filter state changes)
   useEffect(() => {
-    const timer = setInterval(fetchSignals, 2500);
+    const timer = setInterval(() => {
+      if (isEditingRef.current) return; // <-- PAUSE WHILE TYPING
+      fetchSignals();
+    }, 2500);
+
     return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // Filter change effect
   useEffect(() => {
@@ -1427,14 +1686,18 @@ export default function BridgeArbitrageSignals() {
         <input
           className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-emerald-500/50 transition-colors tabular-nums text-center"
           value={props.min}
-          onChange={(e) => props.setMin(e.target.value)}
           placeholder={props.minPh ?? "min"}
+          onFocus={startEditing}
+          onBlur={stopEditing}
+          onChange={(e) => props.setMin(e.target.value)}
         />
         <input
           className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-emerald-500/50 transition-colors tabular-nums text-center"
           value={props.max}
-          onChange={(e) => props.setMax(e.target.value)}
           placeholder={props.maxPh ?? "max"}
+          onFocus={startEditing}
+          onBlur={stopEditing}
+          onChange={(e) => props.setMax(e.target.value)}
         />
       </div>
     </div>
@@ -1453,6 +1716,84 @@ export default function BridgeArbitrageSignals() {
       {label}
     </button>
   );
+
+  const SignalCard = ({
+    s,
+    side,
+    onClick,
+    activeTicker,
+    flashClass,
+    compact = false,
+  }: {
+    s: ArbitrageSignal;
+    side: "short" | "long";
+    onClick: (tk: string) => void;
+    activeTicker: string | null;
+    flashClass: (ticker: string, side: "short" | "long") => string;
+    compact?: boolean;
+  }) => {
+
+    const isShort = side === "short";
+
+    const px = isShort ? toNum(s.askStock) : toNum(s.bidStock);
+    const pxLabel = isShort ? "ASK" : "BID";
+
+    const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
+    const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
+
+    return (
+<button
+  onClick={() => onClick(s.ticker)}
+  className={[
+    "w-full text-left",
+    compact ? "rounded-lg border p-2" : "rounded-xl border p-3",
+    "bg-[#0a0a0a]/55 hover:bg-[#0a0a0a]/85 transition-all",
+    "flex flex-col",
+    isShort ? "border-rose-500/25 hover:border-rose-500/45" : "border-emerald-500/25 hover:border-emerald-500/45",
+    flashClass(s.ticker, side),
+    activeTicker === s.ticker ? (isShort ? "ring-1 ring-rose-500/45" : "ring-1 ring-emerald-500/45") : "",
+  ].join(" ")}
+>
+  {/* ROW 1: Ticker (left) + Bid/Ask (right) */}
+  <div className="flex items-baseline justify-between gap-2">
+    <div
+      className={[
+        compact ? "text-[15px]" : "text-[18px]",
+        "leading-none font-bold tracking-tight",
+        isShort ? "text-rose-300" : "text-emerald-300",
+      ].join(" ")}
+    >
+      {s.ticker}
+    </div>
+
+    <div className="flex items-baseline gap-2">
+      <span className={(compact ? "text-[9px]" : "text-[10px]") + " font-mono text-zinc-500"}>
+        {pxLabel}
+      </span>
+      <span className={(compact ? "text-[13px]" : "text-[15px]") + " font-mono text-white tabular-nums leading-none"}>
+        {px == null ? "—" : fmtNum(px, 2)}
+      </span>
+    </div>
+  </div>
+
+{/* ROW 2: σ / Z / S line (tight) */}
+<div className={(compact ? "mt-1 text-[9px]" : "mt-1.5 text-[10px]") + " font-mono text-zinc-400 tabular-nums"}>
+  <span className="text-zinc-500">σ</span>{" "}
+  {s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}
+  <span className="text-zinc-600"> · </span>
+  <span className="text-zinc-500">Z</span>{" "}
+  {z == null ? "—" : fmtNum(z, 2)}
+  <span className="text-zinc-600"> · </span>
+  <span className="text-zinc-500">S</span>{" "}
+  {zs == null ? "—" : fmtNum(zs, 1)}
+</div>
+
+</button>
+
+
+    );
+  };
+
 
   return (
     <div className="relative min-h-screen w-full bg-[#030303] text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
@@ -1806,7 +2147,8 @@ export default function BridgeArbitrageSignals() {
           DRAWERS (Ignore/Apply)
       ========================= */}
         {(showIgnore || showApply) && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-7 gap-4">
+
             {showIgnore && (
               <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
@@ -2013,11 +2355,12 @@ export default function BridgeArbitrageSignals() {
               <div className="p-4 space-y-4">
                 {(() => {
                   const s = activeData;
-                  const lstCls = s ? numLastClose(s) : null;
-                  const bid = s ? firstNonNullNum(s.bidStock, s.Bid, s.bid) : null;
-                  const ask = s ? firstNonNullNum(s.askStock, s.Ask, s.ask) : null;
-                  const bidDelta = calcPct(bid, lstCls);
-                  const askDelta = calcPct(ask, lstCls);
+                  const bid = s ? toNum((s as any).Bid ?? (s as any).bid) : null;
+                  const ask = s ? toNum((s as any).Ask ?? (s as any).ask) : null;
+
+                  const bidDelta = s ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct) : null;
+                  const askDelta = s ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct) : null;
+
 
                   const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
                     <div className="flex flex-col gap-1 p-3 rounded-xl border border-white/5 bg-white/[0.02]">
@@ -2196,18 +2539,21 @@ export default function BridgeArbitrageSignals() {
         )}
 
         {!error && hasAny && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+
             {benchBlocks.map((bench) => {
               const accent = BENCH_COLORS[bench.benchmark] ?? BENCH_COLORS.DEFAULT;
 
               return (
                 <div
                   key={bench.benchmark}
-                  className="bg-[#0a0a0a]/60 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col"
-                >
+                 className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0">
                   <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-4">
                     <span className="text-lg font-bold text-white tracking-tight">{bench.benchmark}</span>
-                    <div className="h-0.5 flex-1 rounded-full bg-gradient-to-r from-white/5 via-white/10 to-white/5" style={{ color: accent }} />
+                    <div
+                    className="h-0.5 flex-1 rounded-full opacity-80"
+                    style={{ background: `linear-gradient(to right, transparent, ${accent}, transparent)` }}
+                  />
                   </div>
 
                   <div className="p-4 space-y-6">
@@ -2230,77 +2576,39 @@ export default function BridgeArbitrageSignals() {
                             </div>
                           </div>
 
-                          {/* Rows */}
-                          <div className="p-2 space-y-2">
-                            {g.rows.slice(0, rowsToShow).map((row, i) => (
-                              <div key={i} className="grid grid-cols-[1fr_1px_1fr] gap-3 items-stretch relative">
-                                {/* Vertical Divider */}
-                                <div className="bg-white/5 w-px mx-auto absolute top-0 bottom-0 left-1/2 -translate-x-1/2" />
+                          <div className="p-2 grid grid-cols-2 gap-2">
+                            {/* LEFT: DOWN (shorts) */}
+                            <div className="flex flex-col gap-2">
+                              {(g.rows.slice(0, rowsToShow).map((row, i) => row.short).filter(Boolean) as ArbitrageSignal[]).map((s, i) => (
+                                <SignalCard
+                                  key={`${g.id}-S-${s.ticker}-${i}`}
+                                  s={s}
+                                  side="short"
+                                  onClick={onTickerClick}
+                                  activeTicker={activeTicker}
+                                  flashClass={flashClass}
+                                  compact
+                                />
+                              ))}
+                            </div>
 
-                                {/* SHORT Side */}
-                                {row.short ? (
-                                  <button
-                                    onClick={() => onTickerClick(row.short!.ticker)}
-                                    className={`relative group w-full text-left p-2 rounded-lg border border-white/5 bg-[#0a0a0a]/40 hover:bg-[#0a0a0a]/80 hover:border-rose-500/30 transition-all border-l-2 border-l-rose-500/50 ${
-                                      flashClass(row.short.ticker, "short")
-                                    } ${activeTicker === row.short.ticker ? "ring-1 ring-rose-500/50 bg-rose-500/[0.03]" : ""} ${
-                                      row.short.shortCandidate ? "shadow-[inset_0_0_10px_-5px_rgba(251,191,36,0.2)]" : ""
-                                    }`}
-                                  >
-                                    <div className="flex justify-between items-center mb-1">
-                                      <span className="font-bold text-white text-sm tracking-tight">{row.short.ticker}</span>
-                                      <span className="text-[10px] font-mono text-zinc-400 px-1.5 py-0.5 rounded bg-white/5 border border-white/5">
-                                        ASK {displayPxFor(row.short!, "short").value ? fmtNum(displayPxFor(row.short!, "short").value, 2) : "—"}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between items-baseline">
-                                      <span className="text-xs font-mono text-zinc-200">{fmtNum(row.short.sig, 2)}σ</span>
-                                      <div className="flex items-center gap-1 text-[9px] font-mono text-zinc-600">
-                                        <span>Z {displayZapLineFor(row.short!, "short").z ? fmtNum(displayZapLineFor(row.short!, "short").z, 2) : "-"}</span>
-                                        <span className="text-zinc-700">•</span>
-                                        <span>
-                                          S {displayZapLineFor(row.short!, "short").zs ? fmtNum(displayZapLineFor(row.short!, "short").zs, 1) : "-"}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </button>
-                                ) : (
-                                  <div className="border border-dashed border-white/5 rounded-lg bg-transparent" />
-                                )}
-
-                                {/* LONG Side */}
-                                {row.long ? (
-                                  <button
-                                    onClick={() => onTickerClick(row.long!.ticker)}
-                                    className={`relative group w-full text-left p-2 rounded-lg border border-white/5 bg-[#0a0a0a]/40 hover:bg-[#0a0a0a]/80 hover:border-emerald-500/30 transition-all border-r-2 border-r-emerald-500/50 ${
-                                      flashClass(row.long.ticker, "long")
-                                    } ${activeTicker === row.long.ticker ? "ring-1 ring-emerald-500/50 bg-emerald-500/[0.03]" : ""} ${
-                                      row.long.longCandidate ? "shadow-[inset_0_0_10px_-5px_rgba(251,191,36,0.2)]" : ""
-                                    }`}
-                                  >
-                                    <div className="flex justify-between items-center mb-1">
-                                      <span className="text-[10px] font-mono text-zinc-400 px-1.5 py-0.5 rounded bg-white/5 border border-white/5">
-                                        BID {displayPxFor(row.long!, "long").value ? fmtNum(displayPxFor(row.long!, "long").value, 2) : "—"}
-                                      </span>
-                                      <span className="font-bold text-white text-sm tracking-tight">{row.long.ticker}</span>
-                                    </div>
-                                    <div className="flex justify-between items-baseline">
-                                      <div className="flex items-center gap-1 text-[9px] font-mono text-zinc-600">
-                                        <span>Z {displayZapLineFor(row.long!, "long").z ? fmtNum(displayZapLineFor(row.long!, "long").z, 2) : "-"}</span>
-                                        <span className="text-zinc-700">•</span>
-                                        <span>
-                                          S {displayZapLineFor(row.long!, "long").zs ? fmtNum(displayZapLineFor(row.long!, "long").zs, 1) : "-"}
-                                        </span>
-                                      </div>
-                                      <span className="text-xs font-mono text-zinc-200">{fmtNum(row.long.sig, 2)}σ</span>
-                                    </div>
-                                  </button>
-                                ) : (
-                                  <div className="border border-dashed border-white/5 rounded-lg bg-transparent" />
-                                )}
-                              </div>
-                            ))}
+                            {/* RIGHT: UP (longs) */}
+                            <div className="flex flex-col gap-2">
+                              {(g.rows.slice(0, rowsToShow).map((row, i) => row.long).filter(Boolean) as ArbitrageSignal[]).map((s, i) => (
+                                <SignalCard
+                                  key={`${g.id}-L-${s.ticker}-${i}`}
+                                  s={s}
+                                  side="long"
+                                  onClick={onTickerClick}
+                                  activeTicker={activeTicker}
+                                  flashClass={flashClass}
+                                  compact
+                                />
+                              ))}
+                            </div>
                           </div>
+
+
 
                           {g.rows.length > 10 && (
                             <button
