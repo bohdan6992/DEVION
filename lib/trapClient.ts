@@ -3,6 +3,15 @@ import { FullFieldName } from "./fullFields";
 
 export const DEFAULT_TRAP_URL = "http://localhost:5197";
 
+/**
+ * Якщо захочеш дозволити людям змінювати адресу моста:
+ * https://your-vercel.app/?bridge=http://localhost:5197
+ * або зберігати її в localStorage.
+ *
+ * За замовчуванням НЕ потрібне — але не заважає.
+ */
+const LS_BRIDGE_KEY = "bridgeBaseUrl";
+
 export type TrapErrorType = "NOT_RUNNING" | "HTTP_ERROR" | "BAD_JSON";
 
 export type TrapError = {
@@ -18,13 +27,67 @@ export type FullQuotesRow = {
   [K in FullFieldName]: string | number | null;
 };
 
+function safeTrimBase(v: any) {
+  return String(v ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function readBridgeFromQuery(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const u = new URL(window.location.href);
+    const b = u.searchParams.get("bridge");
+    if (!b) return null;
+    const clean = safeTrimBase(b);
+    if (!clean) return null;
+
+    // збережемо і приберемо з URL (щоб не світити)
+    localStorage.setItem(LS_BRIDGE_KEY, clean);
+    u.searchParams.delete("bridge");
+    window.history.replaceState({}, "", u.toString());
+
+    return clean;
+  } catch {
+    return null;
+  }
+}
+
+function readBridgeFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = localStorage.getItem(LS_BRIDGE_KEY);
+    const clean = safeTrimBase(v);
+    return clean || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Головне правило:
+ * - Browser → можна localhost (кожен запускає міст у себе)
+ * - Server/Vercel → ніколи localhost
+ */
 function getBridgeBase() {
-  // allow both NEXT_PUBLIC_TRADING_BRIDGE_URL and legacy NEXT_PUBLIC_TRAP_URL
-  return (
+  // ✅ Browser: беремо override (query/storage) або localhost за замовчуванням
+  if (typeof window !== "undefined") {
+    const fromQuery = readBridgeFromQuery();
+    if (fromQuery) return fromQuery;
+
+    const fromStorage = readBridgeFromStorage();
+    if (fromStorage) return fromStorage;
+
+    return safeTrimBase(DEFAULT_TRAP_URL);
+  }
+
+  // ✅ Server (SSR/build): лише env (якщо раптом є server-side consumer)
+  const envBase =
     process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ||
     process.env.NEXT_PUBLIC_TRAP_URL ||
-    DEFAULT_TRAP_URL
-  );
+    "";
+
+  return safeTrimBase(envBase);
 }
 
 function extractApiErrorMessage(textOrJson: any, fallback: string) {
@@ -34,12 +97,12 @@ function extractApiErrorMessage(textOrJson: any, fallback: string) {
     // if json object
     if (typeof textOrJson === "object") {
       const msg =
-        textOrJson.message ||
-        textOrJson.error ||
-        textOrJson.title ||
-        textOrJson.detail;
-      const type = textOrJson.type ? ` (${textOrJson.type})` : "";
-      const path = textOrJson.path ? ` @ ${textOrJson.path}` : "";
+        (textOrJson as any).message ||
+        (textOrJson as any).error ||
+        (textOrJson as any).title ||
+        (textOrJson as any).detail;
+      const type = (textOrJson as any).type ? ` (${(textOrJson as any).type})` : "";
+      const path = (textOrJson as any).path ? ` @ ${(textOrJson as any).path}` : "";
       if (msg) return `${String(msg)}${type}${path}`.trim();
       return fallback;
     }
@@ -53,14 +116,38 @@ function extractApiErrorMessage(textOrJson: any, fallback: string) {
   }
 }
 
+function tryParseJsonText(s: string): any | null {
+  try {
+    const t = (s ?? "").trim();
+    if (!t) return null;
+    if (!(t.startsWith("{") || t.startsWith("["))) return null;
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Універсальний запит до TradingBridgeApi
  */
 async function fetchBridgeJson<T = any>(path: string): Promise<T> {
   const base = getBridgeBase();
+  const url = `${base}${path}`;
 
   try {
-    const res = await fetch(`${base}${path}`, { cache: "no-store" });
+    // ⚠️ якщо base пустий (SSR без env) — одразу нормальна помилка
+    if (!base) {
+      throw <TrapError>{
+        type: "NOT_RUNNING",
+        message: "Bridge base URL is empty on server. Use client-side fetch or set env.",
+      };
+    }
+
+    const res = await fetch(url, {
+      cache: "no-store",
+      // credentials не треба, але не заважає CORS
+      credentials: "omit",
+    });
 
     if (!res.ok) {
       const ct = res.headers.get("content-type") || "";
@@ -71,19 +158,13 @@ async function fetchBridgeJson<T = any>(path: string): Promise<T> {
         bodyJson = await res.json().catch(() => null);
       } else {
         bodyText = await res.text().catch(() => "");
-        // sometimes APIs return json as text
-        if (bodyText?.trim()?.startsWith("{")) {
-          bodyJson = JSON.parse(bodyText);
-        }
+        bodyJson = tryParseJsonText(bodyText);
       }
 
       throw <TrapError>{
         type: "HTTP_ERROR",
         status: res.status,
-        message: extractApiErrorMessage(
-          bodyJson ?? bodyText,
-          `HTTP ${res.status}`
-        ),
+        message: extractApiErrorMessage(bodyJson ?? bodyText, `HTTP ${res.status}`),
       };
     }
 
@@ -98,6 +179,7 @@ async function fetchBridgeJson<T = any>(path: string): Promise<T> {
   } catch (e: any) {
     if (e?.type) throw e;
 
+    // Типовий випадок: міст не запущений / порт не доступний / CORS
     throw <TrapError>{
       type: "NOT_RUNNING",
       message: "TRAP не запущений або недоступний на цьому пристрої",
@@ -148,10 +230,10 @@ export type ArbitrageSummaryRow = Record<string, any>;
 export type ArbitrageSummaryResponse = {
   ok: boolean;
   format: "csv";
-  updatedAt?: string | null;      // ✅ backend uses updatedAt
-  updatedAtUtc?: string | null;   // ✅ keep compatibility if you had older code
+  updatedAt?: string | null; // backend uses updatedAt
+  updatedAtUtc?: string | null; // compatibility
   count: number;
-  header?: string[];              // ✅ backend returns header
+  header?: string[];
   items: Array<{
     ticker?: string;
     Ticker?: string;
@@ -170,22 +252,16 @@ export type ArbitrageSummaryResponse = {
 };
 
 /** /api/arbitrage/summary */
-export async function getArbitrageSummary(
-  q?: string
-): Promise<ArbitrageSummaryResponse> {
+export async function getArbitrageSummary(q?: string): Promise<ArbitrageSummaryResponse> {
   const qs = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
-  return fetchBridgeJson<ArbitrageSummaryResponse>(
-    `/api/arbitrage/summary${qs}`
-  );
+  return fetchBridgeJson<ArbitrageSummaryResponse>(`/api/arbitrage/summary${qs}`);
 }
 
 /**
  * Backward compatible for list UI:
  * return array of flat rows with string values
  */
-export async function getArbitrageList(
-  q?: string
-): Promise<Record<string, string>[]> {
+export async function getArbitrageList(q?: string): Promise<Record<string, string>[]> {
   const json = await getArbitrageSummary(q);
   const items = Array.isArray(json?.items) ? json.items : [];
 
@@ -205,8 +281,9 @@ export async function getArbitrageList(
       sig: String(sig ?? ""),
     };
 
-    for (const [k, v] of Object.entries(extras ?? {}))
+    for (const [k, v] of Object.entries(extras ?? {})) {
       out[String(k)] = v != null ? String(v) : "";
+    }
 
     return out;
   });
@@ -223,20 +300,14 @@ export type ArbitrageTickerResponse = {
   updatedAt?: string | null; // backend: updatedAt
 };
 
-export async function getArbitrageTicker(
-  ticker: string
-): Promise<ArbitrageTickerResponse> {
+export async function getArbitrageTicker(ticker: string): Promise<ArbitrageTickerResponse> {
   const t = (ticker ?? "").trim().toUpperCase();
   if (!t) throw <TrapError>{ type: "BAD_JSON", message: "Ticker is empty" };
-  return fetchBridgeJson<ArbitrageTickerResponse>(
-    `/api/arbitrage/ticker/${encodeURIComponent(t)}`
-  );
+  return fetchBridgeJson<ArbitrageTickerResponse>(`/api/arbitrage/ticker/${encodeURIComponent(t)}`);
 }
 
 /** alias for old UI code */
-export async function getArbitrageStatsByTicker(
-  ticker: string
-): Promise<ArbitrageTickerResponse> {
+export async function getArbitrageStatsByTicker(ticker: string): Promise<ArbitrageTickerResponse> {
   return getArbitrageTicker(ticker);
 }
 
@@ -267,7 +338,7 @@ export type ArbitrageSignalsQuery = {
   minTotal?: number | string;
   topN?: number | string;
 
-  // ✅ backend supports these (Program.cs uses them)
+  // backend supports these
   limit?: number;
   offset?: number;
 
@@ -305,7 +376,6 @@ export async function getArbitrageSignals(
   mode: ArbitrageSignalsMode,
   query?: ArbitrageSignalsQuery
 ): Promise<ArbitrageSignalsResponse> {
-  // ✅ send params backend understands today
   const qs = buildQuery({
     tickers: query?.tickers,
     minRate: query?.minRate,
@@ -313,22 +383,20 @@ export async function getArbitrageSignals(
     topN: query?.topN,
     limit: query?.limit,
     offset: query?.offset,
-    // dateFrom/dateTo intentionally omitted unless you later implement on backend
   });
 
   return fetchBridgeJson<ArbitrageSignalsResponse>(
-    `/api/arbitrage/signals/${encodeURIComponent(
-      cls
-    )}/${encodeURIComponent(type)}/${encodeURIComponent(mode)}${qs}`
+    `/api/arbitrage/signals/${encodeURIComponent(cls)}/${encodeURIComponent(
+      type
+    )}/${encodeURIComponent(mode)}${qs}`
   );
 }
 
-// backwards-compatible alias (for your component import error)
+// backwards-compatible alias
 export const getArbTicker = getArbitrageTicker;
 
 /* ========= CHRONO (files-based endpoints, аналогічно arbitrage) ========= */
 
-/** summary row for chrono windows */
 export type ChronoSummaryRow = Record<string, any>;
 
 export type ChronoSummaryResponse = {
@@ -338,14 +406,11 @@ export type ChronoSummaryResponse = {
   updatedAtUtc?: string | null;
   count: number;
   header?: string[];
-  // items можуть містити ticker, window, n_up, n_down, ratios, extras...
   items: Array<Record<string, any>>;
 };
 
 /**
  * /api/chrono/summary
- * q — фільтр по тікеру (як у arbitrage)
- * window — опційний фільтр по назві вікна (OPEN / EARLY_BLUE / ...), якщо ти це додаси у backend
  */
 export async function getChronoSummary(params?: {
   q?: string;
@@ -358,11 +423,6 @@ export async function getChronoSummary(params?: {
   return fetchBridgeJson<ChronoSummaryResponse>(`/api/chrono/summary${qs}`);
 }
 
-/**
- * Зручний helper для UI:
- * розгортає items у список з plain-string полями.
- * Залишає тикер+window в явних полях, решту кладе як extras.
- */
 export async function getChronoList(params?: {
   q?: string;
   window?: string;
@@ -372,18 +432,14 @@ export async function getChronoList(params?: {
 
   return items.map((r) => {
     const out: Record<string, string> = {};
-
-    // базові поля
     const ticker = (r as any).Ticker ?? (r as any).ticker ?? "";
     const window = (r as any).Window ?? (r as any).window ?? "";
 
     if (ticker != null) out.ticker = String(ticker);
     if (window != null) out.window = String(window);
 
-    // решту колонок перекладаємо як is
     for (const [k, v] of Object.entries(r)) {
-      if (k === "ticker" || k === "Ticker" || k === "window" || k === "Window")
-        continue;
+      if (k === "ticker" || k === "Ticker" || k === "window" || k === "Window") continue;
       out[k] = v != null ? String(v) : "";
     }
 
@@ -396,19 +452,15 @@ export type ChronoTickerResponse = {
   ok?: boolean;
   format?: "jsonl";
   ticker?: string;
-  item: any; // onefile.jsonl запис по тікеру (усі вікна + метрики)
+  item: any;
   updatedAt?: string | null;
 };
 
-export async function getChronoTicker(
-  ticker: string
-): Promise<ChronoTickerResponse> {
+export async function getChronoTicker(ticker: string): Promise<ChronoTickerResponse> {
   const t = (ticker ?? "").trim().toUpperCase();
   if (!t) throw <TrapError>{ type: "BAD_JSON", message: "Ticker is empty" };
 
-  return fetchBridgeJson<ChronoTickerResponse>(
-    `/api/chrono/ticker/${encodeURIComponent(t)}`
-  );
+  return fetchBridgeJson<ChronoTickerResponse>(`/api/chrono/ticker/${encodeURIComponent(t)}`);
 }
 
 /** /api/chrono/best-params/{ticker} */
@@ -449,11 +501,6 @@ type FullQuotesResponse = {
   capturedAt?: string;
 };
 
-/**
- * Якщо передаєш tickers → список обмежений.
- * Якщо tickers не передаєш → бере всіх з universe.csv
- * fields/preset supported server-side (see Program.cs)
- */
 export async function getFullQuotes(opts?: {
   tickers?: string[];
   fields?: string[];
@@ -465,12 +512,30 @@ export async function getFullQuotes(opts?: {
   if (opts?.preset) p.set("preset", opts.preset);
 
   const qs = p.toString();
-  return fetchBridgeJson<FullQuotesResponse>(
-    `/api/full-quotes${qs ? `?${qs}` : ""}`
-  );
+  return fetchBridgeJson<FullQuotesResponse>(`/api/full-quotes${qs ? `?${qs}` : ""}`);
 }
 
 // keep backward compatible signature
 export async function getFullQuotesLegacy(tickers?: string[]) {
   return getFullQuotes({ tickers });
+}
+
+/**
+ * (Optional) утиліта для UI: дозволити вручну встановити bridge url
+ * наприклад з settings-сторінки.
+ */
+export function setBridgeBaseUrl(url: string) {
+  if (typeof window === "undefined") return;
+  const clean = safeTrimBase(url);
+  if (!clean) return;
+  try {
+    localStorage.setItem(LS_BRIDGE_KEY, clean);
+  } catch {}
+}
+
+export function clearBridgeBaseUrl() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(LS_BRIDGE_KEY);
+  } catch {}
 }
