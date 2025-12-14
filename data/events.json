@@ -1,0 +1,61 @@
+{
+  "events": [
+    {
+      "id": "evt-001",
+      "title": "Звітність $AAPL (Q3)",
+      "date": "2025-09-27",
+      "time": "16:30",
+      "ticker": "AAPL",
+      "tags": ["earnings"],
+      "rank": "A",
+      "note": "Очікування +7% yoy",
+      "link": "https://example.com/aapl-earnings"
+    },
+    {
+      "id": "evt-002",
+      "title": "Звітність $CRWD (Q3)",
+      "date": "2025-09-25",
+      "time": "16:30",
+      "ticker": "AAPL",
+      "tags": ["earnings"],
+      "rank": "B",
+      "note": "Очікування +7% yoy",
+      "link": "https://example.com/aapl-earnings"
+    },
+    {
+      "id": "evt-002",
+      "title": "Звітність $RWD (Q3)",
+      "date": "2025-09-25",
+      "time": "16:30",
+      "ticker": "AAPL",
+      "tags": ["earnings"],
+      "rank": "С",
+      "note": "Очікування +7% yoy",
+      "link": "https://example.com/aapl-earnings"
+    },
+     {
+      "id": "evt-003",
+      "title": "Звітність $RWD (Q3)",
+      "date": "2025-09-24",
+      "time": "16:30",
+      "ticker": "AAPL",
+      "tags": ["earnings"],
+      "rank": "S",
+      "note": "Очікування +7% yoy",
+      "link": "https://example.com/aapl-earnings"
+    },
+   {
+      "id": "evt-004",
+      "title": "Звітність $RWD (Q3)",
+      "date": "2025-09-23",
+      "time": "16:30",
+      "ticker": "AAPL",
+      "tags": ["earnings"],
+      "rank": "F",
+      "note": "Очікування +7% yoy",
+      "link": "https://example.com/aapl-earnings"
+    }
+
+
+  ]
+}

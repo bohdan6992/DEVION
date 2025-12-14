@@ -1,0 +1,272 @@
+/* ============ Design tokens (покриваються themes.css) ============ */
+:root{
+  --gap: 16px;
+  --gap-lg: 20px;
+  --radius: 16px;
+  --radius-lg: 22px;
+
+  /* На випадок, якщо в темі не визначені */
+  --bg: #0b0f1a;
+  --fg: #e6eaf2;
+  --muted: #93a1be;
+
+  /* Нове: шарове "фонове зображення" теми (може перевизначатися в themes.css) */
+  --bg-image:
+    radial-gradient(1100px 700px at 15% -10%, color-mix(in oklab, #7aa2ff 22%, transparent), transparent 60%),
+    radial-gradient(900px 650px at 85% 0%, color-mix(in oklab, #7aa2ff 12%, transparent), transparent 60%);
+
+  --card-bg: color-mix(in oklab, #ffffff 5%, transparent);
+  --card-ring: rgba(255,255,255,.10);
+  --shadow: 0 10px 30px rgba(0,0,0,.25);
+
+  --color-primary: #7aa2ff;
+  --chart-line: #7aa2ff;
+  --chart-dot: #b4c6ff;
+  --chart-grid: rgba(148,163,184,.18);
+  --chart-win: #34d399;
+  --chart-loss: #fb7185;
+  --chart-legend: #a8b1c5;
+  --chart-tooltip-bg: rgba(12,18,33,.92);
+  --chart-tooltip-border: rgba(255,255,255,.10);
+}
+
+/* ============ Базові скидання/типографіка ============ */
+html, body{
+  height: 100%;
+  background: var(--bg);
+  /* Нове: додаємо шарові градієнти як фон теми */
+  background-image: var(--bg-image);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-position: center top;
+  background-size: cover;
+
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+*, *::before, *::after{ box-sizing: border-box; }
+svg, text, tspan{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+/* Виділення тексту — трохи контрасту */
+::selection{
+  background: color-mix(in oklab, var(--color-primary) 28%, transparent);
+}
+
+/* ==================================================================
+   Утиліти контейнера / відступів — аналоги tailwind, які ти юзаєш
+   ================================================================== */
+.max-w-7xl { max-width: 80rem; }            /* ~1280px */
+.mx-auto { margin-left: auto; margin-right: auto; }
+.px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
+.mt-6 { margin-top: 1.5rem; }
+.mt-8 { margin-top: 2rem; }
+.gap-6 { gap: 1.5rem; }
+.p-6 { padding: 1.5rem; }
+.rounded-3xl { border-radius: 1.5rem; }     /* ~24px */
+.mb-4 { margin-bottom: 1rem; }
+
+/* ==================================================================
+   НОВЕ: грід-движок .tt-grid + респонсивні модифікатори
+   (повністю замінює tailwind-клас grid)
+   ================================================================== */
+.tt-grid {
+  display: grid;
+  gap: var(--gap);
+}
+@media (min-width: 640px) {
+  .tt-grid.sm\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .tt-grid.lg\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1280px) {
+  .tt-grid.xl\:grid-cols-7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+}
+
+/* ============ Секції та контейнери (залишив твої) ============ */
+.tt-section{
+  max-width: 1180px;
+  margin: 22px auto;
+  padding: 0 20px;
+}
+
+.tt-container{
+  display: grid;
+  gap: var(--gap);
+  /* картки/статистика — плитка, що елегантно переноситься */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+/* для секції з графіками (карткам потрібно більше мінімальної ширини) */
+.tt-container.tt-charts,
+.tt-container > .tt-card:has(.recharts-wrapper){
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* ============ Картки/панелі ============ */
+.tt-card,
+.surface{ /* <— залишив твою "surface" і додав скло-ефект */
+  position: relative;
+  padding: 18px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-ring);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.tt-title{
+  margin: 0 0 10px 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+
+.tt-muted{
+  color: var(--muted);
+  opacity: .95;
+}
+
+/* ============ Формові штуки ============ */
+.tt-formgrid{
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-top: 10px;
+}
+
+.tt-input{
+  width: 100%;
+  height: 40px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  color: var(--fg);
+  background: var(--card-bg);
+  border: 1px solid var(--card-ring);
+  outline: none;
+}
+.tt-input::placeholder{ color: color-mix(in oklab, var(--muted) 70%, transparent); }
+.tt-input:focus{
+  border-color: color-mix(in oklab, var(--color-primary) 55%, var(--card-ring));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 20%, transparent);
+}
+
+/* ============ Кнопки ============ */
+.tt-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 25%, var(--card-ring));
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--color-primary) 24%, transparent) 0%,
+    color-mix(in oklab, var(--color-primary) 12%, transparent) 100%
+  );
+  color: var(--fg);
+  cursor: pointer;
+  transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
+}
+.tt-btn:hover{
+  box-shadow: 0 8px 28px color-mix(in oklab, var(--color-primary) 25%, transparent);
+}
+.tt-btn:active{ transform: translateY(1px); }
+.tt-btn[disabled]{ opacity: .6; cursor: not-allowed; }
+
+/* ============ Список/рядок ============ */
+.row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--card-ring);
+}
+
+/* ============ Recharts (підтягнути колір і контраст) ============ */
+.recharts-legend-wrapper{ color: var(--chart-legend) !important; }
+.recharts-reference-line line{ opacity: .9; }
+.recharts-tooltip-wrapper .recharts-default-tooltip{
+  background: var(--chart-tooltip-bg) !important;
+  border: 1px solid var(--chart-tooltip-border) !important;
+  color: var(--fg) !important;
+  border-radius: 12px !important;
+}
+
+/* крапки та лінії */
+.recharts-line .recharts-line-curve{ filter: drop-shadow(0 0 0 rgba(0,0,0,0)); }
+.recharts-dot{
+  stroke: var(--chart-dot) !important;
+  fill: var(--bg) !important;
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--chart-dot) 60%, transparent));
+}
+.recharts-cartesian-grid line { stroke: var(--chart-grid) !important; }
+
+/* ============ Невеликі відступи для герою (верхнього блоку) ============ */
+.tt-hero{ margin-top: 8px; }
+
+/* =============================
+   Zoom-mode: розтягуємо полотно
+   (клас .zoom-mode ми додаємо на <body> у _app.tsx)
+   ============================= */
+
+/* знімаємо всі max-width у популярних контейнерах */
+.zoom-mode .tt-section,
+.zoom-mode .max-w-7xl,
+.zoom-mode [class*="max-w-"] {
+  max-width: none !important;
+}
+
+/* ключові обгортки робимо шириною полотна */
+.zoom-mode .tt-section,
+.zoom-mode .tt-topbar-inner,
+.zoom-mode .page,
+.zoom-mode .content,
+.zoom-mode .wrap {
+  width: calc(var(--base-width) * 1px) !important; /* базова = 1920 */
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* щоб гріди не стискались при розтягуванні */
+.zoom-mode .tt-container {
+  /* твій auto-fit OK; достатньо зняти max-width у батьківських */
+  /* якщо хочеш щільніше — розкоментуй наступний рядок */
+  /* grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); */
+}
+
+/* інколи фон з background-attachment: fixed мерехтить під scale;
+   якщо помітиш дрижання — розкоментуй це:
+   body.zoom-mode { background-attachment: scroll; } 
+*/
+
+/* --- Fixed grid under global scale (no reflow) --- */
+.scale-lock {
+  display: grid;
+  gap: var(--gap, 1.25rem);
+  /* вимикаємо tailwind-перебудову, примушуємо нашу сітку */
+  grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)) !important;
+}
+
+/* зручний API через data-атрибут */
+.scale-lock[data-cols] {
+  /* CSS attr() для number ще не підтримується у grid-template-columns,
+     тому дублюємо через кастомну змінну */
+}
+.scale-lock[data-cols="2"] { --cols: 2; }
+.scale-lock[data-cols="3"] { --cols: 3; }
+.scale-lock[data-cols="4"] { --cols: 4; }
+.scale-lock[data-cols="5"] { --cols: 5; }
+.scale-lock[data-cols="6"] { --cols: 6; }
+.scale-lock[data-cols="7"] { --cols: 7; }
+
+/* підстраховка від утиліт типу lg:grid-cols-* */
+.scale-lock[class*="grid-cols-"] { grid-template-columns: repeat(var(--cols, 1), minmax(0,1fr)) !important; }
+
+/* картки всередині — не стискати нижче мін-ширини (щоб не ламався контент) */
+.scale-lock > * { min-width: 0; }

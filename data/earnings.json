@@ -1,0 +1,7 @@
+[
+  { "date": "2025-09-24", "ticker": "AAPL", "company": "Apple Inc.", "sector": "Tech Hardware", "time": "BMO" },
+  { "date": "2025-09-24", "ticker": "NKE",  "company": "Nike, Inc.", "sector": "Consumer Discretionary", "time": "AMC" },
+  { "date": "2025-09-25", "ticker": "TSLA", "company": "Tesla, Inc.", "sector": "Automobiles", "time": "AMC" },
+  { "date": "2025-09-26", "ticker": "AAPL", "company": "Apple Inc.", "sector": "Tech Hardware", "time": "BMO" },   
+  { "date": "2025-09-23", "ticker": "TSLA", "company": "Tesla, Inc.", "sector": "Automobiles", "time": "AC" }
+]

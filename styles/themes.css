@@ -1,0 +1,589 @@
+/* =========================================================
+   THEME TOKENS — спільні дефолти + покриття тем
+   ========================================================= */
+
+/* Базові дефолти */
+:root {
+  --bg: #0b0f1a;
+  --fg: #e6eaf2;
+  --muted: #93a1be;
+
+  --bg-image:
+    radial-gradient(1100px 700px at 15% -10%, color-mix(in oklab, #7aa2ff 22%, transparent), transparent 60%),
+    radial-gradient(900px 650px at 85% 0%, color-mix(in oklab, #7aa2ff 12%, transparent), transparent 60%);
+
+  --card-bg: color-mix(in oklab, #ffffff 5%, transparent);
+  --card-border: rgba(255, 255, 255, .10);
+  --shadow: 0 10px 30px rgba(0, 0, 0, .25);
+
+  --color-primary: #7aa2ff;
+  --chart-line: #7aa2ff;
+  --chart-dot: #b4c6ff;
+  --chart-grid: rgba(148,163,184,.18);
+  --chart-win: #34d399;
+  --chart-loss: #fb7185;
+  --chart-legend: #a8b1c5;
+  --chart-tooltip-bg: rgba(12,18,33,.92);
+  --chart-tooltip-border: rgba(255,255,255,.10);
+  --donut-center: #ffffff;
+}
+
+/* ---------------- LIGHT (Sky Breeze — яскраве небо) ---------------- */
+:root[data-theme="light"] {
+  --bg: #d6f0ff;               /* яскравий небесний */
+  --fg: #0b1b30;               /* темно-морський текст */
+  --muted: #3a5a7a;
+
+  --bg-image:
+    radial-gradient(1400px 860px at 15% -16%, color-mix(in oklab, #38bdf8 58%, transparent), transparent 68%),
+    radial-gradient(1200px 780px at 85% -14%, color-mix(in oklab, #60a5fa 44%, transparent), transparent 70%),
+    radial-gradient(1000px 720px at 50% -24%, color-mix(in oklab, #facc15 30%, transparent), transparent 76%);
+
+  --card-bg: color-mix(in oklab, #ffffff 40%, transparent);
+  --card-border: rgba(7, 23, 42, .10);
+
+  --color-primary: #0ea5e9;
+
+  --chart-line: #0ea5e9;       /* акцент — блакить */
+  --chart-dot: #bae6fd;
+  --chart-grid: rgba(7,23,42,.14);
+  --chart-win: #22c55e;        /* свіжа “травичка” */
+  --chart-loss: #ef4444;       /* контрастна тривога */
+  --chart-legend: #163a5a;
+  --chart-tooltip-bg: rgba(255,255,255,.97);
+  --chart-tooltip-border: rgba(7,23,42,.14);
+  --donut-center: #0b1b30;
+}
+
+/* ---------------- DARK (Slate Aurora) ---------------- */
+:root[data-theme="dark"] {
+  --bg: #050505;
+  --fg: #e7f0ff;
+  --muted: #9fb1cc;
+
+  --bg-image:
+    conic-gradient(from 240deg at 12% -18%, color-mix(in oklab, #60a5fa 38%, transparent), transparent 62%),
+    conic-gradient(from 315deg at 88% -10%, color-mix(in oklab, #22c55e 24%, transparent), transparent 62%),
+    radial-gradient(1200px 720px at 50% -28%, color-mix(in oklab, #0b1222 54%, transparent), transparent 72%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(231,240,255,.10);
+
+  --color-primary: #7aa2ff;
+
+  --chart-line: #7aa2ff;
+  --chart-dot: #c6d6ff;
+  --chart-grid: rgba(156,172,198,.26);
+  --chart-win: #22c55e;
+  --chart-loss: #fb7185;
+  --chart-legend: #c7d6ee;
+  --chart-tooltip-bg: rgba(8,12,24,.96);
+  --chart-tooltip-border: rgba(231,240,255,.16);
+  --donut-center: #ffffff;
+}
+
+/* ---------------- NEON (Violet & Emerald) ---------------- */
+:root[data-theme="neon"] {
+  --bg: #0a0820;
+  --fg: #f5ecff;
+  --muted: #b9c6ff;
+
+  --bg-image:
+    linear-gradient(135deg, color-mix(in oklab, #8b5cf6 56%, transparent), transparent 54%),
+    linear-gradient(315deg, color-mix(in oklab, #10b981 42%, transparent), transparent 58%),
+    radial-gradient(1120px 760px at 12% -12%, color-mix(in oklab, #c4b5fd 28%, transparent), transparent 70%),
+    radial-gradient(1000px 700px at 88%  -8%, color-mix(in oklab, #34d399 24%, transparent), transparent 70%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(139,92,246,.24);
+
+  --color-primary: #a78bfa;
+
+  --chart-line: #8b5cf6;
+  --chart-dot: #dcc7ff;
+  --chart-grid: rgba(16,185,129,.32);
+  --chart-win: #10b981;
+  --chart-loss: #ff5ea8;
+  --chart-legend: #e7deff;
+  --chart-tooltip-bg: rgba(12,16,32,.97);
+  --chart-tooltip-border: rgba(139,92,246,.32);
+  --donut-center: #ffffff;
+}
+
+/* ---------------- PASTEL (Vivid Watercolor) ---------------- */
+:root[data-theme="pastel"] {
+  --bg: #fff0fb;
+  --fg: #1d174b;
+  --muted: #6f6a8a;
+
+  --bg-image:
+    radial-gradient(1500px 820px at 18% -12%, color-mix(in oklab, #c084fc 58%, transparent), transparent 70%),
+    radial-gradient(1300px 740px at 84% -8%,  color-mix(in oklab, #f472b6 46%, transparent), transparent 70%),
+    radial-gradient(1000px 700px at 50% -18%, color-mix(in oklab, #facc15 32%, transparent), transparent 74%);
+
+  --card-bg: color-mix(in oklab, #ffffff 40%, transparent);
+  --card-border: rgba(0,0,0,.08);
+
+  --color-primary: #c084fc;
+
+  --chart-line: #c084fc;
+  --chart-dot: #efd5ff;
+  --chart-grid: rgba(0,0,0,.12);
+  --chart-win: #22c55e;
+  --chart-loss: #f87171;
+  --chart-legend: #57506f;
+  --chart-tooltip-bg: rgba(255,255,255,.98);
+  --chart-tooltip-border: rgba(0,0,0,.12);
+  --donut-center: #1d174b;
+}
+
+/* ---------------- CYBERPUNK (Blue & Red) ---------------- */
+:root[data-theme="cyberpunk"] {
+  --bg: #0a0618;
+  --fg: #ecfaff;
+  --muted: #cfe8ff;
+
+  --bg-image:
+    linear-gradient(210deg, color-mix(in oklab, #0ea5e9 54%, transparent), transparent 60%),
+    linear-gradient(320deg, color-mix(in oklab, #ef4444 48%, transparent), transparent 62%),
+    radial-gradient(1220px 740px at 10% -14%, color-mix(in oklab, #38bdf8 36%, transparent), transparent 64%),
+    radial-gradient(1120px 720px at 92% -10%, color-mix(in oklab, #fb7185 30%, transparent), transparent 66%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(56,189,248,.26);
+
+  --color-primary: #38bdf8;
+
+  --chart-line: #38bdf8;
+  --chart-dot: #bfe5ff;
+  --chart-grid: rgba(255,77,91,.30);
+  --chart-win: #06b6d4;
+  --chart-loss: #ef4444;
+  --chart-legend: #ffd2d2;
+  --chart-tooltip-bg: rgba(7,10,24,.97);
+  --chart-tooltip-border: rgba(56,189,248,.34);
+  --donut-center: #ffffff;
+}
+
+/* ---------------- SOLARIS (Golden Hour — СОНЯЧНІ ПРОМЕНІ) ---------------- */
+:root[data-theme="solaris"] {
+  --bg: #0b0f13;
+  --fg: #fffbea;
+  --muted: #f6cf7a;
+
+  --bg-image:
+    conic-gradient(from 250deg at 8% -18%, color-mix(in oklab, #fde047 56%, transparent), transparent 60%),
+    conic-gradient(from 312deg at 92% -12%, color-mix(in oklab, #fb923c 44%, transparent), transparent 62%),
+    radial-gradient(1260px 720px at 50% -28%, color-mix(in oklab, #ffd7a3 28%, transparent), transparent 72%),
+    radial-gradient(1000px 680px at 50% -10%, color-mix(in oklab, #fda4af 24%, transparent), transparent 74%);
+
+  --card-bg: color-mix(in oklab, #fff9c2 12%, transparent);
+  --card-border: rgba(255, 223, 128, .26);
+
+  --color-primary: #fbbf24;
+
+  --chart-line: #f59e0b;
+  --chart-dot: #ffe59a;
+  --chart-grid: rgba(253, 224, 71, .30);
+  --chart-win: #fbbf24;
+  --chart-loss: #ef4444;
+  --chart-legend: #ffe9a8;
+  --chart-tooltip-bg: rgba(22,14,6,.96);
+  --chart-tooltip-border: rgba(255,223,128,.30);
+  --donut-center: #fffbea;
+}
+
+/* ---------------- SAKURA (Hanami Night) ---------------- */
+:root[data-theme="sakura"] {
+  --bg: #120a14;
+  --fg: #fff6fb;
+  --muted: #f6c9dc;
+
+  --bg-image:
+    radial-gradient(16% 12% at 18% 6%,  color-mix(in oklab, #fda4af 38%, transparent), transparent 70%),
+    radial-gradient(12% 10% at 28% 10%, color-mix(in oklab, #fecdd3 28%, transparent), transparent 72%),
+    radial-gradient(14% 10% at 80%  8%, color-mix(in oklab, #f472b6 26%, transparent), transparent 74%),
+    radial-gradient(1180px 740px at 12% -12%, color-mix(in oklab, #fb7185 38%, transparent), transparent 62%),
+    radial-gradient(940px  680px at 88%  -6%, color-mix(in oklab, #a5b4fc 28%, transparent), transparent 64%);
+
+  --card-bg: color-mix(in oklab, #ffffff 10%, transparent);
+  --card-border: rgba(244,114,182,.28);
+
+  --color-primary: #f472b6;
+
+  --chart-line: #f472b6;
+  --chart-dot: #ffd3e3;
+  --chart-grid: rgba(244,114,182,.30);
+  --chart-win: #fb7185;
+  --chart-loss: #9ca3af;
+  --chart-legend: #ffd5e4;
+  --chart-tooltip-bg: rgba(61,16,37,.96);
+  --chart-tooltip-border: rgba(255,213,228,.30);
+  --donut-center: #fff1f2;
+}
+
+/* ---------------- OCEANIC (Deep Current) ---------------- */
+:root[data-theme="oceanic"] {
+  --bg: #02121a;
+  --fg: #e8fbff;
+  --muted: #a9dcec;
+
+  --bg-image:
+    linear-gradient(160deg,
+      color-mix(in oklab, #22d3ee 26%, transparent) 0%,
+      transparent 58%,
+      color-mix(in oklab, #34d399 20%, transparent) 100%),
+    radial-gradient(1150px 740px at 20% -15%, color-mix(in oklab, #22d3ee 44%, transparent), transparent 68%),
+    radial-gradient(1000px 700px  at 80% -10%, color-mix(in oklab, #2dd4bf 30%, transparent), transparent 68%);
+
+  --card-bg: color-mix(in oklab, #ffffff 9%, transparent);
+  --card-border: rgba(34,211,238,.22);
+
+  --color-primary: #22d3ee;
+
+  --chart-line: #22d3ee;
+  --chart-dot: #c3f4ff;
+  --chart-grid: rgba(14,165,233,.30);
+  --chart-win: #2dd4bf;
+  --chart-loss: #60a5fa;
+  --chart-legend: #d6f4ff;
+  --chart-tooltip-bg: rgba(5,14,24,.97);
+  --chart-tooltip-border: rgba(191,219,254,.30);
+  --donut-center: #ffffff;
+}
+
+/* ---------------- MATRIX (Code Rain — ТЕХНО ЗЕЛЕНІ КОЛОНИ) ---------------- */
+:root[data-theme="matrix"] {
+  --bg: #041207;
+  --fg: #eaffef;
+  --muted: #a8f3bf;
+
+  --bg-image:
+    linear-gradient(90deg, color-mix(in oklab, #22c55e 32%, transparent), transparent 38%),
+    linear-gradient(180deg, color-mix(in oklab, #16a34a 18%, transparent), transparent 60%),
+    radial-gradient(1200px 720px at 12% -12%, color-mix(in oklab, #22c55e 44%, transparent), transparent 62%),
+    radial-gradient(900px  640px at 85%  -6%, color-mix(in oklab, #10b981 30%, transparent), transparent 64%);
+
+  --card-bg: color-mix(in oklab, #ffffff 9%, transparent);
+  --card-border: rgba(34,197,94,.28);
+
+  --color-primary: #22c55e;
+
+  --chart-line: #22c55e;
+  --chart-dot: #b8f4cf;
+  --chart-grid: rgba(34,197,94,.34);
+  --chart-win: #00e27f;          /* кислотний win */
+  --chart-loss: #ff5c5c;         /* гострий неоновий червоний */
+  --chart-legend: #c8f7d8;
+  --chart-tooltip-bg: rgba(4,18,10,.97);
+  --chart-tooltip-border: rgba(34,197,94,.36);
+  --donut-center: #ecfdf5;
+}
+
+/* ---------------- ASHER (Ash Grey) ---------------- */
+:root[data-theme="asher"] {
+  --bg: #101113;            /* темно-графітовий */
+  --fg: #ecedef;            /* майже білий */
+  --muted: #9ea3aa;         /* холодний попелястий */
+
+  /* фоновий “пил на сонці” — дрібні частинки через шум + промені */
+  --bg-image:
+    repeating-radial-gradient(
+      circle at 40% 35%,
+      rgba(255,255,255,0.04) 0,
+      rgba(255,255,255,0.04) 1px,
+      transparent 2px,
+      transparent 4px
+    ),
+    radial-gradient(1300px 760px at 14% -14%, color-mix(in oklab,#6b7280 40%, transparent), transparent 62%),
+    radial-gradient(1100px 720px at 86% -8%, color-mix(in oklab,#3f444a 30%, transparent), transparent 64%),
+    linear-gradient(180deg, rgba(24,26,30,0.8), rgba(16,17,19,1));
+
+  --card-bg: color-mix(in oklab, #ffffff 7%, transparent);
+  --card-border: rgba(160,165,175,.25);
+
+  --color-primary: #babec5;
+
+  /* дуже стримані кольори: */
+  --chart-line: #c5c9cf;
+  --chart-dot: #f1f2f4;
+  --chart-grid: rgba(160,165,175,.32);
+
+  /* позитив і негатив — ледь уловимі пастельні */
+  --chart-win: color-mix(in oklab, #6ee7b7 25%, #cfd4db 75%);
+  --chart-loss: color-mix(in oklab, #f87171 25%, #cfd4db 75%);
+
+  --chart-legend: #e0e3e6;
+  --chart-tooltip-bg: rgba(20,20,22,.97);
+  --chart-tooltip-border: rgba(160,165,175,.36);
+  --donut-center: #f5f6f7;
+}
+
+
+/* ---------------- INFERNO (Hellfire) ---------------- */
+:root[data-theme="inferno"] {
+  --bg: #1a0507;
+  --fg: #ffe8ea;
+  --muted: #ff9aa7;
+
+  --bg-image:
+    radial-gradient(1200px 760px at 12% -12%, color-mix(in oklab, #ef4444 52%, transparent), transparent 60%),
+    radial-gradient(1000px 700px at 88% -8%, color-mix(in oklab, #f97316 42%, transparent), transparent 60%),
+    radial-gradient(1000px 680px at 50% -22%, color-mix(in oklab, #7f1d1d 30%, transparent), transparent 72%);
+
+  --card-bg: color-mix(in oklab, #ffffff 7%, transparent);
+  --card-border: rgba(239,68,68,.32);
+
+  --color-primary: #ff4d4d;
+
+  --chart-line: #ff4d4d;
+  --chart-dot: #ffd0d0;
+  --chart-grid: rgba(249,115,22,.34);
+  --chart-win: #ffd166;      /* жарке золото */
+  --chart-loss: #dc2626;     /* пекельний червоний */
+  --chart-legend: #ffd4d8;
+  --chart-tooltip-bg: rgba(26,5,7,.97);
+  --chart-tooltip-border: rgba(239,68,68,.38);
+  --donut-center: #fff1f2;
+}
+
+/* ---------------- AURORA (Polar Lights) ---------------- */
+:root[data-theme="aurora"] {
+  --bg: #050a1a;
+  --fg: #e6f7ff;
+  --muted: #b9cff0;
+
+  --bg-image:
+    conic-gradient(from 260deg at 12% -18%, color-mix(in oklab, #22c55e 40%, transparent), transparent 60%),
+    conic-gradient(from 310deg at 88% -12%, color-mix(in oklab, #8b5cf6 36%, transparent), transparent 62%),
+    radial-gradient(1200px 760px at 50% -28%, color-mix(in oklab, #0b1222 56%, transparent), transparent 72%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(139, 92, 246, .26);
+
+  --color-primary: #60a5fa;
+
+  --chart-line: #22c55e;
+  --chart-dot: #baf7d0;
+  --chart-grid: rgba(139,92,246,.30);
+  --chart-win: #22c55e;
+  --chart-loss: #ff6b9f;
+  --chart-legend: #d6e7ff;
+  --chart-tooltip-bg: rgba(6,12,28,.97);
+  --chart-tooltip-border: rgba(96,165,250,.34);
+  --donut-center: #e6f7ff;
+}
+
+/* ---------------- DESERT (Mirage Dunes — закат, дюни, оаза, без смуг) ---------------- */
+:root[data-theme="desert"] {
+  --bg: #0f0a07;
+  --fg: #fff3e2;
+  --muted: #f6d7a8;
+
+  --bg-image:
+    /* SUN GLOW */
+    radial-gradient(900px 420px at 50% -12%,
+      color-mix(in oklab, #f59e0b 50%, transparent) 0%,
+      color-mix(in oklab, #f59e0b 24%, transparent) 35%,
+      transparent 70%),
+    /* OASIS BLOOM */
+    radial-gradient(680px 420px at 72% 66%,
+      color-mix(in oklab, #14b8a6 28%, transparent) 0%,
+      color-mix(in oklab, #14b8a6 14%, transparent) 40%,
+      transparent 70%),
+    /* LEFT DUNE */
+    radial-gradient(1200px 520px at -10% 92%,
+      color-mix(in oklab, #7c3e1a 50%, transparent) 0%,
+      color-mix(in oklab, #a16207 36%, transparent) 48%,
+      transparent 70%),
+    /* RIGHT DUNE */
+    radial-gradient(1000px 480px at 110% 96%,
+      color-mix(in oklab, #a16207 44%, transparent) 0%,
+      color-mix(in oklab, #92400e 30%, transparent) 46%,
+      transparent 72%),
+    /* BASE SKY */
+    linear-gradient(180deg,
+      color-mix(in oklab, #3a2a1f 55%, transparent) 0%,
+      color-mix(in oklab, #241913 65%, transparent) 38%,
+      #120b06 100%);
+
+  --card-bg: color-mix(in oklab, #ffffff 9%, transparent);
+  --card-border: rgba(245,158,11,.30);
+  --color-primary: #f59e0b;
+
+  --chart-line: #f59e0b;
+  --chart-dot: #ffe08a;
+  --chart-grid: rgba(245,158,11,.28);
+  --chart-win: #fbbf24;
+  --chart-loss: #ef4444;
+  --chart-legend: #ffe5b8;
+  --chart-tooltip-bg: rgba(18,12,6,.97);
+  --chart-tooltip-border: rgba(245,158,11,.34);
+  --donut-center: #fff6e9;
+}
+
+:root[data-theme="desert"] .surface,
+:root[data-theme="desert"] .tt-card {
+  backdrop-filter: blur(8px) saturate(1.02);
+}
+
+
+/* ---------------- MIDNIGHT (Deep Indigo) ---------------- */
+:root[data-theme="midnight"] {
+  --bg: #070a1a;
+  --fg: #e6e9ff;
+  --muted: #a9b0ff;
+
+  --bg-image:
+    radial-gradient(1200px 740px at 14% -16%, color-mix(in oklab, #6366f1 40%, transparent), transparent 62%),
+    radial-gradient(1000px 700px at 86% -10%, color-mix(in oklab, #22d3ee 26%, transparent), transparent 64%),
+    radial-gradient(1200px 720px at 50% -30%, color-mix(in oklab, #0b1028 54%, transparent), transparent 72%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(99,102,241,.30);
+
+  --color-primary: #6366f1;
+
+  --chart-line: #22d3ee; 
+  --chart-dot: #c9ecff;
+  --chart-grid: rgba(99,102,241,.34);
+  --chart-win: #34d399;
+  --chart-loss: #ef4444;
+  --chart-legend: #d6d8ff;
+  --chart-tooltip-bg: rgba(7,9,22,.97);
+  --chart-tooltip-border: rgba(99,102,241,.36);
+  --donut-center: #e6e8ff;
+}
+
+/* ---------------- FOREST (Deep Canopy — ОРГАНІЧНИЙ ЛІС) ---------------- */
+:root[data-theme="forest"] {
+  --bg: #06140c;
+  --fg: #e9fff4;
+  --muted: #b6f2cf;
+
+  --bg-image:
+    radial-gradient(1200px 720px at 12% -14%, color-mix(in oklab, #166534 36%, transparent), transparent 60%),
+    radial-gradient(1000px 680px at 88% -8%, color-mix(in oklab, #22c55e 30%, transparent), transparent 62%),
+    radial-gradient(1200px 760px at 50% -28%, color-mix(in oklab, #3f2f1b 36%, transparent), transparent 70%);
+
+  --card-bg: color-mix(in oklab, #ffffff 7%, transparent);
+  --card-border: rgba(34,197,94,.28);
+
+  --color-primary: #22c55e;
+
+  --chart-line: #1fb86a;
+  --chart-dot: #aaf0c8;
+  --chart-grid: rgba(63,47,27,.32);
+  --chart-win: #10b981;
+  --chart-loss: #f97316;
+  --chart-legend: #d6f9e6;
+  --chart-tooltip-bg: rgba(6,20,12,.97);
+  --chart-tooltip-border: rgba(34,197,94,.34);
+  --donut-center: #ecfdf5;
+}
+
+/* ---------------- CANDY (Pop Sweet) ---------------- */
+:root[data-theme="candy"] {
+  --bg: #16071b;                 /* більш насичений ягідний */
+  --fg: #fff3f7;
+  --muted: #f8b4d9;
+
+  --bg-image:
+    linear-gradient(135deg, color-mix(in oklab, #f472b6 48%, transparent), transparent 56%),
+    linear-gradient(315deg, color-mix(in oklab, #a78bfa 36%, transparent), transparent 58%),
+    radial-gradient(1080px 720px at 14% -12%, color-mix(in oklab, #ffd6a7 26%, transparent), transparent 70%);
+
+  --card-bg: color-mix(in oklab, #ffffff 8%, transparent);
+  --card-border: rgba(244,114,182,.34);
+
+  --color-primary: #f472b6;
+
+  --chart-line: #f472b6;
+  --chart-dot: #ffd1e1;
+  --chart-grid: rgba(244,114,182,.32);
+  --chart-win: #2dd4bf;      /* mint */
+  --chart-loss: #fb7185;     /* strawberry */
+  --chart-legend: #ffe4ef;
+  --chart-tooltip-bg: rgba(22, 9, 28, .97);
+  --chart-tooltip-border: rgba(244,114,182,.38);
+  --donut-center: #fff3f7;
+}
+
+/* ---------------- MONOCHROME (Greyscale Pro) ---------------- */
+:root[data-theme="monochrome"] {
+
+
+  --bg:#0b0d12; --fg:#eef2ff; --muted:#b7c0d9;
+  --bg-image:
+    radial-gradient(1300px 760px at 16% -14%, color-mix(in oklab,#64748b 34%,transparent), transparent 64%),
+    radial-gradient(1100px 720px at 86% -10%, color-mix(in oklab,#22c55e 22%,transparent), transparent 66%),
+    linear-gradient(180deg, color-mix(in oklab,#0f172a 40%,transparent), transparent 60%);
+  --card-bg: color-mix(in oklab,#ffffff 7%,transparent);
+  --card-border: rgba(148,163,184,.26);
+  --color-primary:#8ea3bf;
+  --chart-line:#8ea3bf; --chart-dot:#e4ecf7; --chart-grid:rgba(148,163,184,.30);
+  --chart-win:#22c55e; --chart-loss:#ef4444; --chart-legend:#e2e8f0;
+  --chart-tooltip-bg:rgba(11,13,18,.97); --chart-tooltip-border:rgba(148,163,184,.34);
+  --donut-center:#f3f6fb;
+}
+
+
+
+
+
+
+
+
+
+
+
+/* =========================================================
+   Базові елементи
+   ========================================================= */
+html, body {
+  height: 100%;
+  background: var(--bg);
+  background-image: var(--bg-image);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-position: center top;
+  background-size: cover;
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-primary) 28%, transparent);
+}
+
+.surface,
+.tt-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.tt-muted { color: var(--muted); }
+
+.tt-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.recharts-legend-wrapper { color: var(--chart-legend) !important; }
+.recharts-reference-line line { opacity: .9; }
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--chart-tooltip-bg) !important;
+  border: 1px solid var(--chart-tooltip-border) !important;
+  color: var(--fg) !important;
+  border-radius: 12px !important;
+}
+
+.recharts-dot {
+  stroke: var(--chart-dot) !important;
+  fill: var(--bg) !important;
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--chart-dot) 60%, transparent));
+}
