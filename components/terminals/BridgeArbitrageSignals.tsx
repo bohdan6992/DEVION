@@ -86,7 +86,7 @@ type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
 type BenchBlock = { benchmark: string; buckets: BucketGroup[] };
 
-type ArbClass = "ark" | "print" | "open" | "intra" | "post" | "global";
+type ArbClass = "blue" | "ark" | "print" | "open" | "intra" | "post" | "global";
 type ArbType = "any" | "hard" | "soft";
 
 /* =========================
@@ -817,6 +817,41 @@ const SignalCard: React.FC<SignalCardProps> = ({
   );
 };
 
+// ✅ BEST_PARAMS UI
+const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
+
+const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
+
+const fmtPct01 = (v: number | null | undefined, digits = 0) => {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${Math.round(v * 100).toFixed(digits)}%`;
+};
+
+const fmtDelay = (sec: number | null | undefined) => {
+  if (sec == null || Number.isNaN(sec)) return "—";
+  if (sec < 60) return `${Math.round(sec)}s`;
+  const m = sec / 60;
+  if (m < 60) return `${Math.round(m)}m`;
+  const h = m / 60;
+  return `${h.toFixed(h < 10 ? 1 : 0)}h`;
+};
+
+const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
+const safeArr = (v: any) => (Array.isArray(v) ? v : []);
+
+const rangeBadge = (r: any) => {
+  const from = toNum(r?.from ?? r?.min);
+  const to = toNum(r?.to ?? r?.max);
+  const rate = toNum(r?.rate);
+  const total = toNum(r?.total);
+  const f = from == null ? "—" : fmtNum(from, 2);
+  const t = to == null ? "—" : fmtNum(to, 2);
+  const rr = rate == null ? "—" : `${Math.round(rate * 100)}%`;
+  const nn = total == null ? "—" : fmtMaybeInt(total);
+  return `${f} → ${t}  ·  ${rr} / ${nn}`;
+};
+
+
 /* =========================
    COMPONENT
 ========================= */
@@ -848,6 +883,9 @@ export default function BridgeArbitrageSignals() {
   const [adv20Max, setAdv20Max] = useState<string>("");
   const [adv20NFMin, setAdv20NFMin] = useState<string>("");
   const [adv20NFMax, setAdv20NFMax] = useState<string>("");
+  // ✅ BestParams compact tab
+const [bpCls, setBpCls] = useState<ArbClass>("global");
+
 
   const [adv90Min, setAdv90Min] = useState<string>("");
   const [adv90Max, setAdv90Max] = useState<string>("");
@@ -1699,6 +1737,9 @@ useEffect(() => {
   const activeMeta = getMeta(activeData);
   const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "—")).toUpperCase();
   const bestObj = activeData?.best ?? activeData?.Best ?? null;
+  // ✅ BEST_PARAMS UI
+  const bestParams = getBestParams(activeData);
+
   const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
   const activeSigma = toNum(bestObj?.sigma ?? bestObj?.Sigma) ?? getNumAny(activeData, ["sig", "Sig", "sigma", "Sigma"]);
   const activeSector2 = getStrAny(activeData, ["sector", "Sector", "lvl2", "level2", "Level2"], "—");
@@ -1872,9 +1913,14 @@ useEffect(() => {
         <div className="flex flex-wrap gap-4 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
           {/* Class Segments */}
           <div className="flex gap-2">
-            {(["global", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
-              <FilterButton key={c} active={cls === c} label={c === "global" ? "GLOB" : c} onClick={() => setCls(c)} />
-            ))}
+          {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+            <FilterButton
+              key={c}
+              active={cls === c}
+              label={c === "global" ? "GLOB" : c.toUpperCase()}
+              onClick={() => setCls(c)}
+            />
+          ))}
           </div>
 
           <div className="w-px h-8 bg-white/5" />
@@ -2456,6 +2502,248 @@ useEffect(() => {
                         ))}
                       </div>
                     </div>
+                    {/* ✅ BEST_PARAMS UI (COMPACT) */}
+                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
+                      <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02] flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Best Params</span>
+                        <span className="text-[10px] font-mono text-zinc-600">from best_params.jsonl</span>
+                      </div>
+
+                      <div className="p-3 space-y-2">
+                        {!bestParams ? (
+                          <div className="text-[11px] font-mono text-zinc-600">— (no best_params on this signal payload)</div>
+                        ) : (
+                          <>
+                            {/* HEADER CHIPS (tight) */}
+                            <div className="flex flex-wrap gap-1.5">
+                              <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
+                                {String(bestParams?.ticker ?? activeTicker ?? "—")}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
+                                {String(bestParams?.bench ?? activeBench ?? "—")}
+                              </span>
+
+                              {(() => {
+                                const st = safeObj(bestParams?.static);
+                                const corr = toNum(st?.corr);
+                                const beta = toNum(st?.beta);
+                                const sigma = toNum(st?.sigma);
+                                return (
+                                  <>
+                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
+                                      corr <span className="text-white ml-1">{corr == null ? "—" : fmtNum(corr, 2)}</span>
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
+                                      β <span className="text-white ml-1">{beta == null ? "—" : fmtNum(beta, 2)}</span>
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
+                                      σ <span className="text-white ml-1">{sigma == null ? "—" : fmtNum(sigma, 2)}</span>
+                                    </span>
+                                  </>
+                                );
+                              })()}
+                            </div>
+
+                            {/* TOP ROW: totals + medians in one compact row */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Totals</div>
+                                {(() => {
+                                  const t = safeObj(bestParams?.totals);
+                                  const ev = toNum(t?.events_total);
+                                  const pre = toNum(t?.pre_total);
+                                  const intra = toNum(t?.intra_total);
+                                  const post = toNum(t?.post_total);
+                                  return (
+                                    <div className="grid grid-cols-4 gap-2 text-[10px] font-mono text-zinc-300">
+                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">ev</span><span>{ev == null ? "—" : fmtMaybeInt(ev)}</span></div>
+                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">pre</span><span>{pre == null ? "—" : fmtMaybeInt(pre)}</span></div>
+                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">intra</span><span>{intra == null ? "—" : fmtMaybeInt(intra)}</span></div>
+                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">post</span><span>{post == null ? "—" : fmtMaybeInt(post)}</span></div>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
+                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Dev print last5 median</div>
+                                {(() => {
+                                  const m = safeObj(bestParams?.dev_print_last5_median);
+                                  const pos = toNum(m?.pos);
+                                  const neg = toNum(m?.neg);
+                                  return (
+                                    <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-zinc-300">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-zinc-500">pos</span>
+                                        <span className={pos == null ? "text-zinc-600" : pos >= 0 ? "text-emerald-300" : "text-rose-300"}>
+                                          {pos == null ? "—" : fmtNum(pos, 3)}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-zinc-500">neg</span>
+                                        <span className={neg == null ? "text-zinc-600" : neg >= 0 ? "text-emerald-300" : "text-rose-300"}>
+                                          {neg == null ? "—" : fmtNum(neg, 3)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+
+                            {/* RATINGS: single compact line (no huge pills grid) */}
+                            <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase">Ratings</div>
+                                <div className="text-[10px] font-mono text-zinc-600">click tab below for per-class</div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {(() => {
+                                  const r = safeObj(bestParams?.ratings) ?? {};
+                                  return clsOrder.map((c) => {
+                                    const val = toNum((r as any)[c]);
+                                    const good = val != null && val >= 0.6;
+                                    return (
+                                      <span
+                                        key={c}
+                                        className={[
+                                          "px-2 py-0.5 rounded-full border text-[10px] font-mono uppercase",
+                                          c === bpCls ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-white/5 text-zinc-400",
+                                          good ? "shadow-[0_0_10px_rgba(16,185,129,0.10)]" : "",
+                                        ].join(" ")}
+                                        onClick={() => setBpCls(c)}
+                                        role="button"
+                                      >
+                                        {c}: <span className="ml-1 text-white">{fmtPct01(val, 0)}</span>
+                                      </span>
+                                    );
+                                  });
+                                })()}
+                              </div>
+                            </div>
+
+                            {/* PER-CLASS: tabs -> show only one class at a time */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {/* Hard/Soft compact */}
+                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Hard / Soft</div>
+                                {(() => {
+                                  const hs = safeObj(bestParams?.hard_soft_share) ?? {};
+                                  const row = safeObj((hs as any)[bpCls]);
+                                  const hard = toNum(row?.hard);
+                                  const soft = toNum(row?.soft);
+                                  const share = toNum(row?.hard_share);
+                                  const total = (hard ?? 0) + (soft ?? 0);
+                                  const hsLabel = total > 0 ? (share != null && share >= (2 / 3) ? "H" : "S") : "—";
+                                  return (
+                                    <div className="flex items-center justify-between text-[10px] font-mono">
+                                      <span className="text-zinc-500 uppercase">{bpCls}</span>
+                                      <span className="text-zinc-300 tabular-nums">
+                                        {hard == null && soft == null ? "—" : `${fmtMaybeInt(hard ?? 0)}/${fmtMaybeInt(soft ?? 0)}`}
+                                        <span className="text-zinc-600"> · </span>
+                                        <span className={hsLabel === "H" ? "text-emerald-300" : hsLabel === "S" ? "text-violet-300" : "text-zinc-600"}>
+                                          {hsLabel}
+                                        </span>
+                                        <span className="text-zinc-600"> · </span>
+                                        <span className="text-zinc-400">{fmtPct01(share, 0)}</span>
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Delay compact */}
+                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Avg hard delay</div>
+                                {(() => {
+                                  const d = safeObj(bestParams?.avg_hard_delay_sec) ?? {};
+                                  const v = toNum((d as any)[bpCls]);
+                                  return (
+                                    <div className="flex items-center justify-between text-[10px] font-mono">
+                                      <span className="text-zinc-500 uppercase">{bpCls}</span>
+                                      <span className="text-zinc-300 tabular-nums">{fmtDelay(v)}</span>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+
+                            {/* Best windows: show ONLY for selected class */}
+                            <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="text-[10px] text-zinc-500 font-mono uppercase">Best windows (any)</div>
+                                <div className="text-[10px] font-mono text-zinc-600 uppercase">{bpCls}</div>
+                              </div>
+
+                              {(() => {
+                                const bw = safeObj(bestParams?.best_windows_any);
+                                const stitched = safeObj(bw?.stitched);
+
+                                const sigmaPeak = safeObj(stitched?.sigma_peak_bins)?.[bpCls];
+                                const benchPeak = safeObj(stitched?.bench_peak_bins)?.[bpCls];
+                                const timeBands = safeObj(stitched?.time_start_bands)?.[bpCls];
+
+                                const renderTwo = (title: string, obj: any) => {
+                                  const pos = safeArr(obj?.pos);
+                                  const neg = safeArr(obj?.neg);
+                                  const empty = pos.length === 0 && neg.length === 0;
+
+                                  return (
+                                    <div className="border border-white/10 rounded-md bg-black/20 p-2">
+                                      <div className="text-[10px] font-mono uppercase text-zinc-500 mb-1">{title}</div>
+                                      {empty ? (
+                                        <div className="text-[10px] font-mono text-zinc-700">—</div>
+                                      ) : (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                          <div>
+                                            <div className="text-[10px] font-mono text-emerald-300 uppercase mb-1">pos</div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                              {pos.map((r: any, i: number) => (
+                                                <span key={i} className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-[10px] font-mono tabular-nums">
+                                                  {rangeBadge(r)}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[10px] font-mono text-rose-300 uppercase mb-1">neg</div>
+                                            <div className="flex flex-wrap gap-1.5">
+                                              {neg.map((r: any, i: number) => (
+                                                <span key={i} className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-200 text-[10px] font-mono tabular-nums">
+                                                  {rangeBadge(r)}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                };
+
+                                return (
+                                  <div className="space-y-2">
+                                    {renderTwo("sigma_peak_bins", sigmaPeak)}
+                                    {renderTwo("bench_peak_bins", benchPeak)}
+                                    {renderTwo("time_start_bands", timeBands)}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+
+                            {/* raw fallback (still there, but compact) */}
+                            <details className="border border-dashed border-white/10 rounded-xl bg-black/20 p-2 text-xs font-mono text-zinc-500 cursor-pointer">
+                              <summary className="hover:text-zinc-300 text-[10px]">raw JSON</summary>
+                              <pre className="mt-2 text-[10px] whitespace-pre-wrap break-all text-zinc-400">
+                                {JSON.stringify(bestParams, null, 2)}
+                              </pre>
+                            </details>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+
 
                     {/* Debug */}
                     <details className="border border-dashed border-white/10 rounded-xl bg-black/20 p-3 text-xs font-mono text-zinc-500 cursor-pointer">

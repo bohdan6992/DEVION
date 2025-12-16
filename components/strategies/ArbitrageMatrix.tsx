@@ -2,11 +2,11 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import { getArbitrageList } from "@/lib/trapClient";
-import { 
-  Search, 
-  ArrowUp, 
-  ArrowDown, 
-  ArrowLeft, 
+import {
+  Search,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
   RefreshCw,
   AlertCircle,
   ChevronLeft,
@@ -22,7 +22,7 @@ import {
   Zap,
   Clock,
   Activity,
-  Flag
+  Flag,
 } from "lucide-react";
 
 // --- Types ---
@@ -31,8 +31,12 @@ type RawRow = Record<string, string>;
 
 type SortKey =
   | "ticker"
+  | "events_total"
   | "events_pre_total"
+  | "events_intra_total"
+  | "events_post_total"
   | "global_any_rate" | "global_hard_rate" | "global_soft_rate"
+  | "blue_any_rate" | "blue_hard_rate" | "blue_soft_rate"
   | "ark_any_rate" | "ark_hard_rate" | "ark_soft_rate"
   | "print_any_rate" | "print_hard_rate" | "print_soft_rate"
   | "open_any_rate" | "open_hard_rate" | "open_soft_rate"
@@ -47,13 +51,21 @@ type DisplayRow = {
   corr: string;
   beta: string;
   sig: string;
+
+  events_total: string;
   events_pre_total: string;
+  events_intra_total: string;
+  events_post_total: string;
+
   global_any_rate: string; global_hard_rate: string; global_soft_rate: string;
+
+  blue_any_rate: string; blue_hard_rate: string; blue_soft_rate: string;
   ark_any_rate: string; ark_hard_rate: string; ark_soft_rate: string;
   print_any_rate: string; print_hard_rate: string; print_soft_rate: string;
   open_any_rate: string; open_hard_rate: string; open_soft_rate: string;
   intra_any_rate: string; intra_hard_rate: string; intra_soft_rate: string;
   post_any_rate: string; post_hard_rate: string; post_soft_rate: string;
+
   __raw: RawRow;
 };
 
@@ -62,39 +74,89 @@ type FilterState = Record<string, { min: string; max: string }>;
 // --- Config ---
 
 const GROUPS = [
-  { 
-    id: "meta", label: "META", color: "text-zinc-400", border: "border-zinc-500", bg: "bg-zinc-500/10", icon: Box,
-    cols: ["events_pre_total"] 
+  {
+    id: "meta",
+    label: "META",
+    color: "text-zinc-400",
+    border: "border-zinc-500",
+    bg: "bg-zinc-500/10",
+    icon: Box,
+    cols: ["events_total", "events_pre_total", "events_intra_total", "events_post_total"],
   },
-  { 
-    id: "global", label: "GLOBAL", color: "text-cyan-400", border: "border-cyan-500", bg: "bg-cyan-500/10", icon: Globe,
-    cols: ["global_any_rate", "global_hard_rate", "global_soft_rate"] 
+  {
+    id: "global",
+    label: "GLOBAL",
+    color: "text-cyan-400",
+    border: "border-cyan-500",
+    bg: "bg-cyan-500/10",
+    icon: Globe,
+    cols: ["global_any_rate", "global_hard_rate", "global_soft_rate"],
   },
-  { 
-    id: "ark", label: "ARK", color: "text-emerald-400", border: "border-emerald-500", bg: "bg-emerald-500/10", icon: Layers,
-    cols: ["ark_any_rate", "ark_hard_rate", "ark_soft_rate"] 
+  {
+    id: "blue",
+    label: "BLUE",
+    color: "text-sky-400",
+    border: "border-sky-500",
+    bg: "bg-sky-500/10",
+    icon: Layers,
+    cols: ["blue_any_rate", "blue_hard_rate", "blue_soft_rate"],
   },
-  { 
-    id: "print", label: "PRINT", color: "text-violet-400", border: "border-violet-500", bg: "bg-violet-500/10", icon: Zap,
-    cols: ["print_any_rate", "print_hard_rate", "print_soft_rate"] 
+  {
+    id: "ark",
+    label: "ARK",
+    color: "text-emerald-400",
+    border: "border-emerald-500",
+    bg: "bg-emerald-500/10",
+    icon: Layers,
+    cols: ["ark_any_rate", "ark_hard_rate", "ark_soft_rate"],
   },
-  { 
-    id: "open", label: "OPEN", color: "text-rose-400", border: "border-rose-500", bg: "bg-rose-500/10", icon: Clock,
-    cols: ["open_any_rate", "open_hard_rate", "open_soft_rate"] 
+  {
+    id: "print",
+    label: "PRINT",
+    color: "text-violet-400",
+    border: "border-violet-500",
+    bg: "bg-violet-500/10",
+    icon: Zap,
+    cols: ["print_any_rate", "print_hard_rate", "print_soft_rate"],
   },
-  { 
-    id: "intra", label: "INTRA", color: "text-indigo-400", border: "border-indigo-500", bg: "bg-indigo-500/10", icon: Activity,
-    cols: ["intra_any_rate", "intra_hard_rate", "intra_soft_rate"] 
+  {
+    id: "open",
+    label: "OPEN",
+    color: "text-rose-400",
+    border: "border-rose-500",
+    bg: "bg-rose-500/10",
+    icon: Clock,
+    cols: ["open_any_rate", "open_hard_rate", "open_soft_rate"],
   },
-  { 
-    id: "post", label: "POST", color: "text-orange-400", border: "border-orange-500", bg: "bg-orange-500/10", icon: Flag,
-    cols: ["post_any_rate", "post_hard_rate", "post_soft_rate"] 
+  {
+    id: "intra",
+    label: "INTRA",
+    color: "text-indigo-400",
+    border: "border-indigo-500",
+    bg: "bg-indigo-500/10",
+    icon: Activity,
+    cols: ["intra_any_rate", "intra_hard_rate", "intra_soft_rate"],
+  },
+  {
+    id: "post",
+    label: "POST",
+    color: "text-orange-400",
+    border: "border-orange-500",
+    bg: "bg-orange-500/10",
+    icon: Flag,
+    cols: ["post_any_rate", "post_hard_rate", "post_soft_rate"],
   },
 ];
 
 const COL_LABELS: Record<string, string> = {
-  events_pre_total: "Evt",
+  events_total: "All",
+  events_pre_total: "Pre",
+  events_intra_total: "Intra",
+  events_post_total: "Post",
+
   global_any_rate: "Any", global_hard_rate: "Hard", global_soft_rate: "Soft",
+
+  blue_any_rate: "Any", blue_hard_rate: "Hard", blue_soft_rate: "Soft",
   ark_any_rate: "Any", ark_hard_rate: "Hard", ark_soft_rate: "Soft",
   print_any_rate: "Any", print_hard_rate: "Hard", print_soft_rate: "Soft",
   open_any_rate: "Any", open_hard_rate: "Hard", open_soft_rate: "Soft",
@@ -120,25 +182,40 @@ function toDisplayRow(r: RawRow): DisplayRow {
     corr: pick(r, ["corr"], ""),
     beta: pick(r, ["beta"], ""),
     sig: pick(r, ["sig", "sigma"], ""),
+
+    events_total: pick(r, ["events_total"], ""),
     events_pre_total: pick(r, ["events_pre_total"], ""),
+    events_intra_total: pick(r, ["events_intra_total"], ""),
+    events_post_total: pick(r, ["events_post_total"], ""),
+
     global_any_rate: pick(r, ["global_any_rate"]),
     global_hard_rate: pick(r, ["global_hard_rate"]),
     global_soft_rate: pick(r, ["global_soft_rate"]),
+
+    blue_any_rate: pick(r, ["blue_any_rate"]),
+    blue_hard_rate: pick(r, ["blue_hard_rate"]),
+    blue_soft_rate: pick(r, ["blue_soft_rate"]),
+
     ark_any_rate: pick(r, ["ark_any_rate"]),
     ark_hard_rate: pick(r, ["ark_hard_rate"]),
     ark_soft_rate: pick(r, ["ark_soft_rate"]),
+
     print_any_rate: pick(r, ["print_any_rate"]),
     print_hard_rate: pick(r, ["print_hard_rate"]),
     print_soft_rate: pick(r, ["print_soft_rate"]),
+
     open_any_rate: pick(r, ["open_any_rate"]),
     open_hard_rate: pick(r, ["open_hard_rate"]),
     open_soft_rate: pick(r, ["open_soft_rate"]),
+
     intra_any_rate: pick(r, ["intra_any_rate"]),
     intra_hard_rate: pick(r, ["intra_hard_rate"]),
     intra_soft_rate: pick(r, ["intra_soft_rate"]),
+
     post_any_rate: pick(r, ["post_any_rate"]),
     post_hard_rate: pick(r, ["post_hard_rate"]),
     post_soft_rate: pick(r, ["post_soft_rate"]),
+
     __raw: r,
   };
 }
@@ -150,7 +227,7 @@ function numOrNaN(x: any) {
 
 function fmtPct(x: string) {
   const v = numOrNaN(x);
-  if (Number.isNaN(v)) return <span className="text-zinc-800">—</span>;
+  if (Number.isNaN(v)) return <span className="text-zinc-600">—</span>;
   return `${(v * 100).toFixed(0)}%`;
 }
 
@@ -166,37 +243,37 @@ function getRateColor(valStr: string) {
 
 // --- Small subcomponent ---
 
-const FilterInput = ({ 
-  label, 
-  colKey, 
-  filters, 
-  onChange 
-}: { 
-  label: string; 
-  colKey: string; 
-  filters: FilterState; 
-  onChange: (key: string, type: 'min' | 'max', val: string) => void 
+const FilterInput = ({
+  label,
+  colKey,
+  filters,
+  onChange,
+}: {
+  label: string;
+  colKey: string;
+  filters: FilterState;
+  onChange: (key: string, type: "min" | "max", val: string) => void;
 }) => {
   return (
     <div className="flex flex-col gap-1">
       <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">{label}</label>
       <div className="flex items-center gap-1">
-        <input 
-          type="number" 
-          placeholder="Min" 
+        <input
+          type="number"
+          placeholder="Min"
           step="0.1"
           className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-xs text-emerald-400 focus:border-emerald-500/50 outline-none placeholder:text-zinc-700"
           value={filters[colKey]?.min || ""}
-          onChange={(e) => onChange(colKey, 'min', e.target.value)}
+          onChange={(e) => onChange(colKey, "min", e.target.value)}
         />
         <span className="text-zinc-700">-</span>
-        <input 
-          type="number" 
-          placeholder="Max" 
+        <input
+          type="number"
+          placeholder="Max"
           step="0.1"
           className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-xs text-emerald-400 focus:border-emerald-500/50 outline-none placeholder:text-zinc-700"
           value={filters[colKey]?.max || ""}
-          onChange={(e) => onChange(colKey, 'max', e.target.value)}
+          onChange={(e) => onChange(colKey, "max", e.target.value)}
         />
       </div>
     </div>
@@ -209,7 +286,7 @@ export default function ArbitrageMatrix() {
   const [rawRows, setRawRows] = useState<DisplayRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [sortKey, setSortKey] = useState<SortKey>("events_pre_total");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useState("");
@@ -224,7 +301,7 @@ export default function ArbitrageMatrix() {
       setLoading(true);
       try {
         const list = await getArbitrageList();
-        const display = (list ?? []).map(toDisplayRow).filter(x => x.ticker);
+        const display = (list ?? []).map(toDisplayRow).filter((x) => x.ticker);
         if (!cancelled) setRawRows(display);
       } catch (e: any) {
         if (!cancelled) setError(e.message || "Failed to load");
@@ -233,7 +310,9 @@ export default function ArbitrageMatrix() {
       }
     };
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const processedRows = useMemo(() => {
@@ -241,12 +320,12 @@ export default function ArbitrageMatrix() {
 
     if (search.trim()) {
       const q = search.trim().toUpperCase();
-      data = data.filter(r => r.ticker.includes(q));
+      data = data.filter((r) => r.ticker.includes(q));
     }
 
     const activeFilters = Object.entries(filters).filter(([_, v]) => v.min !== "" || v.max !== "");
     if (activeFilters.length > 0) {
-      data = data.filter(row => {
+      data = data.filter((row) => {
         return activeFilters.every(([key, { min, max }]) => {
           const val = numOrNaN((row as any)[key]);
           if (Number.isNaN(val)) return false;
@@ -269,8 +348,8 @@ export default function ArbitrageMatrix() {
         const vb = isNaN(bn) ? -Infinity : bn;
         return sortDir === "asc" ? va - vb : vb - va;
       }
-      return sortDir === "asc" 
-        ? String(av).localeCompare(String(bv)) 
+      return sortDir === "asc"
+        ? String(av).localeCompare(String(bv))
         : String(bv).localeCompare(String(av));
     });
   }, [rawRows, search, filters, sortKey, sortDir]);
@@ -280,17 +359,17 @@ export default function ArbitrageMatrix() {
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
-      setSortDir(prev => prev === "asc" ? "desc" : "asc");
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
     } else {
       setSortKey(key);
       setSortDir("desc");
     }
   };
 
-  const handleFilterChange = (key: string, type: 'min' | 'max', val: string) => {
-    setFilters(prev => ({
+  const handleFilterChange = (key: string, type: "min" | "max", val: string) => {
+    setFilters((prev) => ({
       ...prev,
-      [key]: { ...prev[key], [type]: val }
+      [key]: { ...prev[key], [type]: val },
     }));
     setPage(1);
   };
@@ -315,33 +394,37 @@ export default function ArbitrageMatrix() {
         {/* HEADER */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
-            <Link href="/guide" className="inline-flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors mb-2">
+            <Link
+              href="/guide"
+              className="inline-flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors mb-2"
+            >
               <ArrowLeft size={12} /> Back to Dashboard
             </Link>
             <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tighter flex items-center gap-3">
               Arbitrage <span className="text-emerald-500">Matrix</span>
             </h1>
-            <p className="text-zinc-500 text-sm mt-1 font-mono">
-              Real-time correlation & probability analysis
-            </p>
+            <p className="text-zinc-500 text-sm mt-1 font-mono">Real-time correlation & probability analysis</p>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="relative group w-full md:w-64">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-emerald-400 transition-colors" size={14} />
-              <input 
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-emerald-400 transition-colors"
+                size={14}
+              />
+              <input
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder="SEARCH TICKER..."
                 className="w-full bg-zinc-900/50 border border-white/10 rounded-lg py-2.5 pl-9 pr-4 text-xs font-mono text-white placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 transition-all"
               />
             </div>
-            
-            <button 
+
+            <button
               onClick={() => setShowFilters(!showFilters)}
               className={`h-10 px-4 rounded-lg border flex items-center gap-2 text-xs font-bold tracking-wide transition-all ${
                 showFilters || Object.keys(filters).length > 0
-                  ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" 
+                  ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400"
                   : "bg-zinc-900/50 border-white/10 text-zinc-400 hover:bg-white/5"
               }`}
             >
@@ -361,28 +444,30 @@ export default function ArbitrageMatrix() {
           <div className="bg-zinc-900/40 border border-white/10 rounded-xl p-5 backdrop-blur-md animate-in slide-in-from-top-2">
             <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-2">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <Filter size={14} className="text-emerald-500"/> Threshold Configuration
+                <Filter size={14} className="text-emerald-500" /> Threshold Configuration
               </h3>
               <button onClick={clearFilters} className="text-[10px] text-zinc-500 hover:text-white flex items-center gap-1">
-                <X size={12}/> CLEAR ALL
+                <X size={12} /> CLEAR ALL
               </button>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-              {GROUPS.map(group => (
+              {GROUPS.map((group) => (
                 <div key={group.id} className="space-y-3">
-                  <div className={`text-[10px] font-bold ${group.color} uppercase border-b ${group.border} border-opacity-30 pb-1 flex items-center gap-1.5`}>
+                  <div
+                    className={`text-[10px] font-bold ${group.color} uppercase border-b ${group.border} border-opacity-30 pb-1 flex items-center gap-1.5`}
+                  >
                     {group.icon && <group.icon size={10} />}
                     {group.label}
                   </div>
                   <div className="space-y-2">
-                    {group.cols.map(col => (
-                      <FilterInput 
-                        key={col} 
-                        label={COL_LABELS[col]} 
-                        colKey={col} 
-                        filters={filters} 
-                        onChange={handleFilterChange} 
+                    {group.cols.map((col) => (
+                      <FilterInput
+                        key={col}
+                        label={COL_LABELS[col]}
+                        colKey={col}
+                        filters={filters}
+                        onChange={handleFilterChange}
                       />
                     ))}
                   </div>
@@ -399,7 +484,7 @@ export default function ArbitrageMatrix() {
             <span className="text-sm font-mono">SYNCING MARKET DATA...</span>
           </div>
         )}
-        
+
         {error && (
           <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm flex items-center gap-3">
             <AlertCircle size={16} /> {error}
@@ -415,37 +500,41 @@ export default function ArbitrageMatrix() {
                   <tr className="border-b border-white/5">
                     <th className="sticky left-0 z-30 bg-black/90 border-r border-white/10 min-w-[140px]"></th>
                     {GROUPS.map((g) => (
-                      <th 
-                        key={g.id} 
-                        colSpan={g.cols.length} 
+                      <th
+                        key={g.id}
+                        colSpan={g.cols.length}
                         className={`py-2 text-center text-[10px] font-bold tracking-[0.2em] border-l border-white/5 ${g.bg} ${g.color}`}
                       >
                         <div className="flex items-center justify-center gap-1.5">
-                          {g.icon && <g.icon size={12} strokeWidth={2.5}/>}
+                          {g.icon && <g.icon size={12} strokeWidth={2.5} />}
                           {g.label}
                         </div>
                       </th>
                     ))}
                   </tr>
-                  
+
                   <tr className="bg-zinc-900/50 border-b border-white/5 text-[10px] text-zinc-500 uppercase tracking-wider font-bold">
-                    <th 
+                    <th
                       onClick={() => handleSort("ticker")}
                       className="sticky left-0 z-30 bg-zinc-900 px-4 py-3 cursor-pointer hover:text-white border-r border-white/10 group transition-colors"
                     >
                       <div className="flex items-center justify-between">
                         TICKER
-                        <span className={`transition-opacity ${sortKey === "ticker" ? "opacity-100 text-emerald-400" : "opacity-0 group-hover:opacity-100"}`}>
-                          {sortDir === "asc" ? <ArrowDown size={10}/> : <ArrowUp size={10}/>}
+                        <span
+                          className={`transition-opacity ${
+                            sortKey === "ticker" ? "opacity-100 text-emerald-400" : "opacity-0 group-hover:opacity-100"
+                          }`}
+                        >
+                          {sortDir === "asc" ? <ArrowDown size={10} /> : <ArrowUp size={10} />}
                         </span>
                       </div>
                     </th>
-                    {GROUPS.map((g) => (
+                    {GROUPS.map((g) =>
                       g.cols.map((col, idx) => {
                         const isActive = sortKey === col;
                         return (
-                          <th 
-                            key={col} 
+                          <th
+                            key={col}
                             onClick={() => handleSort(col as SortKey)}
                             className={`
                               px-2 py-3 cursor-pointer text-right min-w-[70px] select-none hover:bg-white/5 transition-colors border-l border-white/[0.03]
@@ -455,26 +544,26 @@ export default function ArbitrageMatrix() {
                           >
                             <div className="flex items-center justify-end gap-1">
                               {COL_LABELS[col]}
-                              {isActive && (sortDir === "asc" ? <ArrowUp size={8}/> : <ArrowDown size={8}/>)}
+                              {isActive && (sortDir === "asc" ? <ArrowUp size={8} /> : <ArrowDown size={8} />)}
                             </div>
                           </th>
                         );
                       })
-                    ))}
+                    )}
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-white/[0.02]">
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={24} className="py-12 text-center text-zinc-600 font-mono text-xs">
+                      <td colSpan={32} className="py-12 text-center text-zinc-600 font-mono text-xs">
                         NO DATA MATCHING FILTERS
                       </td>
                     </tr>
                   )}
                   {pageRows.map((row) => (
-                    <tr 
-                      key={row.ticker} 
+                    <tr
+                      key={row.ticker}
                       onClick={() => router.push(`/stats/arbitrage/${row.ticker}`)}
                       className="group hover:bg-white/[0.02] transition-colors cursor-pointer"
                     >
@@ -498,31 +587,35 @@ export default function ArbitrageMatrix() {
                         </div>
                       </td>
 
-                      {GROUPS.map((g) => (
+                      {GROUPS.map((g) =>
                         g.cols.map((col, idx) => {
                           const val = (row as any)[col];
                           const isPct = col.includes("_rate");
+                          const isCount = col.includes("events_");
+
                           return (
-                            <td 
-                              key={col} 
+                            <td
+                              key={col}
                               className={`
                                 px-2 py-3 text-right text-xs font-mono border-l border-white/[0.03]
                                 ${idx === 0 ? "border-l border-white/10" : ""}
                               `}
                             >
                               {isPct ? (
-                                <span className={getRateColor(val)}>
-                                  {fmtPct(val)}
+                                <span className={getRateColor(val)}>{fmtPct(val)}</span>
+                              ) : isCount ? (
+                                <span className={numOrNaN(val) > 0 ? "text-zinc-300" : "text-zinc-700"}>
+                                  {Number.isFinite(numOrNaN(val)) ? numOrNaN(val).toFixed(0) : "—"}
                                 </span>
                               ) : (
                                 <span className={val > 0 ? "text-zinc-300" : "text-zinc-700"}>
-                                  {numOrNaN(val).toFixed(0)}
+                                  {Number.isFinite(numOrNaN(val)) ? numOrNaN(val).toFixed(0) : "—"}
                                 </span>
                               )}
                             </td>
                           );
                         })
-                      ))}
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -539,36 +632,39 @@ export default function ArbitrageMatrix() {
                 <span className="text-white">
                   {Math.min(page * ROWS_PER_PAGE, processedRows.length)}
                 </span>{" "}
-                OF{" "}
-                <span className="text-white">{processedRows.length}</span>
+                OF <span className="text-white">{processedRows.length}</span>
               </div>
-               
+
               <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => setPage(1)} disabled={page === 1}
-                  className="p-1.5 rounded hover:bg:white/10 text-zinc-400 disabled:opacity-30 transition-colors"
+                <button
+                  onClick={() => setPage(1)}
+                  disabled={page === 1}
+                  className="p-1.5 rounded hover:bg-white/10 text-zinc-400 disabled:opacity-30 transition-colors"
                 >
                   <ChevronsLeft size={14} />
                 </button>
-                <button 
-                  onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
                   className="p-1.5 rounded hover:bg-white/10 text-zinc-400 disabled:opacity-30 transition-colors"
                 >
                   <ChevronLeft size={14} />
                 </button>
-                
+
                 <span className="px-3 text-xs font-mono text-zinc-300">
                   PAGE {page} / {totalPages}
                 </span>
-                
-                <button 
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
                   className="p-1.5 rounded hover:bg-white/10 text-zinc-400 disabled:opacity-30 transition-colors"
                 >
                   <ChevronRight size={14} />
                 </button>
-                <button 
-                  onClick={() => setPage(totalPages)} disabled={page === totalPages}
+                <button
+                  onClick={() => setPage(totalPages)}
+                  disabled={page === totalPages}
                   className="p-1.5 rounded hover:bg-white/10 text-zinc-400 disabled:opacity-30 transition-colors"
                 >
                   <ChevronsRight size={14} />
@@ -580,8 +676,8 @@ export default function ArbitrageMatrix() {
       </div>
 
       <style jsx global>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
-        
+        @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
         .custom-scrollbar::-webkit-scrollbar {
           height: 10px;
           background: #09090b;

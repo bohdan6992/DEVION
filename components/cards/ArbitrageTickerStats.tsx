@@ -53,7 +53,8 @@ const THEME = {
 // TYPES & UTILS
 // =========================
 type AnyObj = Record<string, any>;
-type ArbTypeKey = "ark" | "print" | "open" | "intra" | "global";
+type ArbTypeKey = "blue" | "ark" | "print" | "open" | "intra" | "post" | "global";
+
 
 type StackedRow = { label: string; hard: number; soft: number; none: number; total: number };
 type BenchStackedRow = { label: string; hard: number; soft: number; total: number };
@@ -261,6 +262,8 @@ function getHeaderMetrics(item: AnyObj | null): HeaderMetrics {
 
   const statsPre = item?.stats?.pre ?? {};
   const statsIntra = item?.stats?.intra ?? {};
+  const statsPost = item?.stats?.post ?? {};
+
   const mk = (s: AnyObj | null): any => (isObj(s)
     ? {
         any: { rate: n(s?.rate_any), total: n(s?.total) ?? undefined },
@@ -272,37 +275,54 @@ function getHeaderMetrics(item: AnyObj | null): HeaderMetrics {
   return {
     rates: {
       global: mk(statsPre?.global ?? null),
+      blue: mk(statsPre?.blue ?? null),
       ark: mk(statsPre?.ark ?? null),
       print: mk(statsPre?.print ?? null),
       open: mk(statsPre?.open ?? null),
       intra: mk(statsIntra?.intra ?? null),
+      post: mk(statsPost?.post ?? null),
     },
   };
+
 }
 
 function getClassBlock(item: AnyObj | null, cls: ArbTypeKey): AnyObj | null {
   if (!item) return null;
+
   const c = item?.classes?.[cls];
   if (isObj(c)) return c;
+
   if (cls === "intra") return item?.intra ?? item?.stats?.intra ?? null;
+  if (cls === "post") return item?.post ?? item?.stats?.post ?? null;
+
+  // pre-classes: blue/ark/print/open/global
   return item?.pre?.[cls] ?? item?.stats?.pre?.[cls] ?? null;
 }
+
 
 function getPeakBins(item: AnyObj | null, cls: ArbTypeKey, sign: "pos" | "neg"): AnyObj | null {
   const c = getClassBlock(item, cls);
   const vNext = c?.bins?.peak?.[sign];
   if (isObj(vNext)) return vNext;
+
   if (cls === "intra") return item?.bins?.sigma?.intra?.intra?.[sign] ?? null;
+  if (cls === "post") return item?.bins?.sigma?.post?.post?.[sign] ?? null;
+
   return item?.bins?.sigma?.pre?.[cls]?.[sign] ?? null;
 }
+
 
 function getBenchBins(item: AnyObj | null, cls: ArbTypeKey, moment: "start" | "peak" | "norm", sign: "pos" | "neg"): AnyObj | null {
   const c = getClassBlock(item, cls);
   const vNext = c?.bins?.bench?.[moment]?.[sign];
   if (isObj(vNext)) return vNext;
+
   if (cls === "intra") return item?.bins?.bench?.intra?.intra?.[moment]?.[sign] ?? null;
+  if (cls === "post") return item?.bins?.bench?.post?.post?.[moment]?.[sign] ?? null;
+
   return item?.bins?.bench?.pre?.[cls]?.[moment]?.[sign] ?? null;
 }
+
 
 function getTimeStartBins(item: AnyObj | null, cls: ArbTypeKey, sign: "pos" | "neg"): AnyObj | null {
   const c = getClassBlock(item, cls);
@@ -314,7 +334,12 @@ function getTimeStartBins(item: AnyObj | null, cls: ArbTypeKey, sign: "pos" | "n
     const intra = item?.time_bands?.intra_by_class_sign?.intra?.start?.[sign];
     if (isObj(intra)) return intra;
   }
+  if (cls === "post") {
+    const post = item?.time_bands?.post_by_class_sign?.post?.start?.[sign];
+    if (isObj(post)) return post;
+  }
   return null;
+
 }
 
 function getTimeNormBins(item: AnyObj | null, cls: ArbTypeKey, sign: "pos" | "neg"): AnyObj | null {
@@ -327,6 +352,11 @@ function getTimeNormBins(item: AnyObj | null, cls: ArbTypeKey, sign: "pos" | "ne
     const intra = item?.time_bands?.intra_by_class_sign?.intra?.norm?.[sign];
     if (isObj(intra)) return intra;
   }
+    if (cls === "post") {
+    const post = item?.time_bands?.post_by_class_sign?.post?.norm?.[sign];
+    if (isObj(post)) return post;
+  }
+
   return null;
 }
 
@@ -841,11 +871,14 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
     });
     return {
       global: pick(r?.global ?? null),
+      blue: pick(r?.blue ?? null),
       ark: pick(r?.ark ?? null),
       print: pick(r?.print ?? null),
       open: pick(r?.open ?? null),
       intra: pick(r?.intra ?? null),
+      post: pick(r?.post ?? null),
     };
+
   }, [headerMetrics]);
 
   const globalPos = useMemo(() => binsToStacked(getPeakBins(item, "global", "pos")), [item]);
@@ -986,15 +1019,18 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
 
               {/* Stat Cards */}
               {canShow && (
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 w-full xl:w-auto">
+                <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3 w-full xl:w-auto">
                    {(
                     [
                       ["GLOBAL", "global", Globe, "bg-cyan-500", "text-cyan-400"],
+                      ["BLUE", "blue", Layers, "bg-blue-500", "text-blue-400"],
                       ["ARK", "ark", Layers, "bg-emerald-500", "text-emerald-400"],
                       ["PRINT", "print", Layers, "bg-emerald-500", "text-emerald-400"],
                       ["OPEN", "open", Layers, "bg-emerald-500", "text-emerald-400"],
                       ["INTRA", "intra", Layers, "bg-emerald-500", "text-emerald-400"],
+                      ["POST", "post", Layers, "bg-amber-500", "text-amber-400"],
                     ] as const
+
                   ).map(([label, key, Icon, barColor, txtColor]) => {
                      const r = (headerRates as any)[key];
                      const total = r?.total ?? 0;
@@ -1068,11 +1104,14 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
 
              {/* Classes Grid */}
              <div className="grid grid-cols-1 gap-12">
-                <ClassSection title="ARK" subtitle="Deep dive into ARK strategy performance" cls="ark" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-                <ClassSection title="PRINT" subtitle="Print signatures analysis" cls="print" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-                <ClassSection title="OPEN" subtitle="Opening range breakouts" cls="open" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-                <ClassSection title="INTRA" subtitle="Intraday mean reversion" cls="intra" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-             </div>
+            <ClassSection title="BLUE" subtitle="Overnight / BLOOTION window" cls="blue" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="ARK" subtitle="Deep dive into ARK strategy performance" cls="ark" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="PRINT" subtitle="Print signatures analysis" cls="print" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="OPEN" subtitle="Opening range breakouts" cls="open" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="INTRA" subtitle="Intraday mean reversion" cls="intra" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="POST" subtitle="After-hours normalization window" cls="post" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+
+                        </div>
 
              {/* Advanced Metrics */}
              <section className="space-y-8 border-t border-white/5 pt-12">
