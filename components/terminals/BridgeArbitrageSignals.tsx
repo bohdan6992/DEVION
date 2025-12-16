@@ -707,6 +707,116 @@ const MultiSelectFilter = ({
 };
 
 
+// Helper for Class/Mode/Type buttons - moved outside
+interface FilterButtonProps {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  color?: string;
+}
+
+const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => (
+  <button
+    onClick={onClick}
+    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
+      active
+        ? `border border-${color}-500 text-${color}-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-${color}-500/10`
+        : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+    }`}
+  >
+    {label}
+  </button>
+);
+
+// SignalCard - moved outside
+interface SignalCardProps {
+  s: ArbitrageSignal;
+  side: "short" | "long";
+  onClick: (tk: string) => void;
+  activeTicker: string | null;
+  flashClass: (ticker: string, side: "short" | "long") => string;
+  compact?: boolean;
+}
+
+const SignalCard: React.FC<SignalCardProps> = ({
+  s,
+  side,
+  onClick,
+  activeTicker,
+  flashClass,
+  compact = false,
+}) => {
+  const isShort = side === "short";
+  const isActive = activeTicker === s.ticker;
+
+  // Logic from prompt: Down (Short) -> Bid (Red), Up (Long) -> Ask (Green)
+  const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
+  const pxLabel = isShort ? "bid" : "ask";
+  const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
+
+  const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
+  const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
+
+  // Active styles (keep red/green formatting for active)
+  const activeClasses = isShort 
+    ? "bg-rose-500/10 border-rose-500/50 shadow-[0_0_15px_-5px_rgba(244,63,94,0.3)]"
+    : "bg-emerald-500/10 border-emerald-500/50 shadow-[0_0_15px_-5px_rgba(16,185,129,0.3)]";
+  
+  // Inactive: Transparent background
+  const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
+
+  const tickerColor = isActive 
+    ? (isShort ? "text-rose-300" : "text-emerald-300")
+    : "text-zinc-300 group-hover:text-zinc-100";
+
+  return (
+    <button
+      onClick={() => onClick(s.ticker)}
+      className={[
+        "group relative w-full text-left transition-all duration-200 border flex flex-col justify-between",
+        compact ? "p-2 rounded-lg gap-1" : "p-3 rounded-xl gap-1.5",
+        isActive ? activeClasses : inactiveClasses,
+        flashClass(s.ticker, side),
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between w-full">
+        {/* Ticker Symbol */}
+        <span className={`font-bold tracking-tight leading-none ${compact ? "text-sm" : "text-[15px]"} ${tickerColor}`}>
+          {s.ticker}
+        </span>
+        
+        {/* Price Section */}
+        <div className="flex items-baseline gap-1.5">
+            <span className="text-[10px] font-mono text-zinc-600 lowercase">{pxLabel}</span>
+            <span className={`font-mono tabular-nums leading-none font-bold ${compact ? "text-[13px]" : "text-[15px]"} ${pxColor}`}>
+                {px == null ? "—" : fmtNum(px, 2)}
+            </span>
+        </div>
+      </div>
+
+      {/* Metrics Section */}
+      <div className={`flex items-center justify-between w-full font-mono ${compact ? "text-[9px]" : "text-[10px]"} opacity-80`}>
+         <div className="flex items-center gap-1.5">
+           <span className="text-zinc-600">σ</span>
+           <span className="text-zinc-400 tabular-nums">
+              {s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}
+           </span>
+         </div>
+         <div className="flex items-center gap-2">
+           <div className="flex items-center gap-1">
+              <span className="text-zinc-600">Z</span>
+              <span className="text-zinc-400 tabular-nums">{z == null ? "—" : fmtNum(z, 2)}</span>
+           </div>
+           <div className="flex items-center gap-1">
+              <span className="text-zinc-600">S</span>
+              <span className="text-zinc-400 tabular-nums">{zs == null ? "—" : fmtNum(zs, 1)}</span>
+           </div>
+         </div>
+      </div>
+    </button>
+  );
+};
+
 /* =========================
    COMPONENT
 ========================= */
@@ -1125,25 +1235,21 @@ export default function BridgeArbitrageSignals() {
     try {
       const raw = localStorage.getItem(IGNORE_LS_KEY);
       if (raw) {
-        setIgnoreSet(
-          new Set(
-            JSON.parse(raw)
-              .map((x: any) => normalizeTicker(String(x)))
-              .filter(Boolean) as string[]
-          )
-        );
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const safe = parsed.map((x: any) => normalizeTicker(String(x))).filter((x): x is string => !!x);
+          setIgnoreSet(new Set(safe));
+        }
       }
     } catch {}
     try {
       const raw = localStorage.getItem(APPLY_LS_KEY);
       if (raw) {
-        setApplySet(
-          new Set(
-            JSON.parse(raw)
-              .map((x: any) => normalizeTicker(String(x)))
-              .filter(Boolean) as string[]
-          )
-        );
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const safe = parsed.map((x: any) => normalizeTicker(String(x))).filter((x): x is string => !!x);
+          setApplySet(new Set(safe));
+        }
       }
     } catch {}
   }, []);
@@ -1265,26 +1371,26 @@ export default function BridgeArbitrageSignals() {
   /* =========================
      Filters pipeline
   ========================= */
-  const applyListModeFilter = (arr: ArbitrageSignal[]) => {
+  const applyListModeFilter = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
     const a = arr ?? [];
-    if (listMode === "ignore") {
+    if (f.listMode === "ignore") {
       return a.filter((x) => {
         const tk = normalizeTicker(x?.ticker || "");
-        return tk != null && !ignoreSet.has(tk);
+        return tk != null && !f.ignoreSet.has(tk);
       });
     }
-    if (listMode === "apply") {
+    if (f.listMode === "apply") {
       return a.filter((x) => {
         const tk = normalizeTicker(x?.ticker || "");
-        return tk != null && applySet.has(tk);
+        return tk != null && f.applySet.has(tk);
       });
     }
     return a;
   };
 
-  const applyMinRateMinTotal = (arr: ArbitrageSignal[]) => {
-    const mr = toNum(minRate);
-    const mt = toNum(minTotal);
+  const applyMinRateMinTotal = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
+    const mr = toNum(f.minRate);
+    const mt = toNum(f.minTotal);
     if (mr == null && mt == null) return arr ?? [];
 
     const out = (arr ?? []).filter((s) => {
@@ -1297,26 +1403,26 @@ export default function BridgeArbitrageSignals() {
     return out;
   };
 
-  const applyThresholdFilters = (arr: ArbitrageSignal[]) => {
+  const applyThresholdFilters = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
     const n = {
-      ADV20: { min: toNum(adv20Min), max: toNum(adv20Max) },
-      ADV20NF: { min: toNum(adv20NFMin), max: toNum(adv20NFMax) },
-      ADV90: { min: toNum(adv90Min), max: toNum(adv90Max) },
-      ADV90NF: { min: toNum(adv90NFMin), max: toNum(adv90NFMax) },
-      AvPreMhv: { min: toNum(avPreMhvMin), max: toNum(avPreMhvMax) },
-      RoundLot: { min: toNum(roundLotMin), max: toNum(roundLotMax) },
-      VWAP: { min: toNum(vwapMin), max: toNum(vwapMax) },
-      Spread: { min: toNum(spreadMin), max: toNum(spreadMax) },
-      LstPrcL: { min: toNum(lstPrcLMin), max: toNum(lstPrcLMax) },
-      LstCls: { min: toNum(lstClsMin), max: toNum(lstClsMax) },
-      YCls: { min: toNum(yClsMin), max: toNum(yClsMax) },
-      TCls: { min: toNum(tClsMin), max: toNum(tClsMax) },
-      "ClsToCls%": { min: toNum(clsToClsPctMin), max: toNum(clsToClsPctMax) },
-      Lo: { min: toNum(loMin), max: toNum(loMax) },
-      LstClsNewsCnt: { min: toNum(lstClsNewsCntMin), max: toNum(lstClsNewsCntMax) },
-      MarketCapM: { min: toNum(marketCapMMin), max: toNum(marketCapMMax) },
-      PreMhVolNF: { min: toNum(preMhVolNFMin), max: toNum(preMhVolNFMax) },
-      VolNFfromLstCls: { min: toNum(volNFfromLstClsMin), max: toNum(volNFfromLstClsMax) },
+      ADV20: { min: toNum(f.adv20Min), max: toNum(f.adv20Max) },
+      ADV20NF: { min: toNum(f.adv20NFMin), max: toNum(f.adv20NFMax) },
+      ADV90: { min: toNum(f.adv90Min), max: toNum(f.adv90Max) },
+      ADV90NF: { min: toNum(f.adv90NFMin), max: toNum(f.adv90NFMax) },
+      AvPreMhv: { min: toNum(f.avPreMhvMin), max: toNum(f.avPreMhvMax) },
+      RoundLot: { min: toNum(f.roundLotMin), max: toNum(f.roundLotMax) },
+      VWAP: { min: toNum(f.vwapMin), max: toNum(f.vwapMax) },
+      Spread: { min: toNum(f.spreadMin), max: toNum(f.spreadMax) },
+      LstPrcL: { min: toNum(f.lstPrcLMin), max: toNum(f.lstPrcLMax) },
+      LstCls: { min: toNum(f.lstClsMin), max: toNum(f.lstClsMax) },
+      YCls: { min: toNum(f.yClsMin), max: toNum(f.yClsMax) },
+      TCls: { min: toNum(f.tClsMin), max: toNum(f.tClsMax) },
+      "ClsToCls%": { min: toNum(f.clsToClsPctMin), max: toNum(f.clsToClsPctMax) },
+      Lo: { min: toNum(f.loMin), max: toNum(f.loMax) },
+      LstClsNewsCnt: { min: toNum(f.lstClsNewsCntMin), max: toNum(f.lstClsNewsCntMax) },
+      MarketCapM: { min: toNum(f.marketCapMMin), max: toNum(f.marketCapMMax) },
+      PreMhVolNF: { min: toNum(f.preMhVolNFMin), max: toNum(f.preMhVolNFMax) },
+      VolNFfromLstCls: { min: toNum(f.volNFfromLstClsMin), max: toNum(f.volNFfromLstClsMax) },
     };
 
     const checkMinMax = (val: number | null, min: number | null, max: number | null) => {
@@ -1348,77 +1454,67 @@ export default function BridgeArbitrageSignals() {
       if (!checkMinMax(numVolNFfromLstCls(s), n.VolNFfromLstCls.min, n.VolNFfromLstCls.max)) return false;
 
       // RED Group (Exclude)
-      if (excludeDividend) {
+      if (f.excludeDividend) {
         if (hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) return false;
       }
-      if (excludeNews) {
+      if (f.excludeNews) {
         const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
         if (nn > 0) return false;
       }
-      if (excludePTP) {
+      if (f.excludePTP) {
         if (((s as any)._isPTP ?? boolIsPTP(s)) === true) return false;
       }
-      if (excludeSSR) {
+      if (f.excludeSSR) {
         if (((s as any)._isSSR ?? boolIsSSR(s)) === true) return false;
       }
-      if (excludeReport) {
+      if (f.excludeReport) {
         if (hasValue(pickAny(s, ["report", "Report"]))) return false;
       }
-      if (excludeETF) {
+      if (f.excludeETF) {
         if (boolIsETF(s) === true) return false;
         const eqt = strEquityType(s).toLowerCase();
         if (eqt && eqt.includes("etf")) return false;
       }
-      if (excludeCrap) {
-        // Exclude if lstClose < 5
+      if (f.excludeCrap) {
         const px = numLastClose(s);
         if (px != null && px < 5) return false;
       }
-      if (excludeActive) {
+      if (f.excludeActive) {
         if (((s as any)._isActive ?? boolIsActive(s)) === true) return false;
       }
 
       // GREEN Group (Include Only)
-      if (includeUSA) {
+      if (f.includeUSA) {
         if (!isUSA(s)) return false;
       }
-      if (includeChina) {
-        const c = getCountryStr(s); // тепер це вже через getCountry(s) => meta/root
+      if (f.includeChina) {
+        const c = getCountryStr(s);
         if (!c.includes("CHINA") && !c.includes("HONG KONG")) return false;
       }
 
+      // Multi-selects
+      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) return false;
+      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) return false;
+      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) return false;
 
-      // YELLOW Group (Multi-select)
-      if (countryEnabled && selCountries.size > 0) {
-        const c = getCountry(s);
-        if (!selCountries.has(c)) return false;
-      }
-      if (exchangeEnabled && selExchanges.size > 0) {
-        const e = getExchange(s);
-        if (!selExchanges.has(e)) return false;
-      }
-      if (sectorEnabled && selSectors.size > 0) {
-        const sec = getSector(s);
-        if (!selSectors.has(sec)) return false;
-      }
-
-      // Old special report filter fallback
-      if (filterReport !== "ALL") {
+      // Report tri-state
+      if (f.filterReport !== "ALL") {
         const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-        if (filterReport === "YES" && rep !== true) return false;
-        if (filterReport === "NO" && rep !== false) return false;
+        if (f.filterReport === "YES" && rep !== true) return false;
+        if (f.filterReport === "NO" && rep !== false) return false;
       }
 
-      if (equityType.trim()) {
+      // Equity type search
+      if (f.equityType.trim()) {
         const et = strEquityType(s).toLowerCase();
-        if (!et.includes(equityType.toLowerCase().trim())) return false;
+        if (!et.includes(f.equityType.toLowerCase().trim())) return false;
       }
 
       return true;
     });
-
     return out;
   };
+
 
   /* =========================
      Fetch signals
@@ -1455,7 +1551,11 @@ export default function BridgeArbitrageSignals() {
       const rawItems: any[] = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : [];
       const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
 
-      const filtered = filterData(normalized, f);
+      // Apply filters locally (client-side filtering)
+      let filtered = applyListModeFilter(normalized, f);
+      filtered = applyThresholdFilters(filtered, f);
+      filtered = applyMinRateMinTotal(filtered, f);
+
       setItems(filtered);
       setUpdatedAt(Date.now());
     } catch (e: any) {
@@ -1464,117 +1564,6 @@ export default function BridgeArbitrageSignals() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Helper to filter data based on a config object (from Ref)
-  // Helper to filter data based on a config object (from Ref)
-  const filterData = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
-    // 1) Min Rate/Total (bugfix: if threshold set, missing values should FAIL)
-    let out = arr ?? [];
-    const mr = toNum(f.minRate);
-    const mt = toNum(f.minTotal);
-
-    if (mr != null || mt != null) {
-      out = out.filter((s) => {
-        const r = getBestRating(s);
-        const t = getBestTotal(s);
-        if (mr != null && (r == null || r < mr)) return false;
-        if (mt != null && (t == null || t < mt)) return false;
-        return true;
-      });
-    }
-
-    // 2) List Mode (use ref sets)
-    if (f.listMode === "ignore") {
-      out = out.filter((x) => !f.ignoreSet.has(normalizeTicker(x.ticker) || ""));
-    } else if (f.listMode === "apply") {
-      out = out.filter((x) => f.applySet.has(normalizeTicker(x.ticker) || ""));
-    }
-
-    // 3) Thresholds + bools + multiselects
-    return out.filter((s) => {
-      const nCheck = (val: number | null, minStr: string, maxStr: string) => {
-        const min = toNum(minStr);
-        const max = toNum(maxStr);
-        const hasAny = min != null || max != null;
-        if (hasAny && val == null) return false;
-        if (min != null && val != null && val < min) return false;
-        if (max != null && val != null && val > max) return false;
-        return true;
-      };
-
-      // IMPORTANT: use f.* for all filters (fix stale closure in interval)
-      if (!nCheck(numADV20(s), f.adv20Min, f.adv20Max)) return false;
-      if (!nCheck(numADV20NF(s), f.adv20NFMin, f.adv20NFMax)) return false;
-      if (!nCheck(numADV90(s), f.adv90Min, f.adv90Max)) return false;
-      if (!nCheck(numADV90NF(s), f.adv90NFMin, f.adv90NFMax)) return false;
-      if (!nCheck(numAvPreMh(s), f.avPreMhvMin, f.avPreMhvMax)) return false;
-      if (!nCheck(numRoundLot(s), f.roundLotMin, f.roundLotMax)) return false;
-      if (!nCheck(numVWAP(s), f.vwapMin, f.vwapMax)) return false;
-      if (!nCheck(numSpread(s), f.spreadMin, f.spreadMax)) return false;
-      if (!nCheck(numLstPrcL(s), f.lstPrcLMin, f.lstPrcLMax)) return false;
-      if (!nCheck(numLastClose(s), f.lstClsMin, f.lstClsMax)) return false;
-      if (!nCheck(numYCls(s), f.yClsMin, f.yClsMax)) return false;
-      if (!nCheck(numTCls(s), f.tClsMin, f.tClsMax)) return false;
-      if (!nCheck(numClsToClsPct(s), f.clsToClsPctMin, f.clsToClsPctMax)) return false;
-      if (!nCheck(numLo(s), f.loMin, f.loMax)) return false;
-      if (!nCheck(numLstClsNewsCnt(s), f.lstClsNewsCntMin, f.lstClsNewsCntMax)) return false;
-      if (!nCheck(numMarketCapM(s), f.marketCapMMin, f.marketCapMMax)) return false;
-      if (!nCheck(numPreMktVolNF(s), f.preMhVolNFMin, f.preMhVolNFMax)) return false;
-      if (!nCheck(numVolNFfromLstCls(s), f.volNFfromLstClsMin, f.volNFfromLstClsMax)) return false;
-
-      // Booleans (exclude)
-      if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) return false;
-
-      if (f.excludeNews) {
-        const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-        if (nn > 0) return false;
-      }
-
-      if (f.excludePTP && ((s as any)._isPTP ?? boolIsPTP(s)) === true) return false;
-      if (f.excludeSSR && ((s as any)._isSSR ?? boolIsSSR(s)) === true) return false;
-      if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) return false;
-
-      if (f.excludeETF) {
-        if (boolIsETF(s) === true) return false;
-        const eqt = strEquityType(s).toLowerCase();
-        if (eqt && eqt.includes("etf")) return false;
-      }
-
-      if (f.excludeCrap) {
-        const px = numLastClose(s);
-        if (px != null && px < 5) return false;
-      }
-
-      if (f.excludeActive && ((s as any)._isActive ?? boolIsActive(s)) === true) return false;
-
-      // Booleans (include-only)
-      if (f.includeUSA && !isUSA(s)) return false;
-      if (f.includeChina) {
-        const c = getCountryStr(s);
-        if (!c.includes("CHINA") && !c.includes("HONG KONG")) return false;
-      }
-
-      // Multi-selects
-      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) return false;
-      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) return false;
-      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) return false;
-
-      // Report tri-state
-      if (f.filterReport !== "ALL") {
-        const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-        if (f.filterReport === "YES" && rep !== true) return false;
-        if (f.filterReport === "NO" && rep !== false) return false;
-      }
-
-      // Equity type search
-      if (f.equityType.trim()) {
-        const et = strEquityType(s).toLowerCase();
-        if (!et.includes(f.equityType.toLowerCase().trim())) return false;
-      }
-
-      return true;
-    });
   };
 
 
@@ -1756,98 +1745,6 @@ useEffect(() => {
 
   // UI helper for min/max pairs (Tailwind conversion)
 
-
-
-  // Helper for Class/Mode/Type buttons
-  const FilterButton = ({ active, label, onClick, color = "emerald" }: { active: boolean; label: string; onClick: () => void; color?: string }) => (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-        active
-          ? `border border-${color}-500 text-${color}-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-${color}-500/10`
-          : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
-      }`}
-    >
-      {label}
-    </button>
-  );
-
-  const SignalCard = ({
-    s,
-    side,
-    onClick,
-    activeTicker,
-    flashClass,
-    compact = false,
-  }: {
-    s: ArbitrageSignal;
-    side: "short" | "long";
-    onClick: (tk: string) => void;
-    activeTicker: string | null;
-    flashClass: (ticker: string, side: "short" | "long") => string;
-    compact?: boolean;
-  }) => {
-
-    const isShort = side === "short";
-
-    const px = isShort ? toNum(s.askStock) : toNum(s.bidStock);
-    const pxLabel = isShort ? "ASK" : "BID";
-
-    const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
-    const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
-
-    return (
-<button
-  onClick={() => onClick(s.ticker)}
-  className={[
-    "w-full text-left",
-    compact ? "rounded-lg border p-2" : "rounded-xl border p-3",
-    "bg-[#0a0a0a]/55 hover:bg-[#0a0a0a]/85 transition-all",
-    "flex flex-col",
-    isShort ? "border-rose-500/25 hover:border-rose-500/45" : "border-emerald-500/25 hover:border-emerald-500/45",
-    flashClass(s.ticker, side),
-    activeTicker === s.ticker ? (isShort ? "ring-1 ring-rose-500/45" : "ring-1 ring-emerald-500/45") : "",
-  ].join(" ")}
->
-  {/* ROW 1: Ticker (left) + Bid/Ask (right) */}
-  <div className="flex items-baseline justify-between gap-2">
-    <div
-      className={[
-        compact ? "text-[15px]" : "text-[18px]",
-        "leading-none font-bold tracking-tight",
-        isShort ? "text-rose-300" : "text-emerald-300",
-      ].join(" ")}
-    >
-      {s.ticker}
-    </div>
-
-    <div className="flex items-baseline gap-2">
-      <span className={(compact ? "text-[9px]" : "text-[10px]") + " font-mono text-zinc-500"}>
-        {pxLabel}
-      </span>
-      <span className={(compact ? "text-[13px]" : "text-[15px]") + " font-mono text-white tabular-nums leading-none"}>
-        {px == null ? "—" : fmtNum(px, 2)}
-      </span>
-    </div>
-  </div>
-
-{/* ROW 2: σ / Z / S line (tight) */}
-<div className={(compact ? "mt-1 text-[9px]" : "mt-1.5 text-[10px]") + " font-mono text-zinc-400 tabular-nums"}>
-  <span className="text-zinc-500">σ</span>{" "}
-  {s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}
-  <span className="text-zinc-600"> · </span>
-  <span className="text-zinc-500">Z</span>{" "}
-  {z == null ? "—" : fmtNum(z, 2)}
-  <span className="text-zinc-600"> · </span>
-  <span className="text-zinc-500">S</span>{" "}
-  {zs == null ? "—" : fmtNum(zs, 1)}
-</div>
-
-</button>
-
-
-    );
-  };
 
 
   return (
@@ -2609,10 +2506,7 @@ useEffect(() => {
                  className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0">
                   <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-4">
                     <span className="text-lg font-bold text-white tracking-tight">{bench.benchmark}</span>
-                    <div
-                    className="h-0.5 flex-1 rounded-full opacity-80"
-                    style={{ background: `linear-gradient(to right, transparent, ${accent}, transparent)` }}
-                  />
+                    <div className="flex-1 border-b border-dashed border-zinc-700/50 mx-4 opacity-50" />
                   </div>
 
                   <div className="p-4 space-y-6">
