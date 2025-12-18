@@ -525,21 +525,33 @@ function buildSignalsUrl(args: {
   cls: ArbClass;
   type: ArbType;
   mode: Mode;
-  minRate: string;
-  minTotal: string;
-  limit: string;
-  offset: string;
+  minRate: number;
+  minTotal: number;
+  limit: number;
+  offset: number;
   tickers?: string;
 }) {
   const { cls, type, mode, minRate, minTotal, limit, offset, tickers } = args;
+
   const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
-  u.searchParams.set("minRate", (minRate || "0.3").trim());
-  u.searchParams.set("minTotal", (minTotal || "1").trim());
-  u.searchParams.set("limit", (limit || "30").trim());
-  u.searchParams.set("offset", (offset || "0").trim());
-  if (tickers?.trim()) u.searchParams.set("tickers", tickers.trim());
+
+  const safeMinRate  = Number.isFinite(minRate)  ? Math.max(0, minRate) : 0.3;
+  const safeMinTotal = Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : 1;
+  const safeLimit    = Number.isFinite(limit)    ? Math.max(1, Math.trunc(limit)) : 30;
+  const safeOffset   = Number.isFinite(offset)   ? Math.max(0, Math.trunc(offset)) : 0;
+
+  u.searchParams.set("minRate",  String(safeMinRate));
+  u.searchParams.set("minTotal", String(safeMinTotal));
+  u.searchParams.set("limit",    String(safeLimit));
+  u.searchParams.set("offset",   String(safeOffset));
+
+  const t = (tickers ?? "").trim();
+  if (t) u.searchParams.set("tickers", t);
+
   return u.toString();
 }
+
+
 
 /* =========================
    UI Helper Components
@@ -866,11 +878,30 @@ export default function BridgeArbitrageSignals() {
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
 
-  const [minRate, setMinRate] = useState<string>("0.3");
-  const [minTotal, setMinTotal] = useState<string>("1");
+  const [minRate, setMinRate] = useState<number>(0.3);
+  const [minTotal, setMinTotal] = useState<number>(1);
+  const [limit, setLimit] = useState<number>(30);
+  const [offset, setOffset] = useState<number>(0);
 
-  const [limit, setLimit] = useState<string>("30");
-  const [offset, setOffset] = useState<string>("0");
+  type NumField = {
+  label: string;
+  val: number;
+  set: React.Dispatch<React.SetStateAction<number>>;
+  ph: string;
+  step: number;
+  min: number;
+  integer?: boolean;
+};
+
+const fields: NumField[] = [
+  { label: "minRate",  val: minRate,  set: setMinRate,  ph: "0.3", step: 0.1, min: 0.1 },
+  { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1",   step: 1,   min: 1, integer: true },
+  { label: "limit",    val: limit,    set: setLimit,    ph: "30",  step: 5,   min: 1, integer: true },
+  { label: "offset",   val: offset,   set: setOffset,   ph: "0",   step: 1,   min: 0, integer: true },
+];
+
+
+
 
   const [tickersFilter, setTickersFilter] = useState("");
   const tickersFilterNorm = useMemo(() => {
@@ -1025,10 +1056,11 @@ export default function BridgeArbitrageSignals() {
     cls: ArbClass;
     type: ArbType;
     mode: Mode;
-    minRate: string;
-    minTotal: string;
-    limit: string;
-    offset: string;
+    minRate: number;
+    minTotal: number;
+    limit: number;
+    offset: number;
+
     tickersFilterNorm: string;
 
     listMode: ListMode;
@@ -1629,6 +1661,7 @@ export default function BridgeArbitrageSignals() {
         tickers: f.tickersFilterNorm || undefined,
       });
 
+
       const r = await fetch(url, { cache: "no-store" });
 
       if (!r.ok) {
@@ -1995,25 +2028,39 @@ useEffect(() => {
 
           <div className="flex-1" />
 
-          {/* Inputs */}
           <div className="flex gap-2">
-            {[
-              { label: "minRate", val: minRate, set: setMinRate, ph: "0.3" },
-              { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1" },
-              { label: "offset", val: offset, set: setOffset, ph: "0" },
-              { label: "limit", val: limit, set: setLimit, ph: "30" },
-            ].map((f) => (
-              <div key={f.label} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
+            {fields.map((f) => (
+              <div
+                key={f.label}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20"
+              >
                 <span className="text-[10px] font-mono text-zinc-500 uppercase">{f.label}</span>
+
                 <input
-                  value={f.val}
-                  onChange={(e) => f.set(e.target.value)}
+                  type="number"
+                  inputMode="decimal"
+                  step={f.step}
+                  min={f.min}
+                  value={Number.isFinite(f.val) ? f.val : ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "") return; // дозволяємо стерти
+                    let n = Number(raw);
+                    if (!Number.isFinite(n)) return;
+
+                    if (f.integer) n = Math.trunc(n);
+                    n = Math.max(f.min, n);
+
+                    f.set(n);
+                  }}
                   placeholder={f.ph}
-                  className="w-12 bg-transparent text-right text-xs font-mono text-white placeholder-zinc-700 focus:outline-none"
+                  className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
                 />
               </div>
             ))}
           </div>
+
+
         </div>
 
         {/* =========================
@@ -2154,16 +2201,14 @@ useEffect(() => {
 
           <div className="flex-1" />
 
-          <div className="flex-1" />
-
           {/* ZAP FILTERS (Purple box, right aligned) */}
           <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
             {/* ZAP toggle */}
             <button
               type="button"
-              onClick={() => setZapMode("zap")} // якщо тицяємо сюди — sigma автоматом “off” бо mode один
+              onClick={() => setZapMode("zap")}
               className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border uppercase",
                 zapMode === "zap"
                   ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
@@ -2183,7 +2228,8 @@ useEffect(() => {
                 setZapMinAbs(Number.isFinite(v) ? Math.max(0.3, v) : 0.3);
               }}
               className={[
-                "w-[76px] bg-black/20 border rounded-lg px-2 py-1 text-xs font-mono text-right tabular-nums focus:outline-none",
+                // ✅ менший інпут
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
                 zapMode === "zap"
                   ? "border-violet-500/30 text-white"
                   : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
@@ -2197,19 +2243,23 @@ useEffect(() => {
               type="button"
               onClick={() => setZapMode("sigma")}
               className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1",
+                // ✅ baseline вирівнює σ і ZAP
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-baseline gap-1",
                 zapMode === "sigma"
                   ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-          <span className="text-[12px] leading-none">&sigma;</span>
-          <span className="ml-1">ZAP</span>
+              {/* ✅ σ НЕ аперкейзиться і має нормальний baseline */}
+              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>
+                σ
+              </span>
+              <span className="uppercase">ZAP</span>
             </button>
 
             <input
               type="number"
-              step={0.1}
+              step={0.05}
               min={0.05}
               value={zapSigmaMinAbs}
               disabled={zapMode !== "sigma"}
@@ -2218,7 +2268,8 @@ useEffect(() => {
                 setZapSigmaMinAbs(Number.isFinite(v) ? Math.max(0.05, v) : 0.05);
               }}
               className={[
-                "w-[76px] bg-black/20 border rounded-lg px-2 py-1 text-xs font-mono text-right tabular-nums focus:outline-none",
+                // ✅ менший інпут
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
                 zapMode === "sigma"
                   ? "border-violet-500/30 text-white"
                   : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
@@ -2240,6 +2291,8 @@ useEffect(() => {
               OFF
             </button>
           </div>
+
+
         </div>
 
         {/* =========================
