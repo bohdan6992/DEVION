@@ -884,7 +884,12 @@ export default function BridgeArbitrageSignals() {
   const [adv20NFMin, setAdv20NFMin] = useState<string>("");
   const [adv20NFMax, setAdv20NFMax] = useState<string>("");
   // ✅ BestParams compact tab
-const [bpCls, setBpCls] = useState<ArbClass>("global");
+  const [bpCls, setBpCls] = useState<ArbClass>("global");
+  /* ===== ZAP / SigmaZAP (mutually exclusive) ===== */
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "off">("zap"); // default: ZAP active
+  const [zapMinAbs, setZapMinAbs] = useState<number>(0.3);               // min: 0.3, step 0.1
+  const [zapSigmaMinAbs, setZapSigmaMinAbs] = useState<number>(0.05);   // min: 0.05, step 0.1
+
 
 
   const [adv90Min, setAdv90Min] = useState<string>("");
@@ -1029,6 +1034,11 @@ const [bpCls, setBpCls] = useState<ArbClass>("global");
     listMode: ListMode;
     ignoreSet: Set<string>;
     applySet: Set<string>;
+        // ZAP filters
+    zapMode: "zap" | "sigma" | "off";
+    zapMinAbs: number;
+    zapSigmaMinAbs: number;
+
 
     // Thresholds
     adv20Min: string; adv20Max: string;
@@ -1134,6 +1144,11 @@ const [bpCls, setBpCls] = useState<ArbClass>("global");
 
     filterReport,
     equityType,
+
+    zapMode,
+    zapMinAbs,
+    zapSigmaMinAbs,
+
   });
 
   const isEditingRef = useRef(false);
@@ -1207,6 +1222,11 @@ const [bpCls, setBpCls] = useState<ArbClass>("global");
 
       filterReport,
       equityType,
+
+      zapMode,
+      zapMinAbs,
+      zapSigmaMinAbs,
+
     };
   }, [
     cls,
@@ -1264,6 +1284,9 @@ const [bpCls, setBpCls] = useState<ArbClass>("global");
 
     filterReport,
     equityType,
+
+    zapMode, zapMinAbs, zapSigmaMinAbs,
+
   ]);
 
   /* =========================
@@ -1547,6 +1570,36 @@ const [bpCls, setBpCls] = useState<ArbClass>("global");
         const et = strEquityType(s).toLowerCase();
         if (!et.includes(f.equityType.toLowerCase().trim())) return false;
       }
+            // =========================
+      // ZAP / SigmaZAP filters (mutually exclusive)
+      // =========================
+      if (f.zapMode !== "off") {
+        const dir = s.direction; // "down"|"up"|"none"
+        const isShort = dir === "down";
+        const isLong = dir === "up";
+
+        if (!isShort && !isLong) return false;
+
+        if (f.zapMode === "zap") {
+          const thr = Math.max(0.3, Number(f.zapMinAbs ?? 0.3));
+          const v = isShort ? toNum(s.zapS) : toNum(s.zapL);
+          if (v == null) return false;
+          if (Math.abs(v) < thr) return false;
+        }
+
+        if (f.zapMode === "sigma") {
+          const thr = Math.max(0.05, Number(f.zapSigmaMinAbs ?? 0.05));
+          const v = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
+          if (v == null) return false;
+
+          // "ФІЛЬТРУЄ З УРАХУВАННЯМ НАПРЯМКУ"
+          // short (down): sigma має бути <= -thr
+          // long  (up):   sigma має бути >= +thr
+          if (isShort && !(v <= -thr)) return false;
+          if (isLong && !(v >= thr)) return false;
+        }
+      }
+
 
       return true;
     });
@@ -2101,47 +2154,91 @@ useEffect(() => {
 
           <div className="flex-1" />
 
-          {/* ACC SORT & EQUITY TYPE */}
-          <div className="flex items-center gap-2">
+          <div className="flex-1" />
+
+          {/* ZAP FILTERS (Purple box, right aligned) */}
+          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+            {/* ZAP toggle */}
             <button
-              onClick={() => setAccountNonEmptyFirst(!accountNonEmptyFirst)}
-              className={`px-3 py-1.5 rounded-full border text-[10px] font-mono font-bold uppercase transition-all ${
-                accountNonEmptyFirst
-                  ? "bg-violet-500/10 border-violet-500/30 text-violet-400"
-                  : "bg-white/5 border-white/10 text-zinc-500 hover:text-zinc-300"
-              }`}
+              type="button"
+              onClick={() => setZapMode("zap")} // якщо тицяємо сюди — sigma автоматом “off” бо mode один
+              className={[
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                zapMode === "zap"
+                  ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+              ].join(" ")}
             >
-              {accountNonEmptyFirst ? "ACC: NONEMPTY" : "ACC: EMPTY"}
+              ZAP
             </button>
 
-            <div className="flex items-center gap-2 bg-black/20 border border-white/5 rounded-full px-3 py-1">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">Equity</span>
-              <input
-                value={equityType}
-                onChange={(e) => setEquityType(e.target.value)}
-                placeholder="Type..."
-                className="bg-transparent text-xs font-mono text-white placeholder-zinc-700 focus:outline-none w-16"
-              />
-            </div>
-          </div>
-
-          {/* TICKER SEARCH */}
-          <div className="relative group min-w-[200px]">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-xs">⌕</span>
             <input
-              value={tickersFilter}
-              onChange={(e) => setTickersFilter(e.target.value)}
-              placeholder="AAPL, MSFT..."
-              className="w-full bg-[#0a0a0a]/60 border border-white/10 rounded-full pl-8 pr-8 py-1.5 text-xs font-mono text-white placeholder-zinc-700 focus:outline-none focus:border-emerald-500/50 transition-colors"
+              type="number"
+              step={0.1}
+              min={0.3}
+              value={zapMinAbs}
+              disabled={zapMode !== "zap"}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setZapMinAbs(Number.isFinite(v) ? Math.max(0.3, v) : 0.3);
+              }}
+              className={[
+                "w-[76px] bg-black/20 border rounded-lg px-2 py-1 text-xs font-mono text-right tabular-nums focus:outline-none",
+                zapMode === "zap"
+                  ? "border-violet-500/30 text-white"
+                  : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
             />
-            {tickersFilter && (
-              <button
-                onClick={clearTickersFilter}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
-              >
-                ✕
-              </button>
-            )}
+
+            <div className="w-px h-6 bg-violet-500/20 mx-1" />
+
+            {/* SigmaZAP toggle */}
+            <button
+              type="button"
+              onClick={() => setZapMode("sigma")}
+              className={[
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1",
+                zapMode === "sigma"
+                  ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+              ].join(" ")}
+            >
+          <span className="text-[12px] leading-none">&sigma;</span>
+          <span className="ml-1">ZAP</span>
+            </button>
+
+            <input
+              type="number"
+              step={0.1}
+              min={0.05}
+              value={zapSigmaMinAbs}
+              disabled={zapMode !== "sigma"}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setZapSigmaMinAbs(Number.isFinite(v) ? Math.max(0.05, v) : 0.05);
+              }}
+              className={[
+                "w-[76px] bg-black/20 border rounded-lg px-2 py-1 text-xs font-mono text-right tabular-nums focus:outline-none",
+                zapMode === "sigma"
+                  ? "border-violet-500/30 text-white"
+                  : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
+            />
+
+            {/* OFF */}
+            <button
+              type="button"
+              onClick={() => setZapMode("off")}
+              className={[
+                "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                zapMode === "off"
+                  ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
+                  : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
+              ].join(" ")}
+              title="Disable ZAP filters"
+            >
+              OFF
+            </button>
           </div>
         </div>
 
