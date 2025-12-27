@@ -32,7 +32,7 @@ const STRATEGY_CATALOG: Record<string, { title: string; description?: string; ic
   quartalDep: { title: "Quartal Dep", description: "Квартальні залежності та календарні патерни.", icon: "📅" },
   dayTwo: { title: "Day Two", description: "День 2 — продовження/відкат після імпульсу.", icon: "2️⃣" },
   arbitrage: { title: "ArbitRage", description: "Відхилення vs bench і нормалізація (sigma/zap).", icon: "🧮" },
-  openDoor: { title: "Open Door", description: "Сигнали на open: імпульс, fail, bounce.", icon: "🚪" },
+  opendoor: { title: "Open Door", description: "Сигнали на open: імпульс, fail, bounce.", icon: "🚪" },
   rLine: { title: "R-Line", description: "Робота з лініями ризику/рівнями R.", icon: "📏" },
   intraDance: { title: "Intra Dance", description: "Інтра-рухи та “танець” усередині дня.", icon: "🩰" },
   morningLounch: { title: "Morning Lounch", description: "Ранковий імпульс і continuation.", icon: "🌅" },

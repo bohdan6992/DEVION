@@ -1,3 +1,5 @@
+// lib/strategyCatalog.ts
+
 export type StrategyMeta = {
   key: string;
   name: string;
@@ -17,7 +19,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "uptickRule", name: "Uptick Rule", icon: "🛡️", description: "Падіння 10%+ і поведінка після правила." },
   { key: "quartalDep", name: "Quartal Dep", icon: "📅", description: "Квартальні залежності й події." },
   { key: "dayTwo", name: "Day Two", icon: "2️⃣", description: "Другий день після події." },
-  { key: "openDoor", name: "Open Door", icon: "🚪", description: "Відкриття ринку: сетапи та статистика." },
+  { key: "opendoor", name: "Open Door", icon: "🚪", description: "Відкриття ринку: сетапи та статистика." },
   { key: "rLine", name: "R-Line", icon: "📏", description: "Рівні ризику/нагороди та відпрацювання." },
   { key: "intraDance", name: "Intra Dance", icon: "🩰", description: "Інтра-динаміка: рух/нормалізація." },
   { key: "morningLounch", name: "Morning Launch", icon: "🌅", description: "Ранковий імпульс після відкриття." },
@@ -25,6 +27,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },
   { key: "chrono", name: "ChronoFlow", icon: "⏳", description: "Таймінг-потоки та хронологічні патерни." },
+  { key: "powerHour", name: "Power Hour", icon: "⚡️", description: "Фінальна година сесії: сплеск волатильності та закриття позицій." },
 ];
 
 export const STRATEGY_BY_KEY = Object.fromEntries(

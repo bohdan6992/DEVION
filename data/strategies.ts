@@ -87,7 +87,7 @@ export const STRATEGIES: StrategyInfo[] = [
   },
 
   {
-    id: "openDoor",
+    id: "opendoor",
     title: "Open Door",
     icon: "🚪",
     description: "Патерни після першого імпульсу на відкритті.",

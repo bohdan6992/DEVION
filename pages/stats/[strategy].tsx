@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import ArbitrageMatrix from "@/components/strategies/ArbitrageMatrix";
 import ChronoMatrix from "@/components/strategies/ChronoMatrix";
+import OpendoorMatrix from "@/components/strategies/OpendoorMatrix";
 
 function UnknownStrategyScreen({ strategy }: { strategy: string }) {
   return (
@@ -32,6 +33,9 @@ export default function StrategySummaryPage() {
 
     case "chrono":
       return <ChronoMatrix />;
+
+    case "opendoor":
+      return <OpendoorMatrix />;
 
     default:
       return <UnknownStrategyScreen strategy={strategy} />;
