@@ -9,7 +9,7 @@ export default function SignalsPage() {
           mt-[-100px] піднімає його вгору, h-[100px] створює простір, 
           а z-50 гарантує, що він буде над навігацією.
       */}
-      <div className="absolute top-[-100px] left-0 right-0 h-[120px] bg-[#030303] z-[40] pointer-events-none" />
+      <div className="absolute top-[-100px] left-0 right-0 h-[100px] bg-[#030303] z-[40] pointer-events-none" />
 
       <div className="page space-y-6 relative z-10 pt-4">
         <header className="flex items-center justify-between">

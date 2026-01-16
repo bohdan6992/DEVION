@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
+
 
 import { useUi } from "@/components/UiProvider";
 
@@ -11,15 +13,16 @@ import { useUi } from "@/components/UiProvider";
 export type ArbitrageSignal = {
   strategy?: string;
   ticker: string;
+
   benchmark?: string;
   betaBucket?: string | null;
   direction?: "up" | "down" | "none";
   sig?: number | null;
+
   "BidLstClsΔ%"?: number | string | null;
   "AskLstClsΔ%"?: number | string | null;
   Bid?: number | string | null;
   Ask?: number | string | null;
-
 
   zapS?: number | null;
   zapSsigma?: number | null;
@@ -36,10 +39,18 @@ export type ArbitrageSignal = {
 
   account?: string;
   Account?: string;
+
   country?: string;
   Country?: string;
+  exchange?: string;
+  Exchange?: string;
+  sector?: string;
+  Sector?: string;
+
   company?: string;
   Company?: string;
+  SectorL3?: string;
+
   vol?: number | string;
   Vol?: number | string;
   spread?: number | string;
@@ -76,6 +87,17 @@ export type ArbitrageSignal = {
   NewsCount?: number | string;
 
   kind?: "hard" | "soft" | "any";
+
+  // normalized helpers (internal)
+  _bestRating?: number | null;
+  _bestTotal?: number | null;
+  _bestHard?: number | null;
+  _bestSoft?: number | null;
+  _reportBool?: boolean | null;
+  _newsCount?: number;
+  _isPTP?: boolean | null;
+  _isSSR?: boolean | null;
+  _isActive?: boolean | null;
 
   [k: string]: any;
 };
@@ -116,14 +138,283 @@ const BENCH_COLORS: Record<string, string> = {
   DEFAULT: "#94a3b8",
 };
 
-const parseBetaKey = (raw?: string | null): BetaKey => {
-  if (!raw) return "unknown";
-  const b = Number(String(raw).replace(",", "."));
+const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
+const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
+
+const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
+
+const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
+const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
+const ACTIVE_PANEL_LS_KEY = "bridge.arb.activePanel.v1";
+const UI_STATE_LS_KEY = "bridge.arb.uiState.v1";
+
+/* =========================
+   SMALL UTILS (fast)
+========================= */
+const clampInt = (v: any, min: number) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.trunc(n));
+};
+
+const clampFloat = (v: any, min: number) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, n);
+};
+
+const fmtNum = (v: number | null | undefined, digits = 2) =>
+  v == null || Number.isNaN(v)
+    ? "—"
+    : v.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+
+const fmtMaybeInt = (v: number | null | undefined) =>
+  v == null || Number.isNaN(v) ? "—" : Math.round(v).toLocaleString("en-US");
+
+const fmtPct = (v: number | null | undefined, digits = 2) =>
+  v == null || Number.isNaN(v) ? "—" : `${fmtNum(v, digits)}%`;
+
+/* =========================
+   HELPERS
+========================= */
+const toNum = (v: any): number | null => {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+};
+
+const toBool = (v: any): boolean | null => {
+  if (v == null) return null;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v).toLowerCase().trim();
+  if (["true", "1", "yes", "y"].includes(s)) return true;
+  if (["false", "0", "no", "n"].includes(s)) return false;
+  return null;
+};
+
+const hasValue = (v: any): boolean => {
+  if (v == null) return false;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v).toLowerCase().trim();
+  return s.length > 0 && !["false", "0", "no", "null", "undefined"].includes(s);
+};
+
+function normalizeTicker(raw: string): string | null {
+  const tk = (raw || "").trim().toUpperCase().replace(/"/g, "");
+  if (!tk) return null;
+  if (!/^[A-Z0-9.\-]+$/.test(tk)) return null;
+  return tk;
+}
+
+function parseTickersFromFreeText(text: string): string[] {
+  if (!text) return [];
+  const parts = text
+    .split(/[\s,;]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+  for (const p of parts) {
+    const tk = normalizeTicker(p);
+    if (tk) out.push(tk);
+  }
+  return Array.from(new Set(out));
+}
+
+function parseTickersFromCsv(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (!lines.length) return [];
+
+  const detectDelim = (line: string) =>
+    (line.match(/;/g) || []).length > (line.match(/,/g) || []).length ? ";" : ",";
+
+  const delim = detectDelim(lines[0]);
+  const header = lines[0].split(delim).map((x) => x.trim().toLowerCase());
+  const tickerIdx = header.findIndex((h) => h === "ticker");
+  const start = tickerIdx !== -1 ? 1 : 0;
+
+  const out: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const parts = lines[i].split(delim).map((x) => x.trim());
+    const raw = tickerIdx !== -1 ? parts[tickerIdx] : parts[0];
+    const tk = normalizeTicker(raw || "");
+    if (tk) out.push(tk);
+  }
+  return Array.from(new Set(out));
+}
+
+function sortedTickers(set: Set<string>) {
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+const slug = (s: string) =>
+  String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/* =========================
+   Robust pickers
+========================= */
+const getMeta = (d: any) => d?.meta ?? d?.Meta ?? null;
+const getBestObj = (d: any) => d?.best ?? d?.Best ?? null;
+
+const pick = (obj: any, keys: string[]) => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+};
+
+const pickAny = (d: any, keys: string[]) => {
+  const meta = getMeta(d);
+  const v1 = pick(d, keys);
+  if (v1 !== undefined) return v1;
+  const v2 = pick(meta, keys);
+  if (v2 !== undefined) return v2;
+  return undefined;
+};
+
+const getStrAny = (d: any, keys: string[], fallback = "") => String(pickAny(d, keys) ?? fallback).trim();
+const getNumAny = (d: any, keys: string[]) => toNum(pickAny(d, keys));
+const getBoolAny = (d: any, keys: string[]) => toBool(pickAny(d, keys));
+
+const getBestRating = (d: any) =>
+  toNum(getBestObj(d)?.rating ?? getBestObj(d)?.Rating ?? getBestObj(d)?.rate ?? getBestObj(d)?.Rate ?? null);
+
+const getBestTotal = (d: any) =>
+  toNum(getBestObj(d)?.total ?? getBestObj(d)?.Total ?? getBestObj(d)?.count ?? getBestObj(d)?.Count ?? null);
+
+const getCompany = (d: any) => String(getMeta(d)?.company ?? getMeta(d)?.Company ?? d?.company ?? d?.Company ?? "—");
+const getCountry = (d: any) => String(getMeta(d)?.country ?? getMeta(d)?.Country ?? d?.country ?? d?.Country ?? "—");
+const getSector = (d: any) =>
+  String(
+    getMeta(d)?.sectorL3 ??
+      getMeta(d)?.SectorL3 ??
+      getMeta(d)?.sector ??
+      getMeta(d)?.Sector ??
+      d?.sectorL3 ??
+      d?.SectorL3 ??
+      d?.sector ??
+      d?.Sector ??
+      "—"
+  );
+const getExchange = (d: any) => String(d?.exchange ?? d?.Exchange ?? getMeta(d)?.exchange ?? getMeta(d)?.Exchange ?? "—");
+
+const getCountryStr = (s: any) => String(getCountry(s) ?? "").trim().toUpperCase();
+const isUSA = (s: any) => {
+  const c = getCountryStr(s);
+  return c === "UNITED STATES" || c === "USA" || c === "US" || c === "UNITED STATES OF AMERICA";
+};
+
+const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
+  const getAccountStr = (s: any) => String(s?.account ?? s?.Account ?? "").trim();
+  const hasAccount = (s: any) => getAccountStr(s).length > 0;
+
+  return (a: any, b: any) => {
+    const ea = hasAccount(a) ? 1 : 0;
+    const eb = hasAccount(b) ? 1 : 0;
+    const pa = nonEmptyFirst ? -ea : ea;
+    const pb = nonEmptyFirst ? -eb : eb;
+    if (pa !== pb) return pa - pb;
+    return String(a?.ticker ?? "").localeCompare(String(b?.ticker ?? ""));
+  };
+};
+
+/* =========================
+   Numeric field getters (centralized)
+========================= */
+const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
+const numLastClose = (s: any) =>
+  getNumAny(s, ["LstCls", "lstCls", "lstClose", "lastClose", "LastClose", "close", "Close"]);
+
+const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv"]);
+const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
+const numPreMktVolNF = (s: any) =>
+  getNumAny(s, ["preMktVolNF", "PreMktVolNF", "preMhVolNF", "PreMhVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"]);
+const numVWAP = (s: any) => getNumAny(s, ["vwap", "VWAP"]);
+const numRoundLot = (s: any) => getNumAny(s, ["roundLot", "RoundLot"]);
+const numADV20 = (s: any) => getNumAny(s, ["adv20", "ADV20", "Adv20"]);
+const numADV20NF = (s: any) => getNumAny(s, ["adv20NF", "ADV20NF", "Adv20NF"]);
+const numADV90 = (s: any) => getNumAny(s, ["adv90", "ADV90", "Adv90", "avg90", "Avg90"]);
+const numADV90NF = (s: any) => getNumAny(s, ["adv90NF", "ADV90NF", "Adv90NF"]);
+const numLstPrcL = (s: any) => getNumAny(s, ["lstPrcL", "LstPrcL", "lastPriceL", "LastPriceL", "lstPrc", "LstPrc"]);
+const numYCls = (s: any) => getNumAny(s, ["yCls", "YCls", "yClose", "YClose"]);
+const numTCls = (s: any) => getNumAny(s, ["tCls", "TCls", "tClose", "TClose"]);
+const numClsToClsPct = (s: any) =>
+  getNumAny(s, ["ClsToCls%", "clsToCls%", "clsToClsPct", "ClsToClsPct", "ClsToClsPcnt", "clsToClsPcnt"]);
+const numLo = (s: any) => getNumAny(s, ["lo", "Lo", "low", "Low"]);
+const numLstClsNewsCnt = (s: any) => getNumAny(s, ["LstClsNewsCnt", "lstClsNewsCnt", "lstClsNewsCount", "LstClsNewsCount"]);
+
+const numVolNFfromLstCls = (s: any) => {
+  const vol = numPreMktVolNF(s);
+  const prc = numLastClose(s);
+  if (vol != null && prc != null) return vol * prc;
+  return null;
+};
+
+const strEquityType = (s: any) => getStrAny(s, ["equityType", "EquityType", "eqType", "EqType"], "");
+const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount"]);
+const boolIsPTP = (s: any) => getBoolAny(s, ["isPTP", "IsPTP", "ptp", "PTP"]);
+const boolIsSSR = (s: any) => getBoolAny(s, ["isSSR", "IsSSR", "ssr", "SSR"]);
+const boolIsETF = (s: any) => getBoolAny(s, ["etf", "ETF", "isEtf", "IsEtf", "isETF", "IsETF"]);
+const numPositionBp = (s: any) => getNumAny(s, ["PositionBp", "positionBp", "position_bp"]);
+
+const isActiveByPositionBp = (s: any) => {
+  const v = numPositionBp(s);
+  return v != null && v !== 0;
+};
+
+/* =========================
+   Beta parsing
+========================= */
+const parseBetaKey = (raw?: string | number | null): BetaKey => {
+  if (raw == null) return "unknown";
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return "unknown";
+
+  if (s === "lt1" || s.includes("< 1")) return "lt1";
+  if (s === "b1_1_5" || (s.includes("1.0") && s.includes("1.5"))) return "b1_1_5";
+  if (s === "b1_5_2" || (s.includes("1.5") && s.includes("2.0"))) return "b1_5_2";
+  if (s === "gt2" || s.includes("> 2")) return "gt2";
+
+  const b = Number(s.replace(",", "."));
   if (Number.isNaN(b)) return "unknown";
   if (b < 1) return "lt1";
   if (b < 1.5) return "b1_1_5";
   if (b < 2) return "b1_5_2";
   return "gt2";
+};
+
+const getBetaValue = (s: any): number | null => {
+  const b0 = toNum(s?.betaBucket);
+  if (b0 != null) return b0;
+
+  const best = s?.best ?? s?.Best ?? null;
+  const b1 = toNum(best?.beta ?? best?.Beta);
+  if (b1 != null) return b1;
+
+  const meta = s?.meta ?? s?.Meta ?? null;
+  const b2 = toNum(meta?.beta ?? meta?.Beta);
+  if (b2 != null) return b2;
+
+  const bp = s?.best_params ?? s?.bestParams ?? s?.BestParams ?? null;
+  const st = bp?.static ?? bp?.Static ?? null;
+  const b3 = toNum(st?.beta ?? st?.Beta);
+  if (b3 != null) return b3;
+
+  return null;
 };
 
 const sortBenchmarks = (a: string, b: string) => {
@@ -137,23 +428,155 @@ const sortBenchmarks = (a: string, b: string) => {
   return ua.localeCompare(ub);
 };
 
-const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
+/* =========================
+   URL builder
+========================= */
+function buildSignalsUrl(args: {
+  cls: ArbClass;
+  type: ArbType;
+  mode: Mode;
+  minRate: number;
+  minTotal: number;
+  limit: number;
+  offset: number;
+  tickers?: string;
+}) {
+  const { cls, type, mode, minRate, minTotal, limit, offset, tickers } = args;
 
-const fmtNum = (v: number | null | undefined, digits = 2) =>
-  v == null || Number.isNaN(v)
-    ? "—"
-    : v.toLocaleString("en-US", {
-        maximumFractionDigits: digits,
-        minimumFractionDigits: digits,
-      });
+  const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
 
-const fmtInt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? "—" : Math.round(v).toLocaleString("en-US"));
+  const safeMinRate = Number.isFinite(minRate) ? Math.max(0, minRate) : 0.3;
+  const safeMinTotal = Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : 30;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
 
-const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
+  u.searchParams.set("minRate", String(safeMinRate));
+  u.searchParams.set("minTotal", String(safeMinTotal));
+  u.searchParams.set("limit", String(safeLimit));
+  u.searchParams.set("offset", String(safeOffset));
 
-const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
-const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
+  const t = (tickers ?? "").trim();
+  if (t) u.searchParams.set("tickers", t);
 
+  return u.toString();
+}
+
+/* =========================
+   API NORMALIZER
+========================= */
+function normalizeSignal(raw: any): ArbitrageSignal | null {
+  if (!raw) return null;
+
+  const ticker = normalizeTicker(String(raw.ticker ?? raw.Ticker ?? ""));
+  if (!ticker) return null;
+
+  const meta = raw?.meta ?? raw?.Meta ?? null;
+
+  const benchmark = String(raw.benchmark ?? raw.Benchmark ?? raw.bench ?? raw.Bench ?? meta?.bench ?? meta?.benchmark ?? "UNKNOWN").toUpperCase();
+  const betaBucket =
+    raw.betaBucket ?? raw.BetaBucket ?? raw.beta_bucket ?? raw.beta_bucket_str ?? raw.beta ?? raw.Beta ?? meta?.betaBucket ?? meta?.beta ?? null;
+
+  const sideStr = String(raw.side ?? raw.Side ?? raw.dir ?? raw.Dir ?? raw.direction ?? raw.Direction ?? "")
+    .toLowerCase()
+    .trim();
+
+  let direction: "up" | "down" | "none" = "none";
+  if (sideStr.includes("short") || sideStr === "s" || sideStr === "sell") direction = "down";
+  else if (sideStr.includes("long") || sideStr === "l" || sideStr === "buy") direction = "up";
+  else if (raw.direction === "up" || raw.direction === "down" || raw.direction === "none") direction = raw.direction;
+
+  const sig =
+    (typeof raw.sig === "number" ? raw.sig : null) ??
+    (typeof raw.sigma === "number" ? raw.sigma : null) ??
+    (typeof raw.devSigma === "number" ? raw.devSigma : null) ??
+    (typeof raw.dev_sigma === "number" ? raw.dev_sigma : null) ??
+    null;
+
+  const zapS = typeof raw.zapS === "number" ? raw.zapS : typeof raw.zap_s === "number" ? raw.zap_s : null;
+  const zapL = typeof raw.zapL === "number" ? raw.zapL : typeof raw.zap_l === "number" ? raw.zap_l : null;
+
+  const kindStr = String(raw.type ?? raw.Type ?? raw.kind ?? raw.Kind ?? raw.normType ?? "")
+    .toLowerCase()
+    .trim();
+  const kind: "hard" | "soft" | "any" = kindStr.includes("hard") ? "hard" : kindStr.includes("soft") ? "soft" : "any";
+
+  const shortCandidate = !!(raw.shortCandidate ?? raw.ShortCandidate ?? raw.isShort ?? raw.short ?? false);
+  const longCandidate = !!(raw.longCandidate ?? raw.LongCandidate ?? raw.isLong ?? raw.long ?? false);
+
+  const bidStock = toNum(raw.bidStock ?? meta?.bidStock);
+  const askStock = toNum(raw.askStock ?? meta?.askStock);
+  const bidBench = toNum(raw.bidBench ?? meta?.bidBench);
+  const askBench = toNum(raw.askBench ?? meta?.askBench);
+
+  const zapSsigma = toNum(raw.zapSsigma ?? meta?.zapSsigma);
+  const zapLsigma = toNum(raw.zapLsigma ?? meta?.zapLsigma);
+
+  const best = raw?.best ?? raw?.Best ?? null;
+
+  const _bestRating = toNum(best?.rating ?? best?.Rating);
+  const _bestTotal = toNum(best?.total ?? best?.Total);
+  const _bestHard = toNum(best?.hard ?? best?.Hard);
+  const _bestSoft = toNum(best?.soft ?? best?.Soft);
+
+  const _reportBool = (() => {
+    const s = String(meta?.report ?? raw?.report ?? raw?.Report ?? "").trim().toLowerCase();
+    if (["yes", "y", "true", "1"].includes(s)) return true;
+    if (["no", "n", "false", "0"].includes(s)) return false;
+    return null;
+  })();
+
+  const _newsCount =
+    toNum(meta?.newsCnt ?? meta?.newsCount ?? meta?.news ?? raw?.newsCnt ?? raw?.news ?? raw?.newsCount ?? raw?.NewsCount) ?? 0;
+
+  const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
+  const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
+  const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
+
+  // make sure these exist at top-level for filters/options
+  const country = raw?.country ?? raw?.Country ?? meta?.country ?? meta?.Country ?? undefined;
+  const exchange = raw?.exchange ?? raw?.Exchange ?? meta?.exchange ?? meta?.Exchange ?? undefined;
+  const sector = raw?.sector ?? raw?.Sector ?? meta?.sector ?? meta?.Sector ?? meta?.sectorL3 ?? meta?.SectorL3 ?? undefined;
+
+  return {
+    ...raw,
+    meta,
+
+    ticker,
+    benchmark,
+    betaBucket: betaBucket == null ? null : String(betaBucket),
+    direction,
+    sig,
+    zapS,
+    zapSsigma,
+    zapL,
+    zapLsigma,
+    shortCandidate,
+    longCandidate,
+    kind,
+    bidStock,
+    askStock,
+    bidBench,
+    askBench,
+
+    country,
+    exchange,
+    sector,
+
+    _bestRating,
+    _bestTotal,
+    _bestHard,
+    _bestSoft,
+    _reportBool,
+    _newsCount,
+    _isPTP,
+    _isSSR,
+    _isActive,
+  };
+}
+
+/* =========================
+   MinMax component
+========================= */
 type MinMaxProps = {
   label: string;
   min: string;
@@ -170,9 +593,7 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
   return (
     <div
       className={`group flex flex-col gap-1 p-2 rounded-xl border transition-all ${
-        props.min || props.max
-          ? "border-emerald-500/30 bg-emerald-500/[0.05]"
-          : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
+        props.min || props.max ? "border-emerald-500/30 bg-emerald-500/[0.05]" : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
       }`}
       onFocusCapture={props.startEditing}
       onBlurCapture={(e) => {
@@ -182,13 +603,14 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
       }}
     >
       <div className="flex justify-between items-center">
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1">
-          {props.label}
-        </span>
+        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1">{props.label}</span>
         {(props.min || props.max) && (
           <button
             type="button"
-            onClick={() => { props.setMin(""); props.setMax(""); }}
+            onClick={() => {
+              props.setMin("");
+              props.setMax("");
+            }}
             className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
           >
             CLR
@@ -214,348 +636,41 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
   );
 });
 
-
-/* =========================
-   HELPERS
-========================= */
-function normalizeTicker(raw: string): string | null {
-  const tk = (raw || "").trim().toUpperCase().replace(/"/g, "");
-  if (!tk) return null;
-  if (!/^[A-Z0-9.\-]+$/.test(tk)) return null;
-  return tk;
-}
-
-function parseTickersFromFreeText(text: string): string[] {
-  if (!text) return [];
-  const parts = text
-    .split(/[\s,;]+/g)
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const out: string[] = [];
-  for (const p of parts) {
-    const tk = normalizeTicker(p);
-    if (tk) out.push(tk);
-  }
-  return Array.from(new Set(out));
-}
-
-function parseTickersFromCsv(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (!lines.length) return [];
-  const detectDelim = (line: string) => ((line.match(/;/g) || []).length > (line.match(/,/g) || []).length ? ";" : ",");
-  const delim = detectDelim(lines[0]);
-  const header = lines[0].split(delim).map((x) => x.trim().toLowerCase());
-  const tickerIdx = header.findIndex((h) => h === "ticker");
-  const start = tickerIdx !== -1 ? 1 : 0;
-  const out: string[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const parts = lines[i].split(delim).map((x) => x.trim());
-    const raw = tickerIdx !== -1 ? parts[tickerIdx] : parts[0];
-    const tk = normalizeTicker(raw || "");
-    if (tk) out.push(tk);
-  }
-  return Array.from(new Set(out));
-}
-
-function sortedTickers(set: Set<string>) {
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
-
-const toNum = (v: any): number | null => {
-  if (v == null) return null;
-  if (typeof v === "string") {
-    const s = v.trim();
-    if (s === "") return null;
-    const n = Number(s.replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-  }
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  const n = Number(String(v).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-};
-
-const toBool = (v: any): boolean | null => {
-  if (v == null) return null;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  const s = String(v).toLowerCase().trim();
-  if (["true", "1", "yes", "y"].includes(s)) return true;
-  if (["false", "0", "no", "n"].includes(s)) return false;
-  return null;
-};
-
-const hasValue = (v: any): boolean => {
-  if (v == null) return false;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  const s = String(v).toLowerCase().trim();
-  return s.length > 0 && !["false", "0", "no", "null", "undefined"].includes(s);
-};
-
-const getAccountStr = (s: any) => String(s?.account ?? s?.Account ?? "").trim();
-const hasAccount = (s: any) => getAccountStr(s).length > 0;
-
-const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
-  return (a: any, b: any) => {
-    const ea = hasAccount(a) ? 1 : 0;
-    const eb = hasAccount(b) ? 1 : 0;
-    const pa = nonEmptyFirst ? -ea : ea;
-    const pb = nonEmptyFirst ? -eb : eb;
-    if (pa !== pb) return pa - pb;
-    return String(a?.ticker ?? "").localeCompare(String(b?.ticker ?? ""));
-  };
-};
-
-const getCountryStr = (s: any) => String(getCountry(s) ?? "").trim().toUpperCase();
-
-const isUSA = (s: any) => {
-  const c = getCountryStr(s);
-  return c === "UNITED STATES" || c === "USA" || c === "US" || c === "UNITED STATES OF AMERICA";
-};
-
-
-
-const getMeta = (d: any) => d?.meta ?? d?.Meta ?? null;
-const getBestObj = (d: any) => d?.best ?? d?.Best ?? null;
-
-const getBestRating = (d: any) =>
-  toNum(getBestObj(d)?.rating ?? getBestObj(d)?.Rating ?? getBestObj(d)?.rate ?? getBestObj(d)?.Rate ?? null);
-
-const getBestTotal = (d: any) =>
-  toNum(getBestObj(d)?.total ?? getBestObj(d)?.Total ?? getBestObj(d)?.count ?? getBestObj(d)?.Count ?? null);
-
-const getCompany = (d: any) => String(getMeta(d)?.company ?? getMeta(d)?.Company ?? d?.company ?? d?.Company ?? "—");
-const getCountry = (d: any) => String(getMeta(d)?.country ?? getMeta(d)?.Country ?? d?.country ?? d?.Country ?? "—");
-const getSector = (d: any) => String(getMeta(d)?.sector ?? getMeta(d)?.Sector ?? d?.sector ?? d?.Sector ?? "—");
-
-/** extra active fields */
-const getLstPrc = (d: any) =>
-  toNum(d?.lstPrc ?? d?.LstPrc ?? getMeta(d)?.lstPrc ?? getMeta(d)?.LstPrc ?? d?.last ?? d?.Last) ?? null;
-const getExchange = (d: any) => String(d?.exchange ?? d?.Exchange ?? getMeta(d)?.exchange ?? getMeta(d)?.Exchange ?? "—");
-const getTrdStatus = (d: any) => String(d?.trdStatus ?? d?.TrdStatus ?? getMeta(d)?.trdStatus ?? getMeta(d)?.TrdStatus ?? "—");
-const getMarketCapM = (d: any) => toNum(d?.marketCapM ?? d?.MarketCapM ?? getMeta(d)?.marketCapM ?? getMeta(d)?.MarketCapM) ?? null;
-const getTierBP = (d: any) => toNum(d?.tierBP ?? d?.TierBP ?? getMeta(d)?.tierBP ?? getMeta(d)?.TierBP) ?? null;
-
-// Robust readers
-const pick = (obj: any, keys: string[]) => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null) return v;
-  }
-  return undefined;
-};
-
-const pickAny = (d: any, keys: string[]) => {
-  const meta = getMeta(d);
-  const v1 = pick(d, keys);
-  if (v1 !== undefined) return v1;
-  const v2 = pick(meta, keys);
-  if (v2 !== undefined) return v2;
-  return undefined;
-};
-
-const getStrAny = (d: any, keys: string[], fallback = "") => String(pickAny(d, keys) ?? fallback).trim();
-const getNumAny = (d: any, keys: string[]) => toNum(pickAny(d, keys));
-const getBoolAny = (d: any, keys: string[]) => toBool(pickAny(d, keys));
-
-const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
-const numLastClose = (s: any) => getNumAny(s, ["lstClose", "lastClose", "LastClose", "close", "Close"]);
-const numAvg90 = (s: any) => getNumAny(s, ["avg90", "Avg90", "adv90", "ADV90", "Adv90"]);
-const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv", "AvPreMhv", "AvPreMhv"]);
-
-const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
-const numPreMktVolNF = (s: any) =>
-  getNumAny(s, ["preMktVolNF", "PreMktVolNF", "preMhVolNF", "PreMhVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"]);
-const numVWAP = (s: any) => getNumAny(s, ["vwap", "VWAP"]);
-const numRoundLot = (s: any) => getNumAny(s, ["roundLot", "RoundLot"]);
-const numADV20 = (s: any) => getNumAny(s, ["adv20", "ADV20", "Adv20"]);
-const numADV20NF = (s: any) => getNumAny(s, ["adv20NF", "ADV20NF", "Adv20NF"]);
-const numADV90 = (s: any) => getNumAny(s, ["adv90", "ADV90", "Adv90", "avg90", "Avg90"]);
-const numADV90NF = (s: any) => getNumAny(s, ["adv90NF", "ADV90NF", "Adv90NF"]);
-const numLstPrcL = (s: any) => getNumAny(s, ["lstPrcL", "LstPrcL", "lastPriceL", "LastPriceL", "lstPrc", "LstPrc"]);
-const numYCls = (s: any) => getNumAny(s, ["yCls", "YCls", "yClose", "YClose"]);
-const numTCls = (s: any) => getNumAny(s, ["tCls", "TCls", "tClose", "TClose"]);
-const numClsToClsPct = (s: any) =>
-  getNumAny(s, ["ClsToCls%", "clsToCls%", "clsToClsPct", "ClsToClsPct", "ClsToClsPcnt", "clsToClsPcnt"]);
-const numLo = (s: any) => getNumAny(s, ["lo", "Lo", "low", "Low"]);
-const numLstClsNewsCnt = (s: any) => getNumAny(s, ["LstClsNewsCnt", "lstClsNewsCnt", "lstClsNewsCount", "LstClsNewsCount"]);
-
-// Calculated: VolNFfromLstCls = PreMktVolNF * LastClose
-const numVolNFfromLstCls = (s: any) => {
-  const vol = numPreMktVolNF(s);
-  const prc = numLastClose(s);
-  if (vol != null && prc != null) return vol * prc;
-  return null;
-};
-
-const strEquityType = (s: any) => getStrAny(s, ["equityType", "EquityType", "eqType", "EqType"], "");
-const boolDividend = (s: any) => getBoolAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]);
-const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount"]);
-
-const boolIsPTP = (s: any) => getBoolAny(s, ["isPTP", "IsPTP", "ptp", "PTP"]);
-const boolIsSSR = (s: any) => getBoolAny(s, ["isSSR", "IsSSR", "ssr", "SSR"]);
-const boolIsActive = (s: any) => getBoolAny(s, ["active", "Active", "isActive", "IsActive"]);
-const boolIsETF = (s: any) => getBoolAny(s, ["etf", "ETF", "isEtf", "IsEtf", "isETF", "IsETF"]);
-
-/* =========================
-   Active helpers
-========================= */
-const calcPct = (px: number | null, ref: number | null) => {
-  if (px == null || ref == null || ref === 0) return null;
-  return ((px - ref) / ref) * 100;
-};
-const fmtPct = (v: number | null | undefined, digits = 2) => (v == null || Number.isNaN(v) ? "—" : `${fmtNum(v, digits)}%`);
-const fmtMaybeInt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? "—" : Math.round(v).toLocaleString("en-US"));
-const firstNonNullNum = (...vals: any[]) => {
-  for (const x of vals) {
-    const n = toNum(x);
-    if (n != null) return n;
-  }
-  return null;
-};
-
-/* =========================
-   API NORMALIZER
-========================= */
-function normalizeSignal(raw: any): ArbitrageSignal | null {
-  if (!raw) return null;
-
-  const ticker = normalizeTicker(String(raw.ticker ?? raw.Ticker ?? ""));
-  if (!ticker) return null;
-
-  const benchmark = String(raw.benchmark ?? raw.Benchmark ?? raw.bench ?? raw.Bench ?? "UNKNOWN").toUpperCase();
-  const betaBucket = raw.betaBucket ?? raw.BetaBucket ?? raw.beta_bucket ?? raw.beta_bucket_str ?? raw.beta ?? raw.Beta ?? null;
-  const sideStr = String(raw.side ?? raw.Side ?? raw.dir ?? raw.Dir ?? raw.direction ?? raw.Direction ?? "").toLowerCase();
-
-  let direction: "up" | "down" | "none" = "none";
-  if (sideStr.includes("short") || sideStr === "s" || sideStr === "sell") direction = "down";
-  else if (sideStr.includes("long") || sideStr === "l" || sideStr === "buy") direction = "up";
-  else if (raw.direction === "up" || raw.direction === "down" || raw.direction === "none") direction = raw.direction;
-
-  const sig =
-    (typeof raw.sig === "number" ? raw.sig : null) ??
-    (typeof raw.sigma === "number" ? raw.sigma : null) ??
-    (typeof raw.devSigma === "number" ? raw.devSigma : null) ??
-    (typeof raw.dev_sigma === "number" ? raw.dev_sigma : null) ??
-    null;
-
-  const zapS = typeof raw.zapS === "number" ? raw.zapS : typeof raw.zap_s === "number" ? raw.zap_s : null;
-  const zapL = typeof raw.zapL === "number" ? raw.zapL : typeof raw.zap_l === "number" ? raw.zap_l : null;
-
-  const Bid = toNum(raw.Bid ?? raw.bid ?? null);
-  const Ask = toNum(raw.Ask ?? raw.ask ?? null);
-
-  const BidLstClsDeltaPct =
-    toNum(raw["BidLstClsΔ%"] ?? raw["BidLstClsDeltaPct"] ?? raw.BidLstClsDeltaPct ?? raw.bidLstClsDeltaPct ?? null);
-
-  const AskLstClsDeltaPct =
-    toNum(raw["AskLstClsΔ%"] ?? raw["AskLstClsDeltaPct"] ?? raw.AskLstClsDeltaPct ?? raw.askLstClsDeltaPct ?? null);
-
-
-  const kindStr = String(raw.type ?? raw.Type ?? raw.kind ?? raw.Kind ?? raw.normType ?? "").toLowerCase();
-  const kind: "hard" | "soft" | "any" = kindStr.includes("hard") ? "hard" : kindStr.includes("soft") ? "soft" : "any";
-
-  const shortCandidate = !!(raw.shortCandidate ?? raw.ShortCandidate ?? raw.isShort ?? raw.short ?? false);
-  const longCandidate = !!(raw.longCandidate ?? raw.LongCandidate ?? raw.isLong ?? raw.long ?? false);
-
-  const bidStock = typeof raw.bidStock === "number" ? raw.bidStock : toNum(raw.bidStock);
-  const askStock = typeof raw.askStock === "number" ? raw.askStock : toNum(raw.askStock);
-  const bidBench = typeof raw.bidBench === "number" ? raw.bidBench : toNum(raw.bidBench);
-  const askBench = typeof raw.askBench === "number" ? raw.askBench : toNum(raw.askBench);
-
-  const zapSsigma = typeof raw.zapSsigma === "number" ? raw.zapSsigma : toNum(raw.zapSsigma);
-  const zapLsigma = typeof raw.zapLsigma === "number" ? raw.zapLsigma : toNum(raw.zapLsigma);
-
-  const best = raw?.best ?? raw?.Best ?? null;
-  const meta = raw?.meta ?? raw?.Meta ?? null;
-
-  const _bestRating = toNum(best?.rating ?? best?.Rating);
-  const _bestTotal = toNum(best?.total ?? best?.Total);
-  const _bestHard = toNum(best?.hard ?? best?.Hard);
-  const _bestSoft = toNum(best?.soft ?? best?.Soft);
-
-  const _reportBool = (() => {
-    const s = String(meta?.report ?? raw?.report ?? raw?.Report ?? "").trim().toLowerCase();
-    if (["yes", "y", "true", "1"].includes(s)) return true;
-    if (["no", "n", "false", "0"].includes(s)) return false;
-    return null;
-  })();
-
-  const _newsCount =
-    toNum(meta?.newsCnt ?? meta?.newsCount ?? meta?.news ?? raw?.newsCnt ?? raw?.news ?? raw?.newsCount ?? raw?.NewsCount) ?? 0;
-
-  const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
-  const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
-  const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
-
-  return {
-    ...raw,
-    ticker,
-    benchmark,
-    betaBucket: betaBucket == null ? null : String(betaBucket),
-    direction,
-    sig,
-    zapS,
-    zapSsigma,
-    zapL,
-    zapLsigma,
-    shortCandidate,
-    longCandidate,
-    kind,
-    bidStock,
-    askStock,
-    bidBench,
-    askBench,
-    _bestRating,
-    _bestTotal,
-    _bestHard,
-    _bestSoft,
-    _reportBool,
-    _newsCount,
-    _isPTP,
-    _isSSR,
-    _isActive,
-  };
-}
-
-function buildSignalsUrl(args: {
-  cls: ArbClass;
-  type: ArbType;
-  mode: Mode;
-  minRate: number;
-  minTotal: number;
-  limit: number;
-  offset: number;
-  tickers?: string;
-}) {
-  const { cls, type, mode, minRate, minTotal, limit, offset, tickers } = args;
-
-  const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
-
-  const safeMinRate  = Number.isFinite(minRate)  ? Math.max(0, minRate) : 0.3;
-  const safeMinTotal = Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : 1;
-  const safeLimit    = Number.isFinite(limit)    ? Math.max(1, Math.trunc(limit)) : 30;
-  const safeOffset   = Number.isFinite(offset)   ? Math.max(0, Math.trunc(offset)) : 0;
-
-  u.searchParams.set("minRate",  String(safeMinRate));
-  u.searchParams.set("minTotal", String(safeMinTotal));
-  u.searchParams.set("limit",    String(safeLimit));
-  u.searchParams.set("offset",   String(safeOffset));
-
-  const t = (tickers ?? "").trim();
-  if (t) u.searchParams.set("tickers", t);
-
-  return u.toString();
-}
-
-
-
 /* =========================
    UI Helper Components
 ========================= */
+type MsColor = "amber" | "emerald" | "rose";
+
+const MSF = {
+  amber: {
+    activeItem: "bg-amber-500/20 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-amber-500 text-black border-transparent",
+    chipInactive: "text-amber-500 border-transparent hover:bg-amber-500/10",
+    arrow: "text-amber-500 hover:text-amber-400 hover:bg-amber-500/10",
+    divider: "bg-amber-500/20",
+    boxChecked: "bg-amber-500 border-transparent",
+  },
+  emerald: {
+    activeItem: "bg-emerald-500/20 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-emerald-500 text-black border-transparent",
+    chipInactive: "text-emerald-500 border-transparent hover:bg-emerald-500/10",
+    arrow: "text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10",
+    divider: "bg-emerald-500/20",
+    boxChecked: "bg-emerald-500 border-transparent",
+  },
+  rose: {
+    activeItem: "bg-rose-500/20 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-rose-500 text-black border-transparent",
+    chipInactive: "text-rose-500 border-transparent hover:bg-rose-500/10",
+    arrow: "text-rose-500 hover:text-rose-400 hover:bg-rose-500/10",
+    divider: "bg-rose-500/20",
+    boxChecked: "bg-rose-500 border-transparent",
+  },
+} as const;
+
 const MultiSelectFilter = ({
   label,
   options,
@@ -571,12 +686,14 @@ const MultiSelectFilter = ({
   setSelected: (s: Set<string>) => void;
   enabled: boolean;
   toggleEnabled: () => void;
-  color?: "amber" | "emerald" | "rose";
+  color?: MsColor;
 }) => {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const btnRef = useRef<HTMLButtonElement>(null); // dropdown button
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const id = useMemo(() => `msf-${slug(label)}`, [label]);
+  const C = MSF[color];
 
   const toggleOption = (val: string) => {
     const next = new Set(selected);
@@ -585,95 +702,76 @@ const MultiSelectFilter = ({
     setSelected(next);
   };
 
-  const activeNameClass = `bg-${color}-500 text-black shadow-[0_0_15px_${color}] border-transparent`;
-  const inactiveNameClass = `text-${color}-500 border-transparent hover:bg-${color}-500/10`;
-  const arrowClass = `text-${color}-500 hover:text-${color}-400 hover:bg-${color}-500/10`;
-
   const recomputePos = () => {
     const el = wrapRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({
-      left: r.left,
-      top: r.bottom + 8, // mt-2
-      width: Math.max(200, r.width),
-    });
+    setPos({ left: r.left, top: r.bottom + 8, width: Math.max(220, r.width) });
   };
 
-  // close on outside click (works with portal)
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const insideWrap = !!wrapRef.current?.contains(target);
-      // menu is in portal -> detect by id
-      const menuEl = document.getElementById(`msf-${label}`);
-      const insideMenu = !!menuEl?.contains(target);
-      if (!insideWrap && !insideMenu) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [label]);
-
-  // when open, pin position and keep it updated
   useEffect(() => {
     if (!open) return;
     recomputePos();
+
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideWrap = !!wrapRef.current?.contains(target);
+      const menuEl = document.getElementById(id);
+      const insideMenu = !!menuEl?.contains(target);
+      if (!insideWrap && !insideMenu) setOpen(false);
+    };
+
     const onScroll = () => recomputePos();
     const onResize = () => recomputePos();
+
+    document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onResize);
+
     return () => {
+      document.removeEventListener("mousedown", onDown);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onResize);
     };
-  }, [open]);
+  }, [open, id]);
 
-  const menu = open && pos
-    ? createPortal(
-        <div
-          id={`msf-${label}`}
-          style={{
-            position: "fixed",
-            left: pos.left,
-            top: pos.top,
-            width: pos.width,
-            zIndex: 999999, // ✅ поверх active panel
-          }}
-          className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto custom-scrollbar"
-        >
-          <div className="flex flex-col gap-1">
-            {options.map((opt, i) => (
-              <button
-                key={opt || `na-${i}`}
-                type="button"
-                onMouseDown={(e) => e.preventDefault()} // ✅ не забирати фокус/не закривати випадково
-                onClick={() => toggleOption(opt)}
-                className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors ${
-                  selected.has(opt)
-                    ? `bg-${color}-500/20 text-white`
-                    : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded border border-white/20 flex items-center justify-center ${
-                      selected.has(opt) ? `bg-${color}-500 border-transparent` : ""
-                    }`}
-                  >
-                    {selected.has(opt) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+  const menu =
+    open && pos
+      ? createPortal(
+          <div
+            id={id}
+            style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
+            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto custom-scrollbar"
+          >
+            <div className="flex flex-col gap-1">
+              {options.map((opt, i) => (
+                <button
+                  key={opt || `na-${i}`}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => toggleOption(opt)}
+                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                    selected.has(opt) ? C.activeItem : C.inactiveItem
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-3 h-3 rounded border border-white/20 flex items-center justify-center ${
+                        selected.has(opt) ? C.boxChecked : ""
+                      }`}
+                    >
+                      {selected.has(opt) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+                    </div>
+                    <span className="truncate">{opt || "N/A"}</span>
                   </div>
-                  <span className="truncate">{opt || "N/A"}</span>
-                </div>
-              </button>
-            ))}
-            {options.length === 0 && (
-              <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>
-            )}
-          </div>
-        </div>,
-        document.body
-      )
-    : null;
+                </button>
+              ))}
+              {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <>
@@ -682,19 +780,18 @@ const MultiSelectFilter = ({
           type="button"
           onClick={toggleEnabled}
           className={`px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
-            enabled ? activeNameClass : inactiveNameClass
+            enabled ? C.chipActive : C.chipInactive
           }`}
         >
           {label} {selected.size > 0 && <span className="opacity-70 ml-1">({selected.size})</span>}
         </button>
 
-        <div className={`w-px h-4 bg-${color}-500/20`} />
+        <div className={`w-px h-4 ${C.divider}`} />
 
         <button
-          ref={btnRef}
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${arrowClass}`}
+          className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${C.arrow}`}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -718,29 +815,36 @@ const MultiSelectFilter = ({
   );
 };
 
-
-// Helper for Class/Mode/Type buttons - moved outside
 interface FilterButtonProps {
   active: boolean;
   label: string;
   onClick: () => void;
-  color?: string;
+  color?: MsColor;
 }
+
+const FB = {
+  emerald: {
+    on: "border border-emerald-500 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-emerald-500/10",
+  },
+  amber: {
+    on: "border border-amber-500 text-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)] bg-amber-500/10",
+  },
+  rose: {
+    on: "border border-rose-500 text-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.3)] bg-rose-500/10",
+  },
+} as const;
 
 const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => (
   <button
     onClick={onClick}
     className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-      active
-        ? `border border-${color}-500 text-${color}-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-${color}-500/10`
-        : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+      active ? FB[color].on : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
     }`}
   >
     {label}
   </button>
 );
 
-// SignalCard - moved outside
 interface SignalCardProps {
   s: ArbitrageSignal;
   side: "short" | "long";
@@ -748,7 +852,13 @@ interface SignalCardProps {
   activeTicker: string | null;
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
+
+  // NEW: for ACTIVE-position highlight (gold)
+  zapMode: "zap" | "sigma" | "off";
+  activeZapMaxAbs: number;
+  activeSigmaMaxAbs: number;
 }
+
 
 const SignalCard: React.FC<SignalCardProps> = ({
   s,
@@ -757,28 +867,52 @@ const SignalCard: React.FC<SignalCardProps> = ({
   activeTicker,
   flashClass,
   compact = false,
+  zapMode,
+  activeZapMaxAbs,
+  activeSigmaMaxAbs,
 }) => {
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
+    // ACTIVE position by PositionBp != 0
+  const posActive = isActiveByPositionBp(s);
+  
+  const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
+  const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
-  // Logic from prompt: Down (Short) -> Bid (Red), Up (Long) -> Ask (Green)
+  // metric used for highlight depends on active zapMode (same mode for whole list)
+  const m =
+    zapMode === "zap" ? z :
+    zapMode === "sigma" ? zs :
+    null;
+
+  const thr =
+    zapMode === "zap" ? Math.max(0, Number(activeZapMaxAbs ?? 0)) :
+    zapMode === "sigma" ? Math.max(0, Number(activeSigmaMaxAbs ?? 0)) :
+    0;
+
+  // GOLD when: mode enabled + position active + abs(metric) <= threshold
+  const isGold = zapMode !== "off" && posActive && m != null && Math.abs(m) <= thr;
+
+  const goldClasses =
+    "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
+
+
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
   const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
 
-  const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
-  const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
-  // Active styles (keep red/green formatting for active)
-  const activeClasses = isShort 
+  const activeClasses = isShort
     ? "bg-rose-500/10 border-rose-500/50 shadow-[0_0_15px_-5px_rgba(244,63,94,0.3)]"
     : "bg-emerald-500/10 border-emerald-500/50 shadow-[0_0_15px_-5px_rgba(16,185,129,0.3)]";
-  
-  // Inactive: Transparent background
+
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
-  const tickerColor = isActive 
-    ? (isShort ? "text-rose-300" : "text-emerald-300")
+
+  const tickerColor = isActive
+    ? isShort
+      ? "text-rose-300"
+      : "text-emerald-300"
     : "text-zinc-300 group-hover:text-zinc-100";
 
   return (
@@ -787,90 +921,57 @@ const SignalCard: React.FC<SignalCardProps> = ({
       className={[
         "group relative w-full text-left transition-all duration-200 border flex flex-col justify-between",
         compact ? "p-2 rounded-lg gap-1" : "p-3 rounded-xl gap-1.5",
-        isActive ? activeClasses : inactiveClasses,
+        isGold ? goldClasses : (isActive ? activeClasses : inactiveClasses),
         flashClass(s.ticker, side),
       ].join(" ")}
     >
       <div className="flex items-center justify-between w-full">
-        {/* Ticker Symbol */}
         <span className={`font-bold tracking-tight leading-none ${compact ? "text-sm" : "text-[15px]"} ${tickerColor}`}>
           {s.ticker}
         </span>
-        
-        {/* Price Section */}
+
         <div className="flex items-baseline gap-1.5">
-            <span className="text-[10px] font-mono text-zinc-600 lowercase">{pxLabel}</span>
-            <span className={`font-mono tabular-nums leading-none font-bold ${compact ? "text-[13px]" : "text-[15px]"} ${pxColor}`}>
-                {px == null ? "—" : fmtNum(px, 2)}
-            </span>
+          <span className="text-[10px] font-mono text-zinc-600 lowercase">{pxLabel}</span>
+          <span className={`font-mono tabular-nums leading-none font-bold ${compact ? "text-[13px]" : "text-[15px]"} ${pxColor}`}>
+            {px == null ? "—" : fmtNum(px, 2)}
+          </span>
         </div>
       </div>
 
-      {/* Metrics Section */}
       <div className={`flex items-center justify-between w-full font-mono ${compact ? "text-[9px]" : "text-[10px]"} opacity-80`}>
-         <div className="flex items-center gap-1.5">
-           <span className="text-zinc-600">σ</span>
-           <span className="text-zinc-400 tabular-nums">
-              {s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}
-           </span>
-         </div>
-         <div className="flex items-center gap-2">
-           <div className="flex items-center gap-1">
-              <span className="text-zinc-600">Z</span>
-              <span className="text-zinc-400 tabular-nums">{z == null ? "—" : fmtNum(z, 2)}</span>
-           </div>
-           <div className="flex items-center gap-1">
-              <span className="text-zinc-600">S</span>
-              <span className="text-zinc-400 tabular-nums">{zs == null ? "—" : fmtNum(zs, 1)}</span>
-           </div>
-         </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-zinc-600">σ</span>
+          <span className="text-zinc-400 tabular-nums">{s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-600">Z</span>
+            <span className="text-zinc-400 tabular-nums">{z == null ? "—" : fmtNum(z, 2)}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-600">S</span>
+            <span className="text-zinc-400 tabular-nums">{zs == null ? "—" : fmtNum(zs, 1)}</span>
+          </div>
+        </div>
       </div>
     </button>
   );
 };
 
-// ✅ BEST_PARAMS UI
+const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
 const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
 
-const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
-
-const fmtPct01 = (v: number | null | undefined, digits = 0) => {
-  if (v == null || Number.isNaN(v)) return "—";
-  return `${Math.round(v * 100).toFixed(digits)}%`;
-};
-
-const fmtDelay = (sec: number | null | undefined) => {
-  if (sec == null || Number.isNaN(sec)) return "—";
-  if (sec < 60) return `${Math.round(sec)}s`;
-  const m = sec / 60;
-  if (m < 60) return `${Math.round(m)}m`;
-  const h = m / 60;
-  return `${h.toFixed(h < 10 ? 1 : 0)}h`;
-};
-
-const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
-const safeArr = (v: any) => (Array.isArray(v) ? v : []);
-
-const rangeBadge = (r: any) => {
-  const from = toNum(r?.from ?? r?.min);
-  const to = toNum(r?.to ?? r?.max);
-  const rate = toNum(r?.rate);
-  const total = toNum(r?.total);
-  const f = from == null ? "—" : fmtNum(from, 2);
-  const t = to == null ? "—" : fmtNum(to, 2);
-  const rr = rate == null ? "—" : `${Math.round(rate * 100)}%`;
-  const nn = total == null ? "—" : fmtMaybeInt(total);
-  return `${f} → ${t}  ·  ${rr} / ${nn}`;
-};
+type ListMode = "off" | "ignore" | "apply";
+type ActiveMode = "off" | "onlyActive" | "onlyInactive";
 
 
 /* =========================
    COMPONENT
 ========================= */
-type ListMode = "off" | "ignore" | "apply";
-
 export default function BridgeArbitrageSignals() {
-  const { theme } = useUi();
+  // kept for future theme usage; not required right now
+  useUi();
   const isDark = true;
 
   /* ===== defaults requested: global / all / any ===== */
@@ -884,24 +985,21 @@ export default function BridgeArbitrageSignals() {
   const [offset, setOffset] = useState<number>(0);
 
   type NumField = {
-  label: string;
-  val: number;
-  set: React.Dispatch<React.SetStateAction<number>>;
-  ph: string;
-  step: number;
-  min: number;
-  integer?: boolean;
-};
+    label: string;
+    val: number;
+    set: React.Dispatch<React.SetStateAction<number>>;
+    ph: string;
+    step: number;
+    min: number;
+    integer?: boolean;
+  };
 
-const fields: NumField[] = [
-  { label: "minRate",  val: minRate,  set: setMinRate,  ph: "0.3", step: 0.1, min: 0.1 },
-  { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1",   step: 1,   min: 1, integer: true },
-  { label: "limit",    val: limit,    set: setLimit,    ph: "30",  step: 5,   min: 1, integer: true },
-  { label: "offset",   val: offset,   set: setOffset,   ph: "0",   step: 1,   min: 0, integer: true },
-];
-
-
-
+  const fields: NumField[] = [
+    { label: "minRate", val: minRate, set: setMinRate, ph: "0.3", step: 0.1, min: 0.0 },
+    { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1", step: 1, min: 1, integer: true },
+    { label: "limit", val: limit, set: setLimit, ph: "30", step: 5, min: 1, integer: true },
+    { label: "offset", val: offset, set: setOffset, ph: "0", step: 1, min: 0, integer: true },
+  ];
 
   const [tickersFilter, setTickersFilter] = useState("");
   const tickersFilterNorm = useMemo(() => {
@@ -910,81 +1008,84 @@ const fields: NumField[] = [
   }, [tickersFilter]);
 
   /* ===== Threshold filters ===== */
-  const [adv20Min, setAdv20Min] = useState<string>("");
-  const [adv20Max, setAdv20Max] = useState<string>("");
-  const [adv20NFMin, setAdv20NFMin] = useState<string>("");
-  const [adv20NFMax, setAdv20NFMax] = useState<string>("");
-  // ✅ BestParams compact tab
+  const [adv20Min, setAdv20Min] = useState("");
+  const [adv20Max, setAdv20Max] = useState("");
+  const [adv20NFMin, setAdv20NFMin] = useState("");
+  const [adv20NFMax, setAdv20NFMax] = useState("");
+
   const [bpCls, setBpCls] = useState<ArbClass>("global");
-  /* ===== ZAP / SigmaZAP (mutually exclusive) ===== */
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "off">("zap"); // default: ZAP active
-  const [zapMinAbs, setZapMinAbs] = useState<number>(0.3);               // min: 0.3, step 0.1
-  const [zapSigmaMinAbs, setZapSigmaMinAbs] = useState<number>(0.05);   // min: 0.05, step 0.1
 
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "off">("zap");
+  const [zapMinAbs, setZapMinAbs] = useState<number>(0.3);
+  const [zapSigmaMinAbs, setZapSigmaMinAbs] = useState<number>(0.05);
 
+  // highlight thresholds (kept/persisted)
+  const [activeZapMaxAbs, setActiveZapMaxAbs] = useState<number>(0.3);
+  const [activeSigmaMaxAbs, setActiveSigmaMaxAbs] = useState<number>(0.05);
 
-  const [adv90Min, setAdv90Min] = useState<string>("");
-  const [adv90Max, setAdv90Max] = useState<string>("");
-  const [adv90NFMin, setAdv90NFMin] = useState<string>("");
-  const [adv90NFMax, setAdv90NFMax] = useState<string>("");
+  const [adv90Min, setAdv90Min] = useState("");
+  const [adv90Max, setAdv90Max] = useState("");
+  const [adv90NFMin, setAdv90NFMin] = useState("");
+  const [adv90NFMax, setAdv90NFMax] = useState("");
 
-  const [avPreMhvMin, setAvPreMhvMin] = useState<string>("");
-  const [avPreMhvMax, setAvPreMhvMax] = useState<string>("");
+  const [avPreMhvMin, setAvPreMhvMin] = useState("");
+  const [avPreMhvMax, setAvPreMhvMax] = useState("");
 
-  const [roundLotMin, setRoundLotMin] = useState<string>("");
-  const [roundLotMax, setRoundLotMax] = useState<string>("");
+  const [roundLotMin, setRoundLotMin] = useState("");
+  const [roundLotMax, setRoundLotMax] = useState("");
 
-  const [vwapMin, setVwapMin] = useState<string>("");
-  const [vwapMax, setVwapMax] = useState<string>("");
+  const [vwapMin, setVwapMin] = useState("");
+  const [vwapMax, setVwapMax] = useState("");
 
-  const [spreadMin, setSpreadMin] = useState<string>("");
-  const [spreadMax, setSpreadMax] = useState<string>("");
+  const [spreadMin, setSpreadMin] = useState("");
+  const [spreadMax, setSpreadMax] = useState("");
 
-  const [lstPrcLMin, setLstPrcLMin] = useState<string>("");
-  const [lstPrcLMax, setLstPrcLMax] = useState<string>("");
+  const [lstPrcLMin, setLstPrcLMin] = useState("");
+  const [lstPrcLMax, setLstPrcLMax] = useState("");
 
-  const [lstClsMin, setLstClsMin] = useState<string>("");
-  const [lstClsMax, setLstClsMax] = useState<string>("");
+  const [lstClsMin, setLstClsMin] = useState("");
+  const [lstClsMax, setLstClsMax] = useState("");
 
-  const [yClsMin, setYClsMin] = useState<string>("");
-  const [yClsMax, setYClsMax] = useState<string>("");
+  const [yClsMin, setYClsMin] = useState("");
+  const [yClsMax, setYClsMax] = useState("");
 
-  const [tClsMin, setTClsMin] = useState<string>("");
-  const [tClsMax, setTClsMax] = useState<string>("");
+  const [tClsMin, setTClsMin] = useState("");
+  const [tClsMax, setTClsMax] = useState("");
 
-  const [clsToClsPctMin, setClsToClsPctMin] = useState<string>("");
-  const [clsToClsPctMax, setClsToClsPctMax] = useState<string>("");
+  const [clsToClsPctMin, setClsToClsPctMin] = useState("");
+  const [clsToClsPctMax, setClsToClsPctMax] = useState("");
 
-  const [loMin, setLoMin] = useState<string>("");
-  const [loMax, setLoMax] = useState<string>("");
+  const [loMin, setLoMin] = useState("");
+  const [loMax, setLoMax] = useState("");
 
-  const [lstClsNewsCntMin, setLstClsNewsCntMin] = useState<string>("");
-  const [lstClsNewsCntMax, setLstClsNewsCntMax] = useState<string>("");
+  const [lstClsNewsCntMin, setLstClsNewsCntMin] = useState("");
+  const [lstClsNewsCntMax, setLstClsNewsCntMax] = useState("");
 
-  const [marketCapMMin, setMarketCapMMin] = useState<string>("");
-  const [marketCapMMax, setMarketCapMMax] = useState<string>("");
+  const [marketCapMMin, setMarketCapMMin] = useState("");
+  const [marketCapMMax, setMarketCapMMax] = useState("");
 
-  const [preMhVolNFMin, setPreMhVolNFMin] = useState<string>("");
-  const [preMhVolNFMax, setPreMhVolNFMax] = useState<string>("");
+  const [preMhVolNFMin, setPreMhVolNFMin] = useState("");
+  const [preMhVolNFMax, setPreMhVolNFMax] = useState("");
 
-  const [volNFfromLstClsMin, setVolNFfromLstClsMin] = useState<string>("");
-  const [volNFfromLstClsMax, setVolNFfromLstClsMax] = useState<string>("");
+  const [volNFfromLstClsMin, setVolNFfromLstClsMin] = useState("");
+  const [volNFfromLstClsMax, setVolNFfromLstClsMax] = useState("");
 
   /* ===== Boolean filters (Red Group - Exclude) ===== */
   const [excludeDividend, setExcludeDividend] = useState(false);
-  const [excludeNews, setExcludeNews] = useState(false); // If News > 0, exclude
+  const [excludeNews, setExcludeNews] = useState(false);
   const [excludePTP, setExcludePTP] = useState(false);
   const [excludeSSR, setExcludeSSR] = useState(false);
   const [excludeReport, setExcludeReport] = useState(false);
   const [excludeETF, setExcludeETF] = useState(false);
-  const [excludeCrap, setExcludeCrap] = useState(false); // If lstClose < 5, exclude
-  const [excludeActive, setExcludeActive] = useState(false);
+  const [excludeCrap, setExcludeCrap] = useState(false);
+  const [activeMode, setActiveMode] = useState<ActiveMode>("off");
+
 
   /* ===== Boolean filters (Green Group - Include Only) ===== */
-  const [includeUSA, setIncludeUSA] = useState(false); // Only Country == UNITED STATES
-  const [includeChina, setIncludeChina] = useState(false); // Only Country == CHINA or HONG KONG
+  const [includeUSA, setIncludeUSA] = useState(false);
+  const [includeChina, setIncludeChina] = useState(false);
 
-  /* ===== Multi-select (Yellow Group) ===== */
+  /* ===== Multi-select ===== */
   const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
   const [countryEnabled, setCountryEnabled] = useState(false);
 
@@ -996,7 +1097,7 @@ const fields: NumField[] = [
 
   const [filterReport, setFilterReport] = useState<"ALL" | "YES" | "NO">("ALL");
   const [accountNonEmptyFirst, setAccountNonEmptyFirst] = useState(false);
-  const [equityType, setEquityType] = useState<string>("");
+  const [equityType, setEquityType] = useState("");
 
   /* ===== IGNORE/APPLY lists ===== */
   const [listMode, setListMode] = useState<ListMode>("off");
@@ -1026,22 +1127,24 @@ const fields: NumField[] = [
   const [activeData, setActiveData] = useState<any>(null);
 
   /* =========================
-     Derived Options for Multi-Select
+     Multi-select options
+     (IMPORTANT: use robust getters, not item.country/item.exchange)
   ========================= */
   const { allCountries, allExchanges, allSectors } = useMemo(() => {
     const c = new Set<string>();
     const e = new Set<string>();
     const s = new Set<string>();
+
     for (const item of items) {
-      if (item.country) c.add(item.country);
-      if (item.exchange) e.add(item.exchange);
-      if (item.sector) s.add(item.sector);
-      // check meta too
-      const m = getMeta(item);
-      if (m?.country) c.add(m.country);
-      if (m?.exchange) e.add(m.exchange);
-      if (m?.sector) s.add(m.sector);
+      const cc = getCountry(item);
+      const ee = getExchange(item);
+      const ss = getSector(item);
+
+      if (cc && cc !== "—") c.add(cc);
+      if (ee && ee !== "—") e.add(ee);
+      if (ss && ss !== "—") s.add(ss);
     }
+
     return {
       allCountries: Array.from(c).sort(),
       allExchanges: Array.from(e).sort(),
@@ -1050,139 +1153,8 @@ const fields: NumField[] = [
   }, [items]);
 
   /* =========================
-    Ref-based Fetching (Fixes stale closure in interval)
+     Edit pause (typing guard)
   ========================= */
-  type FiltersSnapshot = {
-    cls: ArbClass;
-    type: ArbType;
-    mode: Mode;
-    minRate: number;
-    minTotal: number;
-    limit: number;
-    offset: number;
-
-    tickersFilterNorm: string;
-
-    listMode: ListMode;
-    ignoreSet: Set<string>;
-    applySet: Set<string>;
-        // ZAP filters
-    zapMode: "zap" | "sigma" | "off";
-    zapMinAbs: number;
-    zapSigmaMinAbs: number;
-
-
-    // Thresholds
-    adv20Min: string; adv20Max: string;
-    adv20NFMin: string; adv20NFMax: string;
-    adv90Min: string; adv90Max: string;
-    adv90NFMin: string; adv90NFMax: string;
-    avPreMhvMin: string; avPreMhvMax: string;
-    roundLotMin: string; roundLotMax: string;
-    vwapMin: string; vwapMax: string;
-    spreadMin: string; spreadMax: string;
-    lstPrcLMin: string; lstPrcLMax: string;
-    lstClsMin: string; lstClsMax: string;
-    yClsMin: string; yClsMax: string;
-    tClsMin: string; tClsMax: string;
-    clsToClsPctMin: string; clsToClsPctMax: string;
-    loMin: string; loMax: string;
-    lstClsNewsCntMin: string; lstClsNewsCntMax: string;
-    marketCapMMin: string; marketCapMMax: string;
-    preMhVolNFMin: string; preMhVolNFMax: string;
-    volNFfromLstClsMin: string; volNFfromLstClsMax: string;
-
-    // Booleans
-    excludeDividend: boolean;
-    excludeNews: boolean;
-    excludePTP: boolean;
-    excludeSSR: boolean;
-    excludeReport: boolean;
-    excludeETF: boolean;
-    excludeCrap: boolean;
-    excludeActive: boolean;
-
-    includeUSA: boolean;
-    includeChina: boolean;
-
-    // Multi-selects
-    selCountries: Set<string>;
-    countryEnabled: boolean;
-
-    selExchanges: Set<string>;
-    exchangeEnabled: boolean;
-
-    selSectors: Set<string>;
-    sectorEnabled: boolean;
-
-    // Misc
-    filterReport: "ALL" | "YES" | "NO";
-    equityType: string;
-  };
-
-  const filtersRef = useRef<FiltersSnapshot>({
-    cls,
-    type,
-    mode,
-    minRate,
-    minTotal,
-    limit,
-    offset,
-    tickersFilterNorm,
-
-    listMode,
-    ignoreSet,
-    applySet,
-
-    adv20Min, adv20Max,
-    adv20NFMin, adv20NFMax,
-    adv90Min, adv90Max,
-    adv90NFMin, adv90NFMax,
-    avPreMhvMin, avPreMhvMax,
-    roundLotMin, roundLotMax,
-    vwapMin, vwapMax,
-    spreadMin, spreadMax,
-    lstPrcLMin, lstPrcLMax,
-    lstClsMin, lstClsMax,
-    yClsMin, yClsMax,
-    tClsMin, tClsMax,
-    clsToClsPctMin, clsToClsPctMax,
-    loMin, loMax,
-    lstClsNewsCntMin, lstClsNewsCntMax,
-    marketCapMMin, marketCapMMax,
-    preMhVolNFMin, preMhVolNFMax,
-    volNFfromLstClsMin, volNFfromLstClsMax,
-
-    excludeDividend,
-    excludeNews,
-    excludePTP,
-    excludeSSR,
-    excludeReport,
-    excludeETF,
-    excludeCrap,
-    excludeActive,
-
-    includeUSA,
-    includeChina,
-
-    selCountries,
-    countryEnabled,
-
-    selExchanges,
-    exchangeEnabled,
-
-    selSectors,
-    sectorEnabled,
-
-    filterReport,
-    equityType,
-
-    zapMode,
-    zapMinAbs,
-    zapSigmaMinAbs,
-
-  });
-
   const isEditingRef = useRef(false);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -1194,135 +1166,45 @@ const fields: NumField[] = [
   const stopEditing = () => {
     isEditingRef.current = false;
     setIsEditing(false);
-    // опційно: одразу підтягнути свіжі дані після завершення вводу
   };
 
+  /* =========================
+     Persist Active panel
+  ========================= */
   useEffect(() => {
-    filtersRef.current = {
-      cls,
-      type,
-      mode,
-      minRate,
-      minTotal,
-      limit,
-      offset,
-      tickersFilterNorm,
+    try {
+      const raw = localStorage.getItem(ACTIVE_PANEL_LS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
 
-      listMode,
-      ignoreSet,
-      applySet,
+      const tk = typeof s?.activeTicker === "string" ? normalizeTicker(s.activeTicker) : null;
+      const vis = typeof s?.visible === "boolean" ? s.visible : true;
+      const col = typeof s?.collapsed === "boolean" ? s.collapsed : false;
+      const mode = s?.mode === "mini" || s?.mode === "expanded" ? s.mode : "expanded";
 
-      adv20Min, adv20Max,
-      adv20NFMin, adv20NFMax,
-      adv90Min, adv90Max,
-      adv90NFMin, adv90NFMax,
-      avPreMhvMin, avPreMhvMax,
-      roundLotMin, roundLotMax,
-      vwapMin, vwapMax,
-      spreadMin, spreadMax,
-      lstPrcLMin, lstPrcLMax,
-      lstClsMin, lstClsMax,
-      yClsMin, yClsMax,
-      tClsMin, tClsMax,
-      clsToClsPctMin, clsToClsPctMax,
-      loMin, loMax,
-      lstClsNewsCntMin, lstClsNewsCntMax,
-      marketCapMMin, marketCapMMax,
-      preMhVolNFMin, preMhVolNFMax,
-      volNFfromLstClsMin, volNFfromLstClsMax,
+      setActiveTicker(tk);
+      setActivePanelVisible(vis);
+      setActivePanelCollapsed(col);
+      setActivePanelMode(mode);
+    } catch {}
+  }, []);
 
-      excludeDividend,
-      excludeNews,
-      excludePTP,
-      excludeSSR,
-      excludeReport,
-      excludeETF,
-      excludeCrap,
-      excludeActive,
-
-      includeUSA,
-      includeChina,
-
-      selCountries,
-      countryEnabled,
-
-      selExchanges,
-      exchangeEnabled,
-
-      selSectors,
-      sectorEnabled,
-
-      filterReport,
-      equityType,
-
-      zapMode,
-      zapMinAbs,
-      zapSigmaMinAbs,
-
-    };
-  }, [
-    cls,
-    type,
-    mode,
-    minRate,
-    minTotal,
-    limit,
-    offset,
-    tickersFilterNorm,
-
-    listMode,
-    ignoreSet,
-    applySet,
-
-    adv20Min, adv20Max,
-    adv20NFMin, adv20NFMax,
-    adv90Min, adv90Max,
-    adv90NFMin, adv90NFMax,
-    avPreMhvMin, avPreMhvMax,
-    roundLotMin, roundLotMax,
-    vwapMin, vwapMax,
-    spreadMin, spreadMax,
-    lstPrcLMin, lstPrcLMax,
-    lstClsMin, lstClsMax,
-    yClsMin, yClsMax,
-    tClsMin, tClsMax,
-    clsToClsPctMin, clsToClsPctMax,
-    loMin, loMax,
-    lstClsNewsCntMin, lstClsNewsCntMax,
-    marketCapMMin, marketCapMMax,
-    preMhVolNFMin, preMhVolNFMax,
-    volNFfromLstClsMin, volNFfromLstClsMax,
-
-    excludeDividend,
-    excludeNews,
-    excludePTP,
-    excludeSSR,
-    excludeReport,
-    excludeETF,
-    excludeCrap,
-    excludeActive,
-
-    includeUSA,
-    includeChina,
-
-    selCountries,
-    countryEnabled,
-
-    selExchanges,
-    exchangeEnabled,
-
-    selSectors,
-    sectorEnabled,
-
-    filterReport,
-    equityType,
-
-    zapMode, zapMinAbs, zapSigmaMinAbs,
-
-  ]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        ACTIVE_PANEL_LS_KEY,
+        JSON.stringify({
+          activeTicker,
+          visible: activePanelVisible,
+          collapsed: activePanelCollapsed,
+          mode: activePanelMode,
+        })
+      );
+    } catch {}
+  }, [activeTicker, activePanelVisible, activePanelCollapsed, activePanelMode]);
 
   /* =========================
-     localStorage load/save
+     localStorage load/save ignore/apply
   ========================= */
   useEffect(() => {
     try {
@@ -1417,6 +1299,375 @@ const fields: NumField[] = [
   };
 
   /* =========================
+     UI State (cls/type/mode/listMode/bpCls/zapMode)
+  ========================= */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(UI_STATE_LS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+
+      if (typeof s?.cls === "string") setCls(s.cls);
+      if (typeof s?.type === "string") setType(s.type);
+      if (typeof s?.mode === "string") setMode(s.mode);
+      if (typeof s?.listMode === "string") setListMode(s.listMode);
+      if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
+      if (typeof s?.zapMinAbs === "number") setZapMinAbs(s.zapMinAbs);
+      if (typeof s?.zapSigmaMinAbs === "number") setZapSigmaMinAbs(s.zapSigmaMinAbs);
+      if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") setZapMode(s.zapMode);
+      if (typeof s?.activeZapMaxAbs === "number") setActiveZapMaxAbs(s.activeZapMaxAbs);
+      if (typeof s?.activeSigmaMaxAbs === "number") setActiveSigmaMaxAbs(s.activeSigmaMaxAbs);
+      if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") {
+  setActiveMode(s.activeMode);
+}
+
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        UI_STATE_LS_KEY,
+        JSON.stringify({
+          cls,
+          type,
+          mode,
+          listMode,
+          bpCls,
+
+          zapMode,
+          zapMinAbs,
+          zapSigmaMinAbs,
+
+          activeZapMaxAbs,
+          activeSigmaMaxAbs,
+          activeMode,
+
+        })
+
+      );
+    } catch {}
+  }, [
+    cls, type, mode, listMode, bpCls,
+    zapMode, zapMinAbs, zapSigmaMinAbs,
+    activeZapMaxAbs, activeSigmaMaxAbs,
+    activeMode, // ✅ ADD THIS
+  ]);
+
+
+  /* =========================
+     Snapshot (single source of truth for fetching/filtering)
+  ========================= */
+  const bounds = useMemo(() => {
+    const mm = (minS: string, maxS: string) => ({ min: toNum(minS), max: toNum(maxS) });
+    return {
+      ADV20: mm(adv20Min, adv20Max),
+      ADV20NF: mm(adv20NFMin, adv20NFMax),
+      ADV90: mm(adv90Min, adv90Max),
+      ADV90NF: mm(adv90NFMin, adv90NFMax),
+      AvPreMhv: mm(avPreMhvMin, avPreMhvMax),
+      RoundLot: mm(roundLotMin, roundLotMax),
+      VWAP: mm(vwapMin, vwapMax),
+      Spread: mm(spreadMin, spreadMax),
+      LstPrcL: mm(lstPrcLMin, lstPrcLMax),
+      LstCls: mm(lstClsMin, lstClsMax),
+      YCls: mm(yClsMin, yClsMax),
+      TCls: mm(tClsMin, tClsMax),
+      ClsToClsPct: mm(clsToClsPctMin, clsToClsPctMax),
+      Lo: mm(loMin, loMax),
+      LstClsNewsCnt: mm(lstClsNewsCntMin, lstClsNewsCntMax),
+      MarketCapM: mm(marketCapMMin, marketCapMMax),
+      PreMhVolNF: mm(preMhVolNFMin, preMhVolNFMax),
+      VolNFfromLstCls: mm(volNFfromLstClsMin, volNFfromLstClsMax),
+    };
+  }, [
+    adv20Min, adv20Max,
+    adv20NFMin, adv20NFMax,
+    adv90Min, adv90Max,
+    adv90NFMin, adv90NFMax,
+    avPreMhvMin, avPreMhvMax,
+    roundLotMin, roundLotMax,
+    vwapMin, vwapMax,
+    spreadMin, spreadMax,
+    lstPrcLMin, lstPrcLMax,
+    lstClsMin, lstClsMax,
+    yClsMin, yClsMax,
+    tClsMin, tClsMax,
+    clsToClsPctMin, clsToClsPctMax,
+    loMin, loMax,
+    lstClsNewsCntMin, lstClsNewsCntMax,
+    marketCapMMin, marketCapMMax,
+    preMhVolNFMin, preMhVolNFMax,
+    volNFfromLstClsMin, volNFfromLstClsMax,
+  ]);
+
+  const snapshot = useMemo(() => {
+    return {
+      cls,
+      type,
+      mode,
+      minRate,
+      minTotal,
+      limit,
+      offset,
+      tickersFilterNorm,
+
+      listMode,
+      ignoreSet,
+      applySet,
+
+      bounds,
+
+      excludeDividend,
+      excludeNews,
+      excludePTP,
+      excludeSSR,
+      excludeReport,
+      excludeETF,
+      excludeCrap,
+      activeMode,
+
+      includeUSA,
+      includeChina,
+
+      selCountries,
+      countryEnabled,
+      selExchanges,
+      exchangeEnabled,
+      selSectors,
+      sectorEnabled,
+
+      filterReport,
+      equityType,
+
+      zapMode,
+      zapMinAbs,
+      zapSigmaMinAbs,
+      activeZapMaxAbs,
+      activeSigmaMaxAbs,
+    };
+  }, [
+    cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
+    listMode, ignoreSet, applySet,
+    bounds,
+    excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+    activeMode, // ✅ ADD THIS
+    includeUSA, includeChina,
+    selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
+    filterReport, equityType,
+    zapMode, zapMinAbs, zapSigmaMinAbs, activeZapMaxAbs, activeSigmaMaxAbs
+  ]);
+
+  const filtersRef = useRef(snapshot);
+  useEffect(() => {
+    filtersRef.current = snapshot;
+  }, [snapshot]);
+
+  /* =========================
+     Filters (fast single-pass)
+  ========================= */
+  const passMinMax = (val: number | null, min: number | null, max: number | null) => {
+    if ((min != null || max != null) && val == null) return false;
+    if (min != null && val != null && val < min) return false;
+    if (max != null && val != null && val > max) return false;
+    return true;
+  };
+
+  const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
+    const out: ArbitrageSignal[] = [];
+    const mr = toNum(f.minRate);
+    const mt = toNum(f.minTotal);
+
+    const zapThr = Math.max(0.3, Number(f.zapMinAbs ?? 0.3));
+    const sigThr = Math.max(0.05, Number(f.zapSigmaMinAbs ?? 0.05));
+    const eqNeedle = f.equityType.trim().toLowerCase();
+
+    for (const s of arr ?? []) {
+      const tk = normalizeTicker(s?.ticker || "");
+      if (!tk) continue;
+
+      // list mode first (cheap)
+      if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
+      if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
+
+      // ACTIVE tri-state (PositionBp != 0)
+      if (f.activeMode === "onlyActive") {
+        if (!isActiveByPositionBp(s)) continue;
+      }
+      if (f.activeMode === "onlyInactive") {
+        if (isActiveByPositionBp(s)) continue;
+      }
+
+
+      // thresholds
+      if (!passMinMax(numADV20(s), f.bounds.ADV20.min, f.bounds.ADV20.max)) continue;
+      if (!passMinMax(numADV20NF(s), f.bounds.ADV20NF.min, f.bounds.ADV20NF.max)) continue;
+      if (!passMinMax(numADV90(s), f.bounds.ADV90.min, f.bounds.ADV90.max)) continue;
+      if (!passMinMax(numADV90NF(s), f.bounds.ADV90NF.min, f.bounds.ADV90NF.max)) continue;
+      if (!passMinMax(numAvPreMh(s), f.bounds.AvPreMhv.min, f.bounds.AvPreMhv.max)) continue;
+      if (!passMinMax(numRoundLot(s), f.bounds.RoundLot.min, f.bounds.RoundLot.max)) continue;
+      if (!passMinMax(numVWAP(s), f.bounds.VWAP.min, f.bounds.VWAP.max)) continue;
+      if (!passMinMax(numSpread(s), f.bounds.Spread.min, f.bounds.Spread.max)) continue;
+      if (!passMinMax(numLstPrcL(s), f.bounds.LstPrcL.min, f.bounds.LstPrcL.max)) continue;
+      if (!passMinMax(numLastClose(s), f.bounds.LstCls.min, f.bounds.LstCls.max)) continue;
+      if (!passMinMax(numYCls(s), f.bounds.YCls.min, f.bounds.YCls.max)) continue;
+      if (!passMinMax(numTCls(s), f.bounds.TCls.min, f.bounds.TCls.max)) continue;
+      if (!passMinMax(numClsToClsPct(s), f.bounds.ClsToClsPct.min, f.bounds.ClsToClsPct.max)) continue;
+      if (!passMinMax(numLo(s), f.bounds.Lo.min, f.bounds.Lo.max)) continue;
+      if (!passMinMax(numLstClsNewsCnt(s), f.bounds.LstClsNewsCnt.min, f.bounds.LstClsNewsCnt.max)) continue;
+      if (!passMinMax(numMarketCapM(s), f.bounds.MarketCapM.min, f.bounds.MarketCapM.max)) continue;
+      if (!passMinMax(numPreMktVolNF(s), f.bounds.PreMhVolNF.min, f.bounds.PreMhVolNF.max)) continue;
+      if (!passMinMax(numVolNFfromLstCls(s), f.bounds.VolNFfromLstCls.min, f.bounds.VolNFfromLstCls.max)) continue;
+
+      // minRate/minTotal
+      if (mr != null) {
+        const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+        if (r == null || r < mr) continue;
+      }
+      if (mt != null) {
+        const t = getBestTotal(s) ?? (s as any)._bestTotal ?? toNum((s as any).total) ?? null;
+        if (t == null || t < mt) continue;
+      }
+
+
+      // exclude group
+      if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
+      if (f.excludeNews) {
+        const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
+        if (nn > 0) continue;
+      }
+      if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
+      if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
+      if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) continue;
+      if (f.excludeETF) {
+        if (boolIsETF(s) === true) continue;
+        const eqt = strEquityType(s).toLowerCase();
+        if (eqt && eqt.includes("etf")) continue;
+      }
+      if (f.excludeCrap) {
+        const px = numLastClose(s);
+        if (px != null && px < 5) continue;
+      }
+
+
+      // include group
+      if (f.includeUSA && !isUSA(s)) continue;
+      if (f.includeChina) {
+        const c = getCountryStr(s);
+        if (!c.includes("CHINA") && !c.includes("HONG KONG")) continue;
+      }
+
+      // multi
+      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) continue;
+      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) continue;
+      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
+
+      // report tri-state
+      if (f.filterReport !== "ALL") {
+        const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
+        if (f.filterReport === "YES" && rep !== true) continue;
+        if (f.filterReport === "NO" && rep !== false) continue;
+      }
+
+      // equity type
+      if (eqNeedle) {
+        const et = strEquityType(s).toLowerCase();
+        if (!et.includes(eqNeedle)) continue;
+      }
+
+      // ZAP/SigmaZAP (mutually exclusive)
+      if (f.zapMode !== "off") {
+        const dir = s.direction;
+        const isShort = dir === "down";
+        const isLong = dir === "up";
+        if (!isShort && !isLong) continue;
+
+        if (f.zapMode === "zap") {
+          if (isShort) {
+            const v = toNum(s.zapS);
+            if (v == null || v < zapThr) continue;
+          } else {
+            const v = toNum(s.zapL);
+            if (v == null || v > -zapThr) continue;
+          }
+        } else {
+          if (isShort) {
+            const v = toNum(s.zapSsigma);
+            if (v == null || v < sigThr) continue;
+          } else {
+            const v = toNum(s.zapLsigma);
+            if (v == null || v > -sigThr) continue;
+          }
+        }
+      }
+
+      out.push(s);
+    }
+
+    return out;
+  }, []);
+
+  /* =========================
+     Fetch signals (stable)
+  ========================= */
+  const fetchSignals = useCallback(async () => {
+    const f = filtersRef.current;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const url = buildSignalsUrl({
+        cls: f.cls,
+        type: f.type,
+        mode: f.mode,
+        minRate: f.minRate,
+        minTotal: f.minTotal,
+        limit: f.limit,
+        offset: f.offset,
+        tickers: f.tickersFilterNorm || undefined,
+      });
+
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        setItems([]);
+        setError(`HTTP ${r.status}: ${txt || r.statusText}`);
+        return;
+      }
+
+      const j = await r.json();
+      const rawItems: any[] = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : [];
+      const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+
+      const filtered = applyAllClientFilters(normalized, f);
+
+      setItems(filtered);
+      setUpdatedAt(Date.now());
+    } catch (e: any) {
+      setItems([]);
+      setError(e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }, [applyAllClientFilters]);
+
+  // auto refresh (no stale closure)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (isEditingRef.current) return;
+      fetchSignals();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [fetchSignals]);
+
+  // refetch on snapshot changes (one dep)
+  useEffect(() => {
+    if (isEditingRef.current) return;
+    fetchSignals();
+  }, [snapshot, fetchSignals]);
+
+  /* =========================
      Flash Logic
   ========================= */
   const prevRef = useRef<Map<string, number | null>>(new Map());
@@ -1462,268 +1713,7 @@ const fields: NumField[] = [
   };
 
   /* =========================
-     Filters pipeline
-  ========================= */
-  const applyListModeFilter = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
-    const a = arr ?? [];
-    if (f.listMode === "ignore") {
-      return a.filter((x) => {
-        const tk = normalizeTicker(x?.ticker || "");
-        return tk != null && !f.ignoreSet.has(tk);
-      });
-    }
-    if (f.listMode === "apply") {
-      return a.filter((x) => {
-        const tk = normalizeTicker(x?.ticker || "");
-        return tk != null && f.applySet.has(tk);
-      });
-    }
-    return a;
-  };
-
-  const applyMinRateMinTotal = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
-    const mr = toNum(f.minRate);
-    const mt = toNum(f.minTotal);
-    if (mr == null && mt == null) return arr ?? [];
-
-    const out = (arr ?? []).filter((s) => {
-      const r = getBestRating(s);
-      const t = getBestTotal(s);
-      if (mr != null && r != null && r < mr) return false;
-      if (mt != null && t != null && t < mt) return false;
-      return true;
-    });
-    return out;
-  };
-
-  const applyThresholdFilters = (arr: ArbitrageSignal[], f: FiltersSnapshot) => {
-    const n = {
-      ADV20: { min: toNum(f.adv20Min), max: toNum(f.adv20Max) },
-      ADV20NF: { min: toNum(f.adv20NFMin), max: toNum(f.adv20NFMax) },
-      ADV90: { min: toNum(f.adv90Min), max: toNum(f.adv90Max) },
-      ADV90NF: { min: toNum(f.adv90NFMin), max: toNum(f.adv90NFMax) },
-      AvPreMhv: { min: toNum(f.avPreMhvMin), max: toNum(f.avPreMhvMax) },
-      RoundLot: { min: toNum(f.roundLotMin), max: toNum(f.roundLotMax) },
-      VWAP: { min: toNum(f.vwapMin), max: toNum(f.vwapMax) },
-      Spread: { min: toNum(f.spreadMin), max: toNum(f.spreadMax) },
-      LstPrcL: { min: toNum(f.lstPrcLMin), max: toNum(f.lstPrcLMax) },
-      LstCls: { min: toNum(f.lstClsMin), max: toNum(f.lstClsMax) },
-      YCls: { min: toNum(f.yClsMin), max: toNum(f.yClsMax) },
-      TCls: { min: toNum(f.tClsMin), max: toNum(f.tClsMax) },
-      "ClsToCls%": { min: toNum(f.clsToClsPctMin), max: toNum(f.clsToClsPctMax) },
-      Lo: { min: toNum(f.loMin), max: toNum(f.loMax) },
-      LstClsNewsCnt: { min: toNum(f.lstClsNewsCntMin), max: toNum(f.lstClsNewsCntMax) },
-      MarketCapM: { min: toNum(f.marketCapMMin), max: toNum(f.marketCapMMax) },
-      PreMhVolNF: { min: toNum(f.preMhVolNFMin), max: toNum(f.preMhVolNFMax) },
-      VolNFfromLstCls: { min: toNum(f.volNFfromLstClsMin), max: toNum(f.volNFfromLstClsMax) },
-    };
-
-    const checkMinMax = (val: number | null, min: number | null, max: number | null) => {
-      const hasAnyBound = min != null || max != null;
-      if (hasAnyBound && val == null) return false;
-      if (min != null && val != null && val < min) return false;
-      if (max != null && val != null && val > max) return false;
-      return true;
-    };
-
-    const out = (arr ?? []).filter((s) => {
-      if (!checkMinMax(numADV20(s), n.ADV20.min, n.ADV20.max)) return false;
-      if (!checkMinMax(numADV20NF(s), n.ADV20NF.min, n.ADV20NF.max)) return false;
-      if (!checkMinMax(numADV90(s), n.ADV90.min, n.ADV90.max)) return false;
-      if (!checkMinMax(numADV90NF(s), n.ADV90NF.min, n.ADV90NF.max)) return false;
-      if (!checkMinMax(numAvPreMh(s), n.AvPreMhv.min, n.AvPreMhv.max)) return false;
-      if (!checkMinMax(numRoundLot(s), n.RoundLot.min, n.RoundLot.max)) return false;
-      if (!checkMinMax(numVWAP(s), n.VWAP.min, n.VWAP.max)) return false;
-      if (!checkMinMax(numSpread(s), n.Spread.min, n.Spread.max)) return false;
-      if (!checkMinMax(numLstPrcL(s), n.LstPrcL.min, n.LstPrcL.max)) return false;
-      if (!checkMinMax(numLastClose(s), n.LstCls.min, n.LstCls.max)) return false;
-      if (!checkMinMax(numYCls(s), n.YCls.min, n.YCls.max)) return false;
-      if (!checkMinMax(numTCls(s), n.TCls.min, n.TCls.max)) return false;
-      if (!checkMinMax(numClsToClsPct(s), n["ClsToCls%"].min, n["ClsToCls%"].max)) return false;
-      if (!checkMinMax(numLo(s), n.Lo.min, n.Lo.max)) return false;
-      if (!checkMinMax(numLstClsNewsCnt(s), n.LstClsNewsCnt.min, n.LstClsNewsCnt.max)) return false;
-      if (!checkMinMax(numMarketCapM(s), n.MarketCapM.min, n.MarketCapM.max)) return false;
-      if (!checkMinMax(numPreMktVolNF(s), n.PreMhVolNF.min, n.PreMhVolNF.max)) return false;
-      if (!checkMinMax(numVolNFfromLstCls(s), n.VolNFfromLstCls.min, n.VolNFfromLstCls.max)) return false;
-
-      // RED Group (Exclude)
-      if (f.excludeDividend) {
-        if (hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) return false;
-      }
-      if (f.excludeNews) {
-        const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-        if (nn > 0) return false;
-      }
-      if (f.excludePTP) {
-        if (((s as any)._isPTP ?? boolIsPTP(s)) === true) return false;
-      }
-      if (f.excludeSSR) {
-        if (((s as any)._isSSR ?? boolIsSSR(s)) === true) return false;
-      }
-      if (f.excludeReport) {
-        if (hasValue(pickAny(s, ["report", "Report"]))) return false;
-      }
-      if (f.excludeETF) {
-        if (boolIsETF(s) === true) return false;
-        const eqt = strEquityType(s).toLowerCase();
-        if (eqt && eqt.includes("etf")) return false;
-      }
-      if (f.excludeCrap) {
-        const px = numLastClose(s);
-        if (px != null && px < 5) return false;
-      }
-      if (f.excludeActive) {
-        if (((s as any)._isActive ?? boolIsActive(s)) === true) return false;
-      }
-
-      // GREEN Group (Include Only)
-      if (f.includeUSA) {
-        if (!isUSA(s)) return false;
-      }
-      if (f.includeChina) {
-        const c = getCountryStr(s);
-        if (!c.includes("CHINA") && !c.includes("HONG KONG")) return false;
-      }
-
-      // Multi-selects
-      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) return false;
-      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) return false;
-      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) return false;
-
-      // Report tri-state
-      if (f.filterReport !== "ALL") {
-        const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-        if (f.filterReport === "YES" && rep !== true) return false;
-        if (f.filterReport === "NO" && rep !== false) return false;
-      }
-
-      // Equity type search
-      if (f.equityType.trim()) {
-        const et = strEquityType(s).toLowerCase();
-        if (!et.includes(f.equityType.toLowerCase().trim())) return false;
-      }
-            // =========================
-      // ZAP / SigmaZAP filters (mutually exclusive)
-      // =========================
-      if (f.zapMode !== "off") {
-        const dir = s.direction; // "down"|"up"|"none"
-        const isShort = dir === "down";
-        const isLong = dir === "up";
-
-        if (!isShort && !isLong) return false;
-
-        if (f.zapMode === "zap") {
-          const thr = Math.max(0.3, Number(f.zapMinAbs ?? 0.3));
-          const v = isShort ? toNum(s.zapS) : toNum(s.zapL);
-          if (v == null) return false;
-          if (Math.abs(v) < thr) return false;
-        }
-
-        if (f.zapMode === "sigma") {
-          const thr = Math.max(0.05, Number(f.zapSigmaMinAbs ?? 0.05));
-          const v = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
-          if (v == null) return false;
-
-          // "ФІЛЬТРУЄ З УРАХУВАННЯМ НАПРЯМКУ"
-          // short (down): sigma має бути <= -thr
-          // long  (up):   sigma має бути >= +thr
-          if (isShort && !(v <= -thr)) return false;
-          if (isLong && !(v >= thr)) return false;
-        }
-      }
-
-
-      return true;
-    });
-    return out;
-  };
-
-
-  /* =========================
-     Fetch signals
-  ========================= */
-  const fetchSignals = async () => {
-    // Read from ref to avoid stale closures in interval
-    const f = filtersRef.current;
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const url = buildSignalsUrl({
-        cls: f.cls,
-        type: f.type,
-        mode: f.mode,
-        minRate: f.minRate,
-        minTotal: f.minTotal,
-        limit: f.limit,
-        offset: f.offset,
-        tickers: f.tickersFilterNorm || undefined,
-      });
-
-
-      const r = await fetch(url, { cache: "no-store" });
-
-      if (!r.ok) {
-        const txt = await r.text().catch(() => "");
-        setItems([]);
-        setError(`HTTP ${r.status}: ${txt || r.statusText}`);
-        return;
-      }
-
-      const j = await r.json();
-      const rawItems: any[] = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : [];
-      const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-
-      // Apply filters locally (client-side filtering)
-      let filtered = applyListModeFilter(normalized, f);
-      filtered = applyThresholdFilters(filtered, f);
-      filtered = applyMinRateMinTotal(filtered, f);
-
-      setItems(filtered);
-      setUpdatedAt(Date.now());
-    } catch (e: any) {
-      setItems([]);
-      setError(e?.message ?? "Unknown error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-
-  // Auto-refresh interval (independent of filter state changes)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (isEditingRef.current) return; // <-- PAUSE WHILE TYPING
-      fetchSignals();
-    }, 2500);
-
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-
-  // Filter change effect
-useEffect(() => {
-  if (isEditingRef.current) return; // <-- НЕ фетчимо поки друкуємо
-  fetchSignals();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [
-  cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
-  listMode, ignoreSet, applySet,
-  adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
-  avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
-  lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
-  clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax,
-  marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax,
-  excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap, excludeActive,
-  includeUSA, includeChina, selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
-  filterReport, accountNonEmptyFirst, equityType
-]);
-
-
-  /* =========================
-     Active ticker is derived from /signals items
+     Active ticker derived from items
   ========================= */
   const activeItem = useMemo(() => {
     const tk = normalizeTicker(activeTicker || "");
@@ -1742,11 +1732,6 @@ useEffect(() => {
     if (!n) return;
     setActiveTicker(n);
     setActivePanelVisible(true);
-    setActivePanelCollapsed(false);
-  };
-
-  const closeActive = () => {
-    setActivePanelVisible(false);
   };
 
   /* =========================
@@ -1760,14 +1745,15 @@ useEffect(() => {
       if (direction !== "down" && direction !== "up") continue;
 
       const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
-      const betaKey = parseBetaKey(s.betaBucket ?? null);
+      const betaVal = getBetaValue(s);
+      const betaKey = parseBetaKey(betaVal);
 
       const bucketId = `${benchmark}__${betaKey}`;
       if (!bucketMap.has(bucketId)) bucketMap.set(bucketId, { benchmark, betaKey, shorts: [], longs: [] });
 
       const b = bucketMap.get(bucketId);
       if (direction === "down") b.shorts.push(s);
-      else if (direction === "up") b.longs.push(s);
+      else b.longs.push(s);
     }
 
     const cmp = makeCmpAccountThenTicker(accountNonEmptyFirst);
@@ -1781,12 +1767,7 @@ useEffect(() => {
       const rows: RowPair[] = [];
       for (let i = 0; i < n; i++) rows.push({ short: b.shorts[i], long: b.longs[i] });
 
-      const group: BucketGroup = {
-        id: `${b.benchmark}__${b.betaKey}`,
-        benchmark: b.benchmark,
-        betaKey: b.betaKey,
-        rows,
-      };
+      const group: BucketGroup = { id: `${b.benchmark}__${b.betaKey}`, benchmark: b.benchmark, betaKey: b.betaKey, rows };
 
       const list = benchMap.get(b.benchmark) ?? [];
       list.push(group);
@@ -1815,7 +1796,8 @@ useEffect(() => {
   const typeLabel = type.toUpperCase();
   const modeLabel = mode.toUpperCase();
 
-  const clearTickersFilter = () => setTickersFilter("");
+  const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
+  const setModeApply = () => setListMode((m) => (m === "apply" ? "off" : "apply"));
 
   /* =========================
      Active derived fields
@@ -1823,7 +1805,6 @@ useEffect(() => {
   const activeMeta = getMeta(activeData);
   const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "—")).toUpperCase();
   const bestObj = activeData?.best ?? activeData?.Best ?? null;
-  // ✅ BEST_PARAMS UI
   const bestParams = getBestParams(activeData);
 
   const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
@@ -1834,49 +1815,15 @@ useEffect(() => {
     getNumAny(activeData, ["marketCapM", "MarketCapM"]) ??
     (getNumAny(activeData, ["marketCap", "MarketCap"]) != null ? getNumAny(activeData, ["marketCap", "MarketCap"]) : null);
 
-  const bestDevPos: any[] = Array.isArray(bestObj?.devPos) ? bestObj.devPos : [];
-  const bestDevNeg: any[] = Array.isArray(bestObj?.devNeg) ? bestObj.devNeg : [];
-  const bestBenchPos: any[] = Array.isArray(bestObj?.benchPos) ? bestObj.benchPos : [];
-  const bestBenchNeg: any[] = Array.isArray(bestObj?.benchNeg) ? bestObj.benchNeg : [];
-
   const bestRating = toNum(bestObj?.rating);
   const bestTotalAny = toNum(bestObj?.total);
   const bestTotalHard = toNum(bestObj?.hard);
   const bestTotalSoft = toNum(bestObj?.soft);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
 
-  /* =========================
-     ListMode UI
-  ========================= */
-  const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
-  const setModeApply = () => setListMode((m) => (m === "apply" ? "off" : "apply"));
-
-  /* =========================
-     Price (bid/ask) + zap line helpers
-  ========================= */
-  const displayPxFor = (s: ArbitrageSignal, side: "short" | "long") => {
-    if (side === "short") return { label: "ASK", value: toNum(s.askStock) };
-    return { label: "BID", value: toNum(s.bidStock) };
-  };
-
-  const displayZapLineFor = (s: ArbitrageSignal, side: "short" | "long") => {
-    if (side === "short") {
-      const z = toNum(s.zapS);
-      const zs = toNum(s.zapSsigma);
-      return { zLabel: "zapS", z, sLabel: "σ", zs };
-    }
-    const z = toNum(s.zapL);
-    const zs = toNum(s.zapLsigma);
-    return { zLabel: "zapL", z, sLabel: "σ", zs };
-  };
-
-  // UI helper for min/max pairs (Tailwind conversion)
-
-
-
   return (
     <div className="relative min-h-screen w-full bg-[#030303] text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
-      {/* Ambient Background - Deep Space Nebula */}
+      {/* Ambient Background */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute top-[-10%] left-[20%] w-[600px] h-[600px] bg-emerald-500/[0.05] rounded-full blur-[150px]" />
         <div className="absolute bottom-[10%] right-[20%] w-[600px] h-[600px] bg-violet-500/[0.05] rounded-full blur-[150px]" />
@@ -1884,9 +1831,7 @@ useEffect(() => {
       </div>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-6">
-        {/* =========================
-          HEADER (GlassCard)
-      ========================= */}
+        {/* ========================= HEADER ========================= */}
         <header className="bg-[#0a0a0a]/60 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-3">
@@ -1896,15 +1841,9 @@ useEffect(() => {
               </h1>
 
               <div className="flex gap-2 ml-4">
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">
-                  {classLabel}
-                </span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">
-                  {modeLabel}
-                </span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">
-                  {typeLabel}
-                </span>
+                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{classLabel}</span>
+                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{modeLabel}</span>
+                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{typeLabel}</span>
                 {listMode !== "off" && (
                   <span className="px-2 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-[10px] font-mono text-emerald-400 uppercase">
                     LIST: {listMode}
@@ -1916,13 +1855,62 @@ useEffect(() => {
             <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
               <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
               <span className="text-zinc-700 mx-1">•</span>
-              <span className="opacity-70">
-                minRate {minRate || "—"} • minTotal {minTotal || "—"} • limit {limit || "—"}
-              </span>
+              <span className="opacity-70">minRate {minRate ?? "—"} • minTotal {minTotal ?? "—"} • limit {limit ?? "—"}</span>
             </div>
           </div>
+          
 
           <div className="flex items-center gap-3">
+
+<div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+  <Link
+    href="/paper/arbitrage"
+    className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
+    title="Open /paper/arbitrage"
+  >
+    PAPER
+  </Link>
+
+  <div className="w-px h-5 bg-white/5" />
+
+  <button
+    onClick={() => setActiveMode((m) => (m === "onlyActive" ? "off" : "onlyActive"))}
+    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+      activeMode === "onlyActive"
+        ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
+        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+    }`}
+    title="Show only ACTIVE positions (PositionBp != 0)"
+  >
+    ACTIVE
+  </button>
+
+  <button
+    onClick={() => setActiveMode((m) => (m === "onlyInactive" ? "off" : "onlyInactive"))}
+    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+      activeMode === "onlyInactive"
+        ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
+        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+    }`}
+    title="Show only INACTIVE positions (PositionBp == 0)"
+  >
+    INACTIVE
+  </button>
+
+  <button
+    onClick={() => setActiveMode("off")}
+    className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${
+      activeMode === "off"
+        ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
+        : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
+    }`}
+    title="Disable ACTIVE filter"
+  >
+    OFF
+  </button>
+</div>
+
+
             <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
               <button
                 onClick={setModeIgnore}
@@ -1958,22 +1946,11 @@ useEffect(() => {
               </button>
               <button
                 onClick={() => setShowApply(!showApply)}
-                className={`px-3 py-2 rounded-lg border border-white/10 transition-all text-xs font-mono flex items-center gap-2 ${
-                  showApply
-                    ? "bg-violet-500/10 border-violet-500/30 text-violet-300"
-                    : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
+                className={`px-3 py-2 rounded-lg border transition-all text-xs font-mono flex items-center gap-2 ${
+                  showApply ? "bg-violet-500/10 border-violet-500/30 text-violet-300" : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
                 }`}
               >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="8" y1="6" x2="21" y2="6"></line>
                   <line x1="8" y1="12" x2="21" y2="12"></line>
                   <line x1="8" y1="18" x2="21" y2="18"></line>
@@ -1983,6 +1960,7 @@ useEffect(() => {
                 </svg>
                 AP LIST
               </button>
+
               <button
                 onClick={fetchSignals}
                 className="w-9 h-9 flex items-center justify-center rounded-lg border border-emerald-500/50 bg-[#0a0a0a]/40 text-emerald-500 hover:bg-emerald-500/10 transition-all active:scale-95 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
@@ -1993,25 +1971,16 @@ useEffect(() => {
           </div>
         </header>
 
-        {/* =========================
-          CONTROLS / SWITCH ROW
-      ========================= */}
+        {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap gap-4 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
-          {/* Class Segments */}
           <div className="flex gap-2">
-          {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
-            <FilterButton
-              key={c}
-              active={cls === c}
-              label={c === "global" ? "GLOB" : c.toUpperCase()}
-              onClick={() => setCls(c)}
-            />
-          ))}
+            {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+              <FilterButton key={c} active={cls === c} label={c === "global" ? "GLOB" : c.toUpperCase()} onClick={() => setCls(c)} />
+            ))}
           </div>
 
           <div className="w-px h-8 bg-white/5" />
 
-          {/* Mode Segments */}
           <div className="flex gap-2">
             <FilterButton active={mode === "all"} label="ALL" onClick={() => setMode("all")} />
             <FilterButton active={mode === "top"} label="TOP" onClick={() => setMode("top")} />
@@ -2019,7 +1988,6 @@ useEffect(() => {
 
           <div className="w-px h-8 bg-white/5" />
 
-          {/* Type Segments */}
           <div className="flex gap-2">
             {(["any", "hard", "soft"] as ArbType[]).map((t) => (
               <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
@@ -2030,12 +1998,8 @@ useEffect(() => {
 
           <div className="flex gap-2">
             {fields.map((f) => (
-              <div
-                key={f.label}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20"
-              >
+              <div key={f.label} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
                 <span className="text-[10px] font-mono text-zinc-500 uppercase">{f.label}</span>
-
                 <input
                   type="number"
                   inputMode="decimal"
@@ -2044,13 +2008,11 @@ useEffect(() => {
                   value={Number.isFinite(f.val) ? f.val : ""}
                   onChange={(e) => {
                     const raw = e.target.value;
-                    if (raw === "") return; // дозволяємо стерти
+                    if (raw === "") return;
                     let n = Number(raw);
                     if (!Number.isFinite(n)) return;
-
                     if (f.integer) n = Math.trunc(n);
                     n = Math.max(f.min, n);
-
                     f.set(n);
                   }}
                   placeholder={f.ph}
@@ -2059,13 +2021,9 @@ useEffect(() => {
               </div>
             ))}
           </div>
-
-
         </div>
 
-        {/* =========================
-          THRESHOLDS GRID
-        ========================= */}
+        {/* ========================= THRESHOLDS GRID ========================= */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
           <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
           <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
@@ -2085,39 +2043,18 @@ useEffect(() => {
           <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
           <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
           <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax
-            label="VolNFfromLstCls"
-            min={volNFfromLstClsMin}
-            max={volNFfromLstClsMax}
-            setMin={setVolNFfromLstClsMin}
-            setMax={setVolNFfromLstClsMax}
-            startEditing={startEditing}
-            stopEditing={stopEditing}
-          />
+          <MinMax label="VolNFfromLstCls" min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
         </div>
 
-
-        {/* =========================
-          BOOLEAN & MULTI-SELECT FILTERS
-      ========================= */}
+        {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
         <div className="flex flex-wrap gap-3 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
           <span className="text-zinc-500 mr-2 text-sm">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
             </svg>
           </span>
 
-          {/* RED GROUP (Exclude) */}
+          {/* RED GROUP */}
           <div className="flex items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
             {[
               { label: "Div", val: excludeDividend, set: setExcludeDividend },
@@ -2127,16 +2064,13 @@ useEffect(() => {
               { label: "Rep", val: excludeReport, set: setExcludeReport },
               { label: "ETF", val: excludeETF, set: setExcludeETF },
               { label: "CRAP", val: excludeCrap, set: setExcludeCrap, title: "LstClose < 5" },
-              { label: "Active", val: excludeActive, set: setExcludeActive },
             ].map((b) => (
               <button
                 key={b.label}
                 onClick={() => b.set(!b.val)}
                 title={b.title}
                 className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-                  b.val
-                    ? "bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.6)]"
-                    : "bg-transparent text-rose-500 hover:bg-rose-500/10"
+                  b.val ? "bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.6)]" : "bg-transparent text-rose-500 hover:bg-rose-500/10"
                 }`}
               >
                 {b.label}
@@ -2146,7 +2080,7 @@ useEffect(() => {
 
           <div className="w-px h-6 bg-white/5" />
 
-          {/* GREEN GROUP (Include Only) */}
+          {/* GREEN GROUP */}
           <div className="flex items-center gap-2 p-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10">
             {[
               { label: "USA", val: includeUSA, set: setIncludeUSA },
@@ -2156,9 +2090,7 @@ useEffect(() => {
                 key={b.label}
                 onClick={() => b.set(!b.val)}
                 className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-                  b.val
-                    ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
-                    : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
+                  b.val ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]" : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
                 }`}
               >
                 {b.label}
@@ -2168,7 +2100,7 @@ useEffect(() => {
 
           <div className="w-px h-6 bg-white/5" />
 
-          {/* YELLOW GROUP (Multi-Select) */}
+          {/* YELLOW GROUP */}
           <div className="flex items-center gap-2 p-2 rounded-xl border border-amber-900/30 bg-amber-900/10">
             <MultiSelectFilter
               label="Country"
@@ -2201,9 +2133,8 @@ useEffect(() => {
 
           <div className="flex-1" />
 
-          {/* ZAP FILTERS (Purple box, right aligned) */}
+          {/* ZAP FILTERS */}
           <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
-            {/* ZAP toggle */}
             <button
               type="button"
               onClick={() => setZapMode("zap")}
@@ -2223,34 +2154,39 @@ useEffect(() => {
               min={0.3}
               value={zapMinAbs}
               disabled={zapMode !== "zap"}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setZapMinAbs(Number.isFinite(v) ? Math.max(0.3, v) : 0.3);
-              }}
+              onChange={(e) => setZapMinAbs(clampFloat(e.target.value, 0.3))}
               className={[
-                // ✅ менший інпут
                 "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "zap"
-                  ? "border-violet-500/30 text-white"
-                  : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+                zapMode === "zap" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
               ].join(" ")}
             />
+            <input
+              type="number"
+              step={0.01}
+              min={0}
+              value={activeZapMaxAbs}
+              disabled={zapMode !== "zap"}
+              onChange={(e) => setActiveZapMaxAbs(clampFloat(e.target.value, 0))}
+              className={[
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                zapMode === "zap" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
+              title="ACTIVE highlight: gold when |ZAP| <= this"
+            />
+
 
             <div className="w-px h-6 bg-violet-500/20 mx-1" />
 
-            {/* SigmaZAP toggle */}
             <button
               type="button"
               onClick={() => setZapMode("sigma")}
               className={[
-                // ✅ baseline вирівнює σ і ZAP
                 "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-baseline gap-1",
                 zapMode === "sigma"
                   ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-              {/* ✅ σ НЕ аперкейзиться і має нормальний baseline */}
               <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>
                 σ
               </span>
@@ -2263,46 +2199,46 @@ useEffect(() => {
               min={0.05}
               value={zapSigmaMinAbs}
               disabled={zapMode !== "sigma"}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setZapSigmaMinAbs(Number.isFinite(v) ? Math.max(0.05, v) : 0.05);
-              }}
+              onChange={(e) => setZapSigmaMinAbs(clampFloat(e.target.value, 0.05))}
               className={[
-                // ✅ менший інпут
                 "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "sigma"
-                  ? "border-violet-500/30 text-white"
-                  : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+                zapMode === "sigma" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
               ].join(" ")}
             />
+            <input
+              type="number"
+              step={0.01}
+              min={0}
+              value={activeSigmaMaxAbs}
+              disabled={zapMode !== "sigma"}
+              onChange={(e) => setActiveSigmaMaxAbs(clampFloat(e.target.value, 0))}
+              className={[
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                zapMode === "sigma" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
+              title="ACTIVE highlight: gold when |σZAP| <= this"
+            />
 
-            {/* OFF */}
+
             <button
               type="button"
               onClick={() => setZapMode("off")}
               className={[
                 "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                zapMode === "off"
-                  ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
-                  : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
+                zapMode === "off" ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200" : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
               ].join(" ")}
               title="Disable ZAP filters"
             >
               OFF
             </button>
           </div>
-
-
         </div>
 
-        {/* =========================
-          DRAWERS (Ignore/Apply)
-      ========================= */}
+        {/* ========================= DRAWERS (Ignore/Apply) ========================= */}
         {(showIgnore || showApply) && (
           <div className="grid grid-cols-7 gap-4">
-
             {showIgnore && (
-              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4">
+              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-3">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
                   <span className="text-sm font-bold text-rose-400 tracking-tight">IGNORE LIST</span>
                   <span className="text-[10px] font-mono text-zinc-500">Removed client-side when LIST MODE = IGNORE</span>
@@ -2314,16 +2250,10 @@ useEffect(() => {
                   className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-rose-500/30 resize-none"
                 />
                 <div className="flex gap-2 flex-wrap">
-                  <button
-                    onClick={onAddIgnore}
-                    className="px-4 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold hover:bg-rose-500/30"
-                  >
+                  <button onClick={onAddIgnore} className="px-4 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold hover:bg-rose-500/30">
                     ADD
                   </button>
-                  <button
-                    onClick={() => setIgnoreDraft("")}
-                    className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white"
-                  >
+                  <button onClick={() => setIgnoreDraft("")} className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white">
                     CLEAR
                   </button>
                   <button
@@ -2333,15 +2263,13 @@ useEffect(() => {
                     IMPORT CSV
                   </button>
                   {ignoreSet.size > 0 && (
-                    <button
-                      onClick={() => clearSet(setIgnoreSet, IGNORE_LS_KEY)}
-                      className="ml-auto px-4 py-1.5 rounded-lg bg-rose-900/20 text-rose-500 border border-rose-900/30 text-xs hover:bg-rose-900/40"
-                    >
+                    <button onClick={() => clearSet(setIgnoreSet, IGNORE_LS_KEY)} className="ml-auto px-4 py-1.5 rounded-lg bg-rose-900/20 text-rose-500 border border-rose-900/30 text-xs hover:bg-rose-900/40">
                       RESET
                     </button>
                   )}
                   <input ref={ignoreFileInputRef} type="file" accept=".csv" onChange={onIgnoreFileSelected} className="hidden" />
                 </div>
+
                 {ignoreList.length > 0 && (
                   <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                     {ignoreList.map((tk) => (
@@ -2359,7 +2287,7 @@ useEffect(() => {
             )}
 
             {showApply && (
-              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4">
+              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
                   <span className="text-sm font-bold text-emerald-400 tracking-tight">APPLY ONLY LIST</span>
                   <span className="text-[10px] font-mono text-zinc-500">Show only these when LIST MODE = APPLY</span>
@@ -2371,16 +2299,10 @@ useEffect(() => {
                   className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-emerald-500/30 resize-none"
                 />
                 <div className="flex gap-2 flex-wrap">
-                  <button
-                    onClick={onAddApply}
-                    className="px-4 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30"
-                  >
+                  <button onClick={onAddApply} className="px-4 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30">
                     ADD
                   </button>
-                  <button
-                    onClick={() => setApplyDraft("")}
-                    className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white"
-                  >
+                  <button onClick={() => setApplyDraft("")} className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white">
                     CLEAR
                   </button>
                   <button
@@ -2390,15 +2312,13 @@ useEffect(() => {
                     IMPORT CSV
                   </button>
                   {applySet.size > 0 && (
-                    <button
-                      onClick={() => clearSet(setApplySet, APPLY_LS_KEY)}
-                      className="ml-auto px-4 py-1.5 rounded-lg bg-rose-900/20 text-rose-500 border border-rose-900/30 text-xs hover:bg-rose-900/40"
-                    >
+                    <button onClick={() => clearSet(setApplySet, APPLY_LS_KEY)} className="ml-auto px-4 py-1.5 rounded-lg bg-rose-900/20 text-rose-500 border border-rose-900/30 text-xs hover:bg-rose-900/40">
                       RESET
                     </button>
                   )}
                   <input ref={applyFileInputRef} type="file" accept=".csv" onChange={onApplyFileSelected} className="hidden" />
                 </div>
+
                 {applyList.length > 0 && (
                   <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                     {applyList.map((tk) => (
@@ -2417,9 +2337,7 @@ useEffect(() => {
           </div>
         )}
 
-        {/* =========================
-          ACTIVE PANEL (GlassCard)
-      ========================= */}
+        {/* ========================= ACTIVE PANEL ========================= */}
         {activePanelVisible && (
           <div className="bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/[0.08] border-l-4 border-l-emerald-500 rounded-2xl shadow-[0_0_40px_-10px_rgba(16,185,129,0.05)] overflow-hidden animate-in fade-in zoom-in-95 duration-300">
             <div className="flex justify-between items-center px-4 py-3 border-b border-white/5 bg-white/[0.02]">
@@ -2432,6 +2350,7 @@ useEffect(() => {
                     <div className="h-0.5 w-6 bg-emerald-500/50 rounded-full" />
                   </div>
                   <span className="text-2xl font-bold text-white tracking-tight">{activeTicker ?? "—"}</span>
+
                   <div className="flex gap-2 hidden sm:flex">
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
                       BENCH: <span className="text-white ml-1">{activeBench !== "—" ? activeBench : "—"}</span>
@@ -2450,6 +2369,7 @@ useEffect(() => {
                     </span>
                   </div>
                 </div>
+
                 {activeLoading && <div className="text-[10px] font-mono text-zinc-500 animate-pulse">loading data stream...</div>}
                 {activeErr && <div className="text-xs text-rose-400 font-mono bg-rose-500/10 px-2 py-1 rounded">{activeErr}</div>}
               </div>
@@ -2461,23 +2381,14 @@ useEffect(() => {
                 >
                   {activePanelMode === "mini" ? "EXPAND" : "MINI"}
                 </button>
+
                 <button
                   onClick={() => setActivePanelCollapsed(!activePanelCollapsed)}
                   className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
                   title={activePanelCollapsed ? "Show Panel" : "Collapse Panel"}
                 >
                   {activePanelCollapsed ? (
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                       <circle cx="12" cy="12" r="3"></circle>
                     </svg>
@@ -2502,17 +2413,16 @@ useEffect(() => {
               </div>
             </div>
 
-            {/* Content Body - Only shown if not collapsed */}
             {!activePanelCollapsed && (
               <div className="p-4 space-y-4">
                 {(() => {
                   const s = activeData;
-                  const bid = s ? toNum((s as any).Bid ?? (s as any).bid) : null;
-                  const ask = s ? toNum((s as any).Ask ?? (s as any).ask) : null;
+                  const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
+                  const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
+
 
                   const bidDelta = s ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct) : null;
                   const askDelta = s ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct) : null;
-
 
                   const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
                     <div className="flex flex-col gap-1 p-3 rounded-xl border border-white/5 bg-white/[0.02]">
@@ -2521,25 +2431,16 @@ useEffect(() => {
                     </div>
                   );
 
-                  // RENDER EXPANDED GRID EVEN IF NO TICKER (Empty State as requested)
                   return (
                     <div className="space-y-4">
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                         {renderCell("Company", s ? getCompany(s) : "—")}
                         {renderCell("Country", s ? getCountry(s) : "—")}
-                        {renderCell(
-                          "MarketCapM",
-                          s ? fmtMaybeInt(numMarketCapM(s) ?? getMarketCapM(s) ?? activeMarketCapM2) : "—",
-                          s ? "text-emerald-300" : "text-zinc-500"
-                        )}
+                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "—", s ? "text-emerald-300" : "text-zinc-500")}
                         {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "—")}
                         {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "—")}
                         {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "—")}
-                        {renderCell(
-                          "BidLstClsΔ%",
-                          s ? fmtPct(bidDelta, 2) : "—",
-                          s && bidDelta != null ? (bidDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500"
-                        )}
+                        {renderCell("BidLstClsΔ%", s ? fmtPct(bidDelta, 2) : "—", s && bidDelta != null ? (bidDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
                         {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "—", s ? "text-cyan-300" : "text-zinc-500")}
                       </div>
 
@@ -2550,22 +2451,18 @@ useEffect(() => {
                         {renderCell("Spread", s ? (numSpread(s) == null ? "—" : fmtNum(numSpread(s)!, 4)) : "—")}
                         {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "—")}
                         {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "—")}
-                        {renderCell(
-                          "AskLstClsΔ%",
-                          s ? fmtPct(askDelta, 2) : "—",
-                          s && askDelta != null ? (askDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500"
-                        )}
+                        {renderCell("AskLstClsΔ%", s ? fmtPct(askDelta, 2) : "—", s && askDelta != null ? (askDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
                         {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "—", s ? "text-rose-300" : "text-zinc-500")}
                       </div>
                     </div>
                   );
                 })()}
 
-                {/* EXPANDED SECTION */}
+                {/* expanded (залишаєш свій existing expanded JSX як є) */}
                 {activePanelMode === "expanded" && (
                   <div className="space-y-4 pt-4 border-t border-white/5 animate-in fade-in slide-in-from-top-4 duration-300">
-                    {/* Pricing Section */}
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
+                    {/* встав свій expanded-блок сюди */}
+                      <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
                       <div className="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
                         <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Pricing & Liquidity</span>
                         <span className="text-[10px] font-mono text-zinc-600">parsed from root/meta</span>
@@ -2592,7 +2489,7 @@ useEffect(() => {
                       </div>
                     </div>
 
-                    {/* Flags */}
+                                        {/* Flags */}
                     <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
                       <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]">
                         <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Flags</span>
@@ -2619,297 +2516,6 @@ useEffect(() => {
                         ))}
                       </div>
                     </div>
-
-                    {/* Ranges */}
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
-                      <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Best Ranges</span>
-                      </div>
-                      <div className="p-3 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {[
-                          { title: "DEV POS", data: bestDevPos },
-                          { title: "DEV NEG", data: bestDevNeg },
-                          { title: "BENCH POS", data: bestBenchPos },
-                          { title: "BENCH NEG", data: bestBenchNeg },
-                        ].map((grp) => (
-                          <div key={grp.title} className="bg-black/20 p-3 rounded-lg border border-white/5">
-                            <div className="text-[10px] text-zinc-500 font-mono uppercase mb-2">{grp.title}</div>
-                            <div className="flex flex-wrap gap-2">
-                              {grp.data?.length ? (
-                                grp.data.map((r, i) => (
-                                  <span
-                                    key={i}
-                                    className="px-2 py-1 rounded bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-[10px] font-mono tabular-nums"
-                                  >
-                                    {fmtNum(toNum(r.min), 2)} → {fmtNum(toNum(r.max), 2)}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="text-zinc-700 text-[10px] font-mono">—</span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    {/* ✅ BEST_PARAMS UI (COMPACT) */}
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
-                      <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02] flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Best Params</span>
-                        <span className="text-[10px] font-mono text-zinc-600">from best_params.jsonl</span>
-                      </div>
-
-                      <div className="p-3 space-y-2">
-                        {!bestParams ? (
-                          <div className="text-[11px] font-mono text-zinc-600">— (no best_params on this signal payload)</div>
-                        ) : (
-                          <>
-                            {/* HEADER CHIPS (tight) */}
-                            <div className="flex flex-wrap gap-1.5">
-                              <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                                {String(bestParams?.ticker ?? activeTicker ?? "—")}
-                              </span>
-                              <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                                {String(bestParams?.bench ?? activeBench ?? "—")}
-                              </span>
-
-                              {(() => {
-                                const st = safeObj(bestParams?.static);
-                                const corr = toNum(st?.corr);
-                                const beta = toNum(st?.beta);
-                                const sigma = toNum(st?.sigma);
-                                return (
-                                  <>
-                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                                      corr <span className="text-white ml-1">{corr == null ? "—" : fmtNum(corr, 2)}</span>
-                                    </span>
-                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                                      β <span className="text-white ml-1">{beta == null ? "—" : fmtNum(beta, 2)}</span>
-                                    </span>
-                                    <span className="px-2 py-0.5 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                                      σ <span className="text-white ml-1">{sigma == null ? "—" : fmtNum(sigma, 2)}</span>
-                                    </span>
-                                  </>
-                                );
-                              })()}
-                            </div>
-
-                            {/* TOP ROW: totals + medians in one compact row */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Totals</div>
-                                {(() => {
-                                  const t = safeObj(bestParams?.totals);
-                                  const ev = toNum(t?.events_total);
-                                  const pre = toNum(t?.pre_total);
-                                  const intra = toNum(t?.intra_total);
-                                  const post = toNum(t?.post_total);
-                                  return (
-                                    <div className="grid grid-cols-4 gap-2 text-[10px] font-mono text-zinc-300">
-                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">ev</span><span>{ev == null ? "—" : fmtMaybeInt(ev)}</span></div>
-                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">pre</span><span>{pre == null ? "—" : fmtMaybeInt(pre)}</span></div>
-                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">intra</span><span>{intra == null ? "—" : fmtMaybeInt(intra)}</span></div>
-                                      <div className="flex items-center justify-between gap-2"><span className="text-zinc-500">post</span><span>{post == null ? "—" : fmtMaybeInt(post)}</span></div>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-
-                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Dev print last5 median</div>
-                                {(() => {
-                                  const m = safeObj(bestParams?.dev_print_last5_median);
-                                  const pos = toNum(m?.pos);
-                                  const neg = toNum(m?.neg);
-                                  return (
-                                    <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-zinc-300">
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-zinc-500">pos</span>
-                                        <span className={pos == null ? "text-zinc-600" : pos >= 0 ? "text-emerald-300" : "text-rose-300"}>
-                                          {pos == null ? "—" : fmtNum(pos, 3)}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-zinc-500">neg</span>
-                                        <span className={neg == null ? "text-zinc-600" : neg >= 0 ? "text-emerald-300" : "text-rose-300"}>
-                                          {neg == null ? "—" : fmtNum(neg, 3)}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-
-                            {/* RATINGS: single compact line (no huge pills grid) */}
-                            <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                              <div className="flex items-center justify-between mb-1">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase">Ratings</div>
-                                <div className="text-[10px] font-mono text-zinc-600">click tab below for per-class</div>
-                              </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {(() => {
-                                  const r = safeObj(bestParams?.ratings) ?? {};
-                                  return clsOrder.map((c) => {
-                                    const val = toNum((r as any)[c]);
-                                    const good = val != null && val >= 0.6;
-                                    return (
-                                      <span
-                                        key={c}
-                                        className={[
-                                          "px-2 py-0.5 rounded-full border text-[10px] font-mono uppercase",
-                                          c === bpCls ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-white/5 text-zinc-400",
-                                          good ? "shadow-[0_0_10px_rgba(16,185,129,0.10)]" : "",
-                                        ].join(" ")}
-                                        onClick={() => setBpCls(c)}
-                                        role="button"
-                                      >
-                                        {c}: <span className="ml-1 text-white">{fmtPct01(val, 0)}</span>
-                                      </span>
-                                    );
-                                  });
-                                })()}
-                              </div>
-                            </div>
-
-                            {/* PER-CLASS: tabs -> show only one class at a time */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                              {/* Hard/Soft compact */}
-                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Hard / Soft</div>
-                                {(() => {
-                                  const hs = safeObj(bestParams?.hard_soft_share) ?? {};
-                                  const row = safeObj((hs as any)[bpCls]);
-                                  const hard = toNum(row?.hard);
-                                  const soft = toNum(row?.soft);
-                                  const share = toNum(row?.hard_share);
-                                  const total = (hard ?? 0) + (soft ?? 0);
-                                  const hsLabel = total > 0 ? (share != null && share >= (2 / 3) ? "H" : "S") : "—";
-                                  return (
-                                    <div className="flex items-center justify-between text-[10px] font-mono">
-                                      <span className="text-zinc-500 uppercase">{bpCls}</span>
-                                      <span className="text-zinc-300 tabular-nums">
-                                        {hard == null && soft == null ? "—" : `${fmtMaybeInt(hard ?? 0)}/${fmtMaybeInt(soft ?? 0)}`}
-                                        <span className="text-zinc-600"> · </span>
-                                        <span className={hsLabel === "H" ? "text-emerald-300" : hsLabel === "S" ? "text-violet-300" : "text-zinc-600"}>
-                                          {hsLabel}
-                                        </span>
-                                        <span className="text-zinc-600"> · </span>
-                                        <span className="text-zinc-400">{fmtPct01(share, 0)}</span>
-                                      </span>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-
-                              {/* Delay compact */}
-                              <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase mb-1">Avg hard delay</div>
-                                {(() => {
-                                  const d = safeObj(bestParams?.avg_hard_delay_sec) ?? {};
-                                  const v = toNum((d as any)[bpCls]);
-                                  return (
-                                    <div className="flex items-center justify-between text-[10px] font-mono">
-                                      <span className="text-zinc-500 uppercase">{bpCls}</span>
-                                      <span className="text-zinc-300 tabular-nums">{fmtDelay(v)}</span>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-
-                            {/* Best windows: show ONLY for selected class */}
-                            <div className="bg-black/20 px-3 py-2 rounded-lg border border-white/5">
-                              <div className="flex items-center justify-between mb-1">
-                                <div className="text-[10px] text-zinc-500 font-mono uppercase">Best windows (any)</div>
-                                <div className="text-[10px] font-mono text-zinc-600 uppercase">{bpCls}</div>
-                              </div>
-
-                              {(() => {
-                                const bw = safeObj(bestParams?.best_windows_any);
-                                const stitched = safeObj(bw?.stitched);
-
-                                const sigmaPeak = safeObj(stitched?.sigma_peak_bins)?.[bpCls];
-                                const benchPeak = safeObj(stitched?.bench_peak_bins)?.[bpCls];
-                                const timeBands = safeObj(stitched?.time_start_bands)?.[bpCls];
-
-                                const renderTwo = (title: string, obj: any) => {
-                                  const pos = safeArr(obj?.pos);
-                                  const neg = safeArr(obj?.neg);
-                                  const empty = pos.length === 0 && neg.length === 0;
-
-                                  return (
-                                    <div className="border border-white/10 rounded-md bg-black/20 p-2">
-                                      <div className="text-[10px] font-mono uppercase text-zinc-500 mb-1">{title}</div>
-                                      {empty ? (
-                                        <div className="text-[10px] font-mono text-zinc-700">—</div>
-                                      ) : (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                          <div>
-                                            <div className="text-[10px] font-mono text-emerald-300 uppercase mb-1">pos</div>
-                                            <div className="flex flex-wrap gap-1.5">
-                                              {pos.map((r: any, i: number) => (
-                                                <span key={i} className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-[10px] font-mono tabular-nums">
-                                                  {rangeBadge(r)}
-                                                </span>
-                                              ))}
-                                            </div>
-                                          </div>
-                                          <div>
-                                            <div className="text-[10px] font-mono text-rose-300 uppercase mb-1">neg</div>
-                                            <div className="flex flex-wrap gap-1.5">
-                                              {neg.map((r: any, i: number) => (
-                                                <span key={i} className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-200 text-[10px] font-mono tabular-nums">
-                                                  {rangeBadge(r)}
-                                                </span>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                };
-
-                                return (
-                                  <div className="space-y-2">
-                                    {renderTwo("sigma_peak_bins", sigmaPeak)}
-                                    {renderTwo("bench_peak_bins", benchPeak)}
-                                    {renderTwo("time_start_bands", timeBands)}
-                                  </div>
-                                );
-                              })()}
-                            </div>
-
-                            {/* raw fallback (still there, but compact) */}
-                            <details className="border border-dashed border-white/10 rounded-xl bg-black/20 p-2 text-xs font-mono text-zinc-500 cursor-pointer">
-                              <summary className="hover:text-zinc-300 text-[10px]">raw JSON</summary>
-                              <pre className="mt-2 text-[10px] whitespace-pre-wrap break-all text-zinc-400">
-                                {JSON.stringify(bestParams, null, 2)}
-                              </pre>
-                            </details>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-
-
-                    {/* Debug */}
-                    <details className="border border-dashed border-white/10 rounded-xl bg-black/20 p-3 text-xs font-mono text-zinc-500 cursor-pointer">
-                      <summary className="hover:text-zinc-300">Debug Keys</summary>
-                      <div className="mt-2 space-y-1 text-[10px] break-all">
-                        <div>
-                          <b>raw:</b> {activeData ? Object.keys(activeData).slice(0, 60).join(", ") : "—"}
-                        </div>
-                        <div>
-                          <b>meta:</b> {activeData ? Object.keys(activeMeta ?? {}).slice(0, 60).join(", ") : "—"}
-                        </div>
-                        <div>
-                          <b>best:</b> {activeData ? Object.keys(bestObj ?? {}).slice(0, 60).join(", ") : "—"}
-                        </div>
-                      </div>
-                    </details>
                   </div>
                 )}
               </div>
@@ -2917,9 +2523,7 @@ useEffect(() => {
           </div>
         )}
 
-        {/* =========================
-          MESSAGES & GRID
-      ========================= */}
+        {/* ========================= MESSAGES & GRID ========================= */}
         {error && (
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-mono text-sm text-center">
             ERROR: {error}
@@ -2934,14 +2538,14 @@ useEffect(() => {
 
         {!error && hasAny && (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-
             {benchBlocks.map((bench) => {
               const accent = BENCH_COLORS[bench.benchmark] ?? BENCH_COLORS.DEFAULT;
 
               return (
                 <div
                   key={bench.benchmark}
-                 className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0">
+                  className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0"
+                >
                   <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-4">
                     <span className="text-lg font-bold text-white tracking-tight">{bench.benchmark}</span>
                     <div className="flex-1 border-b border-dashed border-zinc-700/50 mx-4 opacity-50" />
@@ -2954,7 +2558,6 @@ useEffect(() => {
 
                       return (
                         <div key={g.id} className="border border-white/5 bg-white/[0.01] rounded-xl overflow-hidden">
-                          {/* Beta Header */}
                           <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-white/[0.02]">
                             <div className="w-5 h-5 rounded flex items-center justify-center bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px]">
                               ↓
@@ -2968,45 +2571,46 @@ useEffect(() => {
                           </div>
 
                           <div className="p-2 grid grid-cols-2 gap-2">
-                            {/* LEFT: DOWN (shorts) */}
                             <div className="flex flex-col gap-2">
-                              {(g.rows.slice(0, rowsToShow).map((row, i) => row.short).filter(Boolean) as ArbitrageSignal[]).map((s, i) => (
+                              {(g.rows.slice(0, rowsToShow).map((row) => row.short).filter(Boolean) as ArbitrageSignal[]).map((s) => (
                                 <SignalCard
-                                  key={`${g.id}-S-${s.ticker}-${i}`}
+                                  key={`S:${s.ticker}`}
                                   s={s}
                                   side="short"
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
-                                  compact
+                                  zapMode={zapMode}
+                                  activeZapMaxAbs={activeZapMaxAbs}
+                                  activeSigmaMaxAbs={activeSigmaMaxAbs}
                                 />
                               ))}
                             </div>
 
-                            {/* RIGHT: UP (longs) */}
                             <div className="flex flex-col gap-2">
-                              {(g.rows.slice(0, rowsToShow).map((row, i) => row.long).filter(Boolean) as ArbitrageSignal[]).map((s, i) => (
-                                <SignalCard
-                                  key={`${g.id}-L-${s.ticker}-${i}`}
+                              {(g.rows.slice(0, rowsToShow).map((row) => row.long).filter(Boolean) as ArbitrageSignal[]).map((s) => (
+                                  <SignalCard
+                                  key={`L:${s.ticker}`}
                                   s={s}
                                   side="long"
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
-                                  compact
+                                  zapMode={zapMode}
+                                  activeZapMaxAbs={activeZapMaxAbs}
+                                  activeSigmaMaxAbs={activeSigmaMaxAbs}
                                 />
-                              ))}
+
+                                ))}
                             </div>
                           </div>
-
-
 
                           {g.rows.length > 10 && (
                             <button
                               onClick={() => toggleBucket(g.id)}
-                              className="w-full py-2 text-[10px] font-mono font-bold uppercase text-zinc-500 hover:text-white hover:bg-white/5 transition-colors border-t border-white/5"
+                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border-t border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
                             >
-                              {isExpanded ? "COLLAPSE" : `SHOW ALL (${g.rows.length})`}
+                              {isExpanded ? "SHOW LESS" : `SHOW ALL (${g.rows.length})`}
                             </button>
                           )}
                         </div>
@@ -3019,56 +2623,6 @@ useEffect(() => {
           </div>
         )}
       </div>
-
-      <style>{`
-        @keyframes flashUp {
-          0% {
-            box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
-            border-color: rgba(52, 211, 153, 0.25);
-          }
-          35% {
-            box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.14);
-            border-color: rgba(52, 211, 153, 0.55);
-          }
-          100% {
-            box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
-            border-color: rgba(255, 255, 255, 0.08);
-          }
-        }
-        @keyframes flashDown {
-          0% {
-            box-shadow: 0 0 0 0 rgba(251, 113, 133, 0);
-            border-color: rgba(251, 113, 133, 0.25);
-          }
-          35% {
-            box-shadow: 0 0 0 6px rgba(251, 113, 133, 0.14);
-            border-color: rgba(251, 113, 133, 0.55);
-          }
-          100% {
-            box-shadow: 0 0 0 0 rgba(251, 113, 133, 0);
-            border-color: rgba(255, 255, 255, 0.08);
-          }
-        }
-        .flashUp {
-          animation: flashUp 0.9s ease-out;
-        }
-        .flashDown {
-          animation: flashDown 0.9s ease-out;
-        }
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(255, 255, 255, 0.02);
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.2);
-        }
-      `}</style>
     </div>
   );
 }
