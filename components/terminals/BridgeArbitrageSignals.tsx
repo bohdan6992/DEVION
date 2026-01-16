@@ -174,6 +174,13 @@ const fmtMaybeInt = (v: number | null | undefined) =>
 const fmtPct = (v: number | null | undefined, digits = 2) =>
   v == null || Number.isNaN(v) ? "—" : `${fmtNum(v, digits)}%`;
 
+const fmtBpInt = (v: number) => {
+  const n = Math.round(Math.abs(v));
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n.toLocaleString("en-US");
+};
+
+
 /* =========================
    HELPERS
 ========================= */
@@ -966,6 +973,150 @@ type ListMode = "off" | "ignore" | "apply";
 type ActiveMode = "off" | "onlyActive" | "onlyInactive";
 
 
+type HedgeInfo = {
+  benchmark: string;
+  targetBp: number;
+  currentBp: number;
+  needBp: number;
+};
+
+const getBenchmarkKey = (s: any) => String(getStrAny(s, ["benchmark", "Benchmark", "bench", "Bench"], "UNKNOWN")).toUpperCase();
+
+const isEtfRow = (s: any, bench: string) => {
+  // meta.ETF OR boolIsETF() OR equityType contains etf
+  const meta = getMeta(s);
+  const metaEtf = String(meta?.ETF ?? meta?.etf ?? "").trim().toUpperCase();
+  const metaYes = metaEtf === "YES" || metaEtf === "TRUE" || metaEtf === "1";
+  const b = boolIsETF(s) === true;
+  const eqt = strEquityType(s).toLowerCase();
+  const eqtEtf = eqt.includes("etf");
+
+  const tk = String(s?.ticker ?? "").toUpperCase();
+  const sameAsBench = tk === String(bench ?? "").toUpperCase();
+
+  return sameAsBench && (metaYes || b || eqtEtf);
+};
+
+const getBetaFallback1 = (s: any) => {
+  // fallback = best?.beta ?? best_params?.static?.beta ?? 1.0
+  const best = getBestObj(s);
+  const b1 = toNum(best?.beta ?? best?.Beta);
+  if (b1 != null) return b1;
+
+  const bp = getBestParams(s);
+  const st = bp?.static ?? bp?.Static ?? null;
+  const b2 = toNum(st?.beta ?? st?.Beta);
+  if (b2 != null) return b2;
+
+  return 1.0;
+};
+
+const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
+  const map = new Map<string, HedgeInfo>();
+  const groups = new Map<string, ArbitrageSignal[]>();
+
+  for (const s of arr ?? []) {
+    const bench = getBenchmarkKey(s);
+    if (!bench) continue;
+    const list = groups.get(bench) ?? [];
+    list.push(s);
+    groups.set(bench, list);
+  }
+
+  for (const [bench, list] of groups.entries()) {
+    let sumExposure = 0; // Σ(PositionBp * beta) for stocks
+    let current = 0;     // PositionBp of ETF row (bench ticker), if present
+
+    for (const s of list) {
+      const tk = String(s?.ticker ?? "").toUpperCase();
+      const pos = numPositionBp(s) ?? 0;
+
+      if (isEtfRow(s, bench) || tk === bench) {
+        // ETF row: current hedge
+        // (even if meta ETF flag missing, still treat bench ticker as hedge row)
+        current = pos;
+        continue;
+      }
+
+      // stock exposure
+      const beta = getBetaFallback1(s);
+      sumExposure += pos * beta;
+    }
+
+    const target = -sumExposure;
+    const need = target - current;
+
+    map.set(bench, { benchmark: bench, targetBp: target, currentBp: current, needBp: need });
+  }
+
+  return map;
+};
+
+function fmtBp0(v: number | null | undefined) {
+  if (v == null || !Number.isFinite(v)) return "";
+  const a = Math.abs(v);
+  const r = Math.round(a);
+  return r === 0 ? "" : String(r);
+}
+
+function splitSides(v: number | null | undefined) {
+  if (v == null || !Number.isFinite(v) || v === 0) return { left: "", right: "" };
+  return v < 0 ? { left: fmtBp0(v), right: "" } : { left: "", right: fmtBp0(v) };
+}
+
+function HedgeHeaderMinimal({
+  bench,
+  info,
+}: {
+  bench: string;
+  info: { targetBp: number; currentBp: number; needBp: number } | null;
+}) {
+  const need = info ? splitSides(info.needBp) : { left: "", right: "" };
+  const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
+
+  return (
+    <div className="px-4 pt-3 pb-3">
+      {/* top line with centered ETF */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <div className="h-px bg-white/10" />
+        <div className="text-[19px] font-mono font-semibold tracking-wide text-zinc-200 leading-none">
+          {bench}
+        </div>
+        <div className="h-px bg-white/10" />
+      </div>
+
+      {/* NEED (big) */}
+      <div className="mt-3 grid grid-cols-2 gap-6">
+        <div className="text-left">
+          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+            {need.left}
+          </span>
+        </div>
+        <div className="text-right">
+          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+            {need.right}
+          </span>
+        </div>
+      </div>
+
+      {/* CUR (small, subtle) */}
+      <div className="mt-1 grid grid-cols-2 gap-6 opacity-70">
+        <div className="text-left">
+          <span className="text-[12px] font-mono tabular-nums text-zinc-300 leading-none">
+            {cur.left}
+          </span>
+        </div>
+        <div className="text-right">
+          <span className="text-[12px] font-mono tabular-nums text-zinc-300 leading-none">
+            {cur.right}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 /* =========================
    COMPONENT
 ========================= */
@@ -1739,6 +1890,7 @@ export default function BridgeArbitrageSignals() {
   ========================= */
   const benchBlocks: BenchBlock[] = useMemo(() => {
     const bucketMap = new Map<string, any>();
+  
 
     for (const s of items || []) {
       const direction = s.direction;
@@ -1755,6 +1907,8 @@ export default function BridgeArbitrageSignals() {
       if (direction === "down") b.shorts.push(s);
       else b.longs.push(s);
     }
+
+
 
     const cmp = makeCmpAccountThenTicker(accountNonEmptyFirst);
 
@@ -1781,6 +1935,8 @@ export default function BridgeArbitrageSignals() {
         buckets: groups.sort((a, b) => betaOrder.indexOf(a.betaKey) - betaOrder.indexOf(b.betaKey)),
       }));
   }, [items, accountNonEmptyFirst]);
+
+  const hedgeByBench = useMemo(() => computeHedgeByBench(items), [items]);
 
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
 
@@ -1862,53 +2018,53 @@ export default function BridgeArbitrageSignals() {
 
           <div className="flex items-center gap-3">
 
-<div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
-  <Link
-    href="/paper/arbitrage"
-    className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
-    title="Open /paper/arbitrage"
-  >
-    PAPER
-  </Link>
+            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+              <Link
+                href="/paper/arbitrage"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
+                title="Open /paper/arbitrage"
+              >
+                PAPER
+              </Link>
 
-  <div className="w-px h-5 bg-white/5" />
+              <div className="w-px h-5 bg-white/5" />
 
-  <button
-    onClick={() => setActiveMode((m) => (m === "onlyActive" ? "off" : "onlyActive"))}
-    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
-      activeMode === "onlyActive"
-        ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
-        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-    }`}
-    title="Show only ACTIVE positions (PositionBp != 0)"
-  >
-    ACTIVE
-  </button>
+              <button
+                onClick={() => setActiveMode((m) => (m === "onlyActive" ? "off" : "onlyActive"))}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+                  activeMode === "onlyActive"
+                    ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                }`}
+                title="Show only ACTIVE positions (PositionBp != 0)"
+              >
+                ACTIVE
+              </button>
 
-  <button
-    onClick={() => setActiveMode((m) => (m === "onlyInactive" ? "off" : "onlyInactive"))}
-    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
-      activeMode === "onlyInactive"
-        ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
-        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-    }`}
-    title="Show only INACTIVE positions (PositionBp == 0)"
-  >
-    INACTIVE
-  </button>
+              <button
+                onClick={() => setActiveMode((m) => (m === "onlyInactive" ? "off" : "onlyInactive"))}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+                  activeMode === "onlyInactive"
+                    ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                }`}
+                title="Show only INACTIVE positions (PositionBp == 0)"
+              >
+                INACTIVE
+              </button>
 
-  <button
-    onClick={() => setActiveMode("off")}
-    className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${
-      activeMode === "off"
-        ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
-        : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
-    }`}
-    title="Disable ACTIVE filter"
-  >
-    OFF
-  </button>
-</div>
+              <button
+                onClick={() => setActiveMode("off")}
+                className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${
+                  activeMode === "off"
+                    ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
+                    : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
+                }`}
+                title="Disable ACTIVE filter"
+              >
+                OFF
+              </button>
+            </div>
 
 
             <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
@@ -2546,10 +2702,15 @@ export default function BridgeArbitrageSignals() {
                   key={bench.benchmark}
                   className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0"
                 >
-                  <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-4">
-                    <span className="text-lg font-bold text-white tracking-tight">{bench.benchmark}</span>
-                    <div className="flex-1 border-b border-dashed border-zinc-700/50 mx-4 opacity-50" />
+                  {/* Minimal hedge panel (top) */}
+                  <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
+
+                  {/* old divider under header */}
+                  <div className="px-4 pb-3">
+                    <div className="h-px bg-white/5" />
                   </div>
+
+
 
                   <div className="p-4 space-y-6">
                     {bench.buckets.map((g) => {
