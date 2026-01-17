@@ -145,6 +145,7 @@ const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localh
 
 const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
 const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
+const PIN_LS_KEY = "bridge.arb.pinTickers.v1";
 const ACTIVE_PANEL_LS_KEY = "bridge.arb.activePanel.v1";
 const UI_STATE_LS_KEY = "bridge.arb.uiState.v1";
 
@@ -646,7 +647,8 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 /* =========================
    UI Helper Components
 ========================= */
-type MsColor = "amber" | "emerald" | "rose";
+type MsColor = "amber" | "emerald" | "rose" | "cyan";
+
 
 const MSF = {
   amber: {
@@ -676,6 +678,17 @@ const MSF = {
     divider: "bg-rose-500/20",
     boxChecked: "bg-rose-500 border-transparent",
   },
+  // NEW: light-blue / sky (бірюзовий -> блакитний)
+  cyan: {
+    activeItem: "bg-sky-500/15 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-sky-400 text-black border-transparent",
+    chipInactive: "text-sky-300 border-transparent hover:bg-sky-400/10",
+    arrow: "text-sky-300 hover:text-sky-200 hover:bg-sky-400/10",
+    divider: "bg-sky-400/20",
+    boxChecked: "bg-sky-400 border-transparent",
+  },
+
 } as const;
 
 const MultiSelectFilter = ({
@@ -761,16 +774,14 @@ const MultiSelectFilter = ({
                     selected.has(opt) ? C.activeItem : C.inactiveItem
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-3 h-3 rounded border border-white/20 flex items-center justify-center ${
-                        selected.has(opt) ? C.boxChecked : ""
-                      }`}
-                    >
-                      {selected.has(opt) && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
-                    </div>
-                    <span className="truncate">{opt || "N/A"}</span>
+                  <div className="w-6 h-6 flex items-center justify-center">
+                    {selected.has(opt) ? (
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${C.chipActive}`}>{opt}</span>
+                    ) : (
+                      <div className="w-3 h-3 rounded border border-white/20" />
+                    )}
                   </div>
+
                 </button>
               ))}
               {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
@@ -790,7 +801,17 @@ const MultiSelectFilter = ({
             enabled ? C.chipActive : C.chipInactive
           }`}
         >
-          {label} {selected.size > 0 && <span className="opacity-70 ml-1">({selected.size})</span>}
+          {label}
+          {selected.size > 0 && (
+            <div className="ml-2 flex items-center gap-1">
+              {Array.from(selected).slice(0, 6).map((v) => (
+                <span key={v} className="px-2 py-0.5 rounded-full border border-white/10 bg-black/20 text-[10px] font-mono text-cyan-300">
+                  {v}
+                </span>
+              ))}
+              {selected.size > 6 && <span className="text-[10px] font-mono text-zinc-400">+{selected.size - 6}</span>}
+            </div>
+          )}
         </button>
 
         <div className={`w-px h-4 ${C.divider}`} />
@@ -822,6 +843,171 @@ const MultiSelectFilter = ({
   );
 };
 
+type SingleSelectFilterProps = {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  color?: MsColor; // використовує MSF як у MultiSelectFilter
+};
+
+const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
+  value,
+  options,
+  onChange,
+  color = "cyan",
+}) => {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const id = useMemo(() => `ssf-${Math.random().toString(36).slice(2)}`, []);
+  const C = MSF[color];
+
+  const recomputePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      left: r.left,
+      top: r.bottom + 8,
+      width: Math.max(220, r.width),
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    recomputePos();
+
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideWrap = !!wrapRef.current?.contains(target);
+      const menuEl = document.getElementById(id);
+      const insideMenu = !!menuEl?.contains(target);
+      if (!insideWrap && !insideMenu) setOpen(false);
+    };
+
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", recomputePos, true);
+    window.addEventListener("resize", recomputePos);
+
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", recomputePos, true);
+      window.removeEventListener("resize", recomputePos);
+    };
+  }, [open]);
+
+  const currentLabel = options.find((o) => o.value === value)?.label ?? "—";
+
+  const menu =
+    open && pos
+      ? createPortal(
+          <div
+            id={id}
+            style={{
+              position: "fixed",
+              left: pos.left,
+              top: pos.top,
+              width: pos.width,
+              zIndex: 999999,
+            }}
+            className={[
+              // як на 2 скріні: темне вікно, border, rounded, blur
+              "bg-[#0a0a0a]/85 backdrop-blur-xl",
+              "border border-white/[0.08] rounded-2xl shadow-2xl",
+              "p-2 max-h-64 overflow-y-auto custom-scrollbar",
+            ].join(" ")}
+          >
+            <div className="flex flex-col gap-1">
+              {options.map((opt) => {
+                const active = opt.value === value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      onChange(opt.value);
+                      setOpen(false);
+                    }}
+                    className={[
+                      "w-full text-left px-3 py-2 rounded-xl text-xs font-mono transition-colors",
+                      "flex items-center justify-between",
+                      active ? C.activeItem : C.inactiveItem,
+                    ].join(" ")}
+                  >
+                    <span>{opt.label}</span>
+                    {active && (
+                      <span
+                        className={[
+                          "px-2 py-0.5 rounded-full text-[10px] font-mono border",
+                          // чіп “selected” як у фільтрах
+                          color === "cyan"
+                            ? "bg-sky-500/15 border-sky-500/25 text-sky-200"
+                            : C.chipActive,
+                        ].join(" ")}
+                      >
+                        selected
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <>
+      <div
+        ref={wrapRef}
+        className="relative flex items-center bg-black/20 rounded-full border border-white/5"
+      >
+        {/* main button */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={[
+            "px-3 py-1.5 text-[10px] font-mono font-bold transition-all rounded-l-full",
+            C.chipInactive, // синій/бірюзовий акцент
+          ].join(" ")}
+        >
+          {currentLabel}
+        </button>
+
+        {/* divider */}
+        <div className={`w-px h-4 ${C.divider}`} />
+
+        {/* arrow zone */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={[
+            "px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full",
+            C.arrow,
+          ].join(" ")}
+          aria-label="Open"
+        >
+          <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+            <path
+              d="M6 8L10 12L14 8"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {menu}
+    </>
+  );
+};
+
+
+
 interface FilterButtonProps {
   active: boolean;
   label: string;
@@ -852,6 +1038,9 @@ const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, col
   </button>
 );
 
+// ЗАМІНИТИ існуюче оголошення SignalCardProps + компонент SignalCard
+// на наступний блок:
+
 interface SignalCardProps {
   s: ArbitrageSignal;
   side: "short" | "long";
@@ -862,8 +1051,17 @@ interface SignalCardProps {
 
   // NEW: for ACTIVE-position highlight (gold)
   zapMode: "zap" | "sigma" | "off";
-  activeZapMaxAbs: number;
-  activeSigmaMaxAbs: number;
+
+  // these were required before — make them optional
+  activeZapMaxAbs?: number;
+  activeSigmaMaxAbs?: number;
+
+  // optional visual extras (if you added them elsewhere)
+  pinColor?: any;
+  zapGoldAbs?: number;
+  zapSilverAbs?: number;
+  // any other extras you pass to SignalCard can be optional here
+  [k: string]: any;
 }
 
 
@@ -877,12 +1075,18 @@ const SignalCard: React.FC<SignalCardProps> = ({
   zapMode,
   activeZapMaxAbs,
   activeSigmaMaxAbs,
+
+  // optional / new:
+  pinColor = null,
+  zapGoldAbs,
+  zapSilverAbs,
+  zapShowAbs,
 }) => {
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
-    // ACTIVE position by PositionBp != 0
+  // ACTIVE position by PositionBp != 0
   const posActive = isActiveByPositionBp(s);
-  
+
   const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
   const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
@@ -903,11 +1107,9 @@ const SignalCard: React.FC<SignalCardProps> = ({
   const goldClasses =
     "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
 
-
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
   const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
-
 
   const activeClasses = isShort
     ? "bg-rose-500/10 border-rose-500/50 shadow-[0_0_15px_-5px_rgba(244,63,94,0.3)]"
@@ -915,12 +1117,20 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
-
   const tickerColor = isActive
     ? isShort
       ? "text-rose-300"
       : "text-emerald-300"
     : "text-zinc-300 group-hover:text-zinc-100";
+
+  // map pinColor string -> tailwind class (adjust names to your project's palette)
+  const pinClass =
+    pinColor === "orange" ? "bg-orange-400"
+    : pinColor === "lavender" ? "bg-violet-300"
+    : pinColor === "turquoise" ? "bg-cyan-300"
+    : pinColor === "amber" ? "bg-amber-400"
+    : pinColor === "emerald" ? "bg-emerald-400"
+    : "bg-transparent";
 
   return (
     <button
@@ -932,6 +1142,13 @@ const SignalCard: React.FC<SignalCardProps> = ({
         flashClass(s.ticker, side),
       ].join(" ")}
     >
+      {/* PIN DOT (absolute, won't affect layout) */}
+      {pinColor && (
+        <div className="absolute top-2 right-2 w-3 h-3 rounded-full border border-white/10" style={{ pointerEvents: "none" }}>
+          <div className={`w-full h-full rounded-full ${pinClass}`} />
+        </div>
+      )}
+
       <div className="flex items-center justify-between w-full">
         <span className={`font-bold tracking-tight leading-none ${compact ? "text-sm" : "text-[15px]"} ${tickerColor}`}>
           {s.ticker}
@@ -966,11 +1183,26 @@ const SignalCard: React.FC<SignalCardProps> = ({
   );
 };
 
+
 const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
 const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
 
-type ListMode = "off" | "ignore" | "apply";
+type ListMode = "off" | "ignore" | "apply" | "pin";
 type ActiveMode = "off" | "onlyActive" | "onlyInactive";
+
+
+type PinColor = "orange" | "lavender" | "cyan";
+type PinMap = Record<string, PinColor>;
+
+type SortKey = "alpha" | "sigma" | "zapAbs" | "sigZapAbs" | "rate" | "posBpAbs" | "beta" | "pin";
+type SortDir = "asc" | "desc";
+
+const PIN_DOT_CLASS: Record<PinColor, string> = {
+  orange: "bg-orange-400",
+  lavender: "bg-violet-300",
+  cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
+};
+
 
 
 type HedgeInfo = {
@@ -1167,12 +1399,17 @@ export default function BridgeArbitrageSignals() {
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
   const [zapMode, setZapMode] = useState<"zap" | "sigma" | "off">("zap");
-  const [zapMinAbs, setZapMinAbs] = useState<number>(0.3);
-  const [zapSigmaMinAbs, setZapSigmaMinAbs] = useState<number>(0.05);
 
-  // highlight thresholds (kept/persisted)
-  const [activeZapMaxAbs, setActiveZapMaxAbs] = useState<number>(0.3);
-  const [activeSigmaMaxAbs, setActiveSigmaMaxAbs] = useState<number>(0.05);
+  // 3 inputs:
+  // 1) filter/display threshold (single, depends on zapMode)
+  const [zapShowAbs, setZapShowAbs] = useState<number>(0.3);
+
+  // 2) silver: too high highlight (active + inactive)
+  const [zapSilverAbs, setZapSilverAbs] = useState<number>(2.0);
+
+  // 3) gold: normalization highlight (ONLY active)
+  const [zapGoldAbs, setZapGoldAbs] = useState<number>(0.3);
+
 
   const [adv90Min, setAdv90Min] = useState("");
   const [adv90Max, setAdv90Max] = useState("");
@@ -1248,12 +1485,19 @@ export default function BridgeArbitrageSignals() {
 
   const [filterReport, setFilterReport] = useState<"ALL" | "YES" | "NO">("ALL");
   const [accountNonEmptyFirst, setAccountNonEmptyFirst] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("alpha");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
   const [equityType, setEquityType] = useState("");
 
   /* ===== IGNORE/APPLY lists ===== */
   const [listMode, setListMode] = useState<ListMode>("off");
   const [ignoreSet, setIgnoreSet] = useState<Set<string>>(new Set());
   const [applySet, setApplySet] = useState<Set<string>>(new Set());
+  const [pinMap, setPinMap] = useState<PinMap>({});
+  const [showPin, setShowPin] = useState(false);
+  const [pinDraft, setPinDraft] = useState("");
+  const [pinColor, setPinColor] = useState<PinColor>("orange");
   const [showIgnore, setShowIgnore] = useState(false);
   const [showApply, setShowApply] = useState(false);
   const [ignoreDraft, setIgnoreDraft] = useState("");
@@ -1378,6 +1622,32 @@ export default function BridgeArbitrageSignals() {
         }
       }
     } catch {}
+    try {
+      const raw = localStorage.getItem(PIN_LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // expected: [{ticker:"AAPL", color:"orange"}, ...] OR object map
+        if (Array.isArray(parsed)) {
+          const next: PinMap = {};
+          for (const row of parsed) {
+            const tk = normalizeTicker(String(row?.ticker ?? ""));
+            const c = String(row?.color ?? "");
+            if (!tk) continue;
+            if (c === "orange" || c === "lavender" || c === "cyan") next[tk] = c;
+          }
+          setPinMap(next);
+        } else if (parsed && typeof parsed === "object") {
+          const next: PinMap = {};
+          for (const [k, v] of Object.entries(parsed)) {
+            const tk = normalizeTicker(String(k));
+            const c = String(v);
+            if (!tk) continue;
+            if (c === "orange" || c === "lavender" || c === "cyan") next[tk] = c;
+          }
+          setPinMap(next);
+        }
+      }
+    } catch {}
   }, []);
 
   const saveSet = (key: string, set: Set<string>) => {
@@ -1385,6 +1655,41 @@ export default function BridgeArbitrageSignals() {
       localStorage.setItem(key, JSON.stringify(sortedTickers(set)));
     } catch {}
   };
+
+  const savePinMap = (m: PinMap) => {
+    try {
+      const arr = Object.entries(m)
+        .map(([ticker, color]) => ({ ticker, color }))
+        .sort((a, b) => a.ticker.localeCompare(b.ticker));
+      localStorage.setItem(PIN_LS_KEY, JSON.stringify(arr));
+    } catch {}
+  };
+
+  const addPins = (tickers: string[], color: PinColor) => {
+    if (!tickers.length) return;
+    setPinMap((prev) => {
+      const next: PinMap = { ...prev };
+      for (const t of tickers) next[t] = color;
+      savePinMap(next);
+      return next;
+    });
+  };
+
+  const removePin = (ticker: string) => {
+    setPinMap((prev) => {
+      const next: PinMap = { ...prev };
+      delete next[ticker];
+      savePinMap(next);
+      return next;
+    });
+  };
+
+  const clearPins = () => {
+    const next: PinMap = {};
+    setPinMap(next);
+    savePinMap(next);
+  };
+
 
   const addToSet = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, key: string, tickers: string[]) => {
     if (!tickers.length) return;
@@ -1463,11 +1768,13 @@ export default function BridgeArbitrageSignals() {
       if (typeof s?.mode === "string") setMode(s.mode);
       if (typeof s?.listMode === "string") setListMode(s.listMode);
       if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
-      if (typeof s?.zapMinAbs === "number") setZapMinAbs(s.zapMinAbs);
-      if (typeof s?.zapSigmaMinAbs === "number") setZapSigmaMinAbs(s.zapSigmaMinAbs);
-      if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") setZapMode(s.zapMode);
-      if (typeof s?.activeZapMaxAbs === "number") setActiveZapMaxAbs(s.activeZapMaxAbs);
-      if (typeof s?.activeSigmaMaxAbs === "number") setActiveSigmaMaxAbs(s.activeSigmaMaxAbs);
+      if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
+      if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
+      if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
+      if (s?.sortKey) setSortKey(s.sortKey);
+      if (s?.sortDir) setSortDir(s.sortDir);
+
+
       if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") {
   setActiveMode(s.activeMode);
 }
@@ -1487,12 +1794,13 @@ export default function BridgeArbitrageSignals() {
           bpCls,
 
           zapMode,
-          zapMinAbs,
-          zapSigmaMinAbs,
-
-          activeZapMaxAbs,
-          activeSigmaMaxAbs,
           activeMode,
+          sortKey,
+          sortDir,
+          zapShowAbs,
+          zapSilverAbs,
+          zapGoldAbs,
+
 
         })
 
@@ -1500,10 +1808,10 @@ export default function BridgeArbitrageSignals() {
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    zapMode, zapMinAbs, zapSigmaMinAbs,
-    activeZapMaxAbs, activeSigmaMaxAbs,
-    activeMode, // ✅ ADD THIS
+    zapMode, activeMode, zapShowAbs, zapSilverAbs, zapGoldAbs,
+    sortKey, sortDir, // ✅ ДОДАТИ
   ]);
+
 
 
   /* =========================
@@ -1566,6 +1874,10 @@ export default function BridgeArbitrageSignals() {
       listMode,
       ignoreSet,
       applySet,
+      pinMap,
+      sortKey,
+      sortDir,
+
 
       bounds,
 
@@ -1592,21 +1904,22 @@ export default function BridgeArbitrageSignals() {
       equityType,
 
       zapMode,
-      zapMinAbs,
-      zapSigmaMinAbs,
-      activeZapMaxAbs,
-      activeSigmaMaxAbs,
+      zapShowAbs,
+      zapSilverAbs,
+      zapGoldAbs,
+
     };
   }, [
     cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
-    listMode, ignoreSet, applySet,
+    listMode, ignoreSet, applySet,pinMap, applySet, ignoreSet, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     activeMode, // ✅ ADD THIS
     includeUSA, includeChina,
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
-    zapMode, zapMinAbs, zapSigmaMinAbs, activeZapMaxAbs, activeSigmaMaxAbs
+    zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
+
   ]);
 
   const filtersRef = useRef(snapshot);
@@ -1629,8 +1942,9 @@ export default function BridgeArbitrageSignals() {
     const mr = toNum(f.minRate);
     const mt = toNum(f.minTotal);
 
-    const zapThr = Math.max(0.3, Number(f.zapMinAbs ?? 0.3));
-    const sigThr = Math.max(0.05, Number(f.zapSigmaMinAbs ?? 0.05));
+    const base = Number(f.zapShowAbs ?? 0);
+    const zapThr = Math.max(0.3, base);   // for ZAP
+    const sigThr = Math.max(0.05, base);  // for σZAP
     const eqNeedle = f.equityType.trim().toLowerCase();
 
     for (const s of arr ?? []) {
@@ -1640,6 +1954,8 @@ export default function BridgeArbitrageSignals() {
       // list mode first (cheap)
       if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
       if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
+      if (f.listMode === "pin" && !f.pinMap[tk]) continue;
+
 
       // ACTIVE tri-state (PositionBp != 0)
       if (f.activeMode === "onlyActive") {
@@ -1885,13 +2201,146 @@ export default function BridgeArbitrageSignals() {
     setActivePanelVisible(true);
   };
 
+  const getSortValue = (s: ArbitrageSignal, key: SortKey) => {
+    switch (key) {
+      case "sigma": return toNum(s.sig) ?? -Infinity;
+      case "zapAbs": {
+        const dir = s.direction;
+        const v = dir === "down" ? toNum(s.zapS) : dir === "up" ? toNum(s.zapL) : null;
+        return v == null ? -Infinity : Math.abs(v);
+      }
+      case "sigZapAbs": {
+        const dir = s.direction;
+        const v = dir === "down" ? toNum(s.zapSsigma) : dir === "up" ? toNum(s.zapLsigma) : null;
+        return v == null ? -Infinity : Math.abs(v);
+      }
+      case "rate": return getBestRating(s) ?? (s as any)._bestRating ?? -Infinity;
+      case "posBpAbs": {
+        const v = numPositionBp(s);
+        return v == null ? -Infinity : Math.abs(v);
+      }
+      case "beta": {
+        const b = getBetaValue(s);
+        return b == null ? -Infinity : b;
+      }
+      case "pin":
+      case "alpha":
+      default:
+        return null;
+    }
+  };
+
+  const cmpBySort = (a: ArbitrageSignal, b: ArbitrageSignal, f: typeof snapshot) => {
+    const ta = String(a?.ticker ?? "");
+    const tb = String(b?.ticker ?? "");
+
+    const pa = !!f.pinMap[ta];
+    const pb = !!f.pinMap[tb];
+
+    // when sorting by PIN: pinned always on top
+    if (f.sortKey === "pin" && pa !== pb) return pa ? -1 : 1;
+
+    // alpha: just ticker
+    if (f.sortKey === "alpha") return ta.localeCompare(tb);
+
+    const va = getSortValue(a, f.sortKey);
+    const vb = getSortValue(b, f.sortKey);
+
+    const na = typeof va === "number" ? va : -Infinity;
+    const nb = typeof vb === "number" ? vb : -Infinity;
+
+    if (na !== nb) {
+      const d = na < nb ? -1 : 1;
+      return f.sortDir === "asc" ? d : -d;
+    }
+
+    // tie-breakers:
+    // optionally account ordering first if you still want it:
+    // (leave it as your current switch)
+    return ta.localeCompare(tb);
+  };
+
+
   /* =========================
-     Grouping (+ account sorting toggle)
+    Grouping (+ account sorting toggle + turquoise sort + pins)
   ========================= */
   const benchBlocks: BenchBlock[] = useMemo(() => {
     const bucketMap = new Map<string, any>();
-  
 
+    const isPinned = (tk: string) => !!pinMap[tk]; // ✅ pinMap is Record, not Map
+
+    const cmpAccountThenTicker = makeCmpAccountThenTicker(accountNonEmptyFirst);
+
+    const getMetric = (s: ArbitrageSignal): number => {
+      switch (sortKey) {
+        case "sigma":
+          return Math.abs(toNum(s.sig) ?? 0);
+
+        case "zapAbs": {
+          const dir = s.direction;
+          const v = dir === "down" ? toNum(s.zapS) : dir === "up" ? toNum(s.zapL) : null;
+          return v == null ? -Infinity : Math.abs(v);
+        }
+
+        case "sigZapAbs": {
+          const dir = s.direction;
+          const v = dir === "down" ? toNum(s.zapSsigma) : dir === "up" ? toNum(s.zapLsigma) : null;
+          return v == null ? -Infinity : Math.abs(v);
+        }
+
+        case "rate":
+          return getBestRating(s) ?? (s as any)._bestRating ?? -Infinity;
+
+        case "posBpAbs": {
+          const v = numPositionBp(s);
+          return v == null ? -Infinity : Math.abs(v);
+        }
+
+        case "beta": {
+          const b = getBetaValue(s);
+          return b == null ? -Infinity : b;
+        }
+
+        case "pin":
+        case "alpha":
+        default:
+          return 0;
+      }
+    };
+
+    const cmpSort = (a: ArbitrageSignal, b: ArbitrageSignal) => {
+      const ta = normalizeTicker(a?.ticker ?? "") ?? "";
+      const tb = normalizeTicker(b?.ticker ?? "") ?? "";
+
+      // 1) PINS ALWAYS FIRST
+      const pa = isPinned(ta) ? 1 : 0;
+      const pb = isPinned(tb) ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+
+      // 2) SORT KEY
+      if (sortKey === "pin") {
+        // after pin grouping, default to account/ticker
+        return cmpAccountThenTicker(a, b);
+      }
+
+      if (sortKey === "alpha") {
+        // ✅ alphabetical A→Z (as your UI says)
+        // keep account toggle behavior as you had it
+        return cmpAccountThenTicker(a, b);
+      }
+
+      const ma = getMetric(a);
+      const mb = getMetric(b);
+
+      if (ma !== mb) {
+        return sortDir === "asc" ? ma - mb : mb - ma;
+      }
+
+      // 3) tie-breaker (existing behavior)
+      return cmpAccountThenTicker(a, b);
+    };
+
+    // --- build bucket map ---
     for (const s of items || []) {
       const direction = s.direction;
       if (direction !== "down" && direction !== "up") continue;
@@ -1908,14 +2357,11 @@ export default function BridgeArbitrageSignals() {
       else b.longs.push(s);
     }
 
-
-
-    const cmp = makeCmpAccountThenTicker(accountNonEmptyFirst);
-
+    // --- regroup to bench blocks ---
     const benchMap = new Map<string, BucketGroup[]>();
     for (const [, b] of bucketMap.entries()) {
-      b.shorts.sort(cmp);
-      b.longs.sort(cmp);
+      b.shorts.sort(cmpSort);
+      b.longs.sort(cmpSort);
 
       const n = Math.max(b.shorts.length, b.longs.length);
       const rows: RowPair[] = [];
@@ -1934,7 +2380,9 @@ export default function BridgeArbitrageSignals() {
         benchmark,
         buckets: groups.sort((a, b) => betaOrder.indexOf(a.betaKey) - betaOrder.indexOf(b.betaKey)),
       }));
-  }, [items, accountNonEmptyFirst]);
+  }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
+
+
 
   const hedgeByBench = useMemo(() => computeHedgeByBench(items), [items]);
 
@@ -1954,6 +2402,9 @@ export default function BridgeArbitrageSignals() {
 
   const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
   const setModeApply = () => setListMode((m) => (m === "apply" ? "off" : "apply"));
+  const setModePin = () => setListMode((m) => (m === "pin" ? "off" : "pin"));
+
+
 
   /* =========================
      Active derived fields
@@ -2089,6 +2540,18 @@ export default function BridgeArbitrageSignals() {
               >
                 APPLY {applySet.size > 0 && <span className="ml-1 opacity-70">({applySet.size})</span>}
               </button>
+
+              <button
+                onClick={setModePin}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+                  listMode === "pin"
+                    ? "bg-cyan-500/10 text-cyan-300 border-cyan-500/20 shadow-[0_0_10px_-3px_rgba(34,211,238,0.2)]"
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                PIN {Object.keys(pinMap).length > 0 && <span className="ml-1 opacity-70">({Object.keys(pinMap).length})</span>}
+              </button>
+
             </div>
 
             <div className="flex gap-2">
@@ -2115,6 +2578,15 @@ export default function BridgeArbitrageSignals() {
                   <line x1="3" y1="18" x2="3.01" y2="18"></line>
                 </svg>
                 AP LIST
+              </button>
+
+              <button
+                onClick={() => setShowPin(!showPin)}
+                className={`px-3 py-2 rounded-lg border transition-all text-xs font-mono ${
+                  showPin ? "bg-violet-500/10 border-violet-500/30 text-violet-300" : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
+                }`}
+              >
+                PIN LIST
               </button>
 
               <button
@@ -2289,8 +2761,57 @@ export default function BridgeArbitrageSignals() {
 
           <div className="flex-1" />
 
+          {/* SORT (blue group; MSF-like control; one toggle button; no "SORT" label) */}
+          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-sky-900/30 bg-sky-900/10">
+            {/* dropdown control styled like MSF (but BLUE) */}
+            <SingleSelectFilter
+              value={sortKey}
+              onChange={(v) => {
+                const k = v as SortKey;
+                setSortKey(k);
+                if (k === "pin") setSortDir("desc");
+              }}
+              color="cyan"
+              options={[
+                { value: "alpha", label: "ABC" },
+                { value: "sigma", label: "SIG" },
+                { value: "zapAbs", label: "|ZAP|" },
+                { value: "sigZapAbs", label: "|σZAP|" },
+                { value: "rate", label: "RATE" },
+                { value: "posBpAbs", label: "BP" },
+                { value: "beta", label: "BETA" },
+                { value: "pin", label: "PIN" },
+              ]}
+            />
+
+
+            {/* one toggle button (asc/desc cycles) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (sortKey === "pin") return;
+                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+              }}
+              className={[
+                "px-3 py-1.5 rounded-lg border text-[11px] font-mono font-bold",
+                "bg-sky-500/10 border-sky-500/25 text-sky-200",
+                "hover:bg-sky-500/15 hover:border-sky-500/35",
+                "shadow-[0_0_12px_-6px_rgba(56,189,248,0.30)]",
+                "transition-all",
+                sortKey === "pin" ? "opacity-60 cursor-default" : "",
+              ].join(" ")}
+              title={sortKey === "pin" ? "PIN sort (dir N/A)" : "Toggle ASC/DESC"}
+            >
+              {sortKey === "pin" ? "PIN" : sortDir === "asc" ? "↑" : "↓"}
+            </button>
+          </div>
+
+
+
+
           {/* ZAP FILTERS */}
           <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+            {/* mode toggles */}
             <button
               type="button"
               onClick={() => setZapMode("zap")}
@@ -2304,35 +2825,6 @@ export default function BridgeArbitrageSignals() {
               ZAP
             </button>
 
-            <input
-              type="number"
-              step={0.1}
-              min={0.3}
-              value={zapMinAbs}
-              disabled={zapMode !== "zap"}
-              onChange={(e) => setZapMinAbs(clampFloat(e.target.value, 0.3))}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "zap" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-            />
-            <input
-              type="number"
-              step={0.01}
-              min={0}
-              value={activeZapMaxAbs}
-              disabled={zapMode !== "zap"}
-              onChange={(e) => setActiveZapMaxAbs(clampFloat(e.target.value, 0))}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "zap" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-              title="ACTIVE highlight: gold when |ZAP| <= this"
-            />
-
-
-            <div className="w-px h-6 bg-violet-500/20 mx-1" />
-
             <button
               type="button"
               onClick={() => setZapMode("sigma")}
@@ -2343,55 +2835,80 @@ export default function BridgeArbitrageSignals() {
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>
-                σ
-              </span>
+              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>σ</span>
               <span className="uppercase">ZAP</span>
             </button>
 
+            {/* 1) show/filter threshold (single) */}
             <input
               type="number"
-              step={0.05}
-              min={0.05}
-              value={zapSigmaMinAbs}
-              disabled={zapMode !== "sigma"}
-              onChange={(e) => setZapSigmaMinAbs(clampFloat(e.target.value, 0.05))}
+              step={zapMode === "sigma" ? 0.05 : 0.1}
+              min={zapMode === "sigma" ? 0.05 : 0.3}
+              value={zapShowAbs}
+              disabled={zapMode === "off"}
+              onChange={(e) => {
+                const v = clampFloat(
+                  e.target.value,
+                  zapMode === "sigma" ? 0.05 : 0.3
+                );
+                setZapShowAbs(v);
+              }}
               className={[
                 "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "sigma" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+                zapMode !== "off" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
               ].join(" ")}
-            />
-            <input
-              type="number"
-              step={0.01}
-              min={0}
-              value={activeSigmaMaxAbs}
-              disabled={zapMode !== "sigma"}
-              onChange={(e) => setActiveSigmaMaxAbs(clampFloat(e.target.value, 0))}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode === "sigma" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-              title="ACTIVE highlight: gold when |σZAP| <= this"
+              title="Threshold for filtering (ZAP or σZAP depending on mode)"
             />
 
+            {/* 2) SILVER (too high) */}
+            <input
+              type="number"
+              step={zapMode === "sigma" ? 0.1 : 0.5}
+              min={0}
+              value={zapSilverAbs}
+              disabled={zapMode === "off"}
+              onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
+              className={[
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                zapMode !== "off" ? "border-zinc-200/30 text-zinc-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
+              title="SILVER highlight when |metric| >= this (active+inactive)"
+            />
+
+            {/* 3) GOLD (only active normalization) */}
+            <input
+              type="number"
+              step={zapMode === "sigma" ? 0.05 : 0.1}
+              min={0}
+              value={zapGoldAbs}
+              disabled={zapMode === "off"}
+              onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
+              className={[
+                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                zapMode !== "off" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+              ].join(" ")}
+              title="GOLD highlight when |metric| <= this (ONLY active positions)"
+            />
 
             <button
               type="button"
               onClick={() => setZapMode("off")}
               className={[
                 "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                zapMode === "off" ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200" : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
+                zapMode === "off"
+                  ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
+                  : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
               ].join(" ")}
               title="Disable ZAP filters"
             >
               OFF
             </button>
           </div>
+
         </div>
 
         {/* ========================= DRAWERS (Ignore/Apply) ========================= */}
-        {(showIgnore || showApply) && (
+        {(showIgnore || showApply || showPin) && (
           <div className="grid grid-cols-7 gap-4">
             {showIgnore && (
               <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-3">
@@ -2490,6 +3007,84 @@ export default function BridgeArbitrageSignals() {
                 )}
               </div>
             )}
+
+            {showPin && (
+              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
+                <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
+                  <span className="text-sm font-bold text-cyan-300 tracking-tight">PIN LIST</span>
+                  <span className="text-[10px] font-mono text-zinc-500">Show only these when LIST MODE = PIN</span>
+                </div>
+
+                <textarea
+                  value={pinDraft}
+                  onChange={(e) => setPinDraft(e.target.value)}
+                  placeholder="AAPL, MSFT..."
+                  className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-cyan-500/30 resize-none"
+                />
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* color picker */}
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5">
+                    <span className="text-[10px] font-mono text-zinc-500 uppercase">color</span>
+                    {(["orange","lavender","cyan"] as PinColor[]).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setPinColor(c)}
+                        className={[
+                          "w-6 h-6 rounded-full border",
+                          pinColor === c ? "border-white/40" : "border-white/10 opacity-70 hover:opacity-100",
+                          PIN_DOT_CLASS[c],
+                        ].join(" ")}
+                        title={c}
+                      />
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => { addPins(parseTickersFromFreeText(pinDraft), pinColor); setPinDraft(""); setShowPin(true); if (listMode === "off") setListMode("pin"); }}
+                    className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 text-xs font-bold hover:bg-cyan-500/30"
+                  >
+                    ADD
+                  </button>
+
+                  <button
+                    onClick={() => setPinDraft("")}
+                    className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white"
+                  >
+                    CLEAR
+                  </button>
+
+                  {Object.keys(pinMap).length > 0 && (
+                    <button
+                      onClick={clearPins}
+                      className="ml-auto px-4 py-1.5 rounded-lg bg-rose-900/20 text-rose-500 border border-rose-900/30 text-xs hover:bg-rose-900/40"
+                    >
+                      RESET
+                    </button>
+                  )}
+                </div>
+
+                {Object.keys(pinMap).length > 0 && (
+                  <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                    {Object.entries(pinMap)
+                      .sort(([a],[b]) => a.localeCompare(b))
+                      .map(([tk, c]) => (
+                        <button
+                          key={tk}
+                          onClick={() => removePin(tk)}
+                          className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:border-rose-500/40 hover:text-rose-300 transition-colors flex items-center gap-2"
+                          title="Remove pin"
+                        >
+                          <span className={`w-2 h-2 rounded-full ${PIN_DOT_CLASS[c]}`} />
+                          {tk} ×
+                        </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
           </div>
         )}
 
@@ -2742,8 +3337,9 @@ export default function BridgeArbitrageSignals() {
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
                                   zapMode={zapMode}
-                                  activeZapMaxAbs={activeZapMaxAbs}
-                                  activeSigmaMaxAbs={activeSigmaMaxAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
+                                  zapGoldAbs={zapGoldAbs}
+                                  zapSilverAbs={zapSilverAbs}
                                 />
                               ))}
                             </div>
@@ -2758,8 +3354,10 @@ export default function BridgeArbitrageSignals() {
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
                                   zapMode={zapMode}
-                                  activeZapMaxAbs={activeZapMaxAbs}
-                                  activeSigmaMaxAbs={activeSigmaMaxAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
+                                  zapGoldAbs={zapGoldAbs}
+                                  zapSilverAbs={zapSilverAbs}
+
                                 />
 
                                 ))}
