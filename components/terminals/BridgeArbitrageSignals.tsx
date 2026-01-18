@@ -770,18 +770,19 @@ const MultiSelectFilter = ({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => toggleOption(opt)}
-                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-2 ${
                     selected.has(opt) ? C.activeItem : C.inactiveItem
                   }`}
                 >
-                  <div className="w-6 h-6 flex items-center justify-center">
+                  <div className="w-5 h-5 flex items-center justify-center shrink-0">
                     {selected.has(opt) ? (
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${C.chipActive}`}>{opt}</span>
+                      <div className={`w-3 h-3 rounded ${C.boxChecked}`} />
                     ) : (
                       <div className="w-3 h-3 rounded border border-white/20" />
                     )}
                   </div>
 
+                  <span className="truncate">{opt}</span>
                 </button>
               ))}
               {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
@@ -1049,21 +1050,14 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  // NEW: for ACTIVE-position highlight (gold)
   zapMode: "zap" | "sigma" | "off";
+  zapShowAbs: number;    // NEW
+  zapSilverAbs: number;  // NEW
+  zapGoldAbs: number;    // NEW (only ACTIVE)
 
-  // these were required before — make them optional
-  activeZapMaxAbs?: number;
-  activeSigmaMaxAbs?: number;
-
-  // optional visual extras (if you added them elsewhere)
-  pinColor?: any;
-  zapGoldAbs?: number;
-  zapSilverAbs?: number;
-  // any other extras you pass to SignalCard can be optional here
+  pinColor?: PinColor | null;
   [k: string]: any;
 }
-
 
 const SignalCard: React.FC<SignalCardProps> = ({
   s,
@@ -1072,44 +1066,51 @@ const SignalCard: React.FC<SignalCardProps> = ({
   activeTicker,
   flashClass,
   compact = false,
-  zapMode,
-  activeZapMaxAbs,
-  activeSigmaMaxAbs,
 
-  // optional / new:
-  pinColor = null,
-  zapGoldAbs,
-  zapSilverAbs,
+  zapMode,
   zapShowAbs,
+  zapSilverAbs,
+  zapGoldAbs,
+
+  pinColor = null,
 }) => {
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
+
   // ACTIVE position by PositionBp != 0
   const posActive = isActiveByPositionBp(s);
 
   const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
   const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
-  // metric used for highlight depends on active zapMode (same mode for whole list)
-  const m =
+  const metric =
     zapMode === "zap" ? z :
     zapMode === "sigma" ? zs :
     null;
 
-  const thr =
-    zapMode === "zap" ? Math.max(0, Number(activeZapMaxAbs ?? 0)) :
-    zapMode === "sigma" ? Math.max(0, Number(activeSigmaMaxAbs ?? 0)) :
-    0;
+  const absM = metric == null ? null : Math.abs(metric);
 
-  // GOLD when: mode enabled + position active + abs(metric) <= threshold
-  const isGold = zapMode !== "off" && posActive && m != null && Math.abs(m) <= thr;
+  const isGold =
+    zapMode !== "off" &&
+    posActive &&
+    absM != null &&
+    absM <= Math.max(0, Number(zapGoldAbs ?? 0));
+
+  const isSilver =
+    zapMode !== "off" &&
+    absM != null &&
+    absM >= Math.max(0, Number(zapSilverAbs ?? 0));
+
+  const isBelowShow =
+    zapMode !== "off" &&
+    absM != null &&
+    absM < Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
 
   const goldClasses =
     "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
 
-  const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
-  const pxLabel = isShort ? "bid" : "ask";
-  const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
+  const silverClasses =
+    "bg-zinc-200/5 border-zinc-200/30 shadow-[0_0_18px_-10px_rgba(255,255,255,0.18)]";
 
   const activeClasses = isShort
     ? "bg-rose-500/10 border-rose-500/50 shadow-[0_0_15px_-5px_rgba(244,63,94,0.3)]"
@@ -1117,19 +1118,26 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
+  const baseClass =
+    isGold ? goldClasses :
+    isSilver ? silverClasses :
+    isActive ? activeClasses :
+    inactiveClasses;
+
+  const muted = isBelowShow ? "opacity-60" : "opacity-100";
+
+  const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
+  const pxLabel = isShort ? "bid" : "ask";
+  const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
+
   const tickerColor = isActive
-    ? isShort
-      ? "text-rose-300"
-      : "text-emerald-300"
+    ? isShort ? "text-rose-300" : "text-emerald-300"
     : "text-zinc-300 group-hover:text-zinc-100";
 
-  // map pinColor string -> tailwind class (adjust names to your project's palette)
   const pinClass =
     pinColor === "orange" ? "bg-orange-400"
     : pinColor === "lavender" ? "bg-violet-300"
-    : pinColor === "turquoise" ? "bg-cyan-300"
-    : pinColor === "amber" ? "bg-amber-400"
-    : pinColor === "emerald" ? "bg-emerald-400"
+    : pinColor === "cyan" ? "bg-sky-300"
     : "bg-transparent";
 
   return (
@@ -1138,11 +1146,11 @@ const SignalCard: React.FC<SignalCardProps> = ({
       className={[
         "group relative w-full text-left transition-all duration-200 border flex flex-col justify-between",
         compact ? "p-2 rounded-lg gap-1" : "p-3 rounded-xl gap-1.5",
-        isGold ? goldClasses : (isActive ? activeClasses : inactiveClasses),
+        baseClass,
+        muted,
         flashClass(s.ticker, side),
       ].join(" ")}
     >
-      {/* PIN DOT (absolute, won't affect layout) */}
       {pinColor && (
         <div className="absolute top-2 right-2 w-3 h-3 rounded-full border border-white/10" style={{ pointerEvents: "none" }}>
           <div className={`w-full h-full rounded-full ${pinClass}`} />
@@ -1182,6 +1190,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
     </button>
   );
 };
+
 
 
 const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
@@ -1771,6 +1780,11 @@ export default function BridgeArbitrageSignals() {
       if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
       if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
       if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
+
+      if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") {
+        setZapMode(s.zapMode);
+      }
+
       if (s?.sortKey) setSortKey(s.sortKey);
       if (s?.sortDir) setSortDir(s.sortDir);
 
@@ -1911,7 +1925,7 @@ export default function BridgeArbitrageSignals() {
     };
   }, [
     cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
-    listMode, ignoreSet, applySet,pinMap, applySet, ignoreSet, sortKey, sortDir,
+    listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     activeMode, // ✅ ADD THIS
@@ -2075,10 +2089,14 @@ export default function BridgeArbitrageSignals() {
   }, []);
 
   /* =========================
-     Fetch signals (stable)
+    Fetch signals (stable, race-safe)
   ========================= */
+
+  const reqIdRef = useRef(0);
+
   const fetchSignals = useCallback(async () => {
     const f = filtersRef.current;
+    const myId = ++reqIdRef.current;
 
     try {
       setLoading(true);
@@ -2096,6 +2114,10 @@ export default function BridgeArbitrageSignals() {
       });
 
       const r = await fetch(url, { cache: "no-store" });
+
+      // ignore if a newer request was fired
+      if (myId !== reqIdRef.current) return;
+
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
         setItems([]);
@@ -2104,18 +2126,26 @@ export default function BridgeArbitrageSignals() {
       }
 
       const j = await r.json();
-      const rawItems: any[] = Array.isArray(j) ? j : Array.isArray(j?.items) ? j.items : [];
-      const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+      const rawItems: any[] = Array.isArray(j)
+        ? j
+        : Array.isArray(j?.items)
+        ? j.items
+        : [];
+
+      const normalized = rawItems
+        .map(normalizeSignal)
+        .filter(Boolean) as ArbitrageSignal[];
 
       const filtered = applyAllClientFilters(normalized, f);
 
       setItems(filtered);
       setUpdatedAt(Date.now());
     } catch (e: any) {
+      if (myId !== reqIdRef.current) return;
       setItems([]);
       setError(e?.message ?? "Unknown error");
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }, [applyAllClientFilters]);
 
@@ -2125,20 +2155,34 @@ export default function BridgeArbitrageSignals() {
       if (isEditingRef.current) return;
       fetchSignals();
     }, 2500);
+
     return () => clearInterval(timer);
   }, [fetchSignals]);
 
-  // refetch on snapshot changes (one dep)
+  // refetch on snapshot changes (stable dep)
+  const snapshotKey = useMemo(() => {
+    // Вибери 1 стабільне поле, яке реально міняється при оновленні snapshot.
+    // Якщо у тебе є snapshot.ts / snapshot.updatedAt / snapshot.seq — ідеально.
+    // Фолбек: JSON stringify (гірше, але працює).
+    if (!snapshot) return "";
+    if (typeof (snapshot as any).updatedAt === "number") return String((snapshot as any).updatedAt);
+    if (typeof (snapshot as any).ts === "number") return String((snapshot as any).ts);
+    if (typeof (snapshot as any).seq === "number") return String((snapshot as any).seq);
+    return JSON.stringify(snapshot);
+  }, [snapshot]);
+
   useEffect(() => {
     if (isEditingRef.current) return;
     fetchSignals();
-  }, [snapshot, fetchSignals]);
+  }, [snapshotKey, fetchSignals]);
 
   /* =========================
-     Flash Logic
+    Flash Logic (stable, cleanup-safe)
   ========================= */
+
   const prevRef = useRef<Map<string, number | null>>(new Map());
   const flashRef = useRef<Map<string, "up" | "down">>(new Map());
+  const timersRef = useRef<Map<string, number>>(new Map());
   const [, force] = useState(0);
 
   useEffect(() => {
@@ -2146,27 +2190,39 @@ export default function BridgeArbitrageSignals() {
     const next = new Map<string, number | null>();
     const EPS = 1e-6;
 
-    for (const s of items || []) {
+    for (const s of items ?? []) {
       if (!s?.ticker) continue;
+
       const dir = s.direction;
       if (dir !== "down" && dir !== "up") continue;
 
-      const side = dir === "down" ? "short" : "long";
+      const side: "short" | "long" = dir === "down" ? "short" : "long";
       const key = `${side}::${s.ticker}`;
+
+      // flash metric: choose WHAT you want to compare (sig? zap? sigmaZap?)
       const metric = typeof s.sig === "number" ? s.sig : null;
 
       next.set(key, metric);
 
       const old = prev.get(key);
       if (metric != null && old != null && Math.abs(metric - old) > EPS) {
-        const d = metric > old ? "up" : "down";
+        const d: "up" | "down" = metric > old ? "up" : "down";
         flashRef.current.set(key, d);
-        setTimeout(() => {
+
+        // clear previous timer for this key
+        const oldTimer = timersRef.current.get(key);
+        if (oldTimer) window.clearTimeout(oldTimer);
+
+        const t = window.setTimeout(() => {
+          // only clear if still the same direction
           if (flashRef.current.get(key) === d) {
             flashRef.current.delete(key);
             force((x) => x + 1);
           }
+          timersRef.current.delete(key);
         }, 900);
+
+        timersRef.current.set(key, t);
       }
     }
 
@@ -2174,10 +2230,19 @@ export default function BridgeArbitrageSignals() {
     force((x) => x + 1);
   }, [items]);
 
-  const flashClass = (ticker: string, side: "short" | "long") => {
+  // cleanup flash timers on unmount
+  useEffect(() => {
+    return () => {
+      for (const t of timersRef.current.values()) window.clearTimeout(t);
+      timersRef.current.clear();
+    };
+  }, []);
+
+  const flashClass = useCallback((ticker: string, side: "short" | "long") => {
     const f = flashRef.current.get(`${side}::${ticker}`);
     return f === "up" ? "flashUp" : f === "down" ? "flashDown" : "";
-  };
+  }, []);
+
 
   /* =========================
      Active ticker derived from items
@@ -2427,14 +2492,38 @@ export default function BridgeArbitrageSignals() {
   const bestTotalHard = toNum(bestObj?.hard);
   const bestTotalSoft = toNum(bestObj?.soft);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
+
 
   return (
-    <div className="relative min-h-screen w-full bg-[#030303] text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
+      <div className="relative min-h-screen w-full bg-black text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
+
       {/* Ambient Background */}
-      <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute top-[-10%] left-[20%] w-[600px] h-[600px] bg-emerald-500/[0.05] rounded-full blur-[150px]" />
-        <div className="absolute bottom-[10%] right-[20%] w-[600px] h-[600px] bg-violet-500/[0.05] rounded-full blur-[150px]" />
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03]" />
+      <div className="fixed inset-0 pointer-events-none z-0 bg-black">
+        {/* base subtle noise everywhere (optional, very low) */}
+        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.015]" />
+
+        {/* BOTTOM GREEN GRADIENT (soft, radial) */}
+        <div
+          className="absolute inset-x-0 bottom-0 h-[55vh]"
+          style={{
+            backgroundImage:
+              "radial-gradient(70% 55% at 50% 100%, rgba(16,185,129,0.22) 0%, rgba(16,185,129,0.10) 28%, rgba(16,185,129,0.05) 45%, rgba(0,0,0,0) 70%)",
+            WebkitMaskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
+            maskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
+          }}
+        />
+
+        {/* BOTTOM GRAIN (stronger only at bottom, blended) */}
+        <div
+          className="absolute inset-x-0 bottom-0 h-[55vh] mix-blend-screen"
+          style={{
+            backgroundImage: "url('https://grainy-gradients.vercel.app/noise.svg')",
+            opacity: 0.09,
+            WebkitMaskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
+            maskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
+          }}
+        />
       </div>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-6">
@@ -2469,7 +2558,21 @@ export default function BridgeArbitrageSignals() {
 
           <div className="flex items-center gap-3">
 
+          {/* ========================= MODE + ACTIVE FILTER ========================= */}
+          <div className="flex items-center gap-3">
+            {/* Group 1: MONEY / PAPER / SIGNAL */}
             <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+              {/* MONEY (inactive for now) */}
+              <button
+                type="button"
+                disabled
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase border border-transparent text-zinc-600 bg-transparent cursor-not-allowed"
+                title="MONEY (coming soon)"
+              >
+                MONEY
+              </button>
+
+              {/* PAPER */}
               <Link
                 href="/paper/arbitrage"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
@@ -2478,124 +2581,226 @@ export default function BridgeArbitrageSignals() {
                 PAPER
               </Link>
 
-              <div className="w-px h-5 bg-white/5" />
-
+              {/* SIGNAL (current) */}
               <button
-                onClick={() => setActiveMode((m) => (m === "onlyActive" ? "off" : "onlyActive"))}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+                type="button"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]"
+                title="SIGNAL (current)"
+              >
+                SIGNAL
+              </button>
+            </div>
+
+            {/* Group 2: ACTIVE / INACTIVE / ALL */}
+            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+              <button
+                type="button"
+                onClick={() => setActiveMode("onlyActive")}
+                className={[
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   activeMode === "onlyActive"
                     ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5",
+                ].join(" ")}
                 title="Show only ACTIVE positions (PositionBp != 0)"
               >
                 ACTIVE
               </button>
 
               <button
-                onClick={() => setActiveMode((m) => (m === "onlyInactive" ? "off" : "onlyInactive"))}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
+                type="button"
+                onClick={() => setActiveMode("onlyInactive")}
+                className={[
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   activeMode === "onlyInactive"
                     ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5",
+                ].join(" ")}
                 title="Show only INACTIVE positions (PositionBp == 0)"
               >
                 INACTIVE
               </button>
 
               <button
+                type="button"
                 onClick={() => setActiveMode("off")}
-                className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${
+                className={[
+                  "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   activeMode === "off"
                     ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
-                    : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
-                }`}
-                title="Disable ACTIVE filter"
+                    : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400",
+                ].join(" ")}
+                title="Show ALL positions"
               >
-                OFF
+                ALL
               </button>
             </div>
+          </div>
 
 
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+
+            {/* ========================= LIST MODES + DRAWER TOGGLES (two-click-areas) ========================= */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+                {/* ---------- IGNORE pill ---------- */}
+                <div
+                  className={[
+                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
+                    listMode === "ignore"
+                      ? "border-rose-500/25 bg-rose-500/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  ].join(" ")}
+                >
+                  {/* MODE area */}
+                  <button
+                    type="button"
+                    onClick={setModeIgnore}
+                    className={[
+                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
+                      listMode === "ignore" ? "text-rose-300" : "text-zinc-300",
+                    ].join(" ")}
+                    title="LIST MODE: IGNORE"
+                  >
+                    <span className="tracking-wide">IGN</span>
+                    {ignoreSet.size > 0 && <span className="opacity-70">({ignoreSet.size})</span>}
+                  </button>
+
+                  <div className="w-px bg-white/10" />
+
+                  {/* LIST drawer area */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowIgnore((v) => !v);
+                    }}
+                    className={[
+                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
+                      showIgnore ? "text-violet-300" : "text-zinc-400 hover:text-white",
+                    ].join(" ")}
+                    title={showIgnore ? "Hide IGNORE list" : "Show IGNORE list"}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showIgnore ? "" : "opacity-80"}>
+                      <line x1="8" y1="6" x2="21" y2="6" />
+                      <line x1="8" y1="12" x2="21" y2="12" />
+                      <line x1="8" y1="18" x2="21" y2="18" />
+                      <line x1="3" y1="6" x2="3.01" y2="6" />
+                      <line x1="3" y1="12" x2="3.01" y2="12" />
+                      <line x1="3" y1="18" x2="3.01" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* ---------- APPLY pill ---------- */}
+                <div
+                  className={[
+                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
+                    listMode === "apply"
+                      ? "border-emerald-500/25 bg-emerald-500/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  ].join(" ")}
+                >
+                  {/* MODE area */}
+                  <button
+                    type="button"
+                    onClick={setModeApply}
+                    className={[
+                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
+                      listMode === "apply" ? "text-emerald-300" : "text-zinc-300",
+                    ].join(" ")}
+                    title="LIST MODE: APPLY"
+                  >
+                    <span className="tracking-wide">APP</span>
+                    {applySet.size > 0 && <span className="opacity-70">({applySet.size})</span>}
+                  </button>
+
+                  <div className="w-px bg-white/10" />
+
+                  {/* LIST drawer area */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowApply((v) => !v);
+                    }}
+                    className={[
+                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
+                      showApply ? "text-violet-300" : "text-zinc-400 hover:text-white",
+                    ].join(" ")}
+                    title={showApply ? "Hide APPLY list" : "Show APPLY list"}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showApply ? "" : "opacity-80"}>
+                      <line x1="8" y1="6" x2="21" y2="6" />
+                      <line x1="8" y1="12" x2="21" y2="12" />
+                      <line x1="8" y1="18" x2="21" y2="18" />
+                      <line x1="3" y1="6" x2="3.01" y2="6" />
+                      <line x1="3" y1="12" x2="3.01" y2="12" />
+                      <line x1="3" y1="18" x2="3.01" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* ---------- PIN pill ---------- */}
+                <div
+                  className={[
+                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
+                    listMode === "pin"
+                      ? "border-cyan-500/25 bg-cyan-500/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  ].join(" ")}
+                >
+                  {/* MODE area */}
+                  <button
+                    type="button"
+                    onClick={setModePin}
+                    className={[
+                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
+                      listMode === "pin" ? "text-cyan-200" : "text-zinc-300",
+                    ].join(" ")}
+                    title="LIST MODE: PIN"
+                  >
+                    <span className="tracking-wide">PIN</span>
+                    {Object.keys(pinMap).length > 0 && <span className="opacity-70">({Object.keys(pinMap).length})</span>}
+                  </button>
+
+                  <div className="w-px bg-white/10" />
+
+                  {/* LIST drawer area */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPin((v) => !v);
+                    }}
+                    className={[
+                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
+                      showPin ? "text-violet-300" : "text-zinc-400 hover:text-white",
+                    ].join(" ")}
+                    title={showPin ? "Hide PIN list" : "Show PIN list"}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showPin ? "" : "opacity-80"}>
+                      <line x1="8" y1="6" x2="21" y2="6" />
+                      <line x1="8" y1="12" x2="21" y2="12" />
+                      <line x1="8" y1="18" x2="21" y2="18" />
+                      <line x1="3" y1="6" x2="3.01" y2="6" />
+                      <line x1="3" y1="12" x2="3.01" y2="12" />
+                      <line x1="3" y1="18" x2="3.01" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* REFRESH */}
               <button
-                onClick={setModeIgnore}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
-                  listMode === "ignore"
-                    ? "bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-[0_0_10px_-3px_rgba(244,63,94,0.2)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
-              >
-                IGNORE {ignoreSet.size > 0 && <span className="ml-1 opacity-70">({ignoreSet.size})</span>}
-              </button>
-
-              <button
-                onClick={setModeApply}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
-                  listMode === "apply"
-                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
-              >
-                APPLY {applySet.size > 0 && <span className="ml-1 opacity-70">({applySet.size})</span>}
-              </button>
-
-              <button
-                onClick={setModePin}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border ${
-                  listMode === "pin"
-                    ? "bg-cyan-500/10 text-cyan-300 border-cyan-500/20 shadow-[0_0_10px_-3px_rgba(34,211,238,0.2)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                }`}
-              >
-                PIN {Object.keys(pinMap).length > 0 && <span className="ml-1 opacity-70">({Object.keys(pinMap).length})</span>}
-              </button>
-
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowIgnore(!showIgnore)}
-                className={`px-3 py-2 rounded-lg border transition-all text-xs font-mono ${
-                  showIgnore ? "bg-violet-500/10 border-violet-500/30 text-violet-300" : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
-                }`}
-              >
-                IG LIST
-              </button>
-              <button
-                onClick={() => setShowApply(!showApply)}
-                className={`px-3 py-2 rounded-lg border transition-all text-xs font-mono flex items-center gap-2 ${
-                  showApply ? "bg-violet-500/10 border-violet-500/30 text-violet-300" : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
-                }`}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="8" y1="6" x2="21" y2="6"></line>
-                  <line x1="8" y1="12" x2="21" y2="12"></line>
-                  <line x1="8" y1="18" x2="21" y2="18"></line>
-                  <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                  <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                  <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                </svg>
-                AP LIST
-              </button>
-
-              <button
-                onClick={() => setShowPin(!showPin)}
-                className={`px-3 py-2 rounded-lg border transition-all text-xs font-mono ${
-                  showPin ? "bg-violet-500/10 border-violet-500/30 text-violet-300" : "bg-[#0a0a0a]/40 border-white/10 text-zinc-400 hover:text-white"
-                }`}
-              >
-                PIN LIST
-              </button>
-
-              <button
+                type="button"
                 onClick={fetchSignals}
                 className="w-9 h-9 flex items-center justify-center rounded-lg border border-emerald-500/50 bg-[#0a0a0a]/40 text-emerald-500 hover:bg-emerald-500/10 transition-all active:scale-95 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
+                title="Refresh"
               >
                 <span className={`text-lg leading-none ${loading ? "animate-spin" : ""}`}>↻</span>
               </button>
             </div>
+
           </div>
         </header>
 
@@ -2603,7 +2808,12 @@ export default function BridgeArbitrageSignals() {
         <div className="flex flex-wrap gap-4 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
           <div className="flex gap-2">
             {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
-              <FilterButton key={c} active={cls === c} label={c === "global" ? "GLOB" : c.toUpperCase()} onClick={() => setCls(c)} />
+              <FilterButton
+                key={c}
+                active={cls === c}
+                label={c === "global" ? "GLOB" : c.toUpperCase()}
+                onClick={() => setCls(c)}
+              />
             ))}
           </div>
 
@@ -2624,7 +2834,8 @@ export default function BridgeArbitrageSignals() {
 
           <div className="flex-1" />
 
-          <div className="flex gap-2">
+          {/* RIGHT GROUP */}
+          <div className="flex gap-2 items-center">
             {fields.map((f) => (
               <div key={f.label} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
                 <span className="text-[10px] font-mono text-zinc-500 uppercase">{f.label}</span>
@@ -2648,31 +2859,75 @@ export default function BridgeArbitrageSignals() {
                 />
               </div>
             ))}
+
+            {/* COLLAPSE BUTTON — MUST BE LAST (after OFFSET) */}
+              <button
+                onClick={() => setFiltersCollapsed(!filtersCollapsed)}
+                className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
+                title={filtersCollapsed ? "Show Filters" : "Collapse Filters"}
+              >
+                {filtersCollapsed ? (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="group-hover:text-rose-400 transition-colors"
+                  >
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                  </svg>
+                )}
+              </button>
+
           </div>
         </div>
 
         {/* ========================= THRESHOLDS GRID ========================= */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-          <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="ADV90" min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="ADV90NF" min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="AvPreMhv" min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="RoundLot" min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="VWAP" min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="Spread" min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="LstPrcL" min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
+        {!filtersCollapsed && (
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
+            <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90" min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90NF" min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhv" min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="RoundLot" min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VWAP" min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Spread" min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcL" min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
-          <MinMax label="LstCls" min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="YCls" min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="TCls" min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="ClsToCls%" min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="Lo" min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
-          <MinMax label="VolNFfromLstCls" min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-        </div>
+            <MinMax label="LstCls" min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="YCls" min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="TCls" min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ClsToCls%" min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Lo" min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolNFfromLstCls" min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+          </div>
+        )}
+
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
         <div className="flex flex-wrap gap-3 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
@@ -3328,42 +3583,49 @@ export default function BridgeArbitrageSignals() {
 
                           <div className="p-2 grid grid-cols-2 gap-2">
                             <div className="flex flex-col gap-2">
-                              {(g.rows.slice(0, rowsToShow).map((row) => row.short).filter(Boolean) as ArbitrageSignal[]).map((s) => (
+                              {(g.rows
+                                .slice(0, rowsToShow)
+                                .map((r) => r.short)
+                                .filter(Boolean) as ArbitrageSignal[]
+                              ).map((s) => (
                                 <SignalCard
-                                  key={`S:${s.ticker}`}
+                                  key={`S-${s.ticker}`}
                                   s={s}
                                   side="short"
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
                                   zapMode={zapMode}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                  zapGoldAbs={zapGoldAbs}
+                                  zapShowAbs={zapShowAbs}
                                   zapSilverAbs={zapSilverAbs}
+                                  zapGoldAbs={zapGoldAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
                                 />
                               ))}
                             </div>
 
                             <div className="flex flex-col gap-2">
-                              {(g.rows.slice(0, rowsToShow).map((row) => row.long).filter(Boolean) as ArbitrageSignal[]).map((s) => (
-                                  <SignalCard
-                                  key={`L:${s.ticker}`}
+                              {(g.rows
+                                .slice(0, rowsToShow)
+                                .map((r) => r.long)
+                                .filter(Boolean) as ArbitrageSignal[]
+                              ).map((s) => (
+                                <SignalCard
+                                  key={`L-${s.ticker}`}
                                   s={s}
                                   side="long"
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
                                   zapMode={zapMode}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                  zapGoldAbs={zapGoldAbs}
+                                  zapShowAbs={zapShowAbs}
                                   zapSilverAbs={zapSilverAbs}
-
+                                  zapGoldAbs={zapGoldAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
                                 />
-
-                                ))}
+                              ))}
                             </div>
                           </div>
-
                           {g.rows.length > 10 && (
                             <button
                               onClick={() => toggleBucket(g.id)}
