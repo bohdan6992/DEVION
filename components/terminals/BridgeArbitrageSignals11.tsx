@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 
@@ -1772,215 +1772,67 @@ export default function BridgeArbitrageSignals() {
   /* =========================
      UI State (cls/type/mode/listMode/bpCls/zapMode)
   ========================= */
-  // --- Persistence (load before first paint; avoid overwriting stored state with defaults) ---
-  const uiHydratedRef = useRef(false);
-  const uiRestoringRef = useRef(false);
-
-  useLayoutEffect(() => {
-    uiRestoringRef.current = true;
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(UI_STATE_LS_KEY);
-      if (raw) {
-        const s = JSON.parse(raw);
+      if (!raw) return;
+      const s = JSON.parse(raw);
 
-        // core
-        if (typeof s?.cls === "string") setCls(s.cls);
-        if (typeof s?.type === "string") setType(s.type);
-        if (typeof s?.mode === "string") setMode(s.mode);
-        if (typeof s?.listMode === "string") setListMode(s.listMode);
-        if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
+      if (typeof s?.cls === "string") setCls(s.cls);
+      if (typeof s?.type === "string") setType(s.type);
+      if (typeof s?.mode === "string") setMode(s.mode);
+      if (typeof s?.listMode === "string") setListMode(s.listMode);
+      if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
+      if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
+      if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
+      if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
-        // zap/sort
-        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") setZapMode(s.zapMode);
-        if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
-        if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
-        if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
-        if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
-        if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
-        if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
-
-        // query params
-        if (typeof s?.minRate === "number") setMinRate(s.minRate);
-        if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
-        if (typeof s?.limit === "number") setLimit(s.limit);
-        if (typeof s?.offset === "number") setOffset(s.offset);
-        if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
-        if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
-
-        // toggles
-        for (const k of [
-          'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
-          'includeUSA','includeChina',
-        ] as const) {
-          if (typeof s?.[k] === 'boolean') {
-            const v = s[k];
-            switch(k){
-              case 'excludeDividend': setExcludeDividend(v); break;
-              case 'excludeNews': setExcludeNews(v); break;
-              case 'excludePTP': setExcludePTP(v); break;
-              case 'excludeSSR': setExcludeSSR(v); break;
-              case 'excludeReport': setExcludeReport(v); break;
-              case 'excludeETF': setExcludeETF(v); break;
-              case 'excludeCrap': setExcludeCrap(v); break;
-              case 'includeUSA': setIncludeUSA(v); break;
-              case 'includeChina': setIncludeChina(v); break;
-            }
-          }
-        }
-        if (typeof s?.filterReport === 'string') setFilterReport(s.filterReport);
-        if (typeof s?.equityType === 'string') setEquityType(s.equityType);
-
-        // corr
-        if (typeof s?.corrEnabled === 'boolean') setCorrEnabled(s.corrEnabled);
-        if (typeof s?.corrAbs === 'number') setCorrAbs(s.corrAbs);
-
-        // multi-select
-        if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled);
-        if (Array.isArray(s?.selCountries)) setSelCountries(new Set(s.selCountries.filter(Boolean)));
-        if (typeof s?.exchangeEnabled === 'boolean') setExchangeEnabled(s.exchangeEnabled);
-        if (Array.isArray(s?.selExchanges)) setSelExchanges(new Set(s.selExchanges.filter(Boolean)));
-        if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled);
-        if (Array.isArray(s?.selSectors)) setSelSectors(new Set(s.selSectors.filter(Boolean)));
-
-        // bounds (strings)
-        for (const key of [
-          'adv20Min','adv20Max','adv20NFMin','adv20NFMax','adv90Min','adv90Max','adv90NFMin','adv90NFMax',
-          'avPreMhvMin','avPreMhvMax','roundLotMin','roundLotMax','vwapMin','vwapMax','spreadMin','spreadMax',
-          'lstPrcLMin','lstPrcLMax','lstClsMin','lstClsMax','yClsMin','yClsMax','tClsMin','tClsMax',
-          'clsToClsPctMin','clsToClsPctMax','loMin','loMax','lstClsNewsCntMin','lstClsNewsCntMax',
-          'marketCapMMin','marketCapMMax','preMhVolNFMin','preMhVolNFMax','volNFfromLstClsMin','volNFfromLstClsMax',
-        ] as const) {
-          if (typeof s?.[key] === 'string') {
-            const v = s[key];
-            switch(key){
-              case 'adv20Min': setAdv20Min(v); break;
-              case 'adv20Max': setAdv20Max(v); break;
-              case 'adv20NFMin': setAdv20NFMin(v); break;
-              case 'adv20NFMax': setAdv20NFMax(v); break;
-              case 'adv90Min': setAdv90Min(v); break;
-              case 'adv90Max': setAdv90Max(v); break;
-              case 'adv90NFMin': setAdv90NFMin(v); break;
-              case 'adv90NFMax': setAdv90NFMax(v); break;
-              case 'avPreMhvMin': setAvPreMhvMin(v); break;
-              case 'avPreMhvMax': setAvPreMhvMax(v); break;
-              case 'roundLotMin': setRoundLotMin(v); break;
-              case 'roundLotMax': setRoundLotMax(v); break;
-              case 'vwapMin': setVwapMin(v); break;
-              case 'vwapMax': setVwapMax(v); break;
-              case 'spreadMin': setSpreadMin(v); break;
-              case 'spreadMax': setSpreadMax(v); break;
-              case 'lstPrcLMin': setLstPrcLMin(v); break;
-              case 'lstPrcLMax': setLstPrcLMax(v); break;
-              case 'lstClsMin': setLstClsMin(v); break;
-              case 'lstClsMax': setLstClsMax(v); break;
-              case 'yClsMin': setYClsMin(v); break;
-              case 'yClsMax': setYClsMax(v); break;
-              case 'tClsMin': setTClsMin(v); break;
-              case 'tClsMax': setTClsMax(v); break;
-              case 'clsToClsPctMin': setClsToClsPctMin(v); break;
-              case 'clsToClsPctMax': setClsToClsPctMax(v); break;
-              case 'loMin': setLoMin(v); break;
-              case 'loMax': setLoMax(v); break;
-              case 'lstClsNewsCntMin': setLstClsNewsCntMin(v); break;
-              case 'lstClsNewsCntMax': setLstClsNewsCntMax(v); break;
-              case 'marketCapMMin': setMarketCapMMin(v); break;
-              case 'marketCapMMax': setMarketCapMMax(v); break;
-              case 'preMhVolNFMin': setPreMhVolNFMin(v); break;
-              case 'preMhVolNFMax': setPreMhVolNFMax(v); break;
-              case 'volNFfromLstClsMin': setVolNFfromLstClsMin(v); break;
-              case 'volNFfromLstClsMax': setVolNFfromLstClsMax(v); break;
-            }
-          }
-        }
+      if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") {
+        setZapMode(s.zapMode);
       }
-    } catch {}
 
-    uiHydratedRef.current = true;
-    // allow saves on next tick (after state settles)
-    queueMicrotask(() => { uiRestoringRef.current = false; });
+      if (s?.sortKey) setSortKey(s.sortKey);
+      if (s?.sortDir) setSortDir(s.sortDir);
+
+
+      if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") {
+  setActiveMode(s.activeMode);
+}
+
+    } catch {}
   }, []);
 
   useEffect(() => {
-    if (!uiHydratedRef.current) return;
-    if (uiRestoringRef.current) return;
     try {
       localStorage.setItem(
         UI_STATE_LS_KEY,
         JSON.stringify({
-          // core
-          cls, type, mode, listMode, bpCls,
+          cls,
+          type,
+          mode,
+          listMode,
+          bpCls,
 
-          // zap/sort
-          zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+          zapMode,
+          activeMode,
+          sortKey,
+          sortDir,
+          zapShowAbs,
+          zapSilverAbs,
+          zapGoldAbs,
 
-          // query params
-          minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst,
 
-          // toggles
-          excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-          includeUSA, includeChina,
-          filterReport, equityType,
-
-          // corr
-          corrEnabled, corrAbs,
-
-          // multi-select
-          countryEnabled, selCountries: Array.from(selCountries),
-          exchangeEnabled, selExchanges: Array.from(selExchanges),
-          sectorEnabled, selSectors: Array.from(selSectors),
-
-          // bounds
-          adv20Min, adv20Max,
-          adv20NFMin, adv20NFMax,
-          adv90Min, adv90Max,
-          adv90NFMin, adv90NFMax,
-          avPreMhvMin, avPreMhvMax,
-          roundLotMin, roundLotMax,
-          vwapMin, vwapMax,
-          spreadMin, spreadMax,
-          lstPrcLMin, lstPrcLMax,
-          lstClsMin, lstClsMax,
-          yClsMin, yClsMax,
-          tClsMin, tClsMax,
-          clsToClsPctMin, clsToClsPctMax,
-          loMin, loMax,
-          lstClsNewsCntMin, lstClsNewsCntMax,
-          marketCapMMin, marketCapMMax,
-          preMhVolNFMin, preMhVolNFMax,
-          volNFfromLstClsMin, volNFfromLstClsMax,
         })
+
       );
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
-    minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst,
-    excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    includeUSA, includeChina,
-    filterReport, equityType,
-    corrEnabled, corrAbs,
-    countryEnabled, selCountries,
-    exchangeEnabled, selExchanges,
-    sectorEnabled, selSectors,
-    adv20Min, adv20Max,
-    adv20NFMin, adv20NFMax,
-    adv90Min, adv90Max,
-    adv90NFMin, adv90NFMax,
-    avPreMhvMin, avPreMhvMax,
-    roundLotMin, roundLotMax,
-    vwapMin, vwapMax,
-    spreadMin, spreadMax,
-    lstPrcLMin, lstPrcLMax,
-    lstClsMin, lstClsMax,
-    yClsMin, yClsMax,
-    tClsMin, tClsMax,
-    clsToClsPctMin, clsToClsPctMax,
-    loMin, loMax,
-    lstClsNewsCntMin, lstClsNewsCntMax,
-    marketCapMMin, marketCapMMax,
-    preMhVolNFMin, preMhVolNFMax,
-    volNFfromLstClsMin, volNFfromLstClsMax,
+    zapMode, activeMode, zapShowAbs, zapSilverAbs, zapGoldAbs,
+    sortKey, sortDir, // ✅ ДОДАТИ
   ]);
+
+
 
   /* =========================
      Snapshot (single source of truth for fetching/filtering)
@@ -2315,34 +2167,16 @@ export default function BridgeArbitrageSignals() {
 
   // refetch on snapshot changes (stable dep)
   const snapshotKey = useMemo(() => {
-    // Prefer a single stable field if present.
+    // Вибери 1 стабільне поле, яке реально міняється при оновленні snapshot.
+    // Якщо у тебе є snapshot.ts / snapshot.updatedAt / snapshot.seq — ідеально.
+    // Фолбек: JSON stringify (гірше, але працює).
     if (!snapshot) return "";
-    const s: any = snapshot as any;
-
-    const v = s.updatedAt ?? s.ts ?? s.seq ?? s.version;
-    if (typeof v === "number" || typeof v === "string") return String(v);
-
-    // Fallback: cheap shallow signature (avoids JSON.stringify on large snapshots)
-    try {
-      const keys = Object.keys(s).sort();
-      const parts: string[] = [];
-      const cap = 40;
-
-      for (let i = 0; i < keys.length && i < cap; i++) {
-        const k = keys[i];
-        const val = s[k];
-        if (val == null) parts.push(k);
-        else if (typeof val === "number" || typeof val === "string" || typeof val === "boolean") parts.push(`${k}:${val}`);
-        else if (Array.isArray(val)) parts.push(`${k}[${val.length}]`);
-        else parts.push(`${k}{}`);
-      }
-
-      parts.push(`k:${keys.length}`);
-      return parts.join("|");
-    } catch {
-      return "snapshot";
-    }
+    if (typeof (snapshot as any).updatedAt === "number") return String((snapshot as any).updatedAt);
+    if (typeof (snapshot as any).ts === "number") return String((snapshot as any).ts);
+    if (typeof (snapshot as any).seq === "number") return String((snapshot as any).seq);
+    return JSON.stringify(snapshot);
   }, [snapshot]);
+
   useEffect(() => {
     if (isEditingRef.current) return;
     fetchSignals();
@@ -2502,19 +2336,13 @@ export default function BridgeArbitrageSignals() {
     Grouping (+ account sorting toggle + turquoise sort + pins)
   ========================= */
   const benchBlocks: BenchBlock[] = useMemo(() => {
-    const bucketMap = new Map<
-      string,
-      { benchmark: string; betaKey: BetaKey; shorts: ArbitrageSignal[]; longs: ArbitrageSignal[] }
-    >();
+    const bucketMap = new Map<string, any>();
 
-    const isPinned = (tk: string) => !!pinMap[tk]; // pinMap is Record
+    const isPinned = (tk: string) => !!pinMap[tk]; // ✅ pinMap is Record, not Map
 
     const cmpAccountThenTicker = makeCmpAccountThenTicker(accountNonEmptyFirst);
 
-    // Precompute expensive sort metrics once per item (instead of per comparator call in Array.sort).
-    const metricMap = new Map<string, number>(); // key: `${ticker}|${direction}`
-
-    const computeMetric = (s: ArbitrageSignal): number => {
+    const getMetric = (s: ArbitrageSignal): number => {
       switch (sortKey) {
         case "sigma":
           return Math.abs(toNum(s.sig) ?? 0);
@@ -2532,7 +2360,7 @@ export default function BridgeArbitrageSignals() {
         }
 
         case "rate":
-          return getBestRating(s) ?? -Infinity;
+          return getBestRating(s) ?? (s as any)._bestRating ?? -Infinity;
 
         case "posBpAbs": {
           const v = numPositionBp(s);
@@ -2551,71 +2379,66 @@ export default function BridgeArbitrageSignals() {
       }
     };
 
+    const cmpSort = (a: ArbitrageSignal, b: ArbitrageSignal) => {
+      const ta = normalizeTicker(a?.ticker ?? "") ?? "";
+      const tb = normalizeTicker(b?.ticker ?? "") ?? "";
+
+      // 1) PINS ALWAYS FIRST
+      const pa = isPinned(ta) ? 1 : 0;
+      const pb = isPinned(tb) ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+
+      // 2) SORT KEY
+      if (sortKey === "pin") {
+        // after pin grouping, default to account/ticker
+        return cmpAccountThenTicker(a, b);
+      }
+
+      if (sortKey === "alpha") {
+        // ✅ alphabetical A→Z (as your UI says)
+        // keep account toggle behavior as you had it
+        return cmpAccountThenTicker(a, b);
+      }
+
+      const ma = getMetric(a);
+      const mb = getMetric(b);
+
+      if (ma !== mb) {
+        return sortDir === "asc" ? ma - mb : mb - ma;
+      }
+
+      // 3) tie-breaker (existing behavior)
+      return cmpAccountThenTicker(a, b);
+    };
+
+    // --- build bucket map ---
     for (const s of items || []) {
-      const dir = s.direction;
-      if (dir !== "down" && dir !== "up") continue;
-
-      const tk = String(s.ticker ?? "").toUpperCase();
-      if (!tk) continue;
-
-      // compute metric once per (ticker,direction)
-      metricMap.set(`${tk}|${dir}`, computeMetric(s));
+      const direction = s.direction;
+      if (direction !== "down" && direction !== "up") continue;
 
       const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
       const betaVal = getBetaValue(s);
       const betaKey = parseBetaKey(betaVal);
 
       const bucketId = `${benchmark}__${betaKey}`;
-      let b = bucketMap.get(bucketId);
-      if (!b) {
-        b = { benchmark, betaKey, shorts: [], longs: [] };
-        bucketMap.set(bucketId, b);
-      }
+      if (!bucketMap.has(bucketId)) bucketMap.set(bucketId, { benchmark, betaKey, shorts: [], longs: [] });
 
-      if (dir === "down") b.shorts.push(s);
+      const b = bucketMap.get(bucketId);
+      if (direction === "down") b.shorts.push(s);
       else b.longs.push(s);
     }
 
-    const cmpSort = (a: ArbitrageSignal, b: ArbitrageSignal) => {
-      const ta = String(a.ticker ?? "").toUpperCase();
-      const tb = String(b.ticker ?? "").toUpperCase();
-
-      // 1) pinned first
-      const pa = isPinned(ta) ? 1 : 0;
-      const pb = isPinned(tb) ? 1 : 0;
-      if (pa !== pb) return pb - pa;
-
-      // 2) special modes keep old behavior
-      if (sortKey === "pin" || sortKey === "alpha") {
-        return cmpAccountThenTicker(a, b);
-      }
-
-      const ma = metricMap.get(`${ta}|${a.direction}`) ?? -Infinity;
-      const mb = metricMap.get(`${tb}|${b.direction}`) ?? -Infinity;
-
-      if (ma !== mb) return sortDir === "asc" ? ma - mb : mb - ma;
-
-      // 3) tie-breaker
-      return cmpAccountThenTicker(a, b);
-    };
-
-    // regroup to BenchBlock[]
+    // --- regroup to bench blocks ---
     const benchMap = new Map<string, BucketGroup[]>();
-
     for (const [, b] of bucketMap.entries()) {
       b.shorts.sort(cmpSort);
       b.longs.sort(cmpSort);
 
       const n = Math.max(b.shorts.length, b.longs.length);
-      const rows: RowPair[] = new Array(n);
-      for (let i = 0; i < n; i++) rows[i] = { short: b.shorts[i], long: b.longs[i] };
+      const rows: RowPair[] = [];
+      for (let i = 0; i < n; i++) rows.push({ short: b.shorts[i], long: b.longs[i] });
 
-      const group: BucketGroup = {
-        id: `${b.benchmark}__${b.betaKey}`,
-        benchmark: b.benchmark,
-        betaKey: b.betaKey,
-        rows,
-      };
+      const group: BucketGroup = { id: `${b.benchmark}__${b.betaKey}`, benchmark: b.benchmark, betaKey: b.betaKey, rows };
 
       const list = benchMap.get(b.benchmark) ?? [];
       list.push(group);
@@ -3197,7 +3020,47 @@ export default function BridgeArbitrageSignals() {
             />
           </div>
 
-          <div className="flex-1" />          
+          <div className="flex-1" />
+
+          {/* CORR (pink group; button + threshold input) */}
+          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-pink-500/30 bg-pink-500/10">
+            <button
+              type="button"
+              onClick={() => setCorrEnabled((v) => !v)}
+              className={[
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                corrEnabled
+                  ? "bg-pink-500/25 border-pink-500/45 text-pink-100 shadow-[0_0_14px_rgba(236,72,153,0.35)]"
+                  : "bg-transparent border-transparent text-pink-300/70 hover:bg-pink-500/10 hover:text-pink-200",
+              ].join(" ")}
+              title="Toggle correlation hide filter"
+            >
+              CORR
+            </button>
+              <input
+                type="number"
+                step={0.05}
+                min={0.5}
+                max={1.0}
+                value={corrAbs}
+                disabled={!corrEnabled}
+                onChange={(e) => {
+                  const raw = parseFloat(e.target.value);
+                  const v = Number.isFinite(raw) ? raw : 0.5;
+                  const clamped = Math.min(1.0, Math.max(0.5, v));
+                  setCorrAbs(clamped);
+                }}
+                className={[
+                  "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                  corrEnabled ? "border-pink-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+                ].join(" ")}
+                title="Threshold in [0.5..1.0] for |corr|"
+              />
+
+          </div>
+
+
+          
 
           {/* SORT (blue group; MSF-like control; one toggle button; no "SORT" label) */}
           <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-sky-900/30 bg-sky-900/10">
@@ -3244,41 +3107,7 @@ export default function BridgeArbitrageSignals() {
             </button>
           </div>
 
-          {/* CORR (pink group; button + threshold input) */}
-          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-pink-500/30 bg-pink-500/10">
-            <button
-              type="button"
-              onClick={() => setCorrEnabled((v) => !v)}
-              className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                corrEnabled
-                  ? "bg-pink-500/25 border-pink-500/45 text-pink-100 shadow-[0_0_14px_rgba(236,72,153,0.35)]"
-                  : "bg-transparent border-transparent text-pink-300/70 hover:bg-pink-500/10 hover:text-pink-200",
-              ].join(" ")}
-              title="Toggle correlation hide filter"
-            >
-              CORR
-            </button>
-              <input
-                type="number"
-                step={0.05}
-                min={0.5}
-                max={1.0}
-                value={corrAbs}
-                disabled={!corrEnabled}
-                onChange={(e) => {
-                  const raw = parseFloat(e.target.value);
-                  const v = Number.isFinite(raw) ? raw : 0.5;
-                  const clamped = Math.min(1.0, Math.max(0.5, v));
-                  setCorrAbs(clamped);
-                }}
-                className={[
-                  "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                  corrEnabled ? "border-pink-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-                ].join(" ")}
-                title="Threshold in [0.5..1.0] for |corr|"
-              />
-          </div>
+
 
 
           {/* ZAP FILTERS */}
