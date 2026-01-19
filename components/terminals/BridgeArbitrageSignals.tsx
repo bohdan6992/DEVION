@@ -722,6 +722,9 @@ const MultiSelectFilter = ({
     setSelected(next);
   };
 
+
+
+
   const recomputePos = () => {
     const el = wrapRef.current;
     if (!el) return;
@@ -1370,6 +1373,9 @@ export default function BridgeArbitrageSignals() {
   const [cls, setCls] = useState<ArbClass>("global");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
+  const [corrEnabled, setCorrEnabled] = useState(false);
+  const [corrAbs, setCorrAbs] = useState(0.5);
+
 
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
@@ -3015,6 +3021,46 @@ export default function BridgeArbitrageSignals() {
           </div>
 
           <div className="flex-1" />
+
+          {/* CORR (pink group; button + threshold input) */}
+          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-pink-500/30 bg-pink-500/10">
+            <button
+              type="button"
+              onClick={() => setCorrEnabled((v) => !v)}
+              className={[
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                corrEnabled
+                  ? "bg-pink-500/25 border-pink-500/45 text-pink-100 shadow-[0_0_14px_rgba(236,72,153,0.35)]"
+                  : "bg-transparent border-transparent text-pink-300/70 hover:bg-pink-500/10 hover:text-pink-200",
+              ].join(" ")}
+              title="Toggle correlation hide filter"
+            >
+              CORR
+            </button>
+              <input
+                type="number"
+                step={0.05}
+                min={0.5}
+                max={1.0}
+                value={corrAbs}
+                disabled={!corrEnabled}
+                onChange={(e) => {
+                  const raw = parseFloat(e.target.value);
+                  const v = Number.isFinite(raw) ? raw : 0.5;
+                  const clamped = Math.min(1.0, Math.max(0.5, v));
+                  setCorrAbs(clamped);
+                }}
+                className={[
+                  "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
+                  corrEnabled ? "border-pink-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
+                ].join(" ")}
+                title="Threshold in [0.5..1.0] for |corr|"
+              />
+
+          </div>
+
+
+          
 
           {/* SORT (blue group; MSF-like control; one toggle button; no "SORT" label) */}
           <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-sky-900/30 bg-sky-900/10">
