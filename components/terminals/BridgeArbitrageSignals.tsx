@@ -143,10 +143,6 @@ const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
-// Terminal-ish monospace stack (keeps UI looking like a trading terminal without requiring external font loading)
-const TERMINAL_FONT_STACK =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-
 const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
 const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
 const PIN_LS_KEY = "bridge.arb.pinTickers.v1";
@@ -1261,74 +1257,84 @@ const getBetaFallback1 = (s: any) => {
 
 const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   const map = new Map<string, HedgeInfo>();
-  const groups = new Map<string, ArbitrageSignal[]>();
 
-  // PositionBp is always positive; direction for position is encoded as s.direction === "short" (per UI table).
-  // Long is default for any other value (including empty).
-  const dirSign = (s: any) => {
+  // Hedge logic (per your contract):
+  // - Consider ONLY active positions (PositionBp != 0)
+  // - PositionBp is always positive
+  // - Direction defines the side:
+  //     direction: "short" => BUY bucket
+  //     direction: "long"  => SELL bucket
+  //     unknown => ignore
+  // - Per ticker hedge (bp): hedge = PositionBp * beta
+  // - Per benchmark (ETF) group:
+  //     buySum  = Σ hedge for short positions
+  //     sellSum = Σ hedge for long positions
+  //     needBp  = buySum - sellSum
+  //       needBp > 0 => BUY hedge (green/right)
+  //       needBp < 0 => SELL hedge (red/left)
+
+  const dirBucket = (s: any): "buy" | "sell" | null => {
     const d = String(s?.direction ?? getMeta(s)?.direction ?? "").trim().toLowerCase();
-    return d === "short" ? -1 : 1;
+    if (d === "short") return "buy";
+    if (d === "long") return "sell";
+    return null; // unknown => ignore
   };
+
+  // Deduplicate positions inside each bench group, because the feed can contain many signal rows
+  // for the same ticker (different buckets/classes). PositionBp represents the *position*.
+  // We keep the row with the largest PositionBp for each (bench, ticker).
+  const byBenchTicker = new Map<string, any>(); // key = bench::ticker
 
   for (const s of arr ?? []) {
     const bench = getBenchmarkKey(s);
-    if (!bench) continue;
-    const list = groups.get(bench) ?? [];
-    list.push(s);
-    groups.set(bench, list);
+    if (!bench || bench === "UNKNOWN") continue;
+
+    const tk = String(s?.ticker ?? "").toUpperCase();
+    if (!tk) continue;
+
+    // Ignore the ETF row itself in the hedge need calculation.
+    if (tk === bench) continue;
+
+    const bucket = dirBucket(s);
+    if (!bucket) continue; // unknown direction => ignore
+
+    const pos = numPositionBp(s);
+    if (pos == null || pos === 0) continue; // ACTIVE only
+
+    const key = `${bench}::${tk}`;
+    const prev = byBenchTicker.get(key);
+    const prevPos = prev ? (numPositionBp(prev) ?? 0) : 0;
+    if (!prev || pos > prevPos) byBenchTicker.set(key, s);
   }
 
-  for (const [bench, list] of groups.entries()) {
-    // IMPORTANT: signals can contain multiple rows per ticker (different buckets/classes),
-    // but PositionBp represents the *position* and must be counted only once per ticker/account.
-    // Otherwise hedge can be massively overstated.
+  // Aggregate buy/sell per bench
+  const sums = new Map<string, { buySum: number; sellSum: number }>();
 
-    // ETF current hedge position (bench ticker), if present
-    let currentSigned = 0;
+  for (const s of byBenchTicker.values()) {
+    const bench = getBenchmarkKey(s);
+    const bucket = dirBucket(s);
+    if (!bench || !bucket) continue;
 
-    // Deduplicate stock positions by (account, ticker)
-    const posByKey = new Map<string, { pos: number; sign: number; beta: number }>();
+    const pos = numPositionBp(s);
+    if (pos == null || pos === 0) continue;
 
-    for (const s of list) {
-      const tk = String(s?.ticker ?? "").toUpperCase();
-      const pos = numPositionBp(s);
-      if (pos == null || pos === 0) continue; // ACTIVE only (PositionBp != 0)
+    const beta = getBetaFallback1(s);
+    const h = pos * beta;
 
-      const sign = dirSign(s);
+    const cur = sums.get(bench) ?? { buySum: 0, sellSum: 0 };
+    if (bucket === "buy") cur.buySum += h;
+    else cur.sellSum += h;
+    sums.set(bench, cur);
+  }
 
-      // ETF row: current hedge position (signed by direction)
-      if (isEtfRow(s, bench) || tk === bench) {
-        // If multiple rows exist, keep the largest absolute position (most reliable)
-        const cand = sign * pos;
-        if (Math.abs(cand) > Math.abs(currentSigned)) currentSigned = cand;
-        continue;
-      }
-
-      const beta = getBetaFallback1(s);
-      const acct = String(s?.account ?? s?.Account ?? "").toUpperCase();
-      const key = `${acct}::${tk}`;
-
-      const prev = posByKey.get(key);
-      if (!prev || pos > prev.pos) {
-        // If duplicates exist, prefer the row with the largest PositionBp
-        // (since PositionBp is always positive in your feed).
-        posByKey.set(key, { pos, sign, beta });
-      }
-    }
-
-    // Σ(sign * PositionBp * beta) for unique stock positions in this benchmark group
-    let stockSignedHedge = 0;
-    for (const p of posByKey.values()) {
-      stockSignedHedge += p.sign * p.pos * p.beta;
-    }
-
-    // Target hedge for the ETF is the negative of the net signed stock hedge.
-    const target = -stockSignedHedge;
-
-    // How much to trade the ETF hedge (positive => BUY, negative => SELL)
-    const need = target - currentSigned;
-
-    map.set(bench, { benchmark: bench, targetBp: target, currentBp: currentSigned, needBp: need });
+  for (const [bench, v] of sums.entries()) {
+    const need = v.buySum - v.sellSum;
+    map.set(bench, {
+      benchmark: bench,
+      targetBp: need, // kept for compatibility (header currently shows need only)
+      currentBp: 0,
+      needBp: need,
+    });
   }
 
   return map;
@@ -1356,11 +1362,8 @@ function HedgeHeaderMinimal({
   const need = info ? splitSides(info.needBp) : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
-  const hasSell = !!need.left;
-  const hasBuy = !!need.right;
-
   return (
-    <div className="px-4 pt-3 pb-3" style={{ fontFamily: TERMINAL_FONT_STACK }}>
+    <div className="px-4 pt-3 pb-3">
       {/* top line with centered ETF */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="h-px bg-white/10" />
@@ -1373,24 +1376,14 @@ function HedgeHeaderMinimal({
       {/* NEED (big) */}
       <div className="mt-3 grid grid-cols-2 gap-6">
         <div className="text-left">
-          {hasSell ? (
-            <span className="inline-flex items-baseline gap-2 text-[22px] font-mono tabular-nums leading-none text-red-300">
-              <span className="text-[11px] tracking-widest text-red-400/80">SELL</span>
-              <span>{need.left}</span>
-            </span>
-          ) : (
-            <span className="text-[22px] font-mono tabular-nums text-transparent select-none leading-none">0</span>
-          )}
+          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+            {need.left}
+          </span>
         </div>
         <div className="text-right">
-          {hasBuy ? (
-            <span className="inline-flex items-baseline justify-end gap-2 text-[22px] font-mono tabular-nums leading-none text-emerald-300">
-              <span className="text-[11px] tracking-widest text-emerald-400/80">BUY</span>
-              <span>{need.right}</span>
-            </span>
-          ) : (
-            <span className="text-[22px] font-mono tabular-nums text-transparent select-none leading-none">0</span>
-          )}
+          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+            {need.right}
+          </span>
         </div>
       </div>
 
@@ -2612,9 +2605,7 @@ export default function BridgeArbitrageSignals() {
       // compute metric once per (ticker,direction)
       metricMap.set(`${tk}|${dir}`, computeMetric(s));
 
-      // Use the same benchmark key logic everywhere (supports Benchmark/bench/etc.)
-      // so grouping matches hedge-by-benchmark map keys.
-      const benchmark = getBenchmarkKey(s);
+      const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
       const betaVal = getBetaValue(s);
       const betaKey = parseBetaKey(betaVal);
 
