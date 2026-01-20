@@ -1279,8 +1279,15 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   }
 
   for (const [bench, list] of groups.entries()) {
-    let stockSignedHedge = 0; // Σ(sign * PositionBp * beta) for stocks in this benchmark group
-    let currentSigned = 0;    // signed PositionBp of ETF hedge row (bench ticker), if present
+    // IMPORTANT: signals can contain multiple rows per ticker (different buckets/classes),
+    // but PositionBp represents the *position* and must be counted only once per ticker/account.
+    // Otherwise hedge can be massively overstated.
+
+    // ETF current hedge position (bench ticker), if present
+    let currentSigned = 0;
+
+    // Deduplicate stock positions by (account, ticker)
+    const posByKey = new Map<string, { pos: number; sign: number; beta: number }>();
 
     for (const s of list) {
       const tk = String(s?.ticker ?? "").toUpperCase();
@@ -1289,15 +1296,30 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
 
       const sign = dirSign(s);
 
+      // ETF row: current hedge position (signed by direction)
       if (isEtfRow(s, bench) || tk === bench) {
-        // ETF row: current hedge position (signed by direction)
-        currentSigned = sign * pos;
+        // If multiple rows exist, keep the largest absolute position (most reliable)
+        const cand = sign * pos;
+        if (Math.abs(cand) > Math.abs(currentSigned)) currentSigned = cand;
         continue;
       }
 
-      // Stock hedge contribution: signed by direction and scaled by per-ticker beta
       const beta = getBetaFallback1(s);
-      stockSignedHedge += sign * pos * beta;
+      const acct = String(s?.account ?? s?.Account ?? "").toUpperCase();
+      const key = `${acct}::${tk}`;
+
+      const prev = posByKey.get(key);
+      if (!prev || pos > prev.pos) {
+        // If duplicates exist, prefer the row with the largest PositionBp
+        // (since PositionBp is always positive in your feed).
+        posByKey.set(key, { pos, sign, beta });
+      }
+    }
+
+    // Σ(sign * PositionBp * beta) for unique stock positions in this benchmark group
+    let stockSignedHedge = 0;
+    for (const p of posByKey.values()) {
+      stockSignedHedge += p.sign * p.pos * p.beta;
     }
 
     // Target hedge for the ETF is the negative of the net signed stock hedge.
@@ -2789,7 +2811,7 @@ export default function BridgeArbitrageSignals() {
               {/* PAPER */}
               <Link
                 href="/paper/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-emerald-300 hover:text-violet-200 hover:bg-violet-500/10"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
                 title="Open /paper/arbitrage"
               >
                 PAPER
