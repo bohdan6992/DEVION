@@ -143,6 +143,10 @@ const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
+// Terminal-ish monospace stack (keeps UI looking like a trading terminal without requiring external font loading)
+const TERMINAL_FONT_STACK =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
 const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
 const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
 const PIN_LS_KEY = "bridge.arb.pinTickers.v1";
@@ -1259,6 +1263,13 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   const map = new Map<string, HedgeInfo>();
   const groups = new Map<string, ArbitrageSignal[]>();
 
+  // PositionBp is always positive; direction for position is encoded as s.direction === "short" (per UI table).
+  // Long is default for any other value (including empty).
+  const dirSign = (s: any) => {
+    const d = String(s?.direction ?? getMeta(s)?.direction ?? "").trim().toLowerCase();
+    return d === "short" ? -1 : 1;
+  };
+
   for (const s of arr ?? []) {
     const bench = getBenchmarkKey(s);
     if (!bench) continue;
@@ -1268,29 +1279,34 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   }
 
   for (const [bench, list] of groups.entries()) {
-    let sumExposure = 0; // Σ(PositionBp * beta) for stocks
-    let current = 0;     // PositionBp of ETF row (bench ticker), if present
+    let stockSignedHedge = 0; // Σ(sign * PositionBp * beta) for stocks in this benchmark group
+    let currentSigned = 0;    // signed PositionBp of ETF hedge row (bench ticker), if present
 
     for (const s of list) {
       const tk = String(s?.ticker ?? "").toUpperCase();
-      const pos = numPositionBp(s) ?? 0;
+      const pos = numPositionBp(s);
+      if (pos == null || pos === 0) continue; // ACTIVE only (PositionBp != 0)
+
+      const sign = dirSign(s);
 
       if (isEtfRow(s, bench) || tk === bench) {
-        // ETF row: current hedge
-        // (even if meta ETF flag missing, still treat bench ticker as hedge row)
-        current = pos;
+        // ETF row: current hedge position (signed by direction)
+        currentSigned = sign * pos;
         continue;
       }
 
-      // stock exposure
+      // Stock hedge contribution: signed by direction and scaled by per-ticker beta
       const beta = getBetaFallback1(s);
-      sumExposure += pos * beta;
+      stockSignedHedge += sign * pos * beta;
     }
 
-    const target = -sumExposure;
-    const need = target - current;
+    // Target hedge for the ETF is the negative of the net signed stock hedge.
+    const target = -stockSignedHedge;
 
-    map.set(bench, { benchmark: bench, targetBp: target, currentBp: current, needBp: need });
+    // How much to trade the ETF hedge (positive => BUY, negative => SELL)
+    const need = target - currentSigned;
+
+    map.set(bench, { benchmark: bench, targetBp: target, currentBp: currentSigned, needBp: need });
   }
 
   return map;
@@ -1318,8 +1334,11 @@ function HedgeHeaderMinimal({
   const need = info ? splitSides(info.needBp) : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
+  const hasSell = !!need.left;
+  const hasBuy = !!need.right;
+
   return (
-    <div className="px-4 pt-3 pb-3">
+    <div className="px-4 pt-3 pb-3" style={{ fontFamily: TERMINAL_FONT_STACK }}>
       {/* top line with centered ETF */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="h-px bg-white/10" />
@@ -1332,14 +1351,24 @@ function HedgeHeaderMinimal({
       {/* NEED (big) */}
       <div className="mt-3 grid grid-cols-2 gap-6">
         <div className="text-left">
-          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
-            {need.left}
-          </span>
+          {hasSell ? (
+            <span className="inline-flex items-baseline gap-2 text-[22px] font-mono tabular-nums leading-none text-red-300">
+              <span className="text-[11px] tracking-widest text-red-400/80">SELL</span>
+              <span>{need.left}</span>
+            </span>
+          ) : (
+            <span className="text-[22px] font-mono tabular-nums text-transparent select-none leading-none">0</span>
+          )}
         </div>
         <div className="text-right">
-          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
-            {need.right}
-          </span>
+          {hasBuy ? (
+            <span className="inline-flex items-baseline justify-end gap-2 text-[22px] font-mono tabular-nums leading-none text-emerald-300">
+              <span className="text-[11px] tracking-widest text-emerald-400/80">BUY</span>
+              <span>{need.right}</span>
+            </span>
+          ) : (
+            <span className="text-[22px] font-mono tabular-nums text-transparent select-none leading-none">0</span>
+          )}
         </div>
       </div>
 
@@ -2561,7 +2590,9 @@ export default function BridgeArbitrageSignals() {
       // compute metric once per (ticker,direction)
       metricMap.set(`${tk}|${dir}`, computeMetric(s));
 
-      const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
+      // Use the same benchmark key logic everywhere (supports Benchmark/bench/etc.)
+      // so grouping matches hedge-by-benchmark map keys.
+      const benchmark = getBenchmarkKey(s);
       const betaVal = getBetaValue(s);
       const betaKey = parseBetaKey(betaVal);
 
@@ -2758,7 +2789,7 @@ export default function BridgeArbitrageSignals() {
               {/* PAPER */}
               <Link
                 href="/paper/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-emerald-300 hover:text-violet-200 hover:bg-violet-500/10"
                 title="Open /paper/arbitrage"
               >
                 PAPER
