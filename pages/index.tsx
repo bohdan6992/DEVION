@@ -81,10 +81,10 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#030303] text-zinc-200 selection:bg-emerald-500/30 selection:text-white overflow-x-hidden">
+    // ТУТ ЗМІНЕНО: bg-[#030303] -> bg-transparent
+    <div className="min-h-screen bg-transparent text-zinc-200 selection:bg-emerald-500/30 selection:text-white overflow-x-hidden">
       
       {/* GLOBAL CONTAINER */}
-      {/* Використовуємо flex-col gap-8 для однакових відступів всюди (32px) */}
       <main className="max-w-[1800px] mx-auto px-6 py-8 flex flex-col gap-8 pb-32">
         
         {/* 1. HEADER */}

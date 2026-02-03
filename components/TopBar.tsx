@@ -153,6 +153,8 @@ export default function TopBar() {
     { href: "/signals", label: "Strategies" },
     { href: "/news", label: "Market" },
     { href: "/guide", label: "Explorer" },
+    { href: "/sifter", label: "Sifter" }, // ⬅️ ДОДАНО
+    { href: "/tape", label: "Tape" },
   ];
 
   const isActive = (href: string) =>

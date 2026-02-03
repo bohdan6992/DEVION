@@ -13,6 +13,10 @@ import { useAutoScale } from "@/hooks/useAutoScale";
 import UiProvider from "@/components/UiProvider";
 import TopBarMaybe from "@/components/TopBar";
 
+// 🔽 ДОДАНО: Sifter
+import { SifterProvider } from "@/components/sifter/SifterProvider";
+import { SifterDock } from "@/components/sifter/SifterDock";
+
 // краще так, без дивних типів
 const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 
@@ -112,11 +116,17 @@ export default function MyApp({
       {/* ✅ оце прибирає hydration mismatch */}
       {!mounted ? null : (
         <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
-          <SafeTopBar />
-          <div id="tt-offset" aria-hidden="true" />
-          <div id="app-scale">
-            <Component {...pageProps} />
-          </div>
+          {/* 🔽 Sifter живе всередині UiProvider, щоб мати той самий контекст теми */}
+          <SifterProvider>
+            <SafeTopBar />
+            <div id="tt-offset" aria-hidden="true" />
+            <div id="app-scale">
+              <Component {...pageProps} />
+            </div>
+
+            {/* 🔽 Docked overlay, доступний на всіх сторінках */}
+            <SifterDock />
+          </SifterProvider>
         </UiProvider>
       )}
     </>

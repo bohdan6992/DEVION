@@ -4,10 +4,25 @@ import path from "path";
 const nextConfig = {
   reactStrictMode: true,
   images: {
-    unoptimized: true, // щоб Next не ламав локальні іконки при build
+    unoptimized: true,
   },
+
+  async rewrites() {
+    return [
+      // Tape -> TradingBridgeApi (5197)
+      {
+        source: "/api/tape/:path*",
+        destination: "http://localhost:5197/api/tape/:path*",
+      },
+      // (Optional) Everything else under /api stays on 5000
+      {
+        source: "/api/:path*",
+        destination: "http://localhost:5000/api/:path*",
+      },
+    ];
+  },
+
   webpack: (config) => {
-    // "@/..." => корінь проєкту
     config.resolve.alias["@"] = path.resolve(process.cwd());
     return config;
   },

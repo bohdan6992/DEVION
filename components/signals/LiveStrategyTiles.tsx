@@ -1,4 +1,3 @@
-// components/signals/LiveStrategyTiles.tsx
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
@@ -252,7 +251,6 @@ function StrategyCard({ id, data, isFeatured }: { id: string, data: Tile, isFeat
   };
 
   return (
-    // ЗБІЛЬШЕНО ВИСОТУ КАРТОК: 280px для великих, 240px для малих
     <div ref={setNodeRef} style={style} className={`group relative isolate flex flex-row rounded-[2.5rem] border border-white/[0.08] bg-[#0a0a0a]/60 backdrop-blur-xl overflow-hidden transition-all duration-500 hover:border-white/20 shadow-2xl ${isFeatured ? 'h-[280px]' : 'h-[240px]'}`}>
       <div className="flex-1 flex flex-col relative min-w-0">
         <Link href={`/signals/${data.key}`} className="absolute inset-0 z-0" />
@@ -299,7 +297,6 @@ function StrategyCard({ id, data, isFeatured }: { id: string, data: Tile, isFeat
           </div>
         </div>
         
-        {/* PROGRESS BAR - FLOATING CAPSULE DESIGN */}
         <div className="absolute bottom-8 left-10 right-10 h-[3px] bg-white/[0.03] z-10 rounded-full overflow-hidden">
           <div 
             className="h-full relative transition-all duration-[1200ms] cubic-bezier(0.4, 0, 0.2, 1) rounded-full" 
@@ -419,10 +416,12 @@ export default function LiveStrategyTiles() {
     }
   };
 
-  if (!mounted) return <div className="min-h-screen bg-[#030303]" />;
+  // ТУТ ЗМІНЕНО: bg-[#030303] -> bg-transparent
+  if (!mounted) return <div className="min-h-screen bg-transparent" />;
 
   return (
-    <section className="w-full py-20 px-10 bg-[#030303] min-h-screen selection:bg-emerald-500/30 selection:text-white relative overflow-hidden text-white">
+    // ТУТ ЗМІНЕНО: bg-[#030303] -> bg-transparent
+    <section className="w-full py-20 px-10 bg-transparent min-h-screen selection:bg-emerald-500/30 selection:text-white relative overflow-hidden text-white">
       <div className="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-500/5 blur-[150px] pointer-events-none" />
       <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-violet-500/5 blur-[150px] pointer-events-none" />
       
