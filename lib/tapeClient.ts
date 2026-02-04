@@ -52,7 +52,7 @@ export type TapeArbSnapshot = {
 };
 
 // ========================
-// NEW: Raw tape (minute rows)
+// Raw tape (minute rows)
 // ========================
 
 export type TapeMinuteRow = Record<string, any>;
@@ -63,14 +63,6 @@ export type TapeMinuteResponse =
 
 export type TapeDaysResponse = { ok?: boolean; days?: string[] } | string[];
 
-/**
- * IMPORTANT:
- * We keep request keys in camelCase for JSON.
- * Also: some backends bind POST /api/tape/query from query-string (not body) by mistake.
- * To be resilient we:
- *  - send only defined fields (no nulls)
- *  - on 400, fallback to form-url-encoded POST
- */
 export type TapeQueryRequest = {
   dateNy: string;
   minuteFrom?: number;
@@ -82,11 +74,87 @@ export type TapeQueryRequest = {
   offset?: number;
 };
 
-const BASE = (process.env.NEXT_PUBLIC_BRIDGE_API || "").replace(/\/+$/, "");
+// ------------------------
+// Base URL resolution (like trapClient)
+// ------------------------
+
+const DEFAULT_LOCAL = "http://localhost:5197";
+
+function isBrowser() {
+  return typeof window !== "undefined";
+}
+
+function stripTrailingSlashes(x: string) {
+  return (x || "").replace(/\/+$/, "");
+}
+
+function readBridgeFromLocation(): string | null {
+  if (!isBrowser()) return null;
+  try {
+    const u = new URL(window.location.href);
+    // support ?bridge=http://localhost:5197
+    const v = u.searchParams.get("bridge");
+    return v ? stripTrailingSlashes(v) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readBridgeFromStorage(): string | null {
+  if (!isBrowser()) return null;
+  try {
+    const v = window.localStorage.getItem("bridgeApiBase");
+    return v ? stripTrailingSlashes(v) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBridgeToStorage(v: string) {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem("bridgeApiBase", stripTrailingSlashes(v));
+  } catch {
+    // ignore
+  }
+}
+
+function getBaseUrl(): string {
+  // 1) Explicit env override (works for browser builds too)
+  const envBase = stripTrailingSlashes(process.env.NEXT_PUBLIC_BRIDGE_API || "");
+  if (envBase) return envBase;
+
+  // 2) Browser-only: allow ?bridge= and localStorage, fallback to localhost
+  if (isBrowser()) {
+    const fromUrl = readBridgeFromLocation();
+    if (fromUrl) {
+      writeBridgeToStorage(fromUrl);
+      return fromUrl;
+    }
+    const fromLs = readBridgeFromStorage();
+    if (fromLs) return fromLs;
+    return DEFAULT_LOCAL;
+  }
+
+  // 3) Server/SSR: NO localhost fallback (prevents Vercel from trying to call itself)
+  // Return empty -> caller will throw a useful error if used on server.
+  return "";
+}
 
 function url(path: string) {
-  return BASE ? `${BASE}${path}` : path;
+  const base = getBaseUrl();
+  if (!base) {
+    throw new Error(
+      "TapeClient: base URL is not set on the server. " +
+        "Use client-side fetch (browser) or set NEXT_PUBLIC_BRIDGE_API to a public URL."
+    );
+  }
+  return `${base}${path}`;
 }
+
+// ------------------------
+// HTTP helpers
+// ------------------------
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(url(path), { method: "GET" });
@@ -101,9 +169,7 @@ function compactBody(obj: Record<string, any>) {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null) continue;
-    // avoid NaN / Infinity
     if (typeof v === "number" && !Number.isFinite(v)) continue;
-    // avoid empty arrays
     if (Array.isArray(v) && v.length === 0) continue;
     out[k] = v;
   }
@@ -126,7 +192,6 @@ async function postJson<T>(path: string, body: any): Promise<T> {
 }
 
 async function postForm<T>(path: string, body: Record<string, any>): Promise<T> {
-  // form fallback: supports backends that bind POST from query/form instead of body
   const form = new URLSearchParams();
 
   for (const [k, v] of Object.entries(body)) {
@@ -134,7 +199,6 @@ async function postForm<T>(path: string, body: Record<string, any>): Promise<T> 
     if (typeof v === "number" && !Number.isFinite(v)) continue;
 
     if (Array.isArray(v)) {
-      // common patterns: tickers=AAPL&tickers=MSFT
       for (const it of v) form.append(k, String(it));
     } else {
       form.set(k, String(v));
@@ -167,10 +231,12 @@ function normalizeRowsPayload(x: TapeMinuteResponse): TapeMinuteRow[] {
   return [];
 }
 
+// ------------------------
+// Client
+// ------------------------
+
 export const tapeClient = {
-  // ========================
-  // Existing: tape arbitrage
-  // ========================
+  // tape arbitrage
   snapshot(dateNy: string) {
     return getJson<TapeArbSnapshot>(`/api/tape/arbitrage/snapshot?dateNy=${encodeURIComponent(dateNy)}`);
   },
@@ -181,21 +247,18 @@ export const tapeClient = {
     return getJson<TapeArbState[]>(`/api/tape/arbitrage/closed?dateNy=${encodeURIComponent(dateNy)}`);
   },
 
-  // SSE (arbitrage stream)
+  // SSE
   sseUrl() {
+    // For EventSource you need absolute URL
     return url(`/api/tape/stream`);
   },
 
-  // ========================
-  // NEW: raw tape endpoints
-  // ========================
-
+  // raw tape
   async availableDays(): Promise<string[]> {
     const x = await getJson<TapeDaysResponse>(`/api/tape/available-days`);
     return normalizeDaysPayload(x);
   },
 
-  // NOTE: backend may not have this endpoint. Prefer query().
   async minute(dateNy: string, minuteIdx: number): Promise<TapeMinuteRow[]> {
     const x = await getJson<TapeMinuteResponse>(
       `/api/tape/minute?dateNy=${encodeURIComponent(dateNy)}&minuteIdx=${minuteIdx}`
@@ -203,8 +266,6 @@ export const tapeClient = {
     return normalizeRowsPayload(x);
   },
 
-  // POST /api/tape/query (range + filters)
-  // Resilient: sends compact JSON; on 400 falls back to form POST.
   async query(req: TapeQueryRequest): Promise<TapeMinuteRow[]> {
     const body = compactBody(req as any);
 
@@ -213,7 +274,6 @@ export const tapeClient = {
       return normalizeRowsPayload(x);
     } catch (e: any) {
       const msg = String(e?.message ?? "");
-      // fallback only for typical binding/validation failures
       if (msg.includes("400") || msg.toLowerCase().includes("bad request")) {
         const x = await postForm<TapeMinuteResponse>(`/api/tape/query`, body);
         return normalizeRowsPayload(x);
