@@ -14,10 +14,10 @@ const nextConfig = {
         source: "/api/tape/:path*",
         destination: "http://localhost:5197/api/tape/:path*",
       },
-      // (Optional) Everything else under /api stays on 5000
+      // Everything else under /api -> TradingBridgeApi (5197)
       {
         source: "/api/:path*",
-        destination: "http://localhost:5000/api/:path*",
+        destination: "http://localhost:5197/api/:path*",
       },
     ];
   },

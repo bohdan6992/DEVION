@@ -155,6 +155,7 @@ export default function TopBar() {
     { href: "/guide", label: "Explorer" },
     { href: "/sifter", label: "Sifter" }, // ⬅️ ДОДАНО
     { href: "/tape", label: "Tape" },
+    { href: "/sonar", label: "Sonar" },
   ];
 
   const isActive = (href: string) =>

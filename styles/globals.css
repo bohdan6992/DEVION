@@ -2,52 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---------------- 1. HARD RESET & NO SCROLLBARS ---------------- */
+/* ---------------- 1. LIGHTER RESET & SCROLLBARS ---------------- */
 @layer base {
-  /* Ховає скролбар (Chrome, Safari, Opera) */
-  *::-webkit-scrollbar {
-    display: none !important;
-    width: 0 !important;
-    height: 0 !important;
-    background: transparent !important;
-  }
-
-  /* Ховає скролбар (Firefox, IE, Edge) */
-  * {
-    -ms-overflow-style: none !important;
-    scrollbar-width: none !important;
-    box-sizing: border-box; /* Гарантує, що padding не розширює блоки */
-  }
-
   html, body {
     margin: 0;
     padding: 0;
     width: 100%;
     height: 100%;
-    overflow-x: hidden; /* Критично: прибирає горизонтальний скрол */
-    overscroll-behavior: none; /* Прибирає ефект "гумки" на Mac */
+    overflow-x: hidden; 
+    overscroll-behavior: none;
+    box-sizing: border-box;
+    /* Ховаємо скролбар на рівні корня за замовчуванням */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Ховаємо скролбар лише для body та елементів, де це явно не дозволено */
+  html::-webkit-scrollbar, 
+  body::-webkit-scrollbar {
+    display: none;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* КЛАСИ ДЛЯ КЕРУВАННЯ СКРОЛОМ */
+  
+  /* Для елементів, де скрол ТРЕБА бачити (напр. довгі списки) */
+  .scrollbar-visible {
+    -ms-overflow-style: auto !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+  
+  .scrollbar-visible::-webkit-scrollbar {
+    display: block !important;
+    width: 6px !important;
+    height: 6px !important;
+  }
+
+  .scrollbar-visible::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+  }
+
+  /* Утиліта для повного приховування, якщо потрібно для конкретного div */
+  .no-scrollbar {
+    -ms-overflow-style: none !important;
+    scrollbar-width: none !important;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none !important;
   }
 }
 
 /* ---------------- 2. BASE VARS ---------------- */
 @layer base {
   :root {
-    /* Premium Dark Palette */
-    --bg: #030303; /* Deepest Black (Deep Space) */
-    --fg: #e4e4e7; /* Zinc-200 */
+    --bg: #030303;
+    --fg: #e4e4e7;
     --muted: #71717a;
-    --color-primary: #38bdf8; /* Sky-400 */
+    --color-primary: #38bdf8;
 
-    /* Масштабування (Logic) */
+    /* Масштабування */
     --base-width: 1920;
     --scale: 1;
     --offsetX: 0px;
 
-    /* Topbar Config */
+    /* Topbar */
     --topbar-h: 72;       
     --topbar-k: 1;        
     
-    /* Розрахунок відступу контенту від верху */
     --tt-offset: calc(
       (var(--topbar-h) * var(--topbar-k) * var(--scale) * 1px) 
       + env(safe-area-inset-top, 0px)
@@ -55,12 +81,9 @@
   }
 
   body {
-    /* Примусовий темний фон за замовчуванням, щоб не було білих спалахів */
     background-color: var(--bg);
     color: var(--fg);
     @apply antialiased;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
@@ -68,40 +91,33 @@
   a:hover { @apply underline decoration-1 decoration-white/40; }
 }
 
-/* ---------------- 3. LAYOUT HELPERS ---------------- */
+/* ---------------- 3. LAYOUT SYSTEM ---------------- */
 
-/* Головний контейнер */
 #tt-root {
   padding-top: var(--tt-offset);
-  /* padding-bottom: 0; Видалено зайві відступи знизу */
   min-height: 100vh;
   position: relative;
   width: 100%;
-  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
 
-/* Контейнер масштабування */
 #app-scale {
   width: calc(var(--base-width) * 1px);
-  transform-origin: top left;
+  /* ЗМІНА: Центрування через top center краще працює з scale */
+  transform-origin: top center; 
   transform: translateX(var(--offsetX)) scale(var(--scale));
   will-change: transform;
-  
-  /* ЦЕНТРУВАННЯ БЕЗ ВІДСТУПІВ */
   margin: 0 auto; 
-  padding: 0; /* Гарантуємо відсутність внутрішніх відступів */
 }
 
-/* GPU acceleration helpers */
+/* GPU acceleration */
 .card, .nav, .tabs, .topbar, .clock, .strategy-tabs {
   transform: translateZ(0);
   backface-visibility: hidden;
 }
 
 .nowrap { white-space: nowrap; }
-.nowrap > * { flex: 0 0 auto; }
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
 /* ---------------- 4. TOPBAR ---------------- */
@@ -110,83 +126,68 @@
   top: 0; left: 0; right: 0;
   z-index: 1000;
   height: calc(var(--topbar-h) * var(--topbar-k) * var(--scale) * 1px);
-  padding: 0; margin: 0;
   backdrop-filter: blur(12px); 
-  background: rgba(3, 3, 3, 0.6); /* Deep Space Glass Header */
+  background: rgba(3, 3, 3, 0.6);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .tt-topbar-viewport {
   width: calc(var(--base-width) * 1px);
-  transform-origin: top left;
+  transform-origin: top center;
   transform: translateX(var(--offsetX)) scale(var(--scale));
   height: 100%;
+  margin: 0 auto;
 }
 
 .tt-topbar-inner {
   width: 100%;
   height: 100%;
-  /* Мінімальні відступи для контенту хедера, щоб не липнув до країв */
   padding: 0 16px; 
   display: flex;
   align-items: center;
 }
 
 /* ---------------- 5. ZOOM MODE CLEANUP ---------------- */
-/* Повне видалення примусових паддінгів у режимі зуму */
-
 .zoom-mode .container,
 .zoom-mode [class*="max-w-"] { max-width: none !important; }
 
 .zoom-mode .tt-topbar-inner,
 .zoom-mode .page,
-.zoom-mode .content,
-.zoom-mode .wrap,
 .zoom-mode main {
   width: calc(var(--base-width) * 1px) !important;
-  margin-left: auto; margin-right: auto;
-  max-width: none !important;
-  padding-left: 0 !important;  /* FORCE REMOVE PADDING */
-  padding-right: 0 !important; /* FORCE REMOVE PADDING */
+  margin-left: auto; 
+  margin-right: auto;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 
-/* Видалено правило, яке додавало padding-left: 20px для секцій */
 .zoom-mode main > section { 
   padding: 0 !important;
   margin: 0 !important;
 }
 
-.zoom-mode * { overflow: visible; }
-
 /* ---------------- 6. MOBILE TWEAKS ---------------- */
 @media (max-width: 768px) {
-  :root {
-    --topbar-k: 0.8;
-  }
-  /* На мобільному теж прибираємо зайве */
-  #tt-root { padding-left: 0; padding-right: 0; }
+  :root { --topbar-k: 0.8; }
   .tt-topbar-inner { padding: 0 12px; }
 }
 
-/* ---------------- 7. COMPONENT TOKENS ---------------- */
+/* ---------------- 7. COMPONENTS ---------------- */
 :root {
   --tile-bg: rgba(10, 10, 10, 0.6);
   --tile-border: rgba(255, 255, 255, 0.06);
   --chip-bg: rgba(255, 255, 255, 0.05);
 }
 
-/* Ticker Chips */
 .chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
   padding: 4px 10px;
   border-radius: 6px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   font-weight: 600;
-  color: var(--fg);
   background: var(--chip-bg);
   border: 1px solid rgba(255, 255, 255, 0.1);
   transition: all 0.2s ease;
