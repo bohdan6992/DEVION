@@ -13,7 +13,7 @@ import ExcludeIncludePanel from "@/components/filters/ExcludeIncludePanel";
 import ZapPanel from "@/components/filters/ZapPanel";
 import ReportEquityPanel from "@/components/filters/ReportEquityPanel";
 import MultiSelectPanel from "@/components/filters/MultiSelectPanel";
-
+import { bridgeUrl } from "@/lib/bridgeBase";
 
 type ScanerRunResult = {
   summary?: {
@@ -97,7 +97,7 @@ export default function ScanerTerminal() {
         paper: { holdMinutes, slippageBps },
       };
 
-      const res = await fetch(`/api/scaner/run`, {
+      const res = await fetch(bridgeUrl("/api/scaner/run"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
