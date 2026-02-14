@@ -5,201 +5,377 @@ import { useRouter } from "next/navigation";
 import { useSifter } from "./SifterProvider";
 import type { SifterDayRow } from "@/lib/sifterClient";
 import { setSifterHandoff } from "@/lib/sifterHandoff";
-import clsx from "clsx";
 
-// --- Utilities ---
-const toNum = (v: any): number | null => {
+function toNum(v: any): number | null {
   if (v === null || v === undefined) return null;
   const x = Number(v);
-  return Number.isNaN(x) || !Number.isFinite(x) ? null : x;
-};
+  if (Number.isNaN(x) || !Number.isFinite(x)) return null;
+  return x;
+}
 
-const fmt = (n: any, digits = 2) => {
+function fmt(n: any, digits = 2) {
   const x = toNum(n);
-  return x === null ? "—" : x.toFixed(digits);
-};
+  if (x === null) return "";
+  return x.toFixed(digits);
+}
 
-const median = (values: number[]) => {
+function median(values: number[]) {
   if (!values.length) return 0;
   const a = [...values].sort((x, y) => x - y);
   const mid = Math.floor(a.length / 2);
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-};
-
-// --- Sub-Components ---
-const GlassInput = ({ label, ...props }: any) => (
-  <div className="flex flex-col gap-1">
-    <label className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono ml-1">
-      {label}
-    </label>
-    <input
-      {...props}
-      className="bg-[#0a0a0a]/40 border border-white/[0.06] rounded-lg px-3 py-1.5 text-sm text-zinc-200 
-                 focus:outline-none focus:border-emerald-500/40 focus:bg-[#0a0a0a]/80 transition-all font-mono"
-    />
-  </div>
-);
-
-const MetricCard = ({ label, value, colorClass = "text-zinc-200" }: any) => (
-  <div className="bg-[#0a0a0a]/40 border border-white/[0.06] rounded-xl p-3 backdrop-blur-md">
-    <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-1">{label}</div>
-    <div className={clsx("text-lg font-bold tabular-nums", colorClass)}>{value}</div>
-  </div>
-);
+}
 
 export function SifterPanel() {
   const { state, actions } = useSifter();
   const router = useRouter();
+
   const metricKey = state.metric;
 
-  // Logic: Rows Mapping
+  // unified rows (quick rows OR tickerdays days mapped to same shape)
   const rows: SifterDayRow[] = useMemo(() => {
     if (state.runMode === "tickerdays") {
       const days = (state.tdResult?.days ?? []) as any[];
-      return days.map((d) => ({
-        dateNy: (d.dateNy ?? d.DateNy ?? "").toString(),
-        ticker: (d.ticker ?? d.Ticker ?? "").toString(),
-        gapPct: d.gapPct ?? d.GapPct ?? null,
-        clsToClsPct: d.clsToClsPct ?? d.ClsToClsPct ?? null,
-        marketCapM: d.marketCapM ?? d.MarketCapM ?? null,
-        sectorL3: d.sectorL3 ?? d.SectorL3 ?? null,
-        exchange: d.exchange ?? d.Exchange ?? null,
-        adv: d.adv20 ?? d.Adv20 ?? d.adv ?? null,
-        pctChange: d.pctChange ?? d.PctChange ?? null,
-      })).filter(r => r.dateNy && r.ticker) as any;
+
+      return days
+        .map((d) => {
+          const dateNy = (d.dateNy ?? d.DateNy ?? "").toString();
+          const ticker = (d.ticker ?? d.Ticker ?? "").toString();
+
+          return {
+            dateNy,
+            ticker,
+            gapPct: d.gapPct ?? d.GapPct ?? null,
+            clsToClsPct: d.clsToClsPct ?? d.ClsToClsPct ?? null,
+            marketCapM: d.marketCapM ?? d.MarketCapM ?? null,
+            sectorL3: d.sectorL3 ?? d.SectorL3 ?? null,
+            exchange: d.exchange ?? d.Exchange ?? null,
+            adv: d.adv20 ?? d.Adv20 ?? d.adv ?? null,
+
+            // optional alias (tickerdays may provide)
+            // @ts-ignore
+            pctChange: d.pctChange ?? d.PctChange ?? null,
+          } as any;
+        })
+        .filter((r) => r.dateNy && r.ticker) as any;
     }
+
     return state.rows;
   }, [state.runMode, state.rows, state.tdResult]);
 
-  // Logic: Performance
   const perf = useMemo(() => {
     const byTicker = new Map<string, { sum: number; n: number; wins: number }>();
     const vals: number[] = [];
+
     const readMetric = (r: SifterDayRow): number | null => {
-      const x = toNum((r as any)[metricKey]);
+      const raw = (r as any)[metricKey];
+      const x = toNum(raw);
       if (x === null) return null;
       return state.perfSide === "short" ? -x : x;
     };
 
+    // collect
     for (const r of rows) {
       const v = readMetric(r);
       if (v === null) continue;
+
       vals.push(v);
-      const cur = byTicker.get(r.ticker) ?? { sum: 0, n: 0, wins: 0 };
-      cur.sum += v; cur.n += 1; if (v > 0) cur.wins += 1;
-      byTicker.set(r.ticker, cur);
+
+      const t = r.ticker;
+      const cur = byTicker.get(t) ?? { sum: 0, n: 0, wins: 0 };
+      cur.sum += v;
+      cur.n += 1;
+      if (v > 0) cur.wins += 1;
+      byTicker.set(t, cur);
     }
 
     const sum = vals.reduce((a, b) => a + b, 0);
-    const curve: any[] = [];
-    let eq = 0;
-    [...rows].sort((a, b) => a.dateNy.localeCompare(b.dateNy)).forEach(r => {
-      const v = readMetric(r);
-      if (v !== null) { eq += v; curve.push({ dateNy: r.dateNy, eq }); }
-    });
+    const avg = vals.length ? sum / vals.length : 0;
+    const med = median(vals);
+    const winRate = vals.length ? vals.filter((v) => v > 0).length / vals.length : 0;
 
-    return {
-      sum, n: vals.length, avg: vals.length ? sum / vals.length : 0,
-      med: median(vals), winRate: vals.length ? vals.filter(v => v > 0).length / vals.length : 0,
-      curve, breakdown: [...byTicker.entries()].map(([ticker, s]) => ({
-        ticker, sum: s.sum, n: s.n, win: s.wins / s.n
-      })).sort((a, b) => b.sum - a.sum).slice(0, 15)
-    };
+    // curve
+    const sorted = [...rows].slice().sort((a, b) => a.dateNy.localeCompare(b.dateNy));
+    let eq = 0;
+    const curve: { dateNy: string; eq: number }[] = [];
+
+    for (const r of sorted) {
+      const v = readMetric(r);
+      if (v === null) continue;
+      eq += v;
+      curve.push({ dateNy: r.dateNy, eq });
+    }
+
+    const breakdown = [...byTicker.entries()]
+      .map(([ticker, s]) => ({
+        ticker,
+        sum: s.sum,
+        avg: s.n ? s.sum / s.n : 0,
+        n: s.n,
+        win: s.n ? s.wins / s.n : 0,
+      }))
+      .sort((a, b) => b.sum - a.sum)
+      .slice(0, 30);
+
+    return { sum, avg, med, winRate, curve, breakdown, n: vals.length };
   }, [rows, metricKey, state.perfSide]);
 
-  const loading = state.runMode === "tickerdays" ? state.tdStatus === 2 : state.loading;
-  const err = state.runMode === "tickerdays" ? state.tdError : state.error;
+  const openTape = (r: SifterDayRow) => {
+    setSifterHandoff({
+      dateNy: r.dateNy,
+      ticker: r.ticker,
+      minuteFrom: state.minuteFrom,
+      minuteTo: state.minuteTo,
+      metric: state.metric,
+    });
+    router.push("/tape");
+  };
+
+  const isTickerdays = state.runMode === "tickerdays";
+  const loading = isTickerdays ? Boolean(state.tdLoading) : state.loading;
+  const err = isTickerdays ? state.tdError : state.error;
 
   return (
-    <div className="h-full flex flex-col bg-[#030303] selection:bg-emerald-500/30 relative overflow-hidden">
-      {/* Background Nebulas */}
-      <div className="fixed -top-[10%] -left-[10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[150px] pointer-events-none" />
-      <div className="fixed -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-violet-500/10 blur-[150px] pointer-events-none" />
-
-      {/* 1. Header & Filters */}
-      <div className="p-4 bg-[#0a0a0a]/40 border-b border-white/[0.06] backdrop-blur-xl z-10">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-white to-white/40 tracking-tighter">
-            Sifter Analysis
-          </h2>
-          <div className="flex gap-2">
-            {loading && (
-              <button onClick={actions.cancelTickerdays} className="px-4 py-1.5 rounded-lg bg-rose-950/30 text-rose-400 border border-rose-500/20 text-[10px] font-mono font-bold uppercase hover:bg-rose-950/50 transition-all">
-                Cancel Job
+    <div className="h-full flex flex-col text-white/90">
+      {/* Filters */}
+      <div className="p-3 border-b border-white/10">
+        <div className="grid grid-cols-12 gap-2 items-end">
+          {/* Mode toggle */}
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Mode</label>
+            <div className="flex gap-2">
+              <button
+                className={`px-2 py-1 rounded-lg border border-white/10 text-xs ${
+                  state.runMode === "quick" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+                }`}
+                onClick={() => actions.set("runMode", "quick" as any)}
+              >
+                Quick
               </button>
-            )}
-            <button 
-              onClick={state.runMode === "tickerdays" ? actions.runTickerdays : actions.runDays}
+              <button
+                className={`px-2 py-1 rounded-lg border border-white/10 text-xs ${
+                  state.runMode === "tickerdays" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+                }`}
+                onClick={() => actions.set("runMode", "tickerdays" as any)}
+              >
+                TickerDays
+              </button>
+            </div>
+          </div>
+
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">From</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.fromDateNy}
+              onChange={(e) => actions.set("fromDateNy", e.target.value)}
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">To</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.toDateNy}
+              onChange={(e) => actions.set("toDateNy", e.target.value)}
+            />
+          </div>
+          <div className="col-span-3">
+            <label className="text-xs text-white/60">Tickers</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              placeholder="AAPL,MSFT"
+              value={state.tickersText}
+              onChange={(e) => actions.set("tickersText", e.target.value)}
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">SectorL3</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              placeholder="Technology"
+              value={state.sectorL3 ?? ""}
+              onChange={(e) => actions.set("sectorL3", e.target.value || null)}
+            />
+          </div>
+
+          <div className="col-span-1">
+            <label className="text-xs text-white/60">MC min (M)</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.minMarketCapM ?? ""}
+              onChange={(e) => actions.set("minMarketCapM", e.target.value ? Number(e.target.value) : null)}
+            />
+          </div>
+          <div className="col-span-1">
+            <label className="text-xs text-white/60">MC max (M)</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.maxMarketCapM ?? ""}
+              onChange={(e) => actions.set("maxMarketCapM", e.target.value ? Number(e.target.value) : null)}
+            />
+          </div>
+
+          {/* Run + Cancel */}
+          <div className="col-span-1 flex justify-end gap-2">
+            {isTickerdays && state.tdRequestId ? (
+              <button
+                className="px-3 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-white/10 text-sm"
+                onClick={actions.cancelTickerdays}
+                disabled={!loading}
+                title="Cancel running job"
+              >
+                Cancel
+              </button>
+            ) : null}
+
+            <button
+              className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/20 border border-white/10 text-sm"
+              onClick={isTickerdays ? actions.runTickerdays : actions.runDays}
               disabled={loading}
-              className="px-6 py-1.5 rounded-lg bg-emerald-500 text-black text-[10px] font-mono font-bold uppercase hover:bg-emerald-400 transition-all disabled:opacity-50 shadow-[0_0_20px_-5px_rgba(16,185,129,0.4)]"
             >
-              {loading ? "Processing..." : "Execute Run"}
+              {loading ? "Loading…" : "Run"}
             </button>
           </div>
-        </div>
 
-        <div className="grid grid-cols-6 gap-4">
-          <div className="col-span-1 flex flex-col gap-1">
-             <label className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono ml-1">Mode</label>
-             <div className="flex bg-[#0a0a0a]/60 p-1 rounded-lg border border-white/[0.06]">
-                {["quick", "tickerdays"].map(m => (
-                  <button key={m} onClick={() => actions.set("runMode", m as any)} className={clsx("flex-1 py-1 text-[10px] font-mono uppercase rounded-md transition-all", state.runMode === m ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300")}>
-                    {m}
-                  </button>
-                ))}
-             </div>
-          </div>
-          <GlassInput label="From Date" value={state.fromDateNy} onChange={(e: any) => actions.set("fromDateNy", e.target.value)} />
-          <GlassInput label="To Date" value={state.toDateNy} onChange={(e: any) => actions.set("toDateNy", e.target.value)} />
+          {/* Quick minute inputs (still used for Tape handoff) */}
           <div className="col-span-2">
-             <GlassInput label="Tickers (CSV)" placeholder="AAPL, TSLA..." value={state.tickersText} onChange={(e: any) => actions.set("tickersText", e.target.value)} />
+            <label className="text-xs text-white/60">Minute from</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.minuteFrom}
+              onChange={(e) => actions.set("minuteFrom", e.target.value)}
+            />
           </div>
-          <GlassInput label="Sector L3" value={state.sectorL3 ?? ""} onChange={(e: any) => actions.set("sectorL3", e.target.value || null)} />
-        </div>
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Minute to</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.minuteTo}
+              onChange={(e) => actions.set("minuteTo", e.target.value)}
+            />
+          </div>
 
-        {/* Progress Bar for TickerDays */}
-        {state.runMode === "tickerdays" && (
-          <div className="mt-4">
-            <div className="flex justify-between text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1">
-              <span>{state.tdMessage || "Ready"}</span>
-              <span>{fmt((state.tdProgress ?? 0) * 100, 0)}%</span>
-            </div>
-            <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-500 transition-all duration-500 shadow-[0_0_10px_#10b981]" style={{ width: `${(state.tdProgress ?? 0) * 100}%` }} />
+          {/* Tickerdays window selector (Ids) */}
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Window start (id)</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.windowStartId ?? 0}
+              onChange={(e) => actions.set("windowStartId", Number(e.target.value))}
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Window end (id)</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              value={state.windowEndId}
+              onChange={(e) => actions.set("windowEndId", Number(e.target.value))}
+            />
+          </div>
+
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Metric</label>
+            <input
+              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+              placeholder="GapPct / ClsToClsPct / pctChange / SigmaZapS"
+              value={state.metric}
+              onChange={(e) => actions.set("metric", e.target.value)}
+            />
+          </div>
+
+          <div className="col-span-2">
+            <label className="text-xs text-white/60">Perf side</label>
+            <div className="flex gap-2">
+              <button
+                className={`px-2 py-1 rounded-lg border border-white/10 text-xs ${
+                  state.perfSide === "long" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+                }`}
+                onClick={() => actions.set("perfSide", "long")}
+              >
+                Long
+              </button>
+              <button
+                className={`px-2 py-1 rounded-lg border border-white/10 text-xs ${
+                  state.perfSide === "short" ? "bg-white/15" : "bg-white/5 hover:bg-white/10"
+                }`}
+                onClick={() => actions.set("perfSide", "short")}
+              >
+                Short
+              </button>
             </div>
           </div>
-        )}
+
+          <div className="col-span-4">
+            {err ? (
+              <div className="text-xs text-red-300">{err}</div>
+            ) : (
+              <div className="text-xs text-white/50">
+                Rows: {rows.length}
+                {isTickerdays && state.tdRequestId ? (
+                  <span className="ml-2 text-white/40">job: {state.tdRequestId.slice(0, 8)}…</span>
+                ) : null}
+              </div>
+            )}
+
+            {/* Tickerdays progress */}
+            {isTickerdays ? (
+              <div className="mt-1">
+                <div className="text-[11px] text-white/50">
+                  {state.tdMessage ?? ""} • {fmt((state.tdProgress ?? 0) * 100, 0)}%
+                </div>
+                <div className="h-1.5 rounded bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-white/30"
+                    style={{ width: `${Math.max(0, Math.min(1, state.tdProgress ?? 0)) * 100}%` }}
+                  />
+                </div>
+                </div>
+            ) : null}
+          </div>
+        </div>
       </div>
 
-      {/* 2. Main Content (Table) */}
-      <div className="flex-1 overflow-auto z-10 custom-scrollbar">
-        <table className="w-full text-xs font-mono">
-          <thead className="sticky top-0 bg-[#030303]/80 backdrop-blur-xl border-b border-white/[0.06] z-20">
-            <tr className="text-zinc-500 uppercase tracking-widest text-[10px]">
-              <th className="text-left p-4 font-medium">Date (NY)</th>
-              <th className="text-left p-4 font-medium">Ticker</th>
-              <th className="text-right p-4 font-medium">Gap %</th>
-              <th className="text-right p-4 font-medium">C2C %</th>
-              <th className="text-right p-4 font-medium">Mkt Cap (M)</th>
-              <th className="text-left p-4 font-medium">Sector</th>
-              <th className="text-left p-4 font-medium">Exchange</th>
+      {/* Results table */}
+      <div className="flex-1 overflow-auto">
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-black/60 backdrop-blur border-b border-white/10">
+            <tr className="text-white/70">
+              <th className="text-left p-2">dateNy</th>
+              <th className="text-left p-2">ticker</th>
+              <th className="text-right p-2">gapPct</th>
+              <th className="text-right p-2">clsToClsPct</th>
+              <th className="text-right p-2">MC(M)</th>
+              <th className="text-left p-2">sector</th>
+              <th className="text-left p-2">exchange</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.02]">
+          <tbody>
             {rows.map((r) => {
               const key = `${r.dateNy}|${r.ticker}`;
+              const selected = state.selectedKey === key;
+
               const g = toNum(r.gapPct);
               const c = toNum(r.clsToClsPct);
+
+              const gCls = g === null ? "" : g >= 0 ? "text-green-300" : "text-red-300";
+              const cCls = c === null ? "" : c >= 0 ? "text-green-300" : "text-red-300";
+
               return (
-                <tr key={key} onClick={() => { actions.selectRow(r.dateNy, r.ticker); setSifterHandoff({ ...state, dateNy: r.dateNy, ticker: r.ticker }); router.push("/tape"); }}
-                    className="group hover:bg-white/[0.03] cursor-pointer transition-colors tabular-nums">
-                  <td className="p-4 text-zinc-400">{r.dateNy}</td>
-                  <td className="p-4 text-white font-bold group-hover:text-emerald-400 transition-colors">{r.ticker}</td>
-                  <td className={clsx("p-4 text-right", g! >= 0 ? "text-emerald-400" : "text-rose-400")}>{fmt(r.gapPct)}%</td>
-                  <td className={clsx("p-4 text-right", c! >= 0 ? "text-emerald-400" : "text-rose-400")}>{fmt(r.clsToClsPct)}%</td>
-                  <td className="p-4 text-right text-zinc-300">{fmt(r.marketCapM, 0)}</td>
-                  <td className="p-4 text-zinc-500 uppercase text-[10px]">{r.sectorL3}</td>
-                  <td className="p-4 text-zinc-500">{r.exchange}</td>
+                <tr
+                  key={key}
+                  className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${selected ? "bg-white/10" : ""}`}
+                  onClick={() => {
+                    actions.selectRow(r.dateNy, r.ticker);
+                    openTape(r);
+                  }}
+                >
+                  <td className="p-2">{r.dateNy}</td>
+                  <td className="p-2 font-semibold">{r.ticker}</td>
+                  <td className={`p-2 text-right ${gCls}`}>{fmt(r.gapPct, 2)}</td>
+                  <td className={`p-2 text-right ${cCls}`}>{fmt(r.clsToClsPct, 2)}</td>
+                  <td className="p-2 text-right">{fmt(r.marketCapM, 0)}</td>
+                  <td className="p-2">{r.sectorL3 ?? ""}</td>
+                  <td className="p-2">{r.exchange ?? ""}</td>
                 </tr>
               );
             })}
@@ -207,47 +383,52 @@ export function SifterPanel() {
         </table>
       </div>
 
-      {/* 3. Footer Performance Panel */}
-      <div className="p-4 bg-[#0a0a0a]/80 border-t border-white/[0.1] backdrop-blur-2xl z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-        <div className="grid grid-cols-4 gap-4 mb-4">
-          <MetricCard label="Total PnL Sum" value={`${fmt(perf.sum)}%`} colorClass={perf.sum >= 0 ? "text-emerald-400" : "text-rose-400"} />
-          <MetricCard label="Average Trade" value={`${fmt(perf.avg)}%`} />
-          <MetricCard label="Median" value={`${fmt(perf.med)}%`} />
-          <MetricCard label="Win Rate" value={`${fmt(perf.winRate * 100, 1)}%`} colorClass="text-cyan-400" />
+      {/* Trade performance bottom panel */}
+      <div className="p-3 border-t border-white/10 bg-black/40">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-white/70">
+            Perf on <span className="font-semibold text-white/90">{metricKey}</span> ({state.perfSide}) • N={perf.n}
+          </div>
+          <div className="flex gap-3 text-xs">
+            <div>
+              Sum: <span className="font-semibold">{fmt(perf.sum, 2)}</span>
+            </div>
+            <div>
+              Avg: <span className="font-semibold">{fmt(perf.avg, 2)}</span>
+            </div>
+            <div>
+              Med: <span className="font-semibold">{fmt(perf.med, 2)}</span>
+            </div>
+            <div>
+              Win%: <span className="font-semibold">{fmt(perf.winRate * 100, 1)}%</span>
+            </div>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-[#0a0a0a]/40 border border-white/[0.06] rounded-xl p-3">
-            <h4 className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">Recent Equity Path</h4>
-            <div className="flex gap-2 overflow-x-auto pb-2">
-              {perf.curve.slice(-6).map((p, i) => (
-                <div key={i} className="flex flex-col items-center bg-white/[0.03] border border-white/[0.05] rounded-lg p-2 min-w-[80px]">
-                  <span className="text-[9px] text-zinc-600 font-mono">{p.dateNy}</span>
-                  <span className={clsx("text-xs font-bold font-mono", p.eq >= 0 ? "text-emerald-500" : "text-rose-500")}>{fmt(p.eq, 1)}%</span>
-                </div>
+        <div className="mt-2 grid grid-cols-12 gap-2">
+          <div className="col-span-6 rounded-xl border border-white/10 bg-white/5 p-2">
+            <div className="text-xs text-white/70 mb-1">Equity curve (simple)</div>
+            <div className="text-[11px] text-white/60">
+              {perf.curve.slice(-8).map((p) => (
+                <span key={p.dateNy} className="inline-block mr-3">
+                  {p.dateNy}: <span className="text-white/85">{fmt(p.eq, 2)}</span>
+                </span>
               ))}
             </div>
           </div>
-          <div className="bg-[#0a0a0a]/40 border border-white/[0.06] rounded-xl p-3">
-            <h4 className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">Alpha Leaders (Top Sum)</h4>
-            <div className="flex flex-wrap gap-2">
-              {perf.breakdown.slice(0, 5).map(b => (
-                <div key={b.ticker} className="px-2 py-1 bg-emerald-950/20 border border-emerald-500/20 rounded-md">
-                  <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase">{b.ticker}</span>
-                  <span className="ml-2 text-[10px] font-mono text-emerald-200/60">+{fmt(b.sum, 1)}%</span>
-                </div>
+
+          <div className="col-span-6 rounded-xl border border-white/10 bg-white/5 p-2">
+            <div className="text-xs text-white/70 mb-1">Top tickers (by sum)</div>
+            <div className="text-[11px] text-white/60">
+              {perf.breakdown.slice(0, 10).map((b) => (
+                <span key={b.ticker} className="inline-block mr-3">
+                  {b.ticker}: <span className="text-white/85">{fmt(b.sum, 2)}</span> (n={b.n}, win={fmt(b.win * 100, 0)}%)
+                </span>
               ))}
             </div>
           </div>
         </div>
       </div>
-
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
-      `}</style>
     </div>
   );
 }

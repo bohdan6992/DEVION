@@ -17,41 +17,34 @@ export type SifterState = {
 
   runMode: RunMode;
 
-  // filters (shared)
   fromDateNy: string;
   toDateNy: string;
-  tickersText: string; // "AAPL,MSFT"
+  tickersText: string;
   sectorL3: string | null;
   minMarketCapM: number | null;
   maxMarketCapM: number | null;
 
-  // day metric filters (quick mode)
   minGapPct: number | null;
   maxGapPct: number | null;
   minClsToClsPct: number | null;
   maxClsToClsPct: number | null;
 
-  // minute window research (UI-ready)
-  minuteFrom: string; // "09:31"
-  minuteTo: string; // "10:15"
-  metric: string; // "GapPct" | "ClsToClsPct" | "SigmaZapS" | ...
+  minuteFrom: string;
+  minuteTo: string;
+  metric: string;
 
-  // tickerdays selected window ids (backend window IDs)
   windowStartId: number;
   windowEndId: number;
 
-  // results (quick mode)
   loading: boolean;
   error: string | null;
   rows: SifterDayRow[];
 
-  // perf settings
   perfSide: "long" | "short";
   selectedKey: string | null;
 
-  // tickerdays job state
   tdRequestId: string | null;
-  tdStatus: number | null; // 2 running, 3 done, 4 error, 5 cancelled
+  tdStatus: number | null;
   tdProgress: number;
   tdMessage: string | null;
 
@@ -137,7 +130,7 @@ export function SifterProvider({
   const pollRef = useRef<number | null>(null);
   const bcRef = useRef<BroadcastChannel | null>(null);
 
-  // ✅ stateRef fixes stale closure issues in async actions
+  // state ref used by memoized actions
   const stateRef = useRef<SifterState | null>(null);
 
   const [state, setState] = useState<SifterState>(() => {
@@ -173,7 +166,6 @@ export function SifterProvider({
       minuteTo: fromStorage?.minuteTo ?? "10:15",
       metric: fromStorage?.metric ?? "GapPct",
 
-      // ✅ safer defaults (backend windows often have 0..4; keep your prior intent)
       windowStartId: typeof fromStorage?.windowStartId === "number" ? (fromStorage as any).windowStartId : 0,
       windowEndId: typeof fromStorage?.windowEndId === "number" ? (fromStorage as any).windowEndId : 1,
 
@@ -195,10 +187,8 @@ export function SifterProvider({
     };
   });
 
-  // keep ref synced
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  // ✅ critical: keep ref in sync synchronously (prevents "Run does nothing")
+  stateRef.current = state;
 
   const stopPoll = () => {
     if (typeof window === "undefined") return;
@@ -276,7 +266,8 @@ export function SifterProvider({
             tdStatus: st.status,
             tdProgress: st.progress ?? 0,
             tdMessage: st.message ?? null,
-            tdLoading: st.status === 2,
+            // ✅ queued(1) or running(2) считаем "loading"
+            tdLoading: st.status === 1 || st.status === 2,
           };
           syncToOthers(next);
           return { ...prev, ...next };
@@ -344,8 +335,6 @@ export function SifterProvider({
         const url = `/sifter?popout=1`;
         const w = window.open(url, "SifterPopout", "popup=yes,width=1100,height=780");
         if (w) w.focus();
-
-        // ✅ do NOT broadcast whole state (can overwrite other tab with stale values)
         syncToOthers({ mode: "docked" });
       },
 
@@ -365,7 +354,10 @@ export function SifterProvider({
 
       async runDays() {
         const cur = stateRef.current;
-        if (!cur) return;
+        if (!cur) {
+          setState((prev) => ({ ...prev, error: "Sifter state is not ready yet" }));
+          return;
+        }
 
         setState((prev) => ({ ...prev, loading: true, error: null }));
 
@@ -402,9 +394,11 @@ export function SifterProvider({
 
       async runTickerdays() {
         const cur = stateRef.current;
-        if (!cur) return;
+        if (!cur) {
+          setState((prev) => ({ ...prev, tdError: "Sifter state is not ready yet" }));
+          return;
+        }
 
-        // cancel previous running job
         if (cur.tdRequestId && cur.tdStatus === 2) {
           try {
             await postTickerdaysCancel(cur.tdRequestId);

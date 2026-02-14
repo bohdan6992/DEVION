@@ -1,4 +1,5 @@
 // lib/tickerdaysClient.ts
+import { bridgeUrl } from "@/lib/bridgeBase";
 
 export type TickerdaysAck = {
   requestId: string;
@@ -13,7 +14,6 @@ export type TickerdaysStatus = {
 };
 
 export type TickerdaysReportRequest = {
-  // Prefer NY date strings to avoid timezone shifts
   startDateNy: string; // "YYYY-MM-DD"
   endDateNy: string; // "YYYY-MM-DD"
 
@@ -67,14 +67,9 @@ function clip(s: string, max = 2000) {
 async function readError(res: Response): Promise<string> {
   const ct = res.headers.get("content-type") ?? "";
 
-  // try json first
   if (ct.includes("application/json")) {
     try {
       const j: any = await res.json();
-
-      // common shapes:
-      // - ProblemDetails: {title, detail, status, traceId}
-      // - {ok:false, error:"..."} or {message:"..."}
       const msg =
         j?.error ??
         j?.message ??
@@ -83,11 +78,9 @@ async function readError(res: Response): Promise<string> {
         (typeof j === "string" ? j : null);
 
       if (msg) return clip(String(msg));
-
-      // fallback: stringify small json
       return clip(JSON.stringify(j));
     } catch {
-      // fallthrough to text
+      // fallthrough
     }
   }
 
@@ -99,19 +92,19 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+async function fetchJson<T>(absUrl: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(absUrl, init);
 
   if (!res.ok) {
     const err = await readError(res);
-    throw new Error(`${url} failed: ${res.status}${err ? ` • ${err}` : ""}`);
+    throw new Error(`${absUrl} failed: ${res.status}${err ? ` • ${err}` : ""}`);
   }
 
   return (await res.json()) as T;
 }
 
 export async function postTickerdaysReport(body: TickerdaysReportRequest): Promise<TickerdaysAck> {
-  return fetchJson<TickerdaysAck>("/api/tickerdays/report", {
+  return fetchJson<TickerdaysAck>(bridgeUrl("/api/tickerdays/report"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -119,19 +112,19 @@ export async function postTickerdaysReport(body: TickerdaysReportRequest): Promi
 }
 
 export async function getTickerdaysStatus(requestId: string): Promise<TickerdaysStatus> {
-  return fetchJson<TickerdaysStatus>(`/api/tickerdays/status/${encodeURIComponent(requestId)}`, {
+  return fetchJson<TickerdaysStatus>(bridgeUrl(`/api/tickerdays/status/${encodeURIComponent(requestId)}`), {
     method: "GET",
   });
 }
 
 export async function getTickerdaysResult(requestId: string): Promise<TickerdaysResult> {
-  return fetchJson<TickerdaysResult>(`/api/tickerdays/result/${encodeURIComponent(requestId)}`, {
+  return fetchJson<TickerdaysResult>(bridgeUrl(`/api/tickerdays/result/${encodeURIComponent(requestId)}`), {
     method: "GET",
   });
 }
 
 export async function postTickerdaysCancel(requestId: string): Promise<any> {
-  return fetchJson<any>(`/api/tickerdays/cancel/${encodeURIComponent(requestId)}`, {
+  return fetchJson<any>(bridgeUrl(`/api/tickerdays/cancel/${encodeURIComponent(requestId)}`), {
     method: "POST",
   });
 }
