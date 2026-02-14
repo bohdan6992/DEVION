@@ -1,29 +1,30 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || "";
+const BACKEND = process.env.BACKEND_URL || "";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!BACKEND) {
-    res.status(500).json({ message: "BACKEND_URL is not configured" });
-    return;
+    console.error("BACKEND_URL is not configured (server runtime)");
+    return res.status(500).json({ message: "BACKEND_URL is not configured" });
   }
 
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-    res.status(405).json({ message: "Method not allowed" });
-    return;
+    return res.status(405).json({ message: "Method not allowed" });
   }
 
   const url = new URL("/api/sonar/query", BACKEND);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (req.headers.authorization) headers["Authorization"] = String(req.headers.authorization);
+  if (req.headers.cookie) headers["Cookie"] = String(req.headers.cookie);
+
   const upstream = await fetch(url.toString(), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
-      ...(req.headers.cookie ? { Cookie: req.headers.cookie } : {}),
-    } as any,
-    body: JSON.stringify(req.body),
+    headers,
+    body: JSON.stringify(req.body ?? {}),
   });
 
   const text = await upstream.text();
@@ -31,9 +32,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     res.setHeader("Content-Type", "application/json");
-    res.send(text ? JSON.parse(text) : {});
+    return res.send(text ? JSON.parse(text) : {});
   } catch {
     res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/plain");
-    res.send(text);
+    return res.send(text);
   }
 }
