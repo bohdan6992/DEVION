@@ -1,3 +1,5 @@
+import { bridgeUrl } from "@/lib/bridgeBase";
+
 export type ExitMode = "Move1000" | "Close" | "MinuteIdx";
 
 export type ScopeEventsRequest = {
@@ -59,8 +61,11 @@ function pickErrorMessage(json: any, text: string, status: number): string {
   return String(msg);
 }
 
-async function postJson<T>(url: string, bodyObj: any): Promise<{ ok: boolean; status: number; text: string; json: any | null; parsed: T | null }> {
-  const r = await fetch(url, {
+async function postJson<T>(
+  absUrl: string,
+  bodyObj: any
+): Promise<{ ok: boolean; status: number; text: string; json: any | null; parsed: T | null }> {
+  const r = await fetch(absUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(bodyObj),
@@ -79,7 +84,7 @@ async function postJson<T>(url: string, bodyObj: any): Promise<{ ok: boolean; st
 }
 
 export async function postScopeCharts(req: ScopeChartsRequest): Promise<ScopeChartsResponse> {
-  const res = await postJson<ScopeChartsResponse>("/api/scope/charts", req);
+  const res = await postJson<ScopeChartsResponse>(bridgeUrl("/api/scope/charts"), req);
 
   if (!res.ok) {
     return {
@@ -93,7 +98,7 @@ export async function postScopeCharts(req: ScopeChartsRequest): Promise<ScopeCha
 }
 
 export async function postScopeEvents(req: ScopeEventsRequest): Promise<ScopeEventsResponse> {
-  const res = await postJson<ScopeEventsResponse>("/api/scope/events", req);
+  const res = await postJson<ScopeEventsResponse>(bridgeUrl("/api/scope/events"), req);
 
   if (!res.ok) {
     return {
