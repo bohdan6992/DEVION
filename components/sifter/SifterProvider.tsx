@@ -5,18 +5,8 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import type { SifterDayRow, SifterDaysRequest } from "@/lib/sifterClient";
 import { postSifterDays } from "@/lib/sifterClient";
 
-import type {
-  TickerdaysAck,
-  TickerdaysReportRequest,
-  TickerdaysResult,
-  TickerdaysStatus,
-} from "@/lib/tickerdaysClient";
-import {
-  postTickerdaysReport,
-  getTickerdaysStatus,
-  getTickerdaysResult,
-  postTickerdaysCancel,
-} from "@/lib/tickerdaysClient";
+import type { TickerdaysAck, TickerdaysReportRequest, TickerdaysResult, TickerdaysStatus } from "@/lib/tickerdaysClient";
+import { postTickerdaysReport, getTickerdaysStatus, getTickerdaysResult, postTickerdaysCancel } from "@/lib/tickerdaysClient";
 
 type SifterMode = "closed" | "docked";
 type RunMode = "quick" | "tickerdays";
@@ -25,13 +15,12 @@ export type SifterState = {
   mode: SifterMode;
   isPopout: boolean;
 
-  // run mode
   runMode: RunMode;
 
   // filters (shared)
   fromDateNy: string;
   toDateNy: string;
-  tickersText: string;      // "AAPL,MSFT"
+  tickersText: string; // "AAPL,MSFT"
   sectorL3: string | null;
   minMarketCapM: number | null;
   maxMarketCapM: number | null;
@@ -44,8 +33,8 @@ export type SifterState = {
 
   // minute window research (UI-ready)
   minuteFrom: string; // "09:31"
-  minuteTo: string;   // "10:15"
-  metric: string;     // "GapPct" | "ClsToClsPct" | "SigmaZapS" | ...
+  minuteTo: string; // "10:15"
+  metric: string; // "GapPct" | "ClsToClsPct" | "SigmaZapS" | ...
 
   // tickerdays selected window ids (backend window IDs)
   windowStartId: number;
@@ -57,19 +46,18 @@ export type SifterState = {
   rows: SifterDayRow[];
 
   // perf settings
-  perfSide: "long" | "short"; // short = invert
-  selectedKey: string | null; // `${dateNy}|${ticker}`
+  perfSide: "long" | "short";
+  selectedKey: string | null;
 
   // tickerdays job state
   tdRequestId: string | null;
-  tdStatus: number | null;      // 2 running, 3 done, 4 error, 5 cancelled
-  tdProgress: number;           // 0..1
+  tdStatus: number | null; // 2 running, 3 done, 4 error, 5 cancelled
+  tdProgress: number;
   tdMessage: string | null;
 
   tdLoading: boolean;
   tdError: string | null;
 
-  // tickerdays result
   tdResult: TickerdaysResult | null;
 };
 
@@ -82,8 +70,8 @@ type SifterActions = {
 
   setRunMode(mode: RunMode): void;
 
-  runDays(): Promise<void>;           // quick
-  runTickerdays(): Promise<void>;     // job
+  runDays(): Promise<void>;
+  runTickerdays(): Promise<void>;
   cancelTickerdays(): Promise<void>;
 
   selectRow(dateNy: string, ticker: string): void;
@@ -96,20 +84,22 @@ const BC_NAME = "sifter";
 
 function safeJsonParse<T>(s: string | null): T | null {
   if (!s) return null;
-  try { return JSON.parse(s) as T; } catch { return null; }
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeTickers(text: string): string[] | null {
   const parts = text
     .split(/[,\s]+/g)
-    .map(s => s.trim().toUpperCase())
+    .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
   return parts.length ? parts : null;
 }
 
 function buildTickerdaysRequest(state: SifterState): TickerdaysReportRequest {
-  // Map the selected backend window ids into the pricePercFilter timeStart/timeEnd
-  // (backend TickerdaysBuilder expects window ids for timeStart/timeEnd)
   return {
     startDateNy: state.fromDateNy,
     endDateNy: state.toDateNy,
@@ -145,9 +135,15 @@ export function SifterProvider({
   initialIsPopout?: boolean;
 }) {
   const pollRef = useRef<number | null>(null);
+  const bcRef = useRef<BroadcastChannel | null>(null);
+
+  // ✅ stateRef fixes stale closure issues in async actions
+  const stateRef = useRef<SifterState | null>(null);
 
   const [state, setState] = useState<SifterState>(() => {
-    const fromStorage = safeJsonParse<Partial<SifterState>>(typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null);
+    const fromStorage = safeJsonParse<Partial<SifterState>>(
+      typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null
+    );
 
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -177,7 +173,7 @@ export function SifterProvider({
       minuteTo: fromStorage?.minuteTo ?? "10:15",
       metric: fromStorage?.metric ?? "GapPct",
 
-      // default window ids (match backend config; safe defaults)
+      // ✅ safer defaults (backend windows often have 0..4; keep your prior intent)
       windowStartId: typeof fromStorage?.windowStartId === "number" ? (fromStorage as any).windowStartId : 0,
       windowEndId: typeof fromStorage?.windowEndId === "number" ? (fromStorage as any).windowEndId : 1,
 
@@ -195,21 +191,20 @@ export function SifterProvider({
 
       tdLoading: false,
       tdError: null,
-
-      // By default, don't restore the full tdResult from storage (could be huge).
-      // If you want to restore it, set tdResult here from storage.
       tdResult: null,
     };
   });
 
-  const bcRef = useRef<BroadcastChannel | null>(null);
+  // keep ref synced
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const stopPoll = () => {
     if (typeof window === "undefined") return;
     if (pollRef.current != null) window.clearInterval(pollRef.current);
     pollRef.current = null;
   };
-
 
   const syncToOthers = (patch: Partial<SifterState>) => {
     try {
@@ -221,15 +216,14 @@ export function SifterProvider({
     } catch {}
   };
 
-  // Persist
+  // Persist (avoid huge payloads)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Avoid persisting huge payloads by default:
     const toStore: Partial<SifterState> = {
       ...state,
       rows: state.rows,
-      tdResult: null, // keep storage light; toggle if you want full restore
+      tdResult: null,
     };
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
@@ -246,7 +240,7 @@ export function SifterProvider({
       bc.onmessage = (ev) => {
         const msg = ev.data;
         if (!msg || msg.type !== "SYNC_STATE") return;
-        setState(prev => ({ ...prev, ...msg.payload, error: null, tdError: null }));
+        setState((prev) => ({ ...prev, ...msg.payload, error: null, tdError: null }));
       };
     } catch {
       // ignore
@@ -256,7 +250,7 @@ export function SifterProvider({
       if (e.key !== STORAGE_KEY) return;
       const incoming = safeJsonParse<Partial<SifterState>>(e.newValue);
       if (!incoming) return;
-      setState(prev => ({ ...prev, ...incoming, error: null, tdError: null }));
+      setState((prev) => ({ ...prev, ...incoming, error: null, tdError: null }));
     };
 
     window.addEventListener("storage", onStorage);
@@ -269,7 +263,6 @@ export function SifterProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Poll helper
   const startPoll = (requestId: string) => {
     stopPoll();
 
@@ -277,8 +270,7 @@ export function SifterProvider({
       try {
         const st: TickerdaysStatus = await getTickerdaysStatus(requestId);
 
-        // update running status
-        setState(prev => {
+        setState((prev) => {
           const next: Partial<SifterState> = {
             tdRequestId: requestId,
             tdStatus: st.status,
@@ -292,10 +284,9 @@ export function SifterProvider({
 
         if (st.status === 3) {
           stopPoll();
-
           const res: TickerdaysResult = await getTickerdaysResult(requestId);
 
-          setState(prev => {
+          setState((prev) => {
             const next: Partial<SifterState> = {
               tdStatus: 3,
               tdProgress: 1,
@@ -310,7 +301,7 @@ export function SifterProvider({
 
         if (st.status === 4 || st.status === 5) {
           stopPoll();
-          setState(prev => {
+          setState((prev) => {
             const next: Partial<SifterState> = {
               tdLoading: false,
               tdError: st.message ?? (st.status === 5 ? "Cancelled" : "Error"),
@@ -321,7 +312,7 @@ export function SifterProvider({
         }
       } catch (e: any) {
         stopPoll();
-        setState(prev => {
+        setState((prev) => {
           const next: Partial<SifterState> = {
             tdLoading: false,
             tdError: e?.message ?? "Tickerdays status error",
@@ -333,150 +324,170 @@ export function SifterProvider({
     }, 700);
   };
 
-  const actions: SifterActions = useMemo(() => ({
-    toggleDock() {
-      setState(prev => {
-        const nextMode: SifterMode = prev.mode === "docked" ? "closed" : "docked";
-        const next = { ...prev, mode: nextMode };
-        syncToOthers({ mode: nextMode });
-        return next;
-      });
-    },
-    close() {
-      setState(prev => {
-        const next = { ...prev, mode: "closed" as const };
-        syncToOthers({ mode: "closed" });
-        return next;
-      });
-    },
-    openPopout() {
-      if (typeof window === "undefined") return;
-      const url = `/sifter?popout=1`;
-      const w = window.open(url, "SifterPopout", "popup=yes,width=1100,height=780");
-      if (w) w.focus();
-      syncToOthers({ ...state, mode: "docked" });
-    },
-    set(key, value) {
-      setState(prev => {
-        const next = { ...prev, [key]: value };
-        syncToOthers({ [key]: value } as any);
-        return next;
-      });
-    },
-
-    setRunMode(mode) {
-      setState(prev => {
-        const next = { ...prev, runMode: mode };
-        syncToOthers({ runMode: mode });
-        return next;
-      });
-    },
-
-    async runDays() {
-      setState(prev => ({ ...prev, loading: true, error: null }));
-      const req: SifterDaysRequest = {
-        fromDateNy: state.fromDateNy,
-        toDateNy: state.toDateNy,
-        tickers: normalizeTickers(state.tickersText),
-        sectorL3: state.sectorL3,
-        minMarketCapM: state.minMarketCapM,
-        maxMarketCapM: state.maxMarketCapM,
-        minGapPct: state.minGapPct,
-        maxGapPct: state.maxGapPct,
-        minClsToClsPct: state.minClsToClsPct,
-        maxClsToClsPct: state.maxClsToClsPct,
-      };
-
-      try {
-        const res = await postSifterDays(req);
-        setState(prev => {
-          const next = { ...prev, loading: false, rows: res.rows ?? [] };
-          syncToOthers({ loading: false, rows: next.rows });
-          return next;
+  const actions: SifterActions = useMemo(
+    () => ({
+      toggleDock() {
+        setState((prev) => {
+          const nextMode: SifterMode = prev.mode === "docked" ? "closed" : "docked";
+          syncToOthers({ mode: nextMode });
+          return { ...prev, mode: nextMode };
         });
-      } catch (e: any) {
-        setState(prev => ({ ...prev, loading: false, error: e?.message ?? "Error" }));
-      }
-    },
+      },
+      close() {
+        setState((prev) => {
+          syncToOthers({ mode: "closed" });
+          return { ...prev, mode: "closed" };
+        });
+      },
+      openPopout() {
+        if (typeof window === "undefined") return;
+        const url = `/sifter?popout=1`;
+        const w = window.open(url, "SifterPopout", "popup=yes,width=1100,height=780");
+        if (w) w.focus();
 
-    async runTickerdays() {
-      // replace policy: cancel previous running job
-      if (state.tdRequestId && state.tdStatus === 2) {
-        try { await postTickerdaysCancel(state.tdRequestId); } catch {}
-      }
-      stopPoll();
+        // ✅ do NOT broadcast whole state (can overwrite other tab with stale values)
+        syncToOthers({ mode: "docked" });
+      },
 
-      const req = buildTickerdaysRequest(state);
-      if (!req.tickers.length) {
-        setState(prev => ({ ...prev, tdError: "tickers required" }));
-        return;
-      }
+      set(key, value) {
+        setState((prev) => {
+          syncToOthers({ [key]: value } as any);
+          return { ...prev, [key]: value } as any;
+        });
+      },
 
-      setState(prev => {
-        const next: Partial<SifterState> = {
-          tdLoading: true,
-          tdError: null,
-          tdResult: null,
-          tdProgress: 0,
-          tdMessage: "Starting…",
+      setRunMode(mode) {
+        setState((prev) => {
+          syncToOthers({ runMode: mode });
+          return { ...prev, runMode: mode };
+        });
+      },
+
+      async runDays() {
+        const cur = stateRef.current;
+        if (!cur) return;
+
+        setState((prev) => ({ ...prev, loading: true, error: null }));
+
+        const req: SifterDaysRequest = {
+          fromDateNy: cur.fromDateNy,
+          toDateNy: cur.toDateNy,
+          tickers: normalizeTickers(cur.tickersText),
+          sectorL3: cur.sectorL3,
+          minMarketCapM: cur.minMarketCapM,
+          maxMarketCapM: cur.maxMarketCapM,
+          minGapPct: cur.minGapPct,
+          maxGapPct: cur.maxGapPct,
+          minClsToClsPct: cur.minClsToClsPct,
+          maxClsToClsPct: cur.maxClsToClsPct,
         };
-        syncToOthers(next);
-        return { ...prev, ...next };
-      });
 
-      try {
-        const ack: TickerdaysAck = await postTickerdaysReport(req);
+        try {
+          const res = await postSifterDays(req);
+          const rows = Array.isArray(res?.rows) ? res.rows : [];
 
-        setState(prev => {
+          setState((prev) => {
+            const next = { ...prev, loading: false, rows, error: null };
+            syncToOthers({ loading: false, rows, error: null });
+            return next;
+          });
+        } catch (e: any) {
+          setState((prev) => {
+            const msg = e?.message ?? "Error";
+            syncToOthers({ loading: false, error: msg });
+            return { ...prev, loading: false, error: msg };
+          });
+        }
+      },
+
+      async runTickerdays() {
+        const cur = stateRef.current;
+        if (!cur) return;
+
+        // cancel previous running job
+        if (cur.tdRequestId && cur.tdStatus === 2) {
+          try {
+            await postTickerdaysCancel(cur.tdRequestId);
+          } catch {}
+        }
+        stopPoll();
+
+        const req = buildTickerdaysRequest(cur);
+        if (!req.tickers.length) {
+          setState((prev) => ({ ...prev, tdError: "tickers required" }));
+          return;
+        }
+
+        setState((prev) => {
           const next: Partial<SifterState> = {
-            tdRequestId: ack.requestId,
-            tdStatus: ack.status,
             tdLoading: true,
+            tdError: null,
+            tdResult: null,
             tdProgress: 0,
-            tdMessage: "Queued…",
+            tdMessage: "Starting…",
           };
           syncToOthers(next);
           return { ...prev, ...next };
         });
 
-        startPoll(ack.requestId);
-      } catch (e: any) {
-        setState(prev => {
+        try {
+          const ack: TickerdaysAck = await postTickerdaysReport(req);
+
+          setState((prev) => {
+            const next: Partial<SifterState> = {
+              tdRequestId: ack.requestId,
+              tdStatus: ack.status,
+              tdLoading: true,
+              tdProgress: 0,
+              tdMessage: "Queued…",
+            };
+            syncToOthers(next);
+            return { ...prev, ...next };
+          });
+
+          startPoll(ack.requestId);
+        } catch (e: any) {
+          setState((prev) => {
+            const next: Partial<SifterState> = {
+              tdLoading: false,
+              tdError: e?.message ?? "Tickerdays create failed",
+            };
+            syncToOthers(next);
+            return { ...prev, ...next };
+          });
+        }
+      },
+
+      async cancelTickerdays() {
+        const cur = stateRef.current;
+        if (!cur?.tdRequestId) return;
+
+        try {
+          await postTickerdaysCancel(cur.tdRequestId);
+        } catch {}
+
+        stopPoll();
+        setState((prev) => {
           const next: Partial<SifterState> = {
+            tdStatus: 5,
             tdLoading: false,
-            tdError: e?.message ?? "Tickerdays create failed",
+            tdMessage: "Cancelled",
           };
           syncToOthers(next);
           return { ...prev, ...next };
         });
-      }
-    },
+      },
 
-    async cancelTickerdays() {
-      if (!state.tdRequestId) return;
-      try { await postTickerdaysCancel(state.tdRequestId); } catch {}
-      stopPoll();
-      setState(prev => {
-        const next: Partial<SifterState> = {
-          tdStatus: 5,
-          tdLoading: false,
-          tdMessage: "Cancelled",
-        };
-        syncToOthers(next);
-        return { ...prev, ...next };
-      });
-    },
-
-    selectRow(dateNy, ticker) {
-      const key = `${dateNy}|${ticker}`;
-      setState(prev => {
-        const next = { ...prev, selectedKey: key };
-        syncToOthers({ selectedKey: key });
-        return next;
-      });
-    },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [state]);
+      selectRow(dateNy, ticker) {
+        const key = `${dateNy}|${ticker}`;
+        setState((prev) => {
+          syncToOthers({ selectedKey: key });
+          return { ...prev, selectedKey: key };
+        });
+      },
+    }),
+    []
+  );
 
   return <SifterCtx.Provider value={{ state, actions }}>{children}</SifterCtx.Provider>;
 }

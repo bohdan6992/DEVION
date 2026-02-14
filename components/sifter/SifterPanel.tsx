@@ -6,9 +6,16 @@ import { useSifter } from "./SifterProvider";
 import type { SifterDayRow } from "@/lib/sifterClient";
 import { setSifterHandoff } from "@/lib/sifterHandoff";
 
+function toNum(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const x = Number(v);
+  if (Number.isNaN(x) || !Number.isFinite(x)) return null;
+  return x;
+}
+
 function fmt(n: any, digits = 2) {
-  if (n === null || n === undefined || Number.isNaN(n)) return "";
-  const x = Number(n);
+  const x = toNum(n);
+  if (x === null) return "";
   return x.toFixed(digits);
 }
 
@@ -29,35 +36,48 @@ export function SifterPanel() {
   const rows: SifterDayRow[] = useMemo(() => {
     if (state.runMode === "tickerdays") {
       const days = (state.tdResult?.days ?? []) as any[];
-      return days.map((d) => ({
-        dateNy: d.dateNy ?? d.DateNy ?? "",
-        ticker: d.ticker ?? d.Ticker ?? "",
-        gapPct: d.gapPct ?? d.GapPct ?? null,
-        clsToClsPct: d.clsToClsPct ?? d.ClsToClsPct ?? null,
-        marketCapM: d.marketCapM ?? d.MarketCapM ?? null,
-        sectorL3: d.sectorL3 ?? d.SectorL3 ?? null,
-        exchange: d.exchange ?? d.Exchange ?? null,
-        adv: d.adv20 ?? d.Adv20 ?? d.adv ?? null,
 
-        // optional alias
-        // @ts-ignore
-        pctChange: d.pctChange ?? d.PctChange ?? null,
-      })) as any;
+      return days
+        .map((d) => {
+          const dateNy = (d.dateNy ?? d.DateNy ?? "").toString();
+          const ticker = (d.ticker ?? d.Ticker ?? "").toString();
+
+          return {
+            dateNy,
+            ticker,
+            gapPct: d.gapPct ?? d.GapPct ?? null,
+            clsToClsPct: d.clsToClsPct ?? d.ClsToClsPct ?? null,
+            marketCapM: d.marketCapM ?? d.MarketCapM ?? null,
+            sectorL3: d.sectorL3 ?? d.SectorL3 ?? null,
+            exchange: d.exchange ?? d.Exchange ?? null,
+            adv: d.adv20 ?? d.Adv20 ?? d.adv ?? null,
+
+            // optional alias (tickerdays may provide)
+            // @ts-ignore
+            pctChange: d.pctChange ?? d.PctChange ?? null,
+          } as any;
+        })
+        .filter((r) => r.dateNy && r.ticker) as any;
     }
+
     return state.rows;
   }, [state.runMode, state.rows, state.tdResult]);
 
   const perf = useMemo(() => {
-    const vals: number[] = [];
     const byTicker = new Map<string, { sum: number; n: number; wins: number }>();
+    const vals: number[] = [];
 
+    const readMetric = (r: SifterDayRow): number | null => {
+      const raw = (r as any)[metricKey];
+      const x = toNum(raw);
+      if (x === null) return null;
+      return state.perfSide === "short" ? -x : x;
+    };
+
+    // collect
     for (const r of rows) {
-      const vRaw = (r as any)[metricKey];
-      if (vRaw === null || vRaw === undefined || Number.isNaN(vRaw)) continue;
-      let v = Number(vRaw);
-
-      // short = invert
-      if (state.perfSide === "short") v = -v;
+      const v = readMetric(r);
+      if (v === null) continue;
 
       vals.push(v);
 
@@ -74,14 +94,14 @@ export function SifterPanel() {
     const med = median(vals);
     const winRate = vals.length ? vals.filter((v) => v > 0).length / vals.length : 0;
 
+    // curve
     const sorted = [...rows].slice().sort((a, b) => a.dateNy.localeCompare(b.dateNy));
     let eq = 0;
     const curve: { dateNy: string; eq: number }[] = [];
+
     for (const r of sorted) {
-      const vRaw = (r as any)[metricKey];
-      if (vRaw === null || vRaw === undefined || Number.isNaN(vRaw)) continue;
-      let v = Number(vRaw);
-      if (state.perfSide === "short") v = -v;
+      const v = readMetric(r);
+      if (v === null) continue;
       eq += v;
       curve.push({ dateNy: r.dateNy, eq });
     }
@@ -309,7 +329,7 @@ export function SifterPanel() {
                     style={{ width: `${Math.max(0, Math.min(1, state.tdProgress ?? 0)) * 100}%` }}
                   />
                 </div>
-              </div>
+                </div>
             ) : null}
           </div>
         </div>
@@ -334,8 +354,8 @@ export function SifterPanel() {
               const key = `${r.dateNy}|${r.ticker}`;
               const selected = state.selectedKey === key;
 
-              const g = r.gapPct ?? null;
-              const c = r.clsToClsPct ?? null;
+              const g = toNum(r.gapPct);
+              const c = toNum(r.clsToClsPct);
 
               const gCls = g === null ? "" : g >= 0 ? "text-green-300" : "text-red-300";
               const cCls = c === null ? "" : c >= 0 ? "text-green-300" : "text-red-300";

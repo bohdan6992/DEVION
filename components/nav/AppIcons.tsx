@@ -1,127 +1,117 @@
+"use client";
+
 import React from "react";
 
-type Props = React.SVGProps<SVGSVGElement> & { glow?: boolean };
+type Props = React.SVGProps<SVGSVGElement> & { glow?: boolean; color?: string };
 
 const CommonStyles = () => (
   <style>{`
-    @keyframes icon-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-1.2px); } }
-    @keyframes icon-pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    @keyframes icon-spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    @keyframes icon-dash { to { stroke-dashoffset: 0; } }
-    @keyframes icon-terminal { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-
-    .anim-float { animation: icon-float 3s ease-in-out infinite; }
-    .anim-pulse { animation: icon-pulse-subtle 2s ease-in-out infinite; }
-    .anim-spin { animation: icon-spin-slow 10s linear infinite; transform-origin: center; }
-    .anim-terminal { animation: icon-terminal 1s step-end infinite; }
+    @keyframes sonar-ping { 0% { transform: scale(0.4); opacity: 0.8; } 100% { transform: scale(1.2); opacity: 0; } }
+    @keyframes scanner-pnl { 0% { stroke-dashoffset: 100; opacity: 0.3; } 50% { opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0.3; } }
+    @keyframes scope-point { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
+    @keyframes terminal-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes spectr-slide { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    @keyframes swift-flow { 0% { transform: translateX(-10px); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateX(10px); opacity: 0; } }
+    
+    .anim-sonar { animation: sonar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; transform-origin: center; }
+    .anim-pnl { stroke-dasharray: 100; animation: scanner-pnl 3s linear infinite; }
+    .anim-scope { animation: scope-point 2s ease-in-out infinite; transform-origin: center; }
+    .anim-cursor { animation: terminal-cursor 0.8s step-end infinite; }
+    .anim-spectr-1 { animation: spectr-slide 4s ease-in-out infinite; }
+    .anim-spectr-2 { animation: spectr-slide 4s ease-in-out infinite 0.5s; }
+    .anim-swift { animation: swift-flow 1.5s linear infinite; }
   `}</style>
 );
 
-// 1. Terminal - Чистий код, без зайвих ліній зверху
-export function IconCode({ glow = false, ...p }: Props) {
+const Glow = ({ children }: { children: React.ReactNode }) => (
+  <g className="opacity-40 blur-[6px]">{children}</g>
+);
+
+// 1. SONAR - Трейдингові сигнали (Імпульси)
+export function IconSonar({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M8 10l2.5 2L8 14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <line x1="12" y1="14" x2="16" y2="14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" className="anim-terminal" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <circle cx="12" cy="12" r="9" strokeOpacity="0.1" />
+      <circle cx="12" cy="12" r="1" fill="currentColor" />
+      <circle cx="12" cy="12" r="6" className="anim-sonar" strokeWidth="1" />
+      <path d="M12 12l4-7" strokeLinecap="round" className="animate-[spin_4s_linear_infinite] origin-center" />
+      <circle cx="16" cy="5" r="1.5" fill="currentColor" stroke="none" className="anim-scope" />
+      {glow && <Glow><circle cx="12" cy="12" r="6" /></Glow>}
     </svg>
   );
 }
 
-// 2. Shield - Покращена форма, тонкі лінії безпеки
-export function IconSecurity({ glow = false, ...p }: Props) {
+// 2. SCANNER - PnL Research (Крива прибутку)
+export function IconScanner({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M12 7.5c-2.5 0-3.5 1-3.5 1s0 2.5 0 3.5c0 2.5 3.5 4.5 3.5 4.5s3.5-2 3.5-4.5c0-1 0-3.5 0-3.5s-1-1-3.5-1z" 
-        stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" className="anim-float" />
-      <circle cx="12" cy="11.5" r="0.6" fill="currentColor" className="anim-pulse" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <path d="M3 16l4-3 4 5 5-10 5 4" strokeLinecap="round" strokeLinejoin="round" className="anim-pnl" />
+      <path d="M3 16l4-3 4 5 5-10 5 4" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.2" />
+      <path d="M3 20h18" strokeWidth="1" strokeOpacity="0.2" />
+      {glow && <Glow><path d="M3 16l4-3 4 5 5-10 5 4" /></Glow>}
     </svg>
   );
 }
 
-// 3. Nodes - Тонкі зв'язки, без напливів
-export function IconNodes({ glow = false, ...p }: Props) {
+// 3. SCOPE - Глибокий аналіз (Сітка та метрики)
+export function IconScope({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="8.5" cy="8.5" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="15.5" cy="15.5" r="1.5" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="15.5" cy="8.5" r="0.8" fill="currentColor" strokeOpacity="0.4" className="anim-pulse" />
-      <path d="M10 8.5h4M15.5 10v4M10 10l4.5 4.5" stroke="currentColor" strokeWidth="1.1" strokeOpacity="0.3" strokeLinecap="round" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <rect x="4" y="4" width="16" height="16" rx="2" strokeOpacity="0.1" />
+      <path d="M12 4v16M4 12h16" strokeOpacity="0.1" strokeWidth="1" />
+      <circle cx="16" cy="8" r="2" strokeWidth="2" />
+      <circle cx="8" cy="15" r="1.5" fill="currentColor" stroke="none" className="anim-scope" />
+      <path d="M4 19l4-4 3 2 9-9" strokeOpacity="0.4" strokeDasharray="2 2" />
+      {glow && <Glow><circle cx="16" cy="8" r="2" /></Glow>}
     </svg>
   );
 }
 
-// 4. Energy - Більш гостра та динамічна блискавка
-export function IconEnergy({ glow = false, ...p }: Props) {
+// 4. SWAGGER - API Terminal (Запити)
+export function IconSwagger({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M13 7l-4 5.5h5L10 18" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="anim-float" />
-      <path d="M7 6.5a8 8 0 0110 0" stroke="currentColor" strokeWidth="1" strokeOpacity="0.2" strokeDasharray="2 2" className="anim-spin" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <path d="M7 8l-4 4 4 4M17 8l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 16l4-8" strokeOpacity="0.3" strokeLinecap="round" />
+      <rect x="9" y="12" width="6" height="1" fill="currentColor" className="anim-cursor" stroke="none" />
+      {glow && <Glow><path d="M7 8l-4 4 4 4M17 8l4 4-4 4" /></Glow>}
     </svg>
   );
 }
 
-// 5. Analytics - Чіткі стовпчики та тонка лінія тренду
-export function IconChart({ glow = false, ...p }: Props) {
+// 5. SPECTR - Сховище історичних даних (Стек)
+export function IconSpectr({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7.5 16v-3.5M12 16V9M16.5 16v-5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M7.5 9.5l3 2.5 3.5-3 2.5 2" stroke="currentColor" strokeWidth="1" strokeOpacity="0.4" strokeLinecap="round" className="anim-pulse" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <g className="anim-spectr-1">
+        <path d="M4 8l8-4 8 4-8 4-8-4z" fill="currentColor" fillOpacity="0.1" />
+      </g>
+      <g className="anim-spectr-2">
+        <path d="M4 12l8 4 8-4" strokeOpacity="0.6" />
+        <path d="M4 16l8 4 8-4" strokeOpacity="0.3" />
+      </g>
+      {glow && <Glow><path d="M12 4L4 8l8 4 8-4-8-4z" /></Glow>}
     </svg>
   );
 }
 
-// 6. Layers - Тонкі паралельні пласти
-export function IconLayers({ glow = false, ...p }: Props) {
+// 6. SWIFT - Швидкий аналіз (Потік даних)
+export function IconSwift({ glow = false, ...p }: Props) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...p}>
       <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7 9l5 2.5 5-2.5-5-2.5-5 2.5z" stroke="currentColor" strokeWidth="1.2" className="anim-float" />
-      <path d="M7 12.5l5 2.5 5-2.5M7 16l5 2.5 5-2.5" stroke="currentColor" strokeWidth="1.2" strokeOpacity="0.4" strokeLinecap="round" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
-    </svg>
-  );
-}
-
-// 7. Aim/Focus - Більш точні перехрестя (замість Gear)
-export function IconSettings({ glow = false, ...p }: Props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
-      <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="12" cy="12" r="3.5" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2 3" className="anim-spin" />
-      <path d="M12 8v-1M12 17v-1M8 12H7m10 0h-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <circle cx="12" cy="12" r="0.8" fill="currentColor" className="anim-pulse" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
-    </svg>
-  );
-}
-
-// 8. Cloud - Чиста геометрія без перетину ліній
-export function IconCloud({ glow = false, ...p }: Props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
-      <CommonStyles />
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7.5 14h8.5a2.5 2.5 0 000-5c-.3 0-.6 0-.9.1a3.5 3.5 0 00-6.6.9 2.5 2.5 0 00-1 4z" 
-        stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" className="anim-float" />
-      <line x1="10" y1="12" x2="14" y2="12" stroke="currentColor" strokeWidth="1" strokeOpacity="0.2" strokeDasharray="2 1" />
-      {glow && <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="2.8" strokeOpacity="0.2" />}
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" fill="currentColor" fillOpacity="0.05" />
+      <g className="anim-swift">
+        <circle cx="12" cy="12" r="1" fill="currentColor" />
+        <path d="M12 12h6" strokeOpacity="0.4" strokeWidth="1" />
+      </g>
+      <path d="M5 14h14" strokeOpacity="0.1" strokeWidth="1" strokeDasharray="4 2" />
+      {glow && <Glow><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></Glow>}
     </svg>
   );
 }

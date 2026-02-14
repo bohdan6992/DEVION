@@ -15,7 +15,7 @@ export type TickerdaysStatus = {
 export type TickerdaysReportRequest = {
   // Prefer NY date strings to avoid timezone shifts
   startDateNy: string; // "YYYY-MM-DD"
-  endDateNy: string;   // "YYYY-MM-DD"
+  endDateNy: string; // "YYYY-MM-DD"
 
   tickers: string[];
 
@@ -27,7 +27,7 @@ export type TickerdaysReportRequest = {
       pricePercChange?: number; // e.g. 1.0
       side?: number; // 0 any, 1 pos, 2 neg
       timeStart?: number; // window id
-      timeEnd?: number;   // window id
+      timeEnd?: number; // window id
     }>;
     volatilityFilters?: any[];
     volumeFilters?: any[];
@@ -48,8 +48,8 @@ export type TickerdaysResult = {
     fetchDataMode?: number;
     [k: string]: any;
   };
-  days?: any[]; // you can strongly type later (TickerdaysDayRowDto)
-  intraday?: Record<string, any[]>; // key: "TICKER|YYYY-MM-DD" -> points[]
+  days?: any[];
+  intraday?: Record<string, any[]>;
   performance?: {
     trades?: any[];
     summary?: any[];
@@ -58,13 +58,56 @@ export type TickerdaysResult = {
   [k: string]: any;
 };
 
+function clip(s: string, max = 2000) {
+  if (!s) return s;
+  const x = s.trim();
+  return x.length > max ? x.slice(0, max) + " …" : x;
+}
+
+async function readError(res: Response): Promise<string> {
+  const ct = res.headers.get("content-type") ?? "";
+
+  // try json first
+  if (ct.includes("application/json")) {
+    try {
+      const j: any = await res.json();
+
+      // common shapes:
+      // - ProblemDetails: {title, detail, status, traceId}
+      // - {ok:false, error:"..."} or {message:"..."}
+      const msg =
+        j?.error ??
+        j?.message ??
+        j?.title ??
+        j?.detail ??
+        (typeof j === "string" ? j : null);
+
+      if (msg) return clip(String(msg));
+
+      // fallback: stringify small json
+      return clip(JSON.stringify(j));
+    } catch {
+      // fallthrough to text
+    }
+  }
+
+  try {
+    const t = await res.text();
+    return clip(t);
+  } catch {
+    return "";
+  }
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
+
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${url} failed: ${res.status}${text ? ` • ${text}` : ""}`);
+    const err = await readError(res);
+    throw new Error(`${url} failed: ${res.status}${err ? ` • ${err}` : ""}`);
   }
-  return res.json() as Promise<T>;
+
+  return (await res.json()) as T;
 }
 
 export async function postTickerdaysReport(body: TickerdaysReportRequest): Promise<TickerdaysAck> {
