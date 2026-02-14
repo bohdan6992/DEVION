@@ -1,4 +1,5 @@
 // lib/sifterClient.ts
+import { bridgeUrl } from "@/lib/bridgeBase";
 
 async function readErrorText(res: Response) {
   try {
@@ -24,7 +25,6 @@ export type SifterDaysRequest = {
   minClsToClsPct?: number | null;
   maxClsToClsPct?: number | null;
 
-  // optional: future filters (safe to send as null/undefined)
   minMdnPreMhVol90?: number | null;
   maxMdnPreMhVol90?: number | null;
 
@@ -58,17 +58,14 @@ export type SifterDayRow = {
   marketCapM?: number | null;
   sectorL3?: string | null;
 
-  // display-only extras (optional)
   exchange?: string | null;
   adv?: number | null;
 
-  // optional (medians)
   mdnPreMhVol90?: number | null;
   preMhMDV90NF?: number | null;
   preMhMDV20NF?: number | null;
   mdnPostMhVol90NF?: number | null;
 
-  // optional (imbalance)
   imbExch?: string | null;
   imbExchValue?: number | null;
   refPrcExch?: string | null;
@@ -77,7 +74,7 @@ export type SifterDayRow = {
 };
 
 export async function postSifterDays(body: SifterDaysRequest): Promise<{ rows: SifterDayRow[] }> {
-  const res = await fetch("/api/sifter/days", {
+  const res = await fetch(bridgeUrl("/api/sifter/days"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -100,23 +97,19 @@ export type SifterWindowRequest = {
   tickers?: string[] | null;
   sectorL3?: string | null;
   minMarketCapM?: number | null;
-
-  // if your backend supports it later:
   maxMarketCapM?: number | null;
 };
 
 export type SifterTickerdaysResult = {
   requestId?: string | null;
-  status?: number | null; // (depends on backend enum)
+  status?: number | null;
   message?: string | null;
-  progress?: number | null; // 0..1
-
-  // main payload used by SifterPanel
-  days?: any[]; // keep loose for now because backend may change shape
+  progress?: number | null;
+  days?: any[];
 };
 
 export async function postSifterWindow(body: SifterWindowRequest): Promise<SifterTickerdaysResult> {
-  const res = await fetch("/api/sifter/window", {
+  const res = await fetch(bridgeUrl("/api/sifter/window"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
