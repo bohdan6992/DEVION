@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { backendUrl } from "@/lib/backend";
 
 type SonarRow = {
   ticker: string;
@@ -314,7 +315,7 @@ export default function BridgeSonarSignals() {
     setErr(null);
 
     try {
-      const r = await fetch("/api/sonar/query", {
+      const r = await fetch(backendUrl("/api/sonar/query"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

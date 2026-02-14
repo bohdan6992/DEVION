@@ -1,4 +1,5 @@
 import type { PresetDto, PresetUpsertRequestDto } from "@/types/presets";
+import { backendUrl } from "@/lib/backend";
 
 type ListParams = {
   kind?: string;
@@ -17,8 +18,8 @@ function qs(params: Record<string, any>) {
 
 export async function listPresets(params: ListParams = {}): Promise<PresetDto[]> {
   const kind = params.kind ?? "ARBITRAGE";
-  const scope = params.scope ?? "BOTH";
-  const res = await fetch(`/api/presets${qs({ kind, scope })}`, { credentials: "include" });
+  const scope = params.scope ?? "BOTH"
+  const res = await fetch(backendUrl(`/api/presets${qs({ kind, scope })}`), { credentials: "include" });
   if (!res.ok) throw new Error(`listPresets failed: ${res.status}`);
   return res.json();
 }
