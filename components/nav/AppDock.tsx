@@ -24,8 +24,8 @@ type DockItem = {
 };
 
 const ITEMS: DockItem[] = [
-  { key: "sonar", href: "/sonar", label: "Sonar", Icon: IconSonar, accent: "green" },
-  { key: "scanner", href: "/scanner", label: "Scanner", Icon: IconScanner, accent: "cyan" },
+  { key: "sonar", href: "/terminal", label: "Sonar", Icon: IconSonar, accent: "green" },
+  { key: "scaner", href: "/scaner", label: "Scaner", Icon: IconScanner, accent: "cyan" },
   { key: "scope", href: "/scope", label: "Scope", Icon: IconScope, accent: "indigo" },
   // Пряме посилання на локальний Swagger
   { key: "swagger", href: "http://localhost:5197/swagger", label: "Swagger", Icon: IconSwagger, accent: "amber" },
