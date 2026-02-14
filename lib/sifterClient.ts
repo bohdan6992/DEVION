@@ -10,6 +10,8 @@ async function readErrorText(res: Response) {
   }
 }
 
+export type SifterMetric = "gapPct" | "clsToClsPct" | "pctChange" | "sigma";
+
 export type SifterDaysRequest = {
   fromDateNy: string;
   toDateNy: string;
@@ -55,6 +57,11 @@ export type SifterDayRow = {
 
   gapPct?: number | null;
   clsToClsPct?: number | null;
+
+  // ✅ added for Metric select + perf calc
+  pctChange?: number | null;
+  sigma?: number | null;
+
   marketCapM?: number | null;
   sectorL3?: string | null;
 
@@ -93,7 +100,7 @@ export type SifterWindowRequest = {
   toDateNy: string;
   minuteFrom: string; // "09:31"
   minuteTo: string; // "10:15"
-  metric: string; // e.g. "SigmaZapS"
+  metric: SifterMetric; // ✅ unified metric keys
   tickers?: string[] | null;
   sectorL3?: string | null;
   minMarketCapM?: number | null;
@@ -108,11 +115,23 @@ export type SifterTickerdaysResult = {
   days?: any[];
 };
 
+function normalizeMetric(m: any): SifterMetric {
+  // accept old values if they leak from storage
+  const x = String(m ?? "").trim();
+  if (x === "gapPct" || x === "clsToClsPct" || x === "pctChange" || x === "sigma") return x;
+  const low = x.toLowerCase();
+  if (low === "gappct") return "gapPct";
+  if (low === "clstocls" || low === "clstocls_pct" || low === "clstocls_pct" || low === "clstoclpct") return "clsToClsPct";
+  if (low === "clstocls pct" || low === "clstocls_pct") return "clsToClsPct";
+  if (low === "pctchange") return "pctChange";
+  return "gapPct";
+}
+
 export async function postSifterWindow(body: SifterWindowRequest): Promise<SifterTickerdaysResult> {
   const res = await fetch(bridgeUrl("/api/sifter/window"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, metric: normalizeMetric(body.metric) }),
   });
 
   if (!res.ok) {

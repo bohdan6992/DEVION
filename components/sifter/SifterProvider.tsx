@@ -5,11 +5,24 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import type { SifterDayRow, SifterDaysRequest } from "@/lib/sifterClient";
 import { postSifterDays } from "@/lib/sifterClient";
 
-import type { TickerdaysAck, TickerdaysReportRequest, TickerdaysResult, TickerdaysStatus } from "@/lib/tickerdaysClient";
-import { postTickerdaysReport, getTickerdaysStatus, getTickerdaysResult, postTickerdaysCancel } from "@/lib/tickerdaysClient";
+import type {
+  TickerdaysAck,
+  TickerdaysReportRequest,
+  TickerdaysResult,
+  TickerdaysStatus,
+} from "@/lib/tickerdaysClient";
+import {
+  postTickerdaysReport,
+  getTickerdaysStatus,
+  getTickerdaysResult,
+  postTickerdaysCancel,
+  getTickerdaysWindows,
+} from "@/lib/tickerdaysClient";
 
 type SifterMode = "closed" | "docked";
 type RunMode = "quick" | "tickerdays";
+
+export type TickerdaysWindow = { id: number; label: string };
 
 export type SifterState = {
   mode: SifterMode;
@@ -31,10 +44,15 @@ export type SifterState = {
 
   minuteFrom: string;
   minuteTo: string;
-  metric: string;
 
-  windowStartId: number;
-  windowEndId: number;
+  // metric keys expected by rows: gapPct/clsToClsPct/pctChange/sigma
+  metric: "gapPct" | "clsToClsPct" | "pctChange" | "sigma";
+
+  // tickerdays window ids
+  windowStartId: number | null;
+  windowEndId: number | null;
+
+  windows: TickerdaysWindow[];
 
   loading: boolean;
   error: string | null;
@@ -92,7 +110,18 @@ function normalizeTickers(text: string): string[] | null {
   return parts.length ? parts : null;
 }
 
+function isValidNyDate(s: string): boolean {
+  // minimal guard: YYYY-MM-DD
+  return /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+function isValidDateRange(fromNy: string, toNy: string): boolean {
+  if (!isValidNyDate(fromNy) || !isValidNyDate(toNy)) return false;
+  return fromNy <= toNy; // lex compare ok for YYYY-MM-DD
+}
+
 function buildTickerdaysRequest(state: SifterState): TickerdaysReportRequest {
+  // preconditions are validated before calling this
   return {
     startDateNy: state.fromDateNy,
     endDateNy: state.toDateNy,
@@ -105,8 +134,8 @@ function buildTickerdaysRequest(state: SifterState): TickerdaysReportRequest {
           isAbsChange: true,
           pricePercChange: 1.0,
           side: 0,
-          timeStart: state.windowStartId,
-          timeEnd: state.windowEndId,
+          timeStart: state.windowStartId as number,
+          timeEnd: state.windowEndId as number,
         },
       ],
       volatilityFilters: [],
@@ -144,42 +173,50 @@ export function SifterProvider({
     const dd = String(now.getDate()).padStart(2, "0");
     const today = `${yyyy}-${mm}-${dd}`;
 
+    const storedMetric = (fromStorage?.metric as any) ?? "gapPct";
+    const metric: SifterState["metric"] =
+      storedMetric === "gapPct" || storedMetric === "clsToClsPct" || storedMetric === "pctChange" || storedMetric === "sigma"
+        ? storedMetric
+        : "gapPct";
+
     return {
       mode: "closed",
       isPopout: Boolean(initialIsPopout),
 
       runMode: (fromStorage?.runMode as RunMode) ?? "quick",
 
-      fromDateNy: fromStorage?.fromDateNy ?? today,
-      toDateNy: fromStorage?.toDateNy ?? today,
-      tickersText: fromStorage?.tickersText ?? "",
-      sectorL3: fromStorage?.sectorL3 ?? null,
-      minMarketCapM: fromStorage?.minMarketCapM ?? null,
-      maxMarketCapM: fromStorage?.maxMarketCapM ?? null,
+      fromDateNy: (fromStorage?.fromDateNy as any) ?? today,
+      toDateNy: (fromStorage?.toDateNy as any) ?? today,
+      tickersText: (fromStorage?.tickersText as any) ?? "",
+      sectorL3: (fromStorage?.sectorL3 as any) ?? null,
+      minMarketCapM: (fromStorage?.minMarketCapM as any) ?? null,
+      maxMarketCapM: (fromStorage?.maxMarketCapM as any) ?? null,
 
-      minGapPct: fromStorage?.minGapPct ?? null,
-      maxGapPct: fromStorage?.maxGapPct ?? null,
-      minClsToClsPct: fromStorage?.minClsToClsPct ?? null,
-      maxClsToClsPct: fromStorage?.maxClsToClsPct ?? null,
+      minGapPct: (fromStorage?.minGapPct as any) ?? null,
+      maxGapPct: (fromStorage?.maxGapPct as any) ?? null,
+      minClsToClsPct: (fromStorage?.minClsToClsPct as any) ?? null,
+      maxClsToClsPct: (fromStorage?.maxClsToClsPct as any) ?? null,
 
-      minuteFrom: fromStorage?.minuteFrom ?? "09:31",
-      minuteTo: fromStorage?.minuteTo ?? "10:15",
-      metric: fromStorage?.metric ?? "GapPct",
+      minuteFrom: (fromStorage?.minuteFrom as any) ?? "09:31",
+      minuteTo: (fromStorage?.minuteTo as any) ?? "10:15",
+      metric,
 
-      windowStartId: typeof fromStorage?.windowStartId === "number" ? (fromStorage as any).windowStartId : 0,
-      windowEndId: typeof fromStorage?.windowEndId === "number" ? (fromStorage as any).windowEndId : 1,
+      windowStartId: typeof (fromStorage as any)?.windowStartId === "number" ? (fromStorage as any).windowStartId : null,
+      windowEndId: typeof (fromStorage as any)?.windowEndId === "number" ? (fromStorage as any).windowEndId : null,
+
+      windows: Array.isArray((fromStorage as any)?.windows) ? ((fromStorage as any).windows as any) : [],
 
       loading: false,
       error: null,
       rows: Array.isArray(fromStorage?.rows) ? (fromStorage?.rows as any) : [],
 
-      perfSide: fromStorage?.perfSide ?? "long",
-      selectedKey: fromStorage?.selectedKey ?? null,
+      perfSide: (fromStorage?.perfSide as any) ?? "long",
+      selectedKey: (fromStorage?.selectedKey as any) ?? null,
 
-      tdRequestId: fromStorage?.tdRequestId ?? null,
-      tdStatus: fromStorage?.tdStatus ?? null,
-      tdProgress: typeof fromStorage?.tdProgress === "number" ? fromStorage.tdProgress : 0,
-      tdMessage: fromStorage?.tdMessage ?? null,
+      tdRequestId: (fromStorage?.tdRequestId as any) ?? null,
+      tdStatus: (fromStorage?.tdStatus as any) ?? null,
+      tdProgress: typeof (fromStorage as any)?.tdProgress === "number" ? (fromStorage as any).tdProgress : 0,
+      tdMessage: (fromStorage?.tdMessage as any) ?? null,
 
       tdLoading: false,
       tdError: null,
@@ -252,6 +289,44 @@ export function SifterProvider({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load Tickerdays windows when switching to tickerdays mode
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (state.runMode !== "tickerdays") return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const list = await getTickerdaysWindows();
+        if (cancelled) return;
+
+        setState((prev) => {
+          const next: Partial<SifterState> = { windows: Array.isArray(list) ? list : [] };
+          syncToOthers(next);
+
+          // if current selection missing, set simple defaults
+          const w = Array.isArray(list) ? list : [];
+          const startOk = prev.windowStartId != null && w.some((x: any) => x.id === prev.windowStartId);
+          const endOk = prev.windowEndId != null && w.some((x: any) => x.id === prev.windowEndId);
+
+          if (!startOk && w.length) next.windowStartId = w[0].id;
+          if (!endOk && w.length >= 2) next.windowEndId = w[1].id;
+          if (!endOk && w.length === 1) next.windowEndId = w[0].id;
+
+          return { ...prev, ...next };
+        });
+      } catch {
+        // ignore (panel can still work if user already has ids)
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.runMode]);
 
   const startPoll = (requestId: string) => {
     stopPoll();
@@ -359,6 +434,12 @@ export function SifterProvider({
           return;
         }
 
+        // quick: allow empty tickers (means ALL)
+        if (!isValidDateRange(cur.fromDateNy, cur.toDateNy)) {
+          setState((prev) => ({ ...prev, error: "invalid date range (From <= To, YYYY-MM-DD)" }));
+          return;
+        }
+
         setState((prev) => ({ ...prev, loading: true, error: null }));
 
         const req: SifterDaysRequest = {
@@ -399,18 +480,33 @@ export function SifterProvider({
           return;
         }
 
+        // Front validations (avoid 500s)
+        if (!isValidDateRange(cur.fromDateNy, cur.toDateNy)) {
+          setState((prev) => ({ ...prev, tdError: "invalid date range (From <= To, YYYY-MM-DD)" }));
+          return;
+        }
+
+        const tickers = normalizeTickers(cur.tickersText) ?? [];
+        if (!tickers.length) {
+          setState((prev) => ({ ...prev, tdError: "tickers required" }));
+          return;
+        }
+
+        if (cur.windowStartId == null || cur.windowEndId == null) {
+          setState((prev) => ({ ...prev, tdError: "windows required" }));
+          return;
+        }
+        if (cur.windowStartId >= cur.windowEndId) {
+          setState((prev) => ({ ...prev, tdError: "windowStart must be < windowEnd" }));
+          return;
+        }
+
         if (cur.tdRequestId && cur.tdStatus === 2) {
           try {
             await postTickerdaysCancel(cur.tdRequestId);
           } catch {}
         }
         stopPoll();
-
-        const req = buildTickerdaysRequest(cur);
-        if (!req.tickers.length) {
-          setState((prev) => ({ ...prev, tdError: "tickers required" }));
-          return;
-        }
 
         setState((prev) => {
           const next: Partial<SifterState> = {
@@ -425,6 +521,7 @@ export function SifterProvider({
         });
 
         try {
+          const req = buildTickerdaysRequest({ ...cur, tickersText: tickers.join(",") } as any);
           const ack: TickerdaysAck = await postTickerdaysReport(req);
 
           setState((prev) => {

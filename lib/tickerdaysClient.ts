@@ -58,6 +58,11 @@ export type TickerdaysResult = {
   [k: string]: any;
 };
 
+export type TickerdaysWindow = {
+  id: number;
+  label: string;
+};
+
 function clip(s: string, max = 2000) {
   if (!s) return s;
   const x = s.trim();
@@ -126,5 +131,15 @@ export async function getTickerdaysResult(requestId: string): Promise<Tickerdays
 export async function postTickerdaysCancel(requestId: string): Promise<any> {
   return fetchJson<any>(bridgeUrl(`/api/tickerdays/cancel/${encodeURIComponent(requestId)}`), {
     method: "POST",
+  });
+}
+
+/**
+ * Windows list for Tickerdays mode (selectors in SIFTER)
+ * GET /api/tickerdays/windows -> [{id,label}]
+ */
+export async function getTickerdaysWindows(): Promise<TickerdaysWindow[]> {
+  return fetchJson<TickerdaysWindow[]>(bridgeUrl("/api/tickerdays/windows"), {
+    method: "GET",
   });
 }

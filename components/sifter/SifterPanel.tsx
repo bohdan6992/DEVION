@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSifter } from "./SifterProvider";
 import type { SifterDayRow } from "@/lib/sifterClient";
 import { setSifterHandoff } from "@/lib/sifterHandoff";
+import type { SifterMetric } from "@/lib/sifterClient";
 
 function toNum(v: any): number | null {
   if (v === null || v === undefined) return null;
@@ -26,11 +27,20 @@ function median(values: number[]) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
+function parseTickers(text: string): string[] {
+  return text
+    .split(",")
+    .map((x) => x.trim().toUpperCase())
+    .filter(Boolean);
+}
+
 export function SifterPanel() {
   const { state, actions } = useSifter();
   const router = useRouter();
 
   const metricKey = state.metric;
+
+  const effectiveTickers = useMemo(() => parseTickers(state.tickersText ?? ""), [state.tickersText]);
 
   // unified rows (quick rows OR tickerdays days mapped to same shape)
   const rows: SifterDayRow[] = useMemo(() => {
@@ -55,6 +65,8 @@ export function SifterPanel() {
             // optional alias (tickerdays may provide)
             // @ts-ignore
             pctChange: d.pctChange ?? d.PctChange ?? null,
+            // @ts-ignore
+            sigma: d.sigma ?? d.Sigma ?? null,
           } as any;
         })
         .filter((r) => r.dateNy && r.ticker) as any;
@@ -135,6 +147,8 @@ export function SifterPanel() {
   const loading = isTickerdays ? Boolean(state.tdLoading) : state.loading;
   const err = isTickerdays ? state.tdError : state.error;
 
+  const windows = (state as any).windows ?? [];
+
   return (
     <div className="h-full flex flex-col text-white/90">
       {/* Filters */}
@@ -179,15 +193,30 @@ export function SifterPanel() {
               onChange={(e) => actions.set("toDateNy", e.target.value)}
             />
           </div>
+
+          {/* Tickers + ALL + effective */}
           <div className="col-span-3">
             <label className="text-xs text-white/60">Tickers</label>
-            <input
-              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
-              placeholder="AAPL,MSFT"
-              value={state.tickersText}
-              onChange={(e) => actions.set("tickersText", e.target.value)}
-            />
+            <div className="flex gap-2">
+              <input
+                className="flex-1 px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+                placeholder="AAPL,MSFT"
+                value={state.tickersText}
+                onChange={(e) => actions.set("tickersText", e.target.value)}
+              />
+              <button
+                className="px-2 py-1 rounded-lg bg-white/15 hover:bg-white/20 border border-white/10 text-xs"
+                onClick={() => actions.set("tickersText", "")}
+                title="Clear tickers filter"
+              >
+                ALL
+              </button>
+            </div>
+            <div className="text-[11px] text-white/50 mt-1">
+              effective tickers: {effectiveTickers.length ? effectiveTickers.length : "ALL"}
+            </div>
           </div>
+
           <div className="col-span-2">
             <label className="text-xs text-white/60">SectorL3</label>
             <input
@@ -255,32 +284,61 @@ export function SifterPanel() {
             />
           </div>
 
-          {/* Tickerdays window selector (Ids) */}
-          <div className="col-span-2">
-            <label className="text-xs text-white/60">Window start (id)</label>
-            <input
-              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
-              value={state.windowStartId ?? 0}
-              onChange={(e) => actions.set("windowStartId", Number(e.target.value))}
-            />
-          </div>
-          <div className="col-span-2">
-            <label className="text-xs text-white/60">Window end (id)</label>
-            <input
-              className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
-              value={state.windowEndId}
-              onChange={(e) => actions.set("windowEndId", Number(e.target.value))}
-            />
-          </div>
+          {/* Tickerdays windows: 2 selects */}
+          {isTickerdays ? (
+            <>
+              <div className="col-span-2">
+                <label className="text-xs text-white/60">Window start</label>
+                <select
+                  className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+                  value={state.windowStartId ?? ""}
+                  onChange={(e) => actions.set("windowStartId", e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">Select</option>
+                  {windows.map((w: any) => (
+                    <option key={w.id} value={w.id}>
+                      {w.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-white/60">Window end</label>
+                <select
+                  className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
+                  value={state.windowEndId ?? ""}
+                  onChange={(e) => actions.set("windowEndId", e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">Select</option>
+                  {windows.map((w: any) => (
+                    <option key={w.id} value={w.id}>
+                      {w.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* keep grid alignment when not tickerdays */}
+              <div className="col-span-2" />
+              <div className="col-span-2" />
+            </>
+          )}
 
+          {/* Metric select */}
           <div className="col-span-2">
             <label className="text-xs text-white/60">Metric</label>
-            <input
+            <select
               className="w-full px-2 py-1 rounded-lg bg-white/10 border border-white/10"
-              placeholder="GapPct / ClsToClsPct / pctChange / SigmaZapS"
               value={state.metric}
-              onChange={(e) => actions.set("metric", e.target.value)}
-            />
+              onChange={(e) => actions.set("metric", e.target.value as SifterMetric)}
+            >
+              <option value="gapPct">gapPct</option>
+              <option value="clsToClsPct">clsToClsPct</option>
+              <option value="pctChange">pctChange</option>
+              <option value="sigma">sigma</option>
+            </select>
           </div>
 
           <div className="col-span-2">
@@ -329,7 +387,7 @@ export function SifterPanel() {
                     style={{ width: `${Math.max(0, Math.min(1, state.tdProgress ?? 0)) * 100}%` }}
                   />
                 </div>
-                </div>
+              </div>
             ) : null}
           </div>
         </div>
