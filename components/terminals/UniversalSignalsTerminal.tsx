@@ -15,7 +15,6 @@ import ExcludeIncludePanel from "@/components/filters/ExcludeIncludePanel";
 import ZapPanel from "@/components/filters/ZapPanel";
 import ReportEquityPanel from "@/components/filters/ReportEquityPanel";
 import MultiSelectPanel from "@/components/filters/MultiSelectPanel";
-import { backendUrl } from "@/lib/backend";
 
 type SonarItem = Record<string, any>;
 type SonarResponse = { items?: SonarItem[]; total?: number };
@@ -87,7 +86,7 @@ export default function UniversalSignalsTerminal() {
         overlays: { arbitrage: { enabled: true } },
       };
 
-      const res = await fetch(backendUrl(`/api/sonar/query`), {
+      const res = await fetch(`/api/sonar/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
