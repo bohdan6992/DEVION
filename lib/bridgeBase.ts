@@ -1,3 +1,5 @@
+// lib/bridgeBase.ts
+
 const DEFAULT_LOCAL = "http://localhost:5197";
 
 function isBrowser() {
@@ -12,7 +14,7 @@ function readBridgeFromLocation(): string | null {
   if (!isBrowser()) return null;
   try {
     const u = new URL(window.location.href);
-    const v = u.searchParams.get("bridge"); // same param
+    const v = u.searchParams.get("bridge");
     return v ? stripTrailingSlashes(v) : null;
   } catch {
     return null;
@@ -37,11 +39,11 @@ function writeBridgeToStorage(v: string) {
 }
 
 export function getBridgeBaseUrl(): string {
-  // 1) explicit env override
+  // 1) env override (public tunnel etc.)
   const envBase = stripTrailingSlashes(process.env.NEXT_PUBLIC_BRIDGE_API || "");
   if (envBase) return envBase;
 
-  // 2) browser: ?bridge= or localStorage else localhost
+  // 2) browser: ?bridge= -> localStorage -> DEFAULT_LOCAL (✅ як у Tape)
   if (isBrowser()) {
     const fromUrl = readBridgeFromLocation();
     if (fromUrl) {
@@ -50,10 +52,11 @@ export function getBridgeBaseUrl(): string {
     }
     const fromLs = readBridgeFromStorage();
     if (fromLs) return fromLs;
-    return DEFAULT_LOCAL;
+
+    return DEFAULT_LOCAL; // ✅ як у інших інструментів
   }
 
-  // 3) server/SSR: do not fallback to localhost
+  // 3) SSR/server: no localhost fallback
   return "";
 }
 
@@ -65,5 +68,8 @@ export function bridgeUrl(path: string) {
         "Use client-side fetch (browser) or set NEXT_PUBLIC_BRIDGE_API to a public URL."
     );
   }
-  return `${base}${path}`;
+
+  // ✅ fix: normalize path
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${stripTrailingSlashes(base)}${p}`;
 }

@@ -1,5 +1,6 @@
 // lib/paperClient.ts
-import { getAxiBaseUrl, getToken, clearToken } from "./authClient";
+import { getToken, clearToken } from "./authClient";
+import { bridgeUrl } from "./bridgeBase";
 
 export type PaperDirection = "Long" | "Short" | string;
 
@@ -31,14 +32,14 @@ function pickArray<T>(x: any): T[] {
   if (!x || typeof x !== "object") return [];
   const candidates = ["items", "data", "episodes", "observations", "rows", "result"];
   for (const k of candidates) {
-    if (Array.isArray(x[k])) return x[k];
+    if (Array.isArray((x as any)[k])) return (x as any)[k];
   }
   return [];
 }
 
 async function httpGet<T>(path: string): Promise<T> {
   const token = getToken();
-  const url = `${getAxiBaseUrl()}${path}`;
+  const url = bridgeUrl(path);
 
   const res = await fetch(url, {
     method: "GET",

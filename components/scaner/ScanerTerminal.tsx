@@ -78,6 +78,18 @@ export default function ScanerTerminal() {
     [tickersCsv]
   );
 
+  const nowNy = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date()),
+    []
+  );
+
   function getCurrentConfigJson() {
     return JSON.stringify(cfg);
   }
@@ -118,6 +130,15 @@ export default function ScanerTerminal() {
     }
   }
 
+  const canRun = useMemo(() => {
+    // легка валідація, щоб кнопка не стріляла в нікуди
+    if (!fromNy || !toNy) return false;
+    if (Number.isNaN(maxDays) || maxDays <= 0) return false;
+    if (Number.isNaN(holdMinutes) || holdMinutes < 0) return false;
+    if (Number.isNaN(slippageBps) || slippageBps < 0) return false;
+    return true;
+  }, [fromNy, toNy, maxDays, holdMinutes, slippageBps]);
+
   return (
     <div className="min-h-screen bg-black text-neutral-300 p-4 font-sans selection:bg-emerald-500/30">
       {/* TOP NAV */}
@@ -127,69 +148,114 @@ export default function ScanerTerminal() {
             A
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tighter text-white">SCANER_TERMINAL</h1>
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest">Backtest Engine v2.4</p>
+            <h1 className="text-lg font-bold tracking-tighter text-white">
+              SCANER_TERMINAL
+            </h1>
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
+              Backtest Engine v2.4
+            </p>
           </div>
         </div>
+
         <div className="flex items-center gap-4 text-[10px] font-mono">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-neutral-400">SERVER_ONLINE</span>
+            <span
+              className={clsx(
+                "w-2 h-2 rounded-full animate-pulse",
+                loading ? "bg-amber-500" : "bg-emerald-500"
+              )}
+            />
+            <span className="text-neutral-400">
+              {loading ? "SCANNING" : "SERVER_ONLINE"}
+            </span>
           </div>
-          <div className="text-neutral-600">NY_TIME: {new Date().toLocaleTimeString()}</div>
+          <div className="text-neutral-600">NY_TIME: {nowNy}</div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* LEFT COLUMN: CONTROLS */}
         <div className="lg:col-span-4 space-y-4">
-          
           {/* CORE PARAMETERS */}
           <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-4 space-y-4">
             <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-[0.2em] border-b border-neutral-800 pb-2">
               Runtime Parameters
             </div>
-            
+
             <div className="grid grid-cols-2 gap-3">
               <Field label="From (NY)">
-                <input type="date" className="input-terminal" value={fromNy} onChange={(e) => setFromNy(e.target.value)} disabled={loading} />
+                <input
+                  type="date"
+                  className="input-terminal"
+                  value={fromNy}
+                  onChange={(e) => setFromNy(e.target.value)}
+                  disabled={loading}
+                />
               </Field>
               <Field label="To (NY)">
-                <input type="date" className="input-terminal" value={toNy} onChange={(e) => setToNy(e.target.value)} disabled={loading} />
+                <input
+                  type="date"
+                  className="input-terminal"
+                  value={toNy}
+                  onChange={(e) => setToNy(e.target.value)}
+                  disabled={loading}
+                />
               </Field>
             </div>
 
             <Field label="Tickers (CSV/Whitelist)">
-              <input 
-                className="input-terminal" 
-                value={tickersCsv} 
-                onChange={(e) => setTickersCsv(e.target.value)} 
-                placeholder="ALL_AVAILABLE" 
-                disabled={loading} 
+              <input
+                className="input-terminal"
+                value={tickersCsv}
+                onChange={(e) => setTickersCsv(e.target.value)}
+                placeholder="ALL_AVAILABLE"
+                disabled={loading}
               />
             </Field>
 
             <div className="grid grid-cols-3 gap-3">
               <Field label="Max Days">
-                <input type="number" className="input-terminal" value={maxDays} onChange={(e) => setMaxDays(Number(e.target.value))} disabled={loading} />
+                <input
+                  type="number"
+                  className="input-terminal"
+                  value={maxDays}
+                  onChange={(e) => setMaxDays(Number(e.target.value))}
+                  disabled={loading}
+                  min={1}
+                />
               </Field>
               <Field label="Hold (m)">
-                <input type="number" className="input-terminal" value={holdMinutes} onChange={(e) => setHoldMinutes(Number(e.target.value))} disabled={loading} />
+                <input
+                  type="number"
+                  className="input-terminal"
+                  value={holdMinutes}
+                  onChange={(e) => setHoldMinutes(Number(e.target.value))}
+                  disabled={loading}
+                  min={0}
+                />
               </Field>
               <Field label="Slip (bps)">
-                <input type="number" className="input-terminal" value={slippageBps} onChange={(e) => setSlippageBps(Number(e.target.value))} disabled={loading} />
+                <input
+                  type="number"
+                  className="input-terminal"
+                  value={slippageBps}
+                  onChange={(e) => setSlippageBps(Number(e.target.value))}
+                  disabled={loading}
+                  min={0}
+                />
               </Field>
             </div>
 
             <button
               className={clsx(
                 "w-full py-3 rounded font-bold text-xs tracking-widest transition-all",
-                loading 
-                  ? "bg-neutral-800 text-neutral-500 cursor-wait" 
+                !canRun || loading
+                  ? "bg-neutral-800 text-neutral-500 cursor-not-allowed"
                   : "bg-emerald-600 text-black hover:bg-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.2)]"
               )}
               onClick={runScaner}
-              disabled={loading}
+              disabled={!canRun || loading}
+              title={!canRun ? "INVALID_PARAMETERS" : undefined}
             >
               {loading ? "INITIALIZING_SCAN..." : "EXECUTE_SCANNER"}
             </button>
@@ -217,12 +283,27 @@ export default function ScanerTerminal() {
           <div className="space-y-4">
             <ListModePanel cfg={cfg} setCfg={setCfg} />
             <ActivityPanel cfg={cfg} setCfg={setCfg} />
+
+            {/* використовуємо обидва імпорти, які раніше висіли */}
+            <BoundsPanel cfg={cfg} setCfg={setCfg} />
+            <ExcludeIncludePanel cfg={cfg} setCfg={setCfg} />
+
             <ZapPanel cfg={cfg} setCfg={setCfg} />
             <ReportEquityPanel cfg={cfg} setCfg={setCfg} />
-            
+
             <div className="grid grid-cols-1 gap-4">
-                <MultiSelectPanel cfg={cfg} setCfg={setCfg} kind="countries" label="Geography" />
-                <MultiSelectPanel cfg={cfg} setCfg={setCfg} kind="exchanges" label="Markets" />
+              <MultiSelectPanel
+                cfg={cfg}
+                setCfg={setCfg}
+                kind="countries"
+                label="Geography"
+              />
+              <MultiSelectPanel
+                cfg={cfg}
+                setCfg={setCfg}
+                kind="exchanges"
+                label="Markets"
+              />
             </div>
 
             {/* ADVANCED */}
@@ -233,6 +314,7 @@ export default function ScanerTerminal() {
               >
                 {showAdvancedJson ? "// HIDE_RAW_DATA" : "// VIEW_CONFIG_JSON"}
               </button>
+
               {showAdvancedJson && (
                 <textarea
                   className="mt-3 w-full h-48 bg-black/60 border border-neutral-800 rounded p-2 font-mono text-[10px] text-emerald-500/80 outline-none"
@@ -252,17 +334,35 @@ export default function ScanerTerminal() {
         <div className="lg:col-span-8 space-y-4">
           <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-4 min-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-4">
-              <div className="text-[10px] font-bold text-white uppercase tracking-[0.2em]">Output / Trade Log</div>
-              <div className="text-[9px] font-mono text-neutral-500 italic">Total Items: {result?.trades?.length ?? 0}</div>
+              <div className="text-[10px] font-bold text-white uppercase tracking-[0.2em]">
+                Output / Trade Log
+              </div>
+              <div className="text-[9px] font-mono text-neutral-500 italic">
+                Total Items: {result?.trades?.length ?? 0}
+              </div>
             </div>
 
             {!result && !loading && (
               <div className="flex-1 flex flex-col items-center justify-center opacity-20 grayscale">
-                 <div className="text-4xl mb-2">⌬</div>
-                 <p className="font-mono text-xs uppercase tracking-widest text-center">
-                    Awaiting scan command...<br/>
-                    <span className="text-[10px]">Configure filters and press EXECUTE</span>
-                 </p>
+                <div className="text-4xl mb-2">⌬</div>
+                <p className="font-mono text-xs uppercase tracking-widest text-center">
+                  Awaiting scan command...
+                  <br />
+                  <span className="text-[10px]">
+                    Configure filters and press EXECUTE
+                  </span>
+                </p>
+              </div>
+            )}
+
+            {loading && (
+              <div className="mb-4 p-3 bg-emerald-500/5 border border-emerald-500/20 rounded">
+                <div className="text-[10px] font-bold text-emerald-400 uppercase">
+                  Engine Status:
+                </div>
+                <div className="text-[11px] font-mono text-neutral-400">
+                  → Dispatching request to {bridgeUrl("/api/scaner/run")}
+                </div>
               </div>
             )}
 
@@ -270,20 +370,33 @@ export default function ScanerTerminal() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                 <StatCard label="Total Days" value={result.summary.days} />
                 <StatCard label="Execution Count" value={result.summary.trades} />
-                <StatCard label="Win Probability" value={fmtPct(result.summary.winRate)} highlight={Number(result.summary.winRate) > 0.5} />
-                <StatCard label="Net PnL" value={fmtNum(result.summary.pnlTotal)} highlight={Number(result.summary.pnlTotal) > 0} />
+                <StatCard
+                  label="Win Probability"
+                  value={fmtPct(result.summary.winRate)}
+                  highlight={Number(result.summary.winRate) > 0.5}
+                />
+                <StatCard
+                  label="Net PnL"
+                  value={fmtNum(result.summary.pnlTotal)}
+                  highlight={Number(result.summary.pnlTotal) > 0}
+                />
               </div>
             )}
 
             {result?.notes?.length ? (
               <div className="mb-6 p-3 bg-blue-500/5 border border-blue-500/20 rounded">
-                <div className="text-[10px] font-bold text-blue-400 uppercase mb-2">Engine Notes:</div>
+                <div className="text-[10px] font-bold text-blue-400 uppercase mb-2">
+                  Engine Notes:
+                </div>
                 <div className="space-y-1">
-                   {result.notes.map((n, i) => (
-                     <div key={i} className="text-[11px] font-mono text-neutral-400 flex gap-2">
-                        <span className="text-blue-500 opacity-50">→</span> {n}
-                     </div>
-                   ))}
+                  {result.notes.map((n, i) => (
+                    <div
+                      key={i}
+                      className="text-[11px] font-mono text-neutral-400 flex gap-2"
+                    >
+                      <span className="text-blue-500 opacity-50">→</span> {n}
+                    </div>
+                  ))}
                 </div>
               </div>
             ) : null}
@@ -292,38 +405,73 @@ export default function ScanerTerminal() {
               <table className="w-full text-left border-collapse font-mono text-[11px]">
                 <thead className="sticky top-0 bg-neutral-900 text-neutral-500 border-b border-neutral-800">
                   <tr>
-                    <th className="p-2 font-bold uppercase tracking-tighter">Timestamp</th>
-                    <th className="p-2 font-bold uppercase tracking-tighter">Ticker</th>
-                    <th className="p-2 font-bold uppercase tracking-tighter text-center">Dir</th>
-                    <th className="p-2 font-bold uppercase tracking-tighter text-right">Entry</th>
-                    <th className="p-2 font-bold uppercase tracking-tighter text-right">Exit</th>
-                    <th className="p-2 font-bold uppercase tracking-tighter text-right">PnL</th>
+                    <th className="p-2 font-bold uppercase tracking-tighter">
+                      Timestamp
+                    </th>
+                    <th className="p-2 font-bold uppercase tracking-tighter">
+                      Ticker
+                    </th>
+                    <th className="p-2 font-bold uppercase tracking-tighter text-center">
+                      Dir
+                    </th>
+                    <th className="p-2 font-bold uppercase tracking-tighter text-right">
+                      Entry
+                    </th>
+                    <th className="p-2 font-bold uppercase tracking-tighter text-right">
+                      Exit
+                    </th>
+                    <th className="p-2 font-bold uppercase tracking-tighter text-right">
+                      PnL
+                    </th>
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-neutral-800/50">
                   {result?.trades?.map((t, idx) => (
-                    <tr key={idx} className="hover:bg-neutral-800/30 transition-colors group">
+                    <tr
+                      key={idx}
+                      className="hover:bg-neutral-800/30 transition-colors group"
+                    >
                       <td className="p-2 text-neutral-500">{t.dateNy}</td>
-                      <td className="p-2 text-emerald-500 font-bold tracking-widest">{t.ticker}</td>
-                      <td className="p-2 text-center">
-                         <span className={clsx(
-                           "px-1 rounded-[2px] text-[9px] font-bold",
-                           t.side === "LONG" ? "bg-emerald-500/10 text-emerald-500" : "bg-rose-500/10 text-rose-500"
-                         )}>{t.side}</span>
+                      <td className="p-2 text-emerald-500 font-bold tracking-widest">
+                        {t.ticker}
                       </td>
-                      <td className="p-2 text-right text-neutral-400">{t.entryPrice.toFixed(3)}</td>
-                      <td className="p-2 text-right text-neutral-400">{t.exitPrice.toFixed(3)}</td>
-                      <td className={clsx(
-                        "p-2 text-right font-bold",
-                        t.pnl > 0 ? "text-emerald-500" : "text-rose-500"
-                      )}>
-                        {t.pnl > 0 && "+"}{t.pnl.toFixed(3)}
+                      <td className="p-2 text-center">
+                        <span
+                          className={clsx(
+                            "px-1 rounded-[2px] text-[9px] font-bold",
+                            t.side === "LONG"
+                              ? "bg-emerald-500/10 text-emerald-500"
+                              : "bg-rose-500/10 text-rose-500"
+                          )}
+                        >
+                          {t.side}
+                        </span>
+                      </td>
+                      <td className="p-2 text-right text-neutral-400">
+                        {t.entryPrice.toFixed(3)}
+                      </td>
+                      <td className="p-2 text-right text-neutral-400">
+                        {t.exitPrice.toFixed(3)}
+                      </td>
+                      <td
+                        className={clsx(
+                          "p-2 text-right font-bold",
+                          t.pnl > 0 ? "text-emerald-500" : "text-rose-500"
+                        )}
+                      >
+                        {t.pnl > 0 && "+"}
+                        {t.pnl.toFixed(3)}
                       </td>
                     </tr>
                   ))}
-                  {result && result.trades?.length === 0 && (
+
+                  {result && (result.trades?.length ?? 0) === 0 && (
                     <tr>
-                      <td colSpan={6} className="p-10 text-center text-neutral-700 italic font-mono uppercase tracking-widest">
+                      <td
+                        colSpan={6}
+                        className="p-10 text-center text-neutral-700 italic font-mono uppercase tracking-widest"
+                      >
                         // zero_results_returned
                       </td>
                     </tr>
@@ -334,14 +482,21 @@ export default function ScanerTerminal() {
           </div>
         </div>
       </div>
-      
+
       <style jsx global>{`
         .input-terminal {
           @apply w-full bg-black border border-neutral-800 rounded px-2 py-1.5 text-xs font-mono text-neutral-200 outline-none focus:border-emerald-500/50 transition-all;
         }
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #333;
+          border-radius: 10px;
+        }
       `}</style>
     </div>
   );
@@ -350,20 +505,39 @@ export default function ScanerTerminal() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
-      <div className="text-[9px] font-bold text-neutral-600 uppercase tracking-tight ml-1">{label}</div>
+      <div className="text-[9px] font-bold text-neutral-600 uppercase tracking-tight ml-1">
+        {label}
+      </div>
       {children}
     </div>
   );
 }
 
-function StatCard({ label, value, highlight }: { label: string; value: any; highlight?: boolean }) {
+function StatCard({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: any;
+  highlight?: boolean;
+}) {
   return (
-    <div className={clsx(
-      "border border-neutral-800 rounded-lg p-3 bg-black/40",
-      highlight && "border-emerald-500/30"
-    )}>
-      <div className="text-[9px] font-mono text-neutral-600 uppercase">{label}</div>
-      <div className={clsx("text-lg font-mono font-bold tracking-tighter", highlight ? "text-emerald-500" : "text-white")}>
+    <div
+      className={clsx(
+        "border border-neutral-800 rounded-lg p-3 bg-black/40",
+        highlight && "border-emerald-500/30"
+      )}
+    >
+      <div className="text-[9px] font-mono text-neutral-600 uppercase">
+        {label}
+      </div>
+      <div
+        className={clsx(
+          "text-lg font-mono font-bold tracking-tighter",
+          highlight ? "text-emerald-500" : "text-white"
+        )}
+      >
         {value}
       </div>
     </div>
