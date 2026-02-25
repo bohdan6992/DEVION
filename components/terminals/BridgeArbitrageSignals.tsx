@@ -2723,10 +2723,10 @@ export default function BridgeArbitrageSignals() {
 
 
   return (
-      <div className="relative min-h-screen w-full bg-black text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
+      <div className="relative min-h-screen w-full bg-black/0 text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
 
       {/* Ambient Background */}
-      <div className="fixed inset-0 pointer-events-none z-0 bg-black">
+      <div className="fixed inset-0 pointer-events-none z-0 bg-transparent">
         {/* base subtle noise everywhere (optional, very low) */}
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.015]" />
 
