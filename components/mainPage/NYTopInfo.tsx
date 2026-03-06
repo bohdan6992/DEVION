@@ -83,7 +83,7 @@ export default function NYTopInfo() {
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50" />
 
         {/* Dock stays top-right */}
-        <div className="absolute top-4 right-4 z-10 hidden md:flex">
+        <div className="absolute top-4 right-4 z-10 hidden md:flex items-start gap-3">
           <AppDock />
         </div>
 
@@ -92,7 +92,7 @@ export default function NYTopInfo() {
           
           {/* --- LEFT: CLOCK --- */}
           {/* ЗМІНА: Прибрано justify-center, додано border-r для візуального розділення */}
-          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 lg:border-r border-white/[0.06]">
+          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 border-white/[0.06]">
             <div className="flex items-center gap-6 lg:gap-8">
               {/* ANALOG */}
               <div className="relative w-[110px] h-[110px] lg:w-[130px] lg:h-[130px] shrink-0">
