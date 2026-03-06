@@ -10,12 +10,29 @@ function stripTrailingSlashes(x: string) {
   return (x || "").replace(/\/+$/, "");
 }
 
+function sanitizeBridgeBase(x: string | null | undefined): string | null {
+  const raw = (x ?? "").trim();
+  if (!raw) return null;
+
+  const s = stripTrailingSlashes(raw);
+
+  // Must be absolute URL and only http/https
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    // normalize: remove trailing slashes already done
+    return stripTrailingSlashes(u.toString());
+  } catch {
+    return null;
+  }
+}
+
 function readBridgeFromLocation(): string | null {
   if (!isBrowser()) return null;
   try {
     const u = new URL(window.location.href);
     const v = u.searchParams.get("bridge");
-    return v ? stripTrailingSlashes(v) : null;
+    return sanitizeBridgeBase(v);
   } catch {
     return null;
   }
@@ -25,7 +42,7 @@ function readBridgeFromStorage(): string | null {
   if (!isBrowser()) return null;
   try {
     const v = window.localStorage.getItem("bridgeApiBase");
-    return v ? stripTrailingSlashes(v) : null;
+    return sanitizeBridgeBase(v);
   } catch {
     return null;
   }
@@ -33,14 +50,16 @@ function readBridgeFromStorage(): string | null {
 
 function writeBridgeToStorage(v: string) {
   if (!isBrowser()) return;
+  const s = sanitizeBridgeBase(v);
+  if (!s) return;
   try {
-    window.localStorage.setItem("bridgeApiBase", stripTrailingSlashes(v));
+    window.localStorage.setItem("bridgeApiBase", s);
   } catch {}
 }
 
 export function getBridgeBaseUrl(): string {
   // 1) env override (public tunnel etc.)
-  const envBase = stripTrailingSlashes(process.env.NEXT_PUBLIC_BRIDGE_API || "");
+  const envBase = sanitizeBridgeBase(process.env.NEXT_PUBLIC_BRIDGE_API);
   if (envBase) return envBase;
 
   // 2) browser: ?bridge= -> localStorage -> DEFAULT_LOCAL (✅ як у Tape)
@@ -53,7 +72,8 @@ export function getBridgeBaseUrl(): string {
     const fromLs = readBridgeFromStorage();
     if (fromLs) return fromLs;
 
-    return DEFAULT_LOCAL; // ✅ як у інших інструментів
+    // DEFAULT_LOCAL should also be valid (http://localhost:5197)
+    return sanitizeBridgeBase(DEFAULT_LOCAL) || DEFAULT_LOCAL;
   }
 
   // 3) SSR/server: no localhost fallback
@@ -69,7 +89,7 @@ export function bridgeUrl(path: string) {
     );
   }
 
-  // ✅ fix: normalize path
+  // normalize path
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${stripTrailingSlashes(base)}${p}`;
 }
