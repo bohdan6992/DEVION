@@ -23,7 +23,7 @@ const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
-  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome";
+  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
 type LangKey = "UA" | "EN" | "UK";
 
 type MyAppProps = AppProps & {
@@ -59,7 +59,7 @@ export default function MyApp({
     const root = document.documentElement;
     const darkThemes = new Set([
       "dark","neon","cyberpunk","solaris","sakura","oceanic",
-      "matrix","asher","inferno","aurora","desert","midnight",
+      "matrix","asher","inferno","aurora","desert","midnight","space",
       "forest","candy","monochrome",
     ]);
     const apply = () => {
@@ -92,7 +92,7 @@ export default function MyApp({
             var theme = cookieTheme || lsTheme || ${JSON.stringify(initialTheme)};
             var darkSet = new Set([
               "dark","neon","cyberpunk","solaris","sakura","oceanic",
-              "matrix","asher","inferno","aurora","desert","midnight",
+              "matrix","asher","inferno","aurora","desert","midnight","space",
               "forest","candy","monochrome"
             ]);
             var root = document.documentElement;

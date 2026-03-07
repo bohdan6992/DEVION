@@ -9,7 +9,7 @@ import { Search, BarChart2, Info, FileText, Activity, ArrowRight, X } from "luci
 const DARK_THEMES = new Set([
   "dark", "neon", "matrix", "solaris", "cyberpunk",
   "oceanic", "sakura", "asher", "inferno", "aurora",
-  "desert", "midnight", "forest", "candy", "monochrome",
+  "desert", "midnight", "forest", "candy", "monochrome", "space",
 ]);
 
 function themeIsDark(name?: string | null) {
@@ -408,3 +408,5 @@ export default function TickerResearchPanel({
     </section>
   );
 }
+
+

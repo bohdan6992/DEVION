@@ -65,11 +65,13 @@ function Dropdown({
   onChange,
   items,
   icon,
+  isDark,
 }: {
   value: string;
   onChange: (v: string) => void;
   items: Item[];
   icon?: React.ReactNode;
+  isDark: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -94,8 +96,12 @@ function Dropdown({
           text-[10px] uppercase tracking-widest font-bold
           ${
             open
-              ? "bg-white/[0.08] border-white/20 text-white shadow-[0_0_15px_-5px_rgba(255,255,255,0.1)]"
-              : "bg-white/[0.02] border-white/[0.06] text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+              ? isDark
+                ? "bg-white/[0.08] border-white/20 text-white shadow-[0_0_15px_-5px_rgba(255,255,255,0.1)]"
+                : "bg-white/85 border-slate-300 text-slate-800 shadow-[0_10px_24px_-14px_rgba(15,23,42,0.24)]"
+              : isDark
+                ? "bg-white/[0.02] border-white/[0.06] text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                : "bg-white/55 border-slate-300/70 text-slate-500 hover:bg-white/75 hover:text-slate-700"
           }
         `}
       >
@@ -110,7 +116,8 @@ function Dropdown({
       <div
         className={`
           absolute top-[calc(100%+6px)] right-0 min-w-[140px]
-          bg-[#0a0a0a]/90 backdrop-blur-xl border border-white/[0.08]
+          ${isDark ? "bg-[#0a0a0a]/90 border-white/[0.08]" : "bg-white/95 border-slate-300/80"}
+          backdrop-blur-xl
           rounded-xl p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)]
           transition-all duration-200 origin-top-right
           ${open ? "opacity-100 translate-y-0 scale-100 pointer-events-auto" : "opacity-0 -translate-y-2 scale-95 pointer-events-none"}
@@ -129,8 +136,12 @@ function Dropdown({
               text-[10px] uppercase tracking-wider font-mono transition-all
               ${
                 i.key === value
-                  ? "bg-emerald-500/10 text-emerald-400 font-bold"
-                  : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
+                  ? isDark
+                    ? "bg-emerald-500/10 text-emerald-400 font-bold"
+                    : "bg-amber-100/80 text-amber-700 font-bold"
+                  : isDark
+                    ? "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
+                    : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
               }
             `}
           >
@@ -147,7 +158,7 @@ function Dropdown({
 
 export default function TopBar() {
   const router = typeof window !== 'undefined' ? (window as any).next?.router || { pathname: '/' } : { pathname: '/' };
-  const { theme, setTheme, lang, setLang } = useUi();
+  const { theme, setTheme, lang, setLang, isDark } = useUi();
 
   const nav = [
     { href: "/signals", label: "Strategies" },
@@ -160,9 +171,15 @@ export default function TopBar() {
 
   return (
     <>
-      <header className="fixed top-0 z-[100] w-full h-[72px] border-b border-white/[0.06] bg-[#030303]/80 backdrop-blur-xl">
+      <header className={`fixed top-0 z-[100] w-full h-[72px] border-b backdrop-blur-xl ${
+        isDark
+          ? "border-white/[0.06] bg-[#030303]/80"
+          : "border-slate-300/70 bg-[rgba(249,251,255,0.82)]"
+      }`}>
         {/* Top Ambient Line */}
-        <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/[0.1] to-transparent" />
+        <div className={`absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent to-transparent ${
+          isDark ? "via-white/[0.1]" : "via-slate-300/70"
+        }`} />
 
         <div className="relative w-full max-w-[1600px] h-full mx-auto px-6 lg:px-8 flex items-center justify-between">
           
@@ -170,8 +187,14 @@ export default function TopBar() {
           <Link href="/" className="flex items-center gap-3 group">
             
             {/* ICON CONTAINER */}
-            <div className="relative w-10 h-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-white/[0.08] to-white/[0.01] border border-white/[0.08] transition-all duration-300 group-hover:border-emerald-500/30 group-hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
-              <div className="relative z-10 opacity-90 group-hover:opacity-100 transition-opacity text-white">
+            <div className={`relative w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-300 group-hover:border-emerald-500/30 group-hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)] ${
+              isDark
+                ? "bg-gradient-to-br from-white/[0.08] to-white/[0.01] border border-white/[0.08]"
+                : "bg-gradient-to-br from-white/90 to-amber-50/80 border border-slate-300/70"
+            }`}>
+              <div className={`relative z-10 opacity-90 group-hover:opacity-100 transition-opacity ${
+                isDark ? "text-white" : "text-slate-700"
+              }`}>
                  <BrandLogo />
               </div>
               {/* Inner Glow */}
@@ -180,7 +203,9 @@ export default function TopBar() {
             
             {/* TEXT */}
             <div className="flex flex-col justify-center h-10">
-              <span className="font-sans font-bold text-2xl text-white leading-none tracking-tight group-hover:text-emerald-50 transition-colors">
+              <span className={`font-sans font-bold text-2xl leading-none tracking-tight transition-colors ${
+                isDark ? "text-white group-hover:text-emerald-50" : "text-slate-800 group-hover:text-slate-900"
+              }`}>
                 Devi<span className="text-emerald-500">ON</span>
               </span>
             </div>
@@ -205,8 +230,12 @@ export default function TopBar() {
                     className={`
                       absolute inset-0 transition-opacity duration-300 rounded-lg
                       ${active 
-                        ? "bg-white/[0.06] opacity-100 border border-white/[0.04]" 
-                        : "bg-white/[0.0] opacity-0 group-hover:bg-white/[0.02] group-hover:opacity-100"
+                        ? isDark
+                          ? "bg-white/[0.06] opacity-100 border border-white/[0.04]"
+                          : "bg-white/75 opacity-100 border border-slate-300/70"
+                        : isDark
+                          ? "bg-white/[0.0] opacity-0 group-hover:bg-white/[0.02] group-hover:opacity-100"
+                          : "bg-white/[0.0] opacity-0 group-hover:bg-white/60 group-hover:opacity-100"
                       }
                     `} 
                   />
@@ -221,8 +250,12 @@ export default function TopBar() {
                     className={`
                       relative z-10 text-xs font-mono uppercase tracking-[0.15em] font-bold
                       ${active 
-                        ? "text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]" 
-                        : "text-zinc-500 group-hover:text-zinc-200"
+                        ? isDark
+                          ? "text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                          : "text-amber-700"
+                        : isDark
+                          ? "text-zinc-500 group-hover:text-zinc-200"
+                          : "text-slate-500 group-hover:text-slate-700"
                       }
                       transition-colors duration-300
                     `}
@@ -240,14 +273,18 @@ export default function TopBar() {
               value={theme}
               onChange={(v: any) => setTheme(v)}
               items={[
-                { key: "dark", label: "Dark" },
                 { key: "light", label: "Light" },
+                { key: "aurora", label: "Dark" },
+                { key: "matrix", label: "Matrix" },
                 { key: "neon", label: "Neon" },
+                { key: "dark", label: "Aurora" },
+                { key: "space", label: "Space" },
               ]}
+              isDark={isDark}
               icon={<ThemeIcon />}
             />
             
-            <div className="w-[1px] h-5 bg-white/[0.08]" />
+            <div className={`w-[1px] h-5 ${isDark ? "bg-white/[0.08]" : "bg-slate-300/80"}`} />
             
             <Dropdown
               value={lang}
@@ -256,6 +293,7 @@ export default function TopBar() {
                 { key: "UA", label: "UA" },
                 { key: "EN", label: "EN" },
               ]}
+              isDark={isDark}
               icon={<LangIcon />}
             />
           </div>

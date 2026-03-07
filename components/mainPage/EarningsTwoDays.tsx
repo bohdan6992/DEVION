@@ -34,9 +34,9 @@ function formatPrettyDate(dateStr: string) {
 // --- UI COMPONENT: Terminal Badge ---
 const TerminalBadge = ({ children, icon: Icon, color = "zinc" }: { children: React.ReactNode, icon?: any, color?: "zinc" | "amber" | "violet" }) => {
   const colors = {
-    zinc: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
-    amber: "bg-amber-500/10 text-amber-500 border-amber-500/20",
-    violet: "bg-violet-500/10 text-violet-500 border-violet-500/20",
+    zinc: "bg-zinc-500/10 text-emerald-300/60 border-zinc-500/20",
+    amber: "bg-emerald-500/15 text-emerald-300 border-emerald-400/35",
+    violet: "bg-emerald-500/12 text-emerald-300 border-emerald-400/30",
   };
   return (
     <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[10px] font-mono font-bold uppercase tracking-wider ${colors[color]}`}>
@@ -79,17 +79,17 @@ export default function EarningsTwoDays() {
   return (
     <section className="w-full h-full min-h-[300px]">
       {/* Deep Space Glass Card */}
-      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 backdrop-blur-xl shadow-xl flex flex-col group">
+      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-emerald-400/20 bg-[#03130d]/75 backdrop-blur-xl shadow-xl flex flex-col group">
         
         {/* Hover Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50 z-10" />
+        <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/[0.08] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent opacity-50 z-10" />
 
         {/* --- HEADER --- */}
-        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-white/[0.04]">
+        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-emerald-400/20">
           <div className="flex items-center gap-3">
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 border border-white/5 shadow-inner">
-              <DollarSign size={18} className="text-zinc-200" />
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-emerald-950 to-[#082116] border border-emerald-400/25 shadow-inner">
+              <DollarSign size={18} className="text-emerald-100" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
@@ -97,7 +97,7 @@ export default function EarningsTwoDays() {
                 <span className="flex h-1.5 w-1.5 rounded-full bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.6)] animate-pulse" />
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Corporate Calendar</span>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-300/60">Corporate Calendar</span>
               </div>
             </div>
           </div>
@@ -105,7 +105,7 @@ export default function EarningsTwoDays() {
         </header>
 
         {/* --- CONTENT (GRID) --- */}
-        <div className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-white/[0.04] bg-[#0a0a0a]/40">
+        <div className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-emerald-400/15 bg-[#0a0a0a]/40">
           
           {/* TODAY COL */}
           <DayColumn 
@@ -137,7 +137,7 @@ function DayColumn({ title, date, items, loading, isActive }: { title: string; d
        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
              <span className={`flex h-1.5 w-1.5 rounded-full ${isActive ? 'bg-amber-500 shadow-[0_0_6px_#f59e0b]' : 'bg-zinc-600'}`} />
-             <span className={`text-[10px] font-bold uppercase tracking-widest ${isActive ? 'text-amber-200' : 'text-zinc-500'}`}>{title}</span>
+             <span className={`text-[10px] font-bold uppercase tracking-widest ${isActive ? 'text-amber-200' : 'text-emerald-300/60'}`}>{title}</span>
           </div>
           <span className="text-[10px] font-mono text-zinc-600">{formatPrettyDate(date)}</span>
        </div>
@@ -159,17 +159,17 @@ function EarningRow({ row }: { row: Item }) {
   const badgeClass = isPre ? "bg-amber-500/10 border-amber-500/20" : "bg-violet-500/10 border-violet-500/20";
 
   return (
-    <div className="group flex items-center justify-between p-2.5 rounded-lg border border-white/[0.02] bg-white/[0.01] hover:bg-white/[0.04] transition-all duration-200">
+    <div className="group flex items-center justify-between p-2.5 rounded-lg border border-emerald-400/15 bg-emerald-500/[0.05] hover:bg-emerald-500/[0.12] transition-all duration-200">
       <div className="flex flex-col min-w-0">
         <div className="flex items-center gap-2">
-           <span className="text-sm font-bold text-white tracking-wide group-hover:text-zinc-200 transition-colors">
+           <span className="text-sm font-bold text-white tracking-wide group-hover:text-emerald-100 transition-colors">
              {row.ticker}
            </span>
            <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${badgeClass} ${timeColor} flex items-center gap-1`}>
               <TimeIcon size={8} /> {isPre ? 'PRE' : 'POST'}
            </span>
         </div>
-        <span className="text-[10px] font-medium text-zinc-500 truncate mt-0.5" title={row.sector}>
+        <span className="text-[10px] font-medium text-emerald-300/60 truncate mt-0.5" title={row.sector}>
           {row.sector}
         </span>
       </div>
@@ -195,3 +195,5 @@ function EmptyState() {
     </div>
   );
 }
+
+

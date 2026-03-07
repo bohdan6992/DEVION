@@ -6,7 +6,7 @@ import Cookies from "js-cookie";
 export type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
-  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome";
+  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
 
 export type LangKey = "UA" | "EN" | "UK";
 

@@ -123,12 +123,12 @@ function useAutoFetch<T>(url: string, refreshMs: number, deps: any[] = []) {
 // --- UI COMPONENT: Terminal Badge ---
 const TerminalBadge = ({ children, icon: Icon, color = "zinc" }: { children: React.ReactNode, icon?: any, color?: "zinc" | "emerald" | "violet" | "cyan" | "rose" | "blue" }) => {
   const colors: Record<string, string> = {
-    zinc: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
+    zinc: "bg-emerald-500/12 text-emerald-300 border-emerald-400/30",
     emerald: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
-    violet: "bg-violet-500/10 text-violet-500 border-violet-500/20",
-    cyan: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
+    violet: "bg-emerald-500/12 text-emerald-300 border-emerald-400/30",
+    cyan: "bg-emerald-500/15 text-emerald-300 border-emerald-400/35",
     rose: "bg-rose-500/10 text-rose-500 border-rose-500/20",
-    blue: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    blue: "bg-emerald-500/12 text-emerald-300 border-emerald-400/30",
   };
   return (
     <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[10px] font-mono font-bold uppercase tracking-wider ${colors[color] || colors.zinc}`}>
@@ -212,25 +212,28 @@ export default function NewsSentimentBadge({
   return (
     <section className="w-full h-full min-h-[300px]">
       {/* Deep Space Glass Card */}
-      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 backdrop-blur-xl shadow-xl flex flex-col group">
+      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-emerald-400/20 bg-[#03130d]/75 backdrop-blur-xl shadow-xl flex flex-col group">
         
         {/* Hover Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50 z-10" />
+        <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/[0.08] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent opacity-50 z-10" />
 
         {/* --- HEADER --- */}
-        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-white/[0.04]">
+        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-emerald-400/20">
           <div className="flex items-center gap-3">
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 border border-white/5 shadow-inner">
-              <Brain size={18} className="text-zinc-200" />
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-emerald-950 to-[#082116] border border-emerald-400/25 shadow-inner">
+              <Brain size={18} className="text-emerald-100" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
                 NEWS SENTIMENT
-                <span className={`flex h-1.5 w-1.5 rounded-full ${barColor} shadow-[0_0_6px_${shadowColor}] animate-pulse`} />
+                <span
+                  className={`flex h-1.5 w-1.5 rounded-full ${barColor} animate-pulse`}
+                  style={{ boxShadow: `0 0 8px ${shadowColor}` }}
+                />
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">AI Analysis Engine</span>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-300/60">AI Analysis Engine</span>
               </div>
             </div>
           </div>
@@ -250,8 +253,8 @@ export default function NewsSentimentBadge({
              </div>
              
              {/* Progress Bar */}
-             <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden relative">
-                <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-white/20 z-10" />
+             <div className="h-1.5 w-full bg-emerald-400/10 rounded-full overflow-hidden relative">
+                <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-emerald-300/30 z-10" />
                 <div 
                   className={`h-full ${barColor} transition-all duration-700 ease-out`} 
                   style={{ width: `${pct}%`, boxShadow: `0 0 10px ${shadowColor}` }} 
@@ -263,7 +266,7 @@ export default function NewsSentimentBadge({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
              {/* Positive Drivers */}
              <div className="space-y-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
+                <span className="text-[10px] font-bold text-emerald-300/60 uppercase tracking-widest flex items-center gap-1">
                    <TrendingUp size={10} /> Drivers (+)
                 </span>
                 <div className="flex flex-wrap gap-1.5">
@@ -275,7 +278,7 @@ export default function NewsSentimentBadge({
 
              {/* Negative Drivers */}
              <div className="space-y-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
+                <span className="text-[10px] font-bold text-emerald-300/60 uppercase tracking-widest flex items-center gap-1">
                    <TrendingDown size={10} /> Drivers (−)
                 </span>
                 <div className="flex flex-wrap gap-1.5">
@@ -287,7 +290,7 @@ export default function NewsSentimentBadge({
 
              {/* Tickers */}
              <div className="space-y-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
+                <span className="text-[10px] font-bold text-emerald-300/60 uppercase tracking-widest flex items-center gap-1">
                    <Activity size={10} /> Tickers
                 </span>
                 <div className="flex flex-wrap gap-1.5">
@@ -313,16 +316,18 @@ export default function NewsSentimentBadge({
                  <polyline 
                     points={stats.spark.map((v, i) => `${(i / (stats.spark.length - 1)) * 100},${10 - v * 8}`).join(" ")}
                     fill="none" 
-                    stroke="white" 
+                    stroke="#6ee7b7" 
                     strokeWidth="0.5" 
                     vectorEffect="non-scaling-stroke"
                  />
               )}
            </svg>
-           <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] to-transparent" />
+           <div className="absolute inset-0 bg-gradient-to-t from-[#021109] to-transparent" />
         </div>
 
       </div>
     </section>
   );
 }
+
+

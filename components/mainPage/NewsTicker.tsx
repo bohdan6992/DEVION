@@ -61,13 +61,15 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
 
       <style jsx>{`
         .ticker-shell {
-          /* === ЗМІННІ СТИЛЮ (HUD) === */
-          --bg-glass: rgba(13, 13, 16, 0.85);
-          --border: rgba(255, 255, 255, 0.08);
-          --text: #ededed;
-          --text-muted: #94a3b8;
-          --accent: #38bdf8; /* Sky Blue */
-          --red: #f43f5e;
+          /* Theme-driven tokens */
+          --bg-glass: var(--dash-panel-bg);
+          --border: color-mix(in oklab, var(--dash-panel-border) 86%, transparent);
+          --text: var(--dash-text-main);
+          --text-muted: var(--dash-text-muted);
+          --accent: var(--dash-accent);
+          --accent-soft: var(--dash-accent-soft);
+          --accent-border: var(--dash-accent-border);
+          --accent-shadow: var(--dash-accent-shadow);
           
           position: relative;
           display: flex;
@@ -79,7 +81,7 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
           border: 1px solid var(--border);
           border-radius: 12px; /* Трохи менше скруглення для футера */
           overflow: hidden;
-          box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
+          box-shadow: var(--dash-panel-shadow);
           user-select: none;
         }
 
@@ -90,7 +92,7 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
           gap: 10px;
           padding: 0 16px;
           height: 100%;
-          background: rgba(255, 255, 255, 0.02);
+          background: color-mix(in oklab, var(--accent-soft) 92%, transparent);
           border-right: 1px solid var(--border);
           z-index: 2; /* Щоб текст не наїжджав при скролі */
           flex-shrink: 0;
@@ -107,9 +109,9 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
         .pulse-dot {
           width: 6px;
           height: 6px;
-          background-color: var(--red);
+          background-color: var(--accent);
           border-radius: 50%;
-          box-shadow: 0 0 8px var(--red);
+          box-shadow: 0 0 8px var(--accent-shadow);
           animation: pulse 2s infinite;
         }
 
@@ -171,7 +173,7 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
 
         .ticker-item:hover .item-title {
           color: var(--accent);
-          text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+          text-shadow: 0 0 10px color-mix(in oklab, var(--accent-shadow) 65%, transparent);
         }
 
         .item-source {
@@ -179,7 +181,8 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
           font-weight: 700;
           text-transform: uppercase;
           color: var(--accent);
-          background: rgba(56, 189, 248, 0.1);
+          background: color-mix(in oklab, var(--accent-soft) 92%, transparent);
+          border: 1px solid color-mix(in oklab, var(--accent-border) 75%, transparent);
           padding: 2px 6px;
           border-radius: 4px;
         }
@@ -197,7 +200,7 @@ export default function NewsTicker({ items, loading = false }: NewsTickerProps) 
         }
 
         .separator {
-          color: var(--border);
+          color: color-mix(in oklab, var(--accent-border) 70%, transparent);
           font-size: 10px;
           margin-left: 8px;
           letter-spacing: -2px;

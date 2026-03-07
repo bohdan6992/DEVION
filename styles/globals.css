@@ -172,6 +172,11 @@
   .tt-topbar-inner { padding: 0 12px; }
 }
 
+/* Fix: in scaled layout, fixed background can visually "end" on long pages */
+body.zoom-mode {
+  background-attachment: scroll !important;
+}
+
 /* ---------------- 7. COMPONENTS ---------------- */
 :root {
   --tile-bg: rgba(10, 10, 10, 0.6);

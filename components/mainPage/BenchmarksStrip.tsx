@@ -2,13 +2,12 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useUi } from "@/components/UiProvider";
-import { Activity } from "lucide-react";
 
 // --- LOGIC: Theme Detection ---
 const DARK_THEMES = new Set([
   "dark", "neon", "matrix", "solaris", "cyberpunk",
   "oceanic", "sakura", "asher", "inferno", "aurora",
-  "desert", "midnight", "forest", "candy", "monochrome",
+  "desert", "midnight", "forest", "candy", "monochrome", "space",
 ]);
 
 function themeIsDark(name?: string | null) {
@@ -19,7 +18,7 @@ function themeIsDark(name?: string | null) {
 }
 
 export default function BenchmarksStrip({
-  height = 54, // Трохи зменшив висоту для компактності стрічки
+  height = 56,
   locale = "uk",
 }: {
   height?: number;
@@ -76,45 +75,28 @@ export default function BenchmarksStrip({
   }, [isDark, locale]);
 
   return (
-    <section className="w-full max-w-[1400px] mx-auto mb-6">
-      {/* 
-        Container (Deep Space Glass)
-        Height is fixed to create a clean strip
-      */}
+    <section className="w-full max-w-[1400px] mx-auto">
       <div 
         className={`
-          relative w-full overflow-hidden rounded-xl border backdrop-blur-xl shadow-lg flex items-center transition-colors duration-300
+          relative w-full overflow-hidden rounded-xl border backdrop-blur-md shadow-[0_12px_34px_-24px_rgba(0,0,0,0.7)] flex items-center transition-colors duration-300
           ${isDark 
-            ? "bg-[#0a0a0a]/80 border-white/[0.06]" 
-            : "bg-white border-zinc-200 shadow-zinc-200/50"
+            ? "bg-black/20 border-white/10" 
+            : "bg-white/90 border-zinc-200"
           }
         `}
         style={{ height }}
       >
-        
-        {/* Hover Gradient (Dark Mode) */}
-        {isDark && (
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.03] to-transparent opacity-0 hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
-        )}
-
-        {/* --- LEFT LABEL --- */}
         <div className={`
-          relative z-10 flex items-center gap-3 px-4 h-full border-r shrink-0
-          ${isDark ? "border-white/[0.06] bg-[#0a0a0a]" : "border-zinc-200 bg-zinc-50"}
+          relative z-10 flex items-center gap-2 px-4 h-full border-r shrink-0
+          ${isDark ? "border-white/10 bg-black/25" : "border-zinc-200 bg-zinc-50/80"}
         `}>
-          <div className="relative flex items-center justify-center w-2 h-2">
-             <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
-             <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-          </div>
-          <span className={`text-[10px] font-mono font-bold uppercase tracking-widest ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+          <span className={`inline-block w-1.5 h-1.5 rounded-full ${isDark ? "bg-white/60" : "bg-zinc-500/60"}`} />
+          <span className={`text-[10px] font-mono font-semibold uppercase tracking-[0.16em] ${isDark ? "text-[var(--dash-text-muted)]" : "text-zinc-500"}`}>
             Market Tape
           </span>
         </div>
 
-        {/* --- TAPE VIEWPORT --- */}
         <div className="relative flex-1 h-full overflow-hidden">
-           
-           {/* Iframe */}
            <iframe
             key={isDark ? "dark-tape" : "light-tape"}
             title="Ticker Tape"
@@ -124,19 +106,22 @@ export default function BenchmarksStrip({
             scrolling="no"
           />
 
-          {/* Fade Masks (Left & Right) */}
           <div 
             className="absolute top-0 bottom-0 left-0 w-8 pointer-events-none z-20"
-            style={{ background: `linear-gradient(to right, ${isDark ? '#0a0a0a' : '#ffffff'}, transparent)` }}
+            style={{ background: `linear-gradient(to right, ${isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.92)'}, transparent)` }}
           />
           <div 
             className="absolute top-0 bottom-0 right-0 w-8 pointer-events-none z-20"
-            style={{ background: `linear-gradient(to left, ${isDark ? '#0a0a0a' : '#ffffff'}, transparent)` }}
+            style={{ background: `linear-gradient(to left, ${isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.92)'}, transparent)` }}
           />
-
         </div>
 
       </div>
     </section>
   );
 }
+
+
+
+
+

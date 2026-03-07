@@ -25,7 +25,7 @@ type ApiResp = {
 // --- UI COMPONENT: Terminal Badge ---
 const TerminalBadge = ({ children, icon: Icon, color = "zinc" }: { children: React.ReactNode, icon?: any, color?: "zinc" | "emerald" | "rose" }) => {
   const colors = {
-    zinc: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
+    zinc: "bg-zinc-500/10 text-emerald-300/60 border-zinc-500/20",
     emerald: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
     rose: "bg-rose-500/10 text-rose-500 border-rose-500/20",
   };
@@ -94,17 +94,17 @@ export default function TopMoversWidget({
   return (
     <section className="w-full h-full min-h-[300px]">
       {/* Deep Space Glass Card */}
-      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 backdrop-blur-xl shadow-xl flex flex-col group">
+      <div className="relative w-full h-full overflow-hidden rounded-2xl border border-emerald-400/20 bg-[#03130d]/75 backdrop-blur-xl shadow-xl flex flex-col group">
         
         {/* Hover Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50 z-10" />
+        <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/[0.08] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-0" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent opacity-50 z-10" />
 
         {/* --- HEADER --- */}
-        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-white/[0.04]">
+        <header className="relative z-10 flex items-center justify-between p-6 pb-4 border-b border-emerald-400/20">
           <div className="flex items-center gap-3">
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 border border-white/5 shadow-inner">
-              <Zap size={18} className="text-zinc-200" />
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-emerald-950 to-[#082116] border border-emerald-400/25 shadow-inner">
+              <Zap size={18} className="text-emerald-100" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
@@ -112,7 +112,7 @@ export default function TopMoversWidget({
                 <span className="flex h-1.5 w-1.5 rounded-full bg-cyan-500 shadow-[0_0_6px_rgba(6,182,212,0.6)] animate-pulse" />
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Volatility Tracker</span>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-300/60">Volatility Tracker</span>
               </div>
             </div>
           </div>
@@ -120,13 +120,13 @@ export default function TopMoversWidget({
         </header>
 
         {/* --- CONTENT --- */}
-        <div className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-white/[0.04] bg-[#0a0a0a]/40">
+        <div className="relative z-10 flex-1 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-emerald-400/15 bg-[#0a0a0a]/40">
           
           {/* GAINERS COL */}
           <div className="flex flex-col p-4 overflow-hidden">
              <div className="flex items-center gap-2 mb-4">
                 <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_#10b981]" />
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Top Gainers</span>
+                <span className="text-[10px] font-bold text-emerald-300/60 uppercase tracking-widest">Top Gainers</span>
              </div>
              
              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-1">
@@ -140,7 +140,7 @@ export default function TopMoversWidget({
           <div className="flex flex-col p-4 overflow-hidden">
              <div className="flex items-center gap-2 mb-4">
                 <span className="flex h-1.5 w-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#ef4444]" />
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Top Losers</span>
+                <span className="text-[10px] font-bold text-emerald-300/60 uppercase tracking-widest">Top Losers</span>
              </div>
 
              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-1">
@@ -167,8 +167,8 @@ export default function TopMoversWidget({
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(52, 211, 153, 0.35); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(110, 231, 183, 0.55); }
       `}</style>
     </section>
   );
@@ -183,12 +183,12 @@ function MoverRow({ row, type }: { row: Row; type: "up" | "down" }) {
   const Icon = isUp ? ArrowUpRight : ArrowDownRight;
 
   return (
-    <div className="group flex items-center justify-between p-2.5 rounded-lg border border-white/[0.02] bg-white/[0.01] hover:bg-white/[0.04] transition-all duration-200">
+    <div className="group flex items-center justify-between p-2.5 rounded-lg border border-emerald-400/15 bg-emerald-500/[0.05] hover:bg-emerald-500/[0.12] transition-all duration-200">
       <div className="flex flex-col">
-        <span className="text-sm font-bold text-white tracking-wide group-hover:text-zinc-200 transition-colors">
+        <span className="text-sm font-bold text-white tracking-wide group-hover:text-emerald-100 transition-colors">
           {row.ticker}
         </span>
-        <span className="text-[10px] font-mono text-zinc-500 tabular-nums">
+        <span className="text-[10px] font-mono text-emerald-300/60 tabular-nums">
           {row.last.toFixed(2)}
         </span>
       </div>
@@ -221,3 +221,5 @@ function EmptyState() {
     </div>
   );
 }
+
+

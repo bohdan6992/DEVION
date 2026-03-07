@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import OnThisDayFacts from "@/components/OnThisDayFacts";
 import { AppDock } from "@/components/nav/AppDock";
 import { Calendar, Activity } from "lucide-react";
+import { useUi } from "@/components/UiProvider";
 
 // --- LOGIC HELPER ---
 function getNYParts() {
@@ -25,6 +26,7 @@ function getNYParts() {
 }
 
 export default function NYTopInfo() {
+  const { isDark } = useUi();
   const [mounted, setMounted] = useState(false);
   const [dateStr, setDateStr] = useState("");
 
@@ -71,16 +73,22 @@ export default function NYTopInfo() {
 
   if (!mounted) {
     return (
-      <div className="w-full max-w-[1400px] mx-auto h-[200px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 animate-pulse" />
+      <div
+        className="w-full max-w-[1400px] mx-auto h-[200px] rounded-2xl border border-white/12 animate-pulse"
+        style={{ backgroundColor: isDark ? "#000000" : "rgba(255, 255, 255, 0.92)" }}
+      />
     );
   }
 
 // ... (початок коду без змін)
 
   return (
-    <section className="w-full max-w-[1400px] mx-auto mb-6">
-      <div className="relative overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 backdrop-blur-xl shadow-xl">
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-50" />
+    <section className="w-full max-w-[1400px] mx-auto">
+      <div
+        className="relative overflow-hidden rounded-2xl border border-white/12 shadow-xl"
+        style={{ backgroundColor: isDark ? "#000000" : "rgba(255, 255, 255, 0.94)" }}
+      >
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent opacity-50" />
 
         {/* Dock stays top-right */}
         <div className="absolute top-4 right-4 z-10 hidden md:flex items-start gap-3">
@@ -92,7 +100,7 @@ export default function NYTopInfo() {
           
           {/* --- LEFT: CLOCK --- */}
           {/* ЗМІНА: Прибрано justify-center, додано border-r для візуального розділення */}
-          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 border-white/[0.06]">
+          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 border-emerald-400/20">
             <div className="flex items-center gap-6 lg:gap-8">
               {/* ANALOG */}
               <div className="relative w-[110px] h-[110px] lg:w-[130px] lg:h-[130px] shrink-0">
@@ -108,7 +116,7 @@ export default function NYTopInfo() {
                       />
                     ))}
                   </g>
-                  <line ref={hourRef} x1="50" y1="50" x2="50" y2="30" className="stroke-white stroke-[3px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
+                  <line ref={hourRef} x1="50" y1="50" x2="50" y2="30" className="stroke-emerald-100 stroke-[3px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
                   <line ref={minuteRef} x1="50" y1="50" x2="50" y2="22" className="stroke-emerald-400 stroke-[2px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
                   <line ref={secondRef} x1="50" y1="60" x2="50" y2="15" className="stroke-rose-500 stroke-[1px]" style={{ transformOrigin: "50px 50px" }} />
                   <circle cx="50" cy="50" r="2.5" className="fill-zinc-200" />
@@ -117,15 +125,15 @@ export default function NYTopInfo() {
 
               {/* DIGITAL */}
               <div className="flex flex-col whitespace-nowrap">
-                <div className="flex items-baseline font-mono text-5xl lg:text-7xl font-bold tracking-tighter text-white leading-none tabular-nums">
+                <div className="flex items-baseline font-mono text-5xl lg:text-7xl font-bold tracking-tighter text-emerald-100 leading-none tabular-nums">
                   <span ref={hRef}>--</span>
-                  <span className="mx-1 text-zinc-600 animate-pulse">:</span>
+                  <span className="mx-1 text-emerald-300/45 animate-pulse">:</span>
                   <span ref={mRef}>--</span>
-                  <span className="mx-1 text-zinc-700 text-2xl lg:text-4xl">:</span>
+                  <span className="mx-1 text-emerald-300/40 text-2xl lg:text-4xl">:</span>
                   <span ref={sRef} className="text-2xl lg:text-4xl text-emerald-400">--</span>
                 </div>
-                <div className="flex items-center gap-2 mt-3 text-[10px] lg:text-xs font-mono font-medium text-zinc-500 tracking-wider">
-                  <Calendar size={12} className="text-zinc-600" />
+                <div className="flex items-center gap-2 mt-3 text-[10px] lg:text-xs font-mono font-medium text-emerald-300/60 tracking-wider">
+                  <Calendar size={12} className="text-emerald-300/45" />
                   <span className="capitalize">{dateStr}</span>
                 </div>
               </div>
@@ -144,10 +152,10 @@ export default function NYTopInfo() {
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
               <div
                 className="
-                  text-sm lg:text-[15px] text-zinc-400 leading-relaxed font-sans
+                  text-sm lg:text-[15px] text-emerald-200/75 leading-relaxed font-sans
                   [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-3
-                  [&_li]:pl-3 [&_li]:border-l-[2px] [&_li]:border-zinc-800/50 [&_li]:transition-all
-                  [&_li:hover]:border-emerald-500/50 [&_li:hover]:text-zinc-200 [&_li:hover]:bg-white/[0.01]
+                  [&_li]:pl-3 [&_li]:border-l-[2px] [&_li]:border-emerald-400/15 [&_li]:transition-all
+                  [&_li:hover]:border-emerald-500/50 [&_li:hover]:text-emerald-100 [&_li:hover]:bg-emerald-500/[0.06]
                   [&_strong]:text-emerald-400/80 [&_strong]:font-mono [&_strong]:text-[11px] [&_strong]:mr-2
                 "
               >
@@ -179,3 +187,4 @@ export default function NYTopInfo() {
     </section>
   );
 }
+
