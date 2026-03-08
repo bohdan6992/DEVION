@@ -377,11 +377,23 @@ const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCoun
 const boolIsPTP = (s: any) => getBoolAny(s, ["isPTP", "IsPTP", "ptp", "PTP"]);
 const boolIsSSR = (s: any) => getBoolAny(s, ["isSSR", "IsSSR", "ssr", "SSR"]);
 const boolIsETF = (s: any) => getBoolAny(s, ["etf", "ETF", "isEtf", "IsEtf", "isETF", "IsETF"]);
-const numPositionBp = (s: any) => getNumAny(s, ["PositionBp", "positionBp", "position_bp"]);
+const numPositionBp = (s: any) =>
+  getNumAny(s, [
+    "PositionBp",
+    "positionBp",
+    "position_bp",
+    "posBp",
+    "PosBp",
+    "positionBpAbs",
+    "PositionBpAbs",
+  ]);
 
 const isActiveByPositionBp = (s: any) => {
   const v = numPositionBp(s);
-  return v != null && v !== 0;
+  if (v != null) return v !== 0;
+  // Fallback for feeds where PositionBp is absent but active flag is provided.
+  const f = toBool((s as any)?._isActive ?? s?.active ?? s?.isActive ?? s?.IsActive ?? getMeta(s)?.active ?? getMeta(s)?.isActive ?? getMeta(s)?.IsActive);
+  return f === true;
 };
 
 /* =========================
@@ -489,9 +501,15 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
     .trim();
 
   let direction: "up" | "down" | "none" = "none";
-  if (sideStr.includes("short") || sideStr === "s" || sideStr === "sell") direction = "down";
-  else if (sideStr.includes("long") || sideStr === "l" || sideStr === "buy") direction = "up";
-  else if (raw.direction === "up" || raw.direction === "down" || raw.direction === "none") direction = raw.direction;
+  if (sideStr.includes("short") || sideStr === "s" || sideStr === "sell" || sideStr === "down") direction = "down";
+  else if (sideStr.includes("long") || sideStr === "l" || sideStr === "buy" || sideStr === "up") direction = "up";
+  else {
+    const dirRaw = String(raw.direction ?? raw.Direction ?? meta?.direction ?? meta?.Direction ?? "")
+      .trim()
+      .toLowerCase();
+    if (dirRaw === "up" || dirRaw === "long" || dirRaw === "buy") direction = "up";
+    else if (dirRaw === "down" || dirRaw === "short" || dirRaw === "sell") direction = "down";
+  }
 
   const sig =
     (typeof raw.sig === "number" ? raw.sig : null) ??
@@ -510,6 +528,10 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
 
   const shortCandidate = !!(raw.shortCandidate ?? raw.ShortCandidate ?? raw.isShort ?? raw.short ?? false);
   const longCandidate = !!(raw.longCandidate ?? raw.LongCandidate ?? raw.isLong ?? raw.long ?? false);
+  if (direction === "none") {
+    if (shortCandidate && !longCandidate) direction = "down";
+    else if (longCandidate && !shortCandidate) direction = "up";
+  }
 
   const bidStock = toNum(raw.bidStock ?? meta?.bidStock);
   const askStock = toNum(raw.askStock ?? meta?.askStock);
@@ -1255,6 +1277,15 @@ const getBetaFallback1 = (s: any) => {
   return 1.0;
 };
 
+const getHedgeBeta = (s: any) => {
+  // Prefer full parser (betaBucket numeric, best.beta, meta.beta, static beta), then safe fallback.
+  const b = getBetaValue(s);
+  if (b != null && Number.isFinite(b) && b !== 0) return Math.abs(b);
+  const f = getBetaFallback1(s);
+  if (Number.isFinite(f) && f !== 0) return Math.abs(f);
+  return 1.0;
+};
+
 const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   const map = new Map<string, HedgeInfo>();
 
@@ -1274,9 +1305,14 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   //       needBp < 0 => SELL hedge (red/left)
 
   const dirBucket = (s: any): "buy" | "sell" | null => {
-    const d = String(s?.direction ?? getMeta(s)?.direction ?? "").trim().toLowerCase();
-    if (d === "short") return "buy";
-    if (d === "long") return "sell";
+    const d = String(s?.direction ?? getMeta(s)?.direction ?? s?.side ?? getMeta(s)?.side ?? "")
+      .trim()
+      .toLowerCase();
+    // Normalized stream currently uses direction: up/down.
+    // down == short signal => need BUY hedge
+    // up   == long signal  => need SELL hedge
+    if (d === "short" || d === "down" || d === "sell" || d === "s") return "buy";
+    if (d === "long" || d === "up" || d === "buy" || d === "l") return "sell";
     return null; // unknown => ignore
   };
 
@@ -1315,10 +1351,11 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     const bucket = dirBucket(s);
     if (!bench || !bucket) continue;
 
-    const pos = numPositionBp(s);
+    const posRaw = numPositionBp(s);
+    const pos = posRaw == null ? null : Math.abs(posRaw);
     if (pos == null || pos === 0) continue;
 
-    const beta = getBetaFallback1(s);
+    const beta = getHedgeBeta(s);
     const h = pos * beta;
 
     const cur = sums.get(bench) ?? { buySum: 0, sellSum: 0 };
@@ -2760,7 +2797,7 @@ export default function BridgeArbitrageSignals() {
             <div className="flex items-center gap-3">
               <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${loading ? "bg-emerald-500 animate-pulse" : "bg-emerald-500"}`} />
               <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                ARBITRAGE TERMINAL
+                ARBITRAGE SONAR
               </h1>
 
               <div className="flex gap-2 ml-4">

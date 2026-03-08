@@ -2932,7 +2932,7 @@ export default function PaperArbitrageTapePage() {
             <div className="flex items-center gap-3">
               <span className={clsx("w-2.5 h-2.5 rounded-full border border-white/10", loading ? "bg-emerald-500 animate-pulse" : "bg-emerald-500")} />
               <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                ARBITRAGE TERMINAL
+                ARBITRAGE SCANNER
               </h1>
               <div className="flex gap-2 ml-4">
                 <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{classLabel}</span>
