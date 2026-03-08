@@ -292,6 +292,17 @@ type PaperArbAnalyticsResponse = {
   topTickers?: PaperArbTickerStatsDto[] | null;
 };
 
+type EpisodeScanResult = {
+  startAbs: number;
+  endAbs: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlUsd: number;
+  avgPnlUsd: number;
+};
+
 // =========================
 // UTILS
 // =========================
@@ -340,10 +351,51 @@ function splitList(s: string): string[] {
 function splitListUpper(s: string): string[] {
   return splitList(s).map((x) => x.toUpperCase());
 }
+function normalizeTicker(raw: string): string | null {
+  const tk = (raw || "").trim().toUpperCase().replace(/"/g, "");
+  if (!tk) return null;
+  if (!/^[A-Z0-9.\-]+$/.test(tk)) return null;
+  return tk;
+}
+function parseTickersFromCsv(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (!lines.length) return [];
+
+  const detectDelim = (line: string) =>
+    (line.match(/;/g) || []).length > (line.match(/,/g) || []).length ? ";" : ",";
+
+  const delim = detectDelim(lines[0]);
+  const header = lines[0].split(delim).map((x) => x.trim().toLowerCase());
+  const tickerIdx = header.findIndex((h) => h === "ticker");
+  const start = tickerIdx !== -1 ? 1 : 0;
+
+  const out: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const parts = lines[i].split(delim).map((x) => x.trim());
+    const raw = tickerIdx !== -1 ? parts[tickerIdx] : parts[0];
+    const tk = normalizeTicker(raw || "");
+    if (tk) out.push(tk);
+  }
+  return Array.from(new Set(out));
+}
+function tickerKey(x: string | null | undefined): string {
+  return String(x ?? "").trim().toUpperCase();
+}
 function optNumOrNull(v: any): number | null {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+function buildRangeValues(min: number, max: number, step: number): number[] {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  const st = Math.max(0.0001, step);
+  const out: number[] = [];
+  for (let v = lo; v <= hi + st * 0.5; v += st) out.push(Number(v.toFixed(4)));
+  return Array.from(new Set(out));
 }
 
 function normalizeSide(
@@ -718,12 +770,20 @@ function SideBadge({ side }: { side: TapeArbSide }) {
 // =========================
 // Simple SVG line chart (equity curve)
 // =========================
-function EquityChart({ points }: { points: PaperArbEquityPointDto[] }) {
+function EquityChart({
+  points,
+  title,
+  meta,
+}: {
+  points: PaperArbEquityPointDto[];
+  title?: string;
+  meta?: string;
+}) {
   const w = 1100;
-  const h = 320;
+  const h = 360;
   const padX = 18;
-  const padTop = 16;
-  const padBottom = 38;
+  const padTop = 34;
+  const padBottom = 34;
 
   const parseKey = (key: string): { date: string | null; minuteIdx: number | null } => {
     const m = String(key ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:\s+(\d+))?$/);
@@ -885,8 +945,14 @@ function EquityChart({ points }: { points: PaperArbEquityPointDto[] }) {
   const zeroY = zeroInRange ? toY(0) : null;
 
   return (
-    <div className="w-full rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/70 p-3 shadow-[0_0_36px_-12px_rgba(16,185,129,0.28)]">
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-[320px]">
+    <div className="relative w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
         <defs>
           <linearGradient id="eq-bg" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="rgba(16,185,129,0.08)" />
@@ -925,7 +991,7 @@ function EquityChart({ points }: { points: PaperArbEquityPointDto[] }) {
         <path d={areaD} fill="url(#eq-fill)" />
         <path d={lineD} fill="none" stroke="url(#eq-stroke)" strokeWidth="2.8" filter="url(#eq-glow)" />
 
-        <circle cx={toX(0)} cy={firstY} r="3.2" fill="rgba(56,189,248,0.95)" />
+        <circle cx={toX(0)} cy={firstY} r="3.2" fill="rgba(167,139,250,0.95)" />
         <circle cx={toX(chartPoints.length - 1)} cy={lastY} r="4" fill="rgba(16,185,129,1)" />
         <text x={toX(chartPoints.length - 1) + 8} y={lastY - 10} fontSize="10" className="fill-emerald-300 font-mono">
           {num(last?.equity ?? null, 2)}
@@ -956,46 +1022,246 @@ function EquityChart({ points }: { points: PaperArbEquityPointDto[] }) {
   );
 }
 
-function StartsByTimeChart({ rows }: { rows: PaperArbClosedDto[] }) {
+function StartsByTimeChart({
+  rows,
+  title,
+  meta,
+}: {
+  rows: PaperArbClosedDto[];
+  title?: string;
+  meta?: string;
+}) {
   const w = 1100;
   const h = 320;
   const padX = 22;
-  const padTop = 16;
-  const padBottom = 40;
+  const padTop = 40;
+  const footerH = 40;
+  const padBottom = 46;
 
   const bins = useMemo(() => {
-    const m = new Map<number, number>();
+    const m = new Map<number, { ok: number; bad: number }>();
     for (const r of rows) {
       const idx = Number(r.startMinuteIdx);
       if (!Number.isFinite(idx)) continue;
-      const b = Math.trunc(idx / 5) * 5; // 5-minute buckets
-      m.set(b, (m.get(b) ?? 0) + 1);
+      const b = Math.trunc(idx / 5) * 5;
+      const prev = m.get(b) ?? { ok: 0, bad: 0 };
+      if ((r.totalPnlUsd ?? 0) > 0) prev.ok += 1;
+      else prev.bad += 1;
+      m.set(b, prev);
     }
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
   }, [rows]);
 
   if (!bins.length) {
     return (
-      <div className="w-full rounded-xl border border-white/10 bg-[#070707]/70 p-4 text-xs font-mono text-zinc-500">
+      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No start events for chart.
       </div>
     );
   }
 
-  const maxY = Math.max(1, ...bins.map(([, c]) => c));
+  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.ok, v.bad)));
   const plotW = w - padX * 2;
   const plotH = h - padTop - padBottom;
   const barGap = 2;
-  const barW = Math.max(2, Math.floor(plotW / bins.length) - barGap);
+  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
+  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
+  const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
+  const xTickItems = useMemo(() => {
+    const src = bins.map(([idx], i) => ({ idx, i }));
+    const target = Math.max(4, Math.min(10, src.length));
+    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
+    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
+    const out: Array<{ idx: number; x: number }> = [];
+    let lastX = -1e9;
+    for (const t of uniq) {
+      const x = padX + t.i * (groupW + barGap) + groupW / 2;
+      const mustKeep = t.i === 0 || t.i === src.length - 1;
+      if (!mustKeep && x - lastX < 86) continue;
+      out.push({ idx: t.idx, x });
+      lastX = x;
+    }
+    return out;
+  }, [bins, groupW, barGap]);
+  const totalOk = bins.reduce((s, [, v]) => s + v.ok, 0);
+  const totalBad = bins.reduce((s, [, v]) => s + v.bad, 0);
+  const total = totalOk + totalBad;
+  const hit = total > 0 ? totalOk / total : 0;
+  const avgOkBin = bins.length ? totalOk / bins.length : 0;
+  const avgBadBin = bins.length ? totalBad / bins.length : 0;
+  const bestOk = bins.reduce((best, cur) => (cur[1].ok > best[1].ok ? cur : best), bins[0]);
+  const bestBad = bins.reduce((best, cur) => (cur[1].bad > best[1].bad ? cur : best), bins[0]);
+
+  return (
+    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
+          START OK
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/90" />
+          START BAD
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
+        <defs>
+          <linearGradient id="starts-ok-bar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
+            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
+          </linearGradient>
+          <linearGradient id="starts-bad-bar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
+            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
+          </linearGradient>
+        </defs>
+
+        {yTicks.map((t) => {
+          const y = padTop + plotH - (t / maxY) * plotH;
+          return (
+            <g key={`y-${t}`}>
+              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              {t > 0 && (
+                <text x={w - padX - 4} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
+                  {t}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {bins.map(([idx, v], i) => {
+          const xBase = padX + i * (groupW + barGap);
+          const hOk = plotH * (v.ok / maxY);
+          const hBad = plotH * (v.bad / maxY);
+          const yOk = padTop + plotH - hOk;
+          const yBad = padTop + plotH - hBad;
+          return (
+            <g key={`${idx}-${i}`}>
+              <rect x={xBase} y={yOk} width={barW} height={hOk} rx="3" fill="url(#starts-ok-bar)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={yBad} width={barW} height={hBad} rx="3" fill="url(#starts-bad-bar)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+            </g>
+          );
+        })}
+
+        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+
+        {xTickItems.map((t, i) => {
+          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
+          return (
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+              {minuteIdxToClockLabel(t.idx)}
+            </text>
+          );
+        })}
+      </svg>
+
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <span className="text-emerald-300/90">ok {intn(totalOk)}</span>
+          <span className="text-rose-300/90">bad {intn(totalBad)}</span>
+          <span className="text-zinc-500">hit {num(hit * 100, 1)}%</span>
+          <span className="text-zinc-500">avg/bin {num(avgOkBin, 2)} / {num(avgBadBin, 2)}</span>
+          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+            best ok: <span className="text-emerald-300">{minuteIdxToClockLabel(bestOk[0])}</span> ({intn(bestOk[1].ok)})
+          </span>
+          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+            best bad: <span className="text-rose-300">{minuteIdxToClockLabel(bestBad[0])}</span> ({intn(bestBad[1].bad)})
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StartsEndsByTimeChart({
+  rows,
+  title,
+  meta,
+}: {
+  rows: PaperArbClosedDto[];
+  title?: string;
+  meta?: string;
+}) {
+  const w = 1100;
+  const h = 360;
+  const padX = 22;
+  const padTop = 56;
+  const padBottom = 34;
+
+  const bins = useMemo(() => {
+    const m = new Map<number, { starts: number; ends: number }>();
+    for (const r of rows) {
+      const s = Number(r.startMinuteIdx);
+      const e = Number(r.endMinuteIdx);
+
+      if (Number.isFinite(s)) {
+        const b = Math.trunc(s / 5) * 5;
+        const prev = m.get(b) ?? { starts: 0, ends: 0 };
+        prev.starts += 1;
+        m.set(b, prev);
+      }
+      if (Number.isFinite(e)) {
+        const b = Math.trunc(e / 5) * 5;
+        const prev = m.get(b) ?? { starts: 0, ends: 0 };
+        prev.ends += 1;
+        m.set(b, prev);
+      }
+    }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [rows]);
+
+  if (!bins.length) {
+    return (
+      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No start/end events for chart.
+      </div>
+    );
+  }
+
+  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.starts, v.ends)));
+  const plotW = w - padX * 2;
+  const plotH = h - padTop - padBottom;
+  const barGap = 2;
+  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
+  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
   const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
 
   return (
-    <div className="w-full rounded-xl border border-white/10 bg-[#070707]/70 p-3">
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-[320px]">
+    <div className="relative w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+
+      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
+          START
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/80" />
+          END
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
         <defs>
-          <linearGradient id="starts-bar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(139,92,246,0.9)" />
-            <stop offset="100%" stopColor="rgba(139,92,246,0.2)" />
+          <linearGradient id="se-start" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
+            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
+          </linearGradient>
+          <linearGradient id="se-end" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
+            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
           </linearGradient>
         </defs>
 
@@ -1011,11 +1277,18 @@ function StartsByTimeChart({ rows }: { rows: PaperArbClosedDto[] }) {
           );
         })}
 
-        {bins.map(([idx, count], i) => {
-          const x = padX + i * (barW + barGap);
-          const hh = plotH * (count / maxY);
-          const y = padTop + plotH - hh;
-          return <rect key={`${idx}-${i}`} x={x} y={y} width={barW} height={hh} rx="2" fill="url(#starts-bar)" />;
+        {bins.map(([idx, v], i) => {
+          const xBase = padX + i * (groupW + barGap);
+          const hs = plotH * (v.starts / maxY);
+          const he = plotH * (v.ends / maxY);
+          const ys = padTop + plotH - hs;
+          const ye = padTop + plotH - he;
+          return (
+            <g key={`${idx}-${i}`}>
+              <rect x={xBase} y={ys} width={barW} height={hs} rx="3" fill="url(#se-start)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={ye} width={barW} height={he} rx="3" fill="url(#se-end)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+            </g>
+          );
         })}
 
         <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
@@ -1024,7 +1297,7 @@ function StartsByTimeChart({ rows }: { rows: PaperArbClosedDto[] }) {
           .filter((_, i) => i % Math.ceil(bins.length / 8) === 0 || i === bins.length - 1)
           .map(([idx], i) => {
             const pos = bins.findIndex(([k]) => k === idx);
-            const x = padX + pos * (barW + barGap) + barW / 2;
+            const x = padX + pos * (groupW + barGap) + groupW / 2;
             return (
               <text key={`x-${idx}-${i}`} x={x} y={h - 10} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
                 {minuteIdxToClockLabel(idx)}
@@ -1032,6 +1305,401 @@ function StartsByTimeChart({ rows }: { rows: PaperArbClosedDto[] }) {
             );
           })}
       </svg>
+    </div>
+  );
+}
+
+function PeakStrengthByTimeChart({
+  rows,
+  title,
+  meta,
+}: {
+  rows: PaperArbClosedDto[];
+  title?: string;
+  meta?: string;
+}) {
+  const w = 1100;
+  const h = 320;
+  const padX = 24;
+  const padTop = 40;
+  const footerH = 40;
+  const padBottom = 46;
+
+  const bins = useMemo(() => {
+    const m = new Map<number, { count: number; sumAbs: number }>();
+    for (const r of rows) {
+      const p = Number(r.peakMinuteIdx);
+      if (!Number.isFinite(p)) continue;
+      const b = Math.trunc(p / 5) * 5;
+      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? r.peakMetric ?? 0));
+      const prev = m.get(b) ?? { count: 0, sumAbs: 0 };
+      prev.count += 1;
+      prev.sumAbs += Number.isFinite(peakAbs) ? peakAbs : 0;
+      m.set(b, prev);
+    }
+    return [...m.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([idx, v]) => ({ idx, count: v.count, avgAbs: v.count ? v.sumAbs / v.count : 0 }));
+  }, [rows]);
+
+  if (!bins.length) {
+    return (
+      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No peak events for chart.
+      </div>
+    );
+  }
+
+  const plotW = w - padX * 2;
+  const plotH = h - padTop - padBottom;
+  const maxCount = Math.max(1, ...bins.map((b) => b.count));
+  const maxAbs = Math.max(0.0001, ...bins.map((b) => b.avgAbs));
+  const barGap = 1;
+  const barW = Math.max(3, Math.floor(plotW / bins.length) - barGap);
+
+  const toX = (i: number) => padX + i * (barW + barGap) + barW / 2;
+  const toYCount = (v: number) => padTop + plotH - (v / maxCount) * plotH;
+  const toYAbs = (v: number) => padTop + plotH - (v / maxAbs) * plotH;
+  const lineD = bins
+    .map((b, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toYAbs(b.avgAbs).toFixed(2)}`)
+    .join(" ");
+  const peakVals = bins.map((b) => b.avgAbs);
+  const avgPeak = peakVals.length ? peakVals.reduce((s, v) => s + v, 0) / peakVals.length : 0;
+  const sortedPeak = [...peakVals].sort((a, b) => a - b);
+  const medPeak = sortedPeak.length ? sortedPeak[Math.floor((sortedPeak.length - 1) * 0.5)] : 0;
+  const p90Peak = sortedPeak.length ? sortedPeak[Math.floor((sortedPeak.length - 1) * 0.9)] : 0;
+  const maxCountBin = bins.reduce((best, cur) => (cur.count > best.count ? cur : best), bins[0]);
+  const strengthRanges = [
+    { label: "<0.5", min: 0, max: 0.5 },
+    { label: "0.5-1", min: 0.5, max: 1 },
+    { label: "1-2", min: 1, max: 2 },
+    { label: "2-4", min: 2, max: 4 },
+    { label: "4+", min: 4, max: Number.POSITIVE_INFINITY },
+  ];
+  const strengthDist = strengthRanges.map((r) => ({
+    ...r,
+    count: bins.filter((b) => b.avgAbs >= r.min && b.avgAbs < r.max).reduce((s, b) => s + b.count, 0),
+  }));
+  const xTickItems = useMemo(() => {
+    const src = bins.map((b, i) => ({ idx: b.idx, i }));
+    const target = Math.max(4, Math.min(10, src.length));
+    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
+    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
+    const out: Array<{ idx: number; x: number }> = [];
+    let lastX = -1e9;
+    for (const t of uniq) {
+      const x = toX(t.i);
+      const mustKeep = t.i === 0 || t.i === src.length - 1;
+      if (!mustKeep && x - lastX < 86) continue;
+      out.push({ idx: t.idx, x });
+      lastX = x;
+    }
+    return out;
+  }, [bins, barW, barGap]);
+
+  return (
+    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+
+      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-violet-400/80" />
+          COUNT
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-300/90" />
+          AVG PEAK ABS
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
+        <defs>
+          <linearGradient id="peak-count" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(167,139,250,0.95)" />
+            <stop offset="100%" stopColor="rgba(167,139,250,0.25)" />
+          </linearGradient>
+          <filter id="peak-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.8" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {[0, 0.33, 0.66, 1].map((t, i) => {
+          const y = padTop + plotH - t * plotH;
+          const left = Math.round(t * maxCount);
+          const right = num(t * maxAbs, 3);
+          return (
+            <g key={`grid-${i}`}>
+              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              {left > 0 && (
+                <text x={padX + 2} y={y - 3} fontSize="14" className="fill-zinc-400 font-mono">
+                  {left}
+                </text>
+              )}
+              {t > 0 && (
+                <text x={w - padX - 2} y={y - 3} textAnchor="end" fontSize="14" className="fill-amber-200/80 font-mono">
+                  {right}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {bins.map((b, i) => {
+          const x = padX + i * (barW + barGap);
+          const hh = plotH * (b.count / maxCount);
+          const y = padTop + plotH - hh;
+          return <rect key={`b-${b.idx}-${i}`} x={x} y={y} width={barW} height={hh} rx="3" fill="url(#peak-count)" stroke="rgba(196,181,253,0.55)" strokeWidth="0.6" />;
+        })}
+
+        <path d={lineD} fill="none" stroke="rgba(252,211,77,0.95)" strokeWidth="2" filter="url(#peak-line-glow)" />
+        {bins.map((b, i) => (
+          <circle key={`p-${b.idx}-${i}`} cx={toX(i)} cy={toYAbs(b.avgAbs)} r="2.5" fill="rgba(252,211,77,0.95)" />
+        ))}
+
+        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        {xTickItems.map((t, i) => {
+          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
+          return (
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+              {minuteIdxToClockLabel(t.idx)}
+            </text>
+          );
+        })}
+      </svg>
+
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <span className="text-zinc-500">avg {num(avgPeak, 3)}</span>
+          <span className="text-zinc-500">median {num(medPeak, 3)}</span>
+          <span className="text-zinc-500">p90 {num(p90Peak, 3)}</span>
+          <span className="text-violet-300/90">max count {intn(maxCountBin.count)} @ {minuteIdxToClockLabel(maxCountBin.idx)}</span>
+          {strengthDist.map((d) => (
+            <span key={d.label} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+              {d.label}: <span className="text-amber-300">{intn(d.count)}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PeakReversionTwoThirdsChart({
+  rows,
+  title,
+  meta,
+}: {
+  rows: PaperArbClosedDto[];
+  title?: string;
+  meta?: string;
+}) {
+  const w = 1100;
+  const h = 320;
+  const padX = 22;
+  const padTop = 40;
+  const footerH = 40;
+  const padBottom = 46;
+
+  const bins = useMemo(() => {
+    const m = new Map<number, { yes: number; no: number }>();
+    for (const r of rows) {
+      const t = Number(r.peakMinuteIdx);
+      if (!Number.isFinite(t)) continue;
+      const b = Math.trunc(t / 5) * 5;
+
+      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? 0));
+      const endAbs = Math.abs(Number(r.endMetricAbs ?? 0));
+      const revertedFrac = peakAbs > 0 ? (peakAbs - endAbs) / peakAbs : 0;
+      const ok = revertedFrac >= 2 / 3;
+
+      const prev = m.get(b) ?? { yes: 0, no: 0 };
+      if (ok) prev.yes += 1;
+      else prev.no += 1;
+      m.set(b, prev);
+    }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [rows]);
+
+  const stats = useMemo(() => {
+    const valsAll: number[] = [];
+    const valsYes: number[] = [];
+    const valsNo: number[] = [];
+    const distRanges = [
+      { label: "<0.5", min: 0, max: 0.5 },
+      { label: "0.5-1", min: 0.5, max: 1 },
+      { label: "1-2", min: 1, max: 2 },
+      { label: "2-4", min: 2, max: 4 },
+      { label: "4+", min: 4, max: Number.POSITIVE_INFINITY },
+    ];
+    const dist = distRanges.map((r) => ({ ...r, yes: 0, no: 0 }));
+
+    for (const r of rows) {
+      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? 0));
+      if (!Number.isFinite(peakAbs) || peakAbs <= 0) continue;
+      const endAbs = Math.abs(Number(r.endMetricAbs ?? 0));
+      const revertedFrac = peakAbs > 0 ? (peakAbs - endAbs) / peakAbs : 0;
+      const ok = revertedFrac >= 2 / 3;
+
+      valsAll.push(peakAbs);
+      if (ok) valsYes.push(peakAbs);
+      else valsNo.push(peakAbs);
+
+      const bucket = dist.find((d) => peakAbs >= d.min && peakAbs < d.max);
+      if (bucket) {
+        if (ok) bucket.yes += 1;
+        else bucket.no += 1;
+      }
+    }
+
+    const avg = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+    const pctl = (a: number[], p: number) => {
+      if (!a.length) return 0;
+      const s = [...a].sort((x, y) => x - y);
+      const idx = Math.min(s.length - 1, Math.max(0, Math.round((s.length - 1) * p)));
+      return s[idx] ?? 0;
+    };
+    return {
+      avgAll: avg(valsAll),
+      medAll: pctl(valsAll, 0.5),
+      p90All: pctl(valsAll, 0.9),
+      avgYes: avg(valsYes),
+      avgNo: avg(valsNo),
+      dist,
+    };
+  }, [rows]);
+
+  if (!bins.length) {
+    return (
+      <div className="w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No peak reversion data.
+      </div>
+    );
+  }
+
+  const plotW = w - padX * 2;
+  const plotH = h - padTop - padBottom;
+  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.yes, v.no)));
+  const barGap = 2;
+  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
+  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
+  const totalYes = bins.reduce((s, [, v]) => s + v.yes, 0);
+  const totalNo = bins.reduce((s, [, v]) => s + v.no, 0);
+  const total = totalYes + totalNo;
+  const yesRate = total ? totalYes / total : 0;
+  const xTickItems = useMemo(() => {
+    const src = bins.map(([idx], i) => ({ idx, i }));
+    const target = Math.max(4, Math.min(10, src.length));
+    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
+    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
+    const out: Array<{ idx: number; x: number }> = [];
+    let lastX = -1e9;
+    for (const t of uniq) {
+      const x = padX + t.i * (groupW + barGap) + groupW / 2;
+      const mustKeep = t.i === 0 || t.i === src.length - 1;
+      if (!mustKeep && x - lastX < 86) continue;
+      out.push({ idx: t.idx, x });
+      lastX = x;
+    }
+    return out;
+  }, [bins, groupW, barGap]);
+
+  return (
+    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
+          REVERTED ≥ 2/3
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
+          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/90" />
+          NOT REVERTED
+        </div>
+        <div className="text-[10px] font-mono text-zinc-500">
+          hit {num(yesRate * 100, 1)}%
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
+        <defs>
+          <linearGradient id="rev-yes" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
+            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
+          </linearGradient>
+          <linearGradient id="rev-no" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
+            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
+          </linearGradient>
+        </defs>
+
+        {[0, 0.33, 0.66, 1].map((t, i) => {
+          const y = padTop + plotH - t * plotH;
+          const val = Math.round(t * maxY);
+          return (
+            <g key={`y-${i}`}>
+              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              {val > 0 && (
+                <text x={w - padX - 4} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
+                  {val}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {bins.map(([idx, v], i) => {
+          const xBase = padX + i * (groupW + barGap);
+          const hYes = plotH * (v.yes / maxY);
+          const hNo = plotH * (v.no / maxY);
+          const yYes = padTop + plotH - hYes;
+          const yNo = padTop + plotH - hNo;
+          return (
+            <g key={`${idx}-${i}`}>
+              <rect x={xBase} y={yYes} width={barW} height={hYes} rx="3" fill="url(#rev-yes)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={yNo} width={barW} height={hNo} rx="3" fill="url(#rev-no)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+            </g>
+          );
+        })}
+
+        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        {xTickItems.map((t, i) => {
+          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
+          return (
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+              {minuteIdxToClockLabel(t.idx)}
+            </text>
+          );
+        })}
+      </svg>
+
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <span className="text-zinc-500">peakAbs avg {num(stats.avgAll, 3)}</span>
+          <span className="text-zinc-500">median {num(stats.medAll, 3)}</span>
+          <span className="text-zinc-500">p90 {num(stats.p90All, 3)}</span>
+          <span className="text-emerald-300/90">avg(reverted) {num(stats.avgYes, 3)}</span>
+          <span className="text-rose-300/90">avg(not) {num(stats.avgNo, 3)}</span>
+          {stats.dist.map((d) => (
+            <span key={d.label} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+              {d.label}: <span className="text-emerald-300">{intn(d.yes)}</span>/<span className="text-rose-300">{intn(d.no)}</span>
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1061,6 +1729,7 @@ export default function PaperArbitrageTapePage() {
   const [dateNy, setDateNy] = useState<string>(todayNyYmd());
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
+  const [rangePreset, setRangePreset] = useState<"custom" | "3d" | "5d" | "10d" | "20d" | "30d">("custom");
 
   // global filters (variant)
   const [session, setSession] = useState<PaperArbSession>("GLOB");
@@ -1136,8 +1805,12 @@ export default function PaperArbitrageTapePage() {
   });
 
   // lists
+  const [ignoreTickersText, setIgnoreTickersText] = useState<string>("");
   const [tickersText, setTickersText] = useState<string>("");
   const [benchTickersText, setBenchTickersText] = useState<string>("");
+  const ignoreFileInputRef = useRef<HTMLInputElement | null>(null);
+  const applyFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pinFileInputRef = useRef<HTMLInputElement | null>(null);
   const [sideFilter, setSideFilter] = useState<"" | "Long" | "Short">("");
 
   const [exchangesText, setExchangesText] = useState<string>("");
@@ -1242,6 +1915,18 @@ export default function PaperArbitrageTapePage() {
   const [maxImbExchValue, setMaxImbExchValue] = useState<string>("");
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
+  const [scanStartMin, setScanStartMin] = useState<number>(0.05);
+  const [scanStartMax, setScanStartMax] = useState<number>(0.2);
+  const [scanStartStep, setScanStartStep] = useState<number>(0.01);
+  const [scanEndMin, setScanEndMin] = useState<number>(0.01);
+  const [scanEndMax, setScanEndMax] = useState<number>(0.1);
+  const [scanEndStep, setScanEndStep] = useState<number>(0.01);
+  const [scanObjective, setScanObjective] = useState<"pnl" | "winrate">("pnl");
+  const [scanTopK, setScanTopK] = useState<number>(20);
+  const [scanRows, setScanRows] = useState<EpisodeScanResult[]>([]);
+  const [scanLoading, setScanLoading] = useState<boolean>(false);
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
 
   // ========= Derived: variant (for display)
   const variantString = useMemo(() => {
@@ -1354,6 +2039,42 @@ export default function PaperArbitrageTapePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const sortedDaysAsc = useMemo(() => {
+    return [...(days ?? [])].filter((d) => toYmd(d)).sort((a, b) => a.localeCompare(b));
+  }, [days]);
+  const sortedDaysDesc = useMemo(() => {
+    return [...sortedDaysAsc].sort((a, b) => b.localeCompare(a));
+  }, [sortedDaysAsc]);
+  const fromDayOptions = useMemo(() => {
+    const pool = sortedDaysDesc.length ? sortedDaysDesc : [dateFrom, dateTo].filter(toYmd);
+    return pool.filter((d) => !toYmd(dateTo) || d <= dateTo).map((d) => ({ value: d, label: d }));
+  }, [sortedDaysDesc, dateFrom, dateTo]);
+  const toDayOptions = useMemo(() => {
+    const pool = sortedDaysDesc.length ? sortedDaysDesc : [dateFrom, dateTo].filter(toYmd);
+    return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
+  }, [sortedDaysDesc, dateFrom, dateTo]);
+
+  const applyRangePreset = (preset: "custom" | "3d" | "5d" | "10d" | "20d" | "30d") => {
+    setDateMode("range");
+    if (tab === "episodes") setEpisodesUseSearch(true);
+    setRangePreset(preset);
+    if (preset === "custom") return;
+    const n = preset === "3d" ? 3 : preset === "5d" ? 5 : preset === "10d" ? 10 : preset === "20d" ? 20 : 30;
+    const end = toYmd(dateTo) ? dateTo : (sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd());
+    if (!sortedDaysAsc.length) {
+      setDateTo(end);
+      setDateFrom(end);
+      return;
+    }
+    const eligible = sortedDaysAsc.filter((d) => d <= end);
+    const src = eligible.length ? eligible : sortedDaysAsc;
+    const slice = src.slice(Math.max(0, src.length - n));
+    const from = slice[0] ?? src[0];
+    const to = slice[slice.length - 1] ?? src[src.length - 1];
+    setDateFrom(from);
+    setDateTo(to);
+  };
+
   // ========= Persist/restore filters (like reference terminal)
   useLayoutEffect(() => {
     filtersRestoringRef.current = true;
@@ -1412,18 +2133,29 @@ export default function PaperArbitrageTapePage() {
           if (rr.length) setRatingRules(rr);
         }
         if (s.ratingEnabledBands && typeof s.ratingEnabledBands === "object") {
-          setRatingEnabledBands((prev) => ({
-            ...prev,
-            BLUE: Boolean(s.ratingEnabledBands.BLUE),
-            ARK: Boolean(s.ratingEnabledBands.ARK),
-            OPEN: Boolean(s.ratingEnabledBands.OPEN),
-            INTRA: Boolean(s.ratingEnabledBands.INTRA),
-            PRINT: Boolean(s.ratingEnabledBands.PRINT),
-            POST: Boolean(s.ratingEnabledBands.POST),
-            GLOBAL: Boolean(s.ratingEnabledBands.GLOBAL),
-          }));
+          setRatingEnabledBands((prev) => {
+            const next = {
+              ...prev,
+              BLUE: Boolean(s.ratingEnabledBands.BLUE),
+              ARK: Boolean(s.ratingEnabledBands.ARK),
+              OPEN: Boolean(s.ratingEnabledBands.OPEN),
+              INTRA: Boolean(s.ratingEnabledBands.INTRA),
+              PRINT: Boolean(s.ratingEnabledBands.PRINT),
+              POST: Boolean(s.ratingEnabledBands.POST),
+              GLOBAL: Boolean(s.ratingEnabledBands.GLOBAL),
+            };
+
+            const hasAnyEnabled =
+              next.BLUE || next.ARK || next.OPEN || next.INTRA || next.PRINT || next.POST || next.GLOBAL;
+
+            // Backward-compat for old saved state where all bands were false.
+            if (!hasAnyEnabled) next.GLOBAL = true;
+
+            return next;
+          });
         }
 
+        if (typeof s.ignoreTickersText === "string") setIgnoreTickersText(s.ignoreTickersText);
         if (typeof s.tickersText === "string") setTickersText(s.tickersText);
         if (typeof s.benchTickersText === "string") setBenchTickersText(s.benchTickersText);
         if (s.sideFilter === "" || s.sideFilter === "Long" || s.sideFilter === "Short") setSideFilter(s.sideFilter);
@@ -1521,6 +2253,7 @@ export default function PaperArbitrageTapePage() {
       ratingType,
       ratingRules,
       ratingEnabledBands,
+      ignoreTickersText,
       tickersText,
       benchTickersText,
       sideFilter,
@@ -1604,7 +2337,7 @@ export default function PaperArbitrageTapePage() {
       session, metric, closeMode, startAbs, endAbs, minHoldCandles, pnlMode,
       includeEquityCurve, equityCurveMode, topN, scopeMode, offset, minTradesPerTicker,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
-      ratingType, ratingRules, ratingEnabledBands, tickersText, benchTickersText, sideFilter,
+      ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       exchangesText, countriesText, sectorsL3Text, imbExchsText, minTierBp, maxTierBp,
       minBeta, maxBeta, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
@@ -1649,6 +2382,10 @@ export default function PaperArbitrageTapePage() {
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
+    const applyTickers = splitListUpper(tickersText);
+    const pinTickers = splitListUpper(benchTickersText);
+    const reqTickers =
+      listMode === "apply" ? applyTickers : listMode === "pin" ? pinTickers : [];
 
     const rrEnabled = ratingRules
       .filter((r) => ratingEnabledBands[r.band])
@@ -1657,6 +2394,15 @@ export default function PaperArbitrageTapePage() {
         minRate: Math.max(0, Number(r.minRate) || 0),
         minTotal: Math.max(0, clampInt(r.minTotal, 0)),
       }));
+
+    const activeRule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+    const rrForRequest = rrEnabled.length
+      ? rrEnabled
+      : [{
+          band: activeRule.band,
+          minRate: Math.max(0, Number(activeRule.minRate) || 0),
+          minTotal: Math.max(0, clampInt(activeRule.minTotal, 0)),
+        }];
 
     const req: PaperArbAnalyticsRequest = {
       dateFrom: from,
@@ -1671,10 +2417,10 @@ export default function PaperArbitrageTapePage() {
       pnlMode,
 
       ratingType: ratingType ?? "any",
-      ratingRules: rrEnabled.length ? rrEnabled : null,
+      ratingRules: rrForRequest,
 
-      tickers: splitListUpper(tickersText).length ? splitListUpper(tickersText) : null,
-      benchTickers: splitListUpper(benchTickersText).length ? splitListUpper(benchTickersText) : null,
+      tickers: reqTickers.length ? reqTickers : null,
+      benchTickers: null,
       side: sideFilter ? sideFilter : null,
 
       exchanges: splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
@@ -1829,10 +2575,94 @@ export default function PaperArbitrageTapePage() {
     }
   }
 
+  async function runEpisodesAutoScan() {
+    if (scanLoading) return;
+    const from = dateMode === "day" ? dateNy : dateFrom;
+    const to = dateMode === "day" ? dateNy : dateTo;
+    if (!toYmd(from) || !toYmd(to) || from > to) {
+      setScanErr("Invalid date range for scan.");
+      return;
+    }
+
+    const starts = buildRangeValues(scanStartMin, scanStartMax, scanStartStep).filter((x) => x > 0);
+    const ends = buildRangeValues(scanEndMin, scanEndMax, scanEndStep).filter((x) => x >= 0);
+    const combos: Array<{ s: number; e: number }> = [];
+    for (const s of starts) {
+      for (const e of ends) {
+        if (e <= s) combos.push({ s, e });
+      }
+    }
+    if (!combos.length) {
+      setScanErr("No valid StartAbs/EndAbs combinations (need EndAbs <= StartAbs).");
+      return;
+    }
+
+    setScanLoading(true);
+    setScanErr(null);
+    setScanProgress({ done: 0, total: combos.length });
+
+    const out: EpisodeScanResult[] = [];
+    try {
+      for (let i = 0; i < combos.length; i++) {
+        const c = combos[i];
+        const req = buildPostRequest(from, to);
+        req.startAbs = c.s;
+        req.endAbs = c.e;
+        const j = await apiPost<any>("/api/paper/arbitrage/episodes/search", req);
+        const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
+        const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
+        const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
+        const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
+        const trades = rows.length;
+        const winRate = trades > 0 ? wins / trades : 0;
+        out.push({
+          startAbs: c.s,
+          endAbs: c.e,
+          trades,
+          wins,
+          losses,
+          winRate,
+          totalPnlUsd: total,
+          avgPnlUsd: trades > 0 ? total / trades : 0,
+        });
+        setScanProgress({ done: i + 1, total: combos.length });
+      }
+
+      const sorted = [...out].sort((a, b) => {
+        if (scanObjective === "winrate") {
+          if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+          return b.totalPnlUsd - a.totalPnlUsd;
+        }
+        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
+        return b.winRate - a.winRate;
+      });
+      const top = Math.max(1, Math.min(200, clampInt(scanTopK, 20)));
+      setScanRows(sorted.slice(0, top));
+    } catch (e: any) {
+      setScanErr(e?.message ?? String(e));
+    } finally {
+      setScanLoading(false);
+    }
+  }
+
+  const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
+  const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
+  const pinSet = useMemo(() => new Set(splitListUpper(benchTickersText)), [benchTickersText]);
+
+  const listModeAllowsTicker = (tkRaw: string | null | undefined) => {
+    const tk = tickerKey(tkRaw);
+    if (!tk) return false;
+    if (listMode === "ignore") return !ignoreSet.has(tk);
+    if (listMode === "apply") return applySet.has(tk);
+    if (listMode === "pin") return pinSet.has(tk);
+    return true;
+  };
+
   // ========= Client-side filters
   const filteredActive = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
     return activeRows.filter((r) => {
+      if (!listModeAllowsTicker(r.ticker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
       if (qSide) {
         const s = normalizeSide(r.side);
@@ -1841,11 +2671,12 @@ export default function PaperArbitrageTapePage() {
       }
       return true;
     });
-  }, [activeRows, qTicker, qSide]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
     return episodesRows.filter((r) => {
+      if (!listModeAllowsTicker(r.ticker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
       if (qSide) {
         const s = normalizeSide(r.side);
@@ -1854,7 +2685,7 @@ export default function PaperArbitrageTapePage() {
       }
       return true;
     });
-  }, [episodesRows, qTicker, qSide]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -2002,9 +2833,64 @@ export default function PaperArbitrageTapePage() {
   const minRateLabel = selectedRule?.minRate ?? 0;
   const minTotalLabel = selectedRule?.minTotal ?? 0;
   const limitLabel = scopeMode === "ALL" ? 1000 : topN;
-  const ignCount = [excludePTP, excludeSSR, excludeETF, excludeCrap].filter(Boolean).length;
-  const appCount = splitListUpper(tickersText).length;
-  const pinCount = splitListUpper(benchTickersText).length;
+  const ignCount = ignoreSet.size;
+  const appCount = applySet.size;
+  const pinCount = pinSet.size;
+  const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
+  const setModeApply = () => setListMode((m) => (m === "apply" ? "off" : "apply"));
+  const setModePin = () => setListMode((m) => (m === "pin" ? "off" : "pin"));
+  const mergeTickerText = (prev: string, add: string[]) => {
+    const next = new Set<string>([...splitListUpper(prev), ...add]);
+    return Array.from(next).join(", ");
+  };
+
+  const onIgnoreFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const t = await file.text();
+      const parsed = parseTickersFromCsv(t);
+      if (!parsed.length) return;
+      setIgnoreTickersText((prev) => mergeTickerText(prev, parsed));
+      setShowIgnore(true);
+      if (listMode === "off") setListMode("ignore");
+    } catch {
+      // ignore malformed file
+    }
+  };
+
+  const onApplyFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const t = await file.text();
+      const parsed = parseTickersFromCsv(t);
+      if (!parsed.length) return;
+      setTickersText((prev) => mergeTickerText(prev, parsed));
+      setShowApply(true);
+      if (listMode === "off") setListMode("apply");
+    } catch {
+      // ignore malformed file
+    }
+  };
+
+  const onPinFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const t = await file.text();
+      const parsed = parseTickersFromCsv(t);
+      if (!parsed.length) return;
+      setBenchTickersText((prev) => mergeTickerText(prev, parsed));
+      setShowPin(true);
+      if (listMode === "off") setListMode("pin");
+    } catch {
+      // ignore malformed file
+    }
+  };
   const activeRule = useMemo(
     () => ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 },
     [ratingRules, ruleBand]
@@ -2037,8 +2923,7 @@ export default function PaperArbitrageTapePage() {
 
   // ========= UI
   return (
-    <div className="relative min-h-screen w-full bg-black/0 text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
-      <NebulaBackground />
+    <div className="relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* Header */}
@@ -2126,13 +3011,13 @@ export default function PaperArbitrageTapePage() {
               <div
                 className={clsx(
                   "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                  listMode === "ignore" ? "border-rose-500/25 bg-rose-500/10" : "border-white/10 bg-white/5 hover:bg-white/10"
+                  listMode === "ignore" ? "border-rose-500/30 bg-rose-500/12" : "border-white/10 bg-white/5 hover:bg-white/10"
                 )}
               >
                 <button
                   type="button"
                   onClick={() => {
-                    setListMode("ignore");
+                    setModeIgnore();
                     setShowAdvanced(true);
                   }}
                   className={clsx(
@@ -2155,7 +3040,7 @@ export default function PaperArbitrageTapePage() {
                   }}
                   className={clsx(
                     "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                    showIgnore ? "text-violet-300" : "text-zinc-400 hover:text-white"
+                    showIgnore ? "text-rose-300" : "text-zinc-400 hover:text-white"
                   )}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showIgnore ? "" : "opacity-80"}>
@@ -2178,7 +3063,7 @@ export default function PaperArbitrageTapePage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setListMode("apply");
+                    setModeApply();
                     setShowAdvanced(true);
                   }}
                   className={clsx(
@@ -2201,7 +3086,7 @@ export default function PaperArbitrageTapePage() {
                   }}
                   className={clsx(
                     "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                    showApply ? "text-violet-300" : "text-zinc-400 hover:text-white"
+                    showApply ? "text-emerald-300" : "text-zinc-400 hover:text-white"
                   )}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showApply ? "" : "opacity-80"}>
@@ -2218,18 +3103,18 @@ export default function PaperArbitrageTapePage() {
               <div
                 className={clsx(
                   "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                  listMode === "pin" ? "border-cyan-500/25 bg-cyan-500/10" : "border-white/10 bg-white/5 hover:bg-white/10"
+                  listMode === "pin" ? "border-violet-400/30 bg-violet-400/12" : "border-white/10 bg-white/5 hover:bg-white/10"
                 )}
               >
                 <button
                   type="button"
                   onClick={() => {
-                    setListMode("pin");
+                    setModePin();
                     setShowAdvanced(true);
                   }}
                   className={clsx(
                     "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                    listMode === "pin" ? "text-cyan-200" : "text-zinc-300"
+                    listMode === "pin" ? "text-violet-200" : "text-zinc-300"
                   )}
                   title="LIST MODE: PIN"
                 >
@@ -2282,6 +3167,132 @@ export default function PaperArbitrageTapePage() {
 
           </div>
         </header>
+
+        {(showIgnore || showApply || showPin) && (
+          <GlassCard className="p-3 border-white/[0.08] bg-[#05070b]/95">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+              {showIgnore && (
+                <div className="rounded-xl border border-rose-500/25 bg-rose-500/[0.05] p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] uppercase tracking-widest font-mono text-rose-300">
+                      IGNORE TICKERS
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => ignoreFileInputRef.current?.click()}
+                        className="text-[10px] font-mono px-2 py-1 rounded border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors"
+                      >
+                        IMPORT CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIgnoreTickersText("")}
+                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
+                      >
+                        CLR
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={ignoreTickersText}
+                    onChange={(e) => setIgnoreTickersText(e.target.value.toUpperCase())}
+                    rows={4}
+                    placeholder="AAPL, TSLA, NVDA"
+                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-500/45 font-mono"
+                  />
+                  <input
+                    ref={ignoreFileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={onIgnoreFileSelected}
+                    className="hidden"
+                  />
+                </div>
+              )}
+
+              {showApply && (
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] uppercase tracking-widest font-mono text-emerald-300">
+                      APPLY TICKERS
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applyFileInputRef.current?.click()}
+                        className="text-[10px] font-mono px-2 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+                      >
+                        IMPORT CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTickersText("")}
+                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
+                      >
+                        CLR
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={tickersText}
+                    onChange={(e) => setTickersText(e.target.value.toUpperCase())}
+                    rows={4}
+                    placeholder="AAPL, TSLA, NVDA"
+                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 font-mono"
+                  />
+                  <input
+                    ref={applyFileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={onApplyFileSelected}
+                    className="hidden"
+                  />
+                </div>
+              )}
+
+              {showPin && (
+                <div className="rounded-xl border border-violet-400/25 bg-violet-400/[0.05] p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] uppercase tracking-widest font-mono text-violet-200">
+                      PIN TICKERS
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => pinFileInputRef.current?.click()}
+                        className="text-[10px] font-mono px-2 py-1 rounded border border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition-colors"
+                      >
+                        IMPORT CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBenchTickersText("")}
+                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
+                      >
+                        CLR
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={benchTickersText}
+                    onChange={(e) => setBenchTickersText(e.target.value.toUpperCase())}
+                    rows={4}
+                    placeholder="AAPL, TSLA, NVDA"
+                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-400/45 font-mono"
+                  />
+                  <input
+                    ref={pinFileInputRef}
+                    type="file"
+                    accept=".csv"
+                    onChange={onPinFileSelected}
+                    className="hidden"
+                  />
+                </div>
+              )}
+            </div>
+          </GlassCard>
+        )}
 
         <GlassCard className="p-3 border-white/[0.08] bg-[#05070b]/95">
           <div className="flex flex-wrap items-center gap-3">
@@ -2383,30 +3394,33 @@ export default function PaperArbitrageTapePage() {
 
             <div className="flex-1" />
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-[#090b10]">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">MINRATE</span>
-              <GlassInput
+              <input
                 type="number"
+                inputMode="decimal"
                 step={0.1}
+                min={0}
                 value={activeRule.minRate}
                 onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                className="w-[74px]"
+                className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-[#090b10]">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">MINTOTAL</span>
-              <GlassInput
+              <input
                 type="number"
+                inputMode="numeric"
                 step={1}
                 min={0}
                 value={activeRule.minTotal}
                 onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                className="w-[74px]"
+                className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-[#090b10]">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
               <GlassSelect
                 value={session}
@@ -2420,7 +3434,7 @@ export default function PaperArbitrageTapePage() {
                   { value: "POST", label: "POST" },
                   { value: "NIGHT", label: "NIGHT" },
                 ]}
-                className="min-w-[108px]"
+                className="min-w-[108px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent"
               />
             </div>
 
@@ -2555,7 +3569,7 @@ export default function PaperArbitrageTapePage() {
                 ))}
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SIDE</span>
               <GlassSelect
                 value={sideFilter}
@@ -2565,38 +3579,74 @@ export default function PaperArbitrageTapePage() {
                   { value: "Long", label: "LONG" },
                   { value: "Short", label: "SHORT" },
                 ]}
-                className="min-w-[90px]"
+                className="min-w-[90px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">MINHOLD</span>
-              <GlassInput
+              <input
                 type="number"
+                inputMode="numeric"
                 min={0}
                 max={180}
                 step={1}
                 value={minHoldCandles}
                 onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
-                className="w-[74px]"
+                className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5">
+            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">TRADES</span>
-              <GlassInput
+              <input
                 type="number"
+                inputMode="numeric"
                 min={0}
                 step={10}
                 value={minTradesPerTicker}
                 onChange={(e) => setMinTradesPerTicker(Math.max(0, clampInt(e.target.value, 0)))}
-                className="w-[74px]"
+                className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
               />
             </div>
 
             <div className="flex-1" />
 
-            <div className="flex items-center gap-2 px-2 py-1 rounded-lg border border-white/10 bg-white/5">
+            {tab === "episodes" && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg border border-white/10 bg-white/5">
+                <span className="text-[10px] font-mono text-zinc-500 uppercase">EP MODE</span>
+                <div className="flex items-center gap-1 bg-[#0a0a0a]/40 p-1 rounded-lg border border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setEpisodesUseSearch(false)}
+                    className={clsx(
+                      "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
+                      !episodesUseSearch
+                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                    title="GET /api/paper/arbitrage/episodes (single day)"
+                  >
+                    GET
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEpisodesUseSearch(true)}
+                    className={clsx(
+                      "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
+                      episodesUseSearch
+                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                    title="POST /api/paper/arbitrage/episodes/search (date range + filters)"
+                  >
+                    SEARCH
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 px-2 h-10 rounded-lg border border-white/5 bg-black/20">
               <div className="flex items-center gap-1 bg-[#0a0a0a]/40 p-1 rounded-lg border border-white/[0.06]">
                 {[
                   { key: "day", label: "DAY" },
@@ -2609,7 +3659,19 @@ export default function PaperArbitrageTapePage() {
                       const wants = m.key as DateMode;
                       const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearch);
                       if (wants === "range" && !canRange) return;
+                      if (tab === "episodes") {
+                        if (wants === "day") {
+                          setEpisodesUseSearch(false);
+                          const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
+                          setDateNy(d);
+                          setDateFrom(d);
+                          setDateTo(d);
+                        } else {
+                          setEpisodesUseSearch(true);
+                        }
+                      }
                       setDateMode(wants);
+                      if (wants === "day") setRangePreset("custom");
                     }}
                     className={clsx(
                       "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
@@ -2631,24 +3693,59 @@ export default function PaperArbitrageTapePage() {
                     setDateNy(d);
                     setDateFrom(d);
                     setDateTo(d);
+                    setRangePreset("custom");
                   }}
-                  options={(days?.length ? days : [dateNy]).map((d) => ({ value: d, label: d }))}
-                  className="min-w-[126px]"
+                  options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
+                  className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
                 />
               ) : (
                 <div className="flex items-center gap-2">
-                  <GlassInput
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    placeholder="YYYY-MM-DD"
-                    className="w-[128px]"
+                  <GlassSelect
+                    value={rangePreset}
+                    onChange={(e) => applyRangePreset(e.target.value as any)}
+                    options={[
+                      { value: "custom", label: "CUSTOM" },
+                      { value: "3d", label: "3D" },
+                      { value: "5d", label: "5D" },
+                      { value: "10d", label: "10D" },
+                      { value: "20d", label: "20D" },
+                      { value: "30d", label: "30D" },
+                    ]}
+                    className="min-w-[96px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
                   />
-                  <GlassInput
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    placeholder="YYYY-MM-DD"
-                    className="w-[128px]"
-                  />
+                  {rangePreset === "custom" ? (
+                    <>
+                      <GlassSelect
+                        value={dateFrom}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setDateFrom(v);
+                          if (toYmd(dateTo) && v > dateTo) setDateTo(v);
+                        }}
+                        options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
+                        className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
+                      />
+                      <GlassSelect
+                        value={dateTo}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setDateTo(v);
+                          if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
+                        }}
+                        options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                        className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <div className="px-2.5 h-[24px] inline-flex items-center rounded-md border border-white/10 bg-black/20 text-[11px] font-mono text-zinc-300 tabular-nums">
+                        {dateFrom}
+                      </div>
+                      <div className="px-2.5 h-[24px] inline-flex items-center rounded-md border border-white/10 bg-black/20 text-[11px] font-mono text-zinc-300 tabular-nums">
+                        {dateTo}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -2656,8 +3753,8 @@ export default function PaperArbitrageTapePage() {
         </GlassCard>
 
         <GlassCard className="p-3">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-            <div className="flex items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
+          <div className="flex flex-wrap gap-4 items-start">
+            <div className="inline-flex flex-wrap items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
               {[
                 {
                   label: "Div",
@@ -2741,7 +3838,7 @@ export default function PaperArbitrageTapePage() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+            <div className="inline-flex flex-wrap items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
               <button
                 type="button"
                 onClick={() => {
@@ -2865,14 +3962,14 @@ export default function PaperArbitrageTapePage() {
               </GlassCard>
             </div>
 
-            <GlassCard className="p-3">
+            <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">
                 ACTIVE EPISODES | rows {activeSorted.length}
               </div>
 
-              <div className="overflow-auto rounded-xl border border-white/10 bg-[#070707]/70 backdrop-blur-md">
+              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
                 <table className="min-w-[1200px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#0b0b0b]/95 text-zinc-400 border-b border-white/10 backdrop-blur-md">
+                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
                     <tr>
                       <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("ticker")}>Ticker{sortMark(activeSort.key === "ticker", activeSort.dir)}</button></th>
                       <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("bench")}>Bench{sortMark(activeSort.key === "bench", activeSort.dir)}</button></th>
@@ -2933,11 +4030,11 @@ export default function PaperArbitrageTapePage() {
                 </table>
               </div>
 
-              <div className="mt-3 rounded-xl border border-white/[0.06] bg-[#0a0a0a]/45 p-3">
+              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
                 <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
               </div>
-            </GlassCard>
+            </div>
           </div>
         )}
 
@@ -2976,14 +4073,141 @@ export default function PaperArbitrageTapePage() {
             </div>
 
             <GlassCard className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+                  EPISODES AUTO SCAN | find best StartAbs / EndAbs
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">
+                  {scanLoading ? `progress ${scanProgress.done}/${scanProgress.total}` : `results ${intn(scanRows.length)}`}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-2 mb-3">
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.MIN</span>
+                  <input type="number" step={0.01} value={scanStartMin} onChange={(e) => setScanStartMin(clampNumber(e.target.value, 0.01))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.MAX</span>
+                  <input type="number" step={0.01} value={scanStartMax} onChange={(e) => setScanStartMax(clampNumber(e.target.value, 0.01))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.STEP</span>
+                  <input type="number" step={0.01} value={scanStartStep} onChange={(e) => setScanStartStep(clampNumber(e.target.value, 0.001))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.MIN</span>
+                  <input type="number" step={0.01} value={scanEndMin} onChange={(e) => setScanEndMin(clampNumber(e.target.value, 0))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.MAX</span>
+                  <input type="number" step={0.01} value={scanEndMax} onChange={(e) => setScanEndMax(clampNumber(e.target.value, 0))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.STEP</span>
+                  <input type="number" step={0.01} value={scanEndStep} onChange={(e) => setScanEndStep(clampNumber(e.target.value, 0.001))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase">TOP</span>
+                  <input type="number" step={1} min={1} max={200} value={scanTopK} onChange={(e) => setScanTopK(Math.max(1, Math.min(200, clampInt(e.target.value, 20))))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+                </div>
+                <div className="col-span-2 md:col-span-2 xl:col-span-2 flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+                  <button
+                    type="button"
+                    onClick={() => setScanObjective("pnl")}
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                      scanObjective === "pnl"
+                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    TOTAL PNL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScanObjective("winrate")}
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                      scanObjective === "winrate"
+                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    WIN RATE
+                  </button>
+                </div>
+                <div className="flex items-center justify-end">
+                  <button
+                    type="button"
+                    disabled={scanLoading}
+                    onClick={runEpisodesAutoScan}
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg border text-[10px] font-mono font-bold uppercase transition-all",
+                      scanLoading
+                        ? "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed"
+                        : "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                    )}
+                  >
+                    {scanLoading ? "SCANNING..." : "RUN SCAN"}
+                  </button>
+                </div>
+              </div>
+
+              {scanErr && <div className="text-xs font-mono text-rose-300 mb-2">{scanErr}</div>}
+
+              <div className="overflow-auto rounded-xl border border-white/10 bg-[#070707]/95">
+                <table className="min-w-[880px] w-full text-xs font-mono">
+                  <thead className="sticky top-0 z-10 bg-[#0b0b0b]/95 text-zinc-400 border-b border-white/10">
+                    <tr>
+                      <th className="text-right p-2">#</th>
+                      <th className="text-right p-2">StartAbs</th>
+                      <th className="text-right p-2">EndAbs</th>
+                      <th className="text-right p-2">Trades</th>
+                      <th className="text-right p-2">W/L</th>
+                      <th className="text-right p-2">WinRate</th>
+                      <th className="text-right p-2">TotalPnL</th>
+                      <th className="text-right p-2">AvgPnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scanRows.map((r, i) => (
+                      <tr key={`${r.startAbs}-${r.endAbs}-${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03]">
+                        <td className="p-2 text-right text-zinc-500">{i + 1}</td>
+                        <td className="p-2 text-right text-zinc-200">{num(r.startAbs, 3)}</td>
+                        <td className="p-2 text-right text-zinc-200">{num(r.endAbs, 3)}</td>
+                        <td className="p-2 text-right text-zinc-300">{intn(r.trades)}</td>
+                        <td className="p-2 text-right text-zinc-300">{intn(r.wins)} / {intn(r.losses)}</td>
+                        <td className="p-2 text-right text-zinc-200">{num(r.winRate * 100, 1)}%</td>
+                        <td className={clsx("p-2 text-right font-bold", r.totalPnlUsd > 0 ? "text-emerald-300" : r.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-200")}>
+                          {num(r.totalPnlUsd, 2)}
+                        </td>
+                        <td className={clsx("p-2 text-right", r.avgPnlUsd > 0 ? "text-emerald-300" : r.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-200")}>
+                          {num(r.avgPnlUsd, 2)}
+                        </td>
+                      </tr>
+                    ))}
+                    {!scanRows.length && (
+                      <tr>
+                        <td colSpan={8} className="p-4 text-center text-zinc-500">
+                          Run scan to see best parameter combinations.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </GlassCard>
+
+            <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">
                 EPISODES | rows {episodesSorted.length} | click header to sort{" "}
                 {episodesUseSearch ? "| SEARCH(POST)" : "| GET(day)"}
               </div>
 
-              <div className="overflow-auto rounded-xl border border-white/10 bg-[#070707]/70 backdrop-blur-md">
+              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
                 <table className="min-w-[1400px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#0b0b0b]/95 text-zinc-400 border-b border-white/10 backdrop-blur-md">
+                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
                     <tr>
                       <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("ticker")}>Ticker{sortMark(episodesSort.key === "ticker", episodesSort.dir)}</button></th>
                       <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("bench")}>Bench{sortMark(episodesSort.key === "bench", episodesSort.dir)}</button></th>
@@ -3040,9 +4264,63 @@ export default function PaperArbitrageTapePage() {
                           >
                             {num(r.totalPnlUsd ?? null, 2)}
                           </td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.rawPnlUsd ?? null, 2)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.benchPnlUsd ?? null, 2)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.hedgedPnlUsd ?? null, 2)}</td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.rawPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.rawPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.rawPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.benchPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.benchPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.benchPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.hedgedPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.hedgedPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.hedgedPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
 
                           <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.closeMode ?? closeMode}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.minHoldCandles ?? minHoldCandles)}</td>
@@ -3060,11 +4338,11 @@ export default function PaperArbitrageTapePage() {
                 </table>
               </div>
 
-              <div className="mt-3 rounded-xl border border-white/[0.06] bg-[#0a0a0a]/45 p-3">
+              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
                 <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
               </div>
-            </GlassCard>
+            </div>
           </div>
         )}
 
@@ -3112,31 +4390,49 @@ export default function PaperArbitrageTapePage() {
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
               {(analytics?.equityCurve?.length ?? 0) > 0 && (
-                <GlassCard className="p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                      EQUITY CURVE | {equityCurveMode}
-                    </div>
-                    <div className="text-[10px] font-mono text-zinc-600">
-                      points {intn(analytics?.equityCurve?.length ?? 0)}
-                    </div>
-                  </div>
-                  <EquityChart points={analytics!.equityCurve!} />
-                </GlassCard>
+                <div className="p-0">
+                  <EquityChart
+                    points={analytics!.equityCurve!}
+                    title={`EQUITY CURVE | ${equityCurveMode}`}
+                    meta={`points ${intn(analytics?.equityCurve?.length ?? 0)}`}
+                  />
+                </div>
               )}
 
-              <GlassCard className="p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                    START EVENTS BY TIME | 5M
-                  </div>
-                  <div className="text-[10px] font-mono text-zinc-600">rows {intn(analyticsSorted.length)}</div>
-                </div>
-                <StartsByTimeChart rows={analyticsSorted} />
-              </GlassCard>
+              <div className="p-0">
+                <StartsEndsByTimeChart
+                  rows={analyticsSorted}
+                  title="START VS END BY TIME | 5M"
+                  meta={`rows ${intn(analyticsSorted.length)}`}
+                />
+              </div>
             </div>
 
-            <GlassCard className="p-3">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+              <div className="p-0">
+                <StartsByTimeChart
+                  rows={analyticsSorted}
+                  title="START EVENTS BY TIME (OK/BAD) | 5M"
+                  meta={`rows ${intn(analyticsSorted.length)}`}
+                />
+              </div>
+              <div className="p-0">
+                <PeakStrengthByTimeChart
+                  rows={analyticsSorted}
+                  title="PEAK STRENGTH BY TIME | 5M"
+                  meta={`rows ${intn(analyticsSorted.length)}`}
+                />
+              </div>
+              <div className="p-0">
+                <PeakReversionTwoThirdsChart
+                  rows={analyticsSorted}
+                  title="PEAK REVERSION ≥ 2/3 | 5M"
+                  meta={`rows ${intn(analyticsSorted.length)}`}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
                   ANALYTICS TRADES | rows {analyticsSorted.length}
@@ -3144,9 +4440,9 @@ export default function PaperArbitrageTapePage() {
                 <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
               </div>
 
-              <div className="overflow-auto rounded-xl border border-white/10 bg-[#070707]/70 backdrop-blur-md">
+              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
                 <table className="min-w-[1720px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#0b0b0b]/95 text-zinc-400 border-b border-white/10 backdrop-blur-md">
+                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
                     <tr>
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
@@ -3228,9 +4524,63 @@ export default function PaperArbitrageTapePage() {
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetricAbs ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetricAbs ?? null, 3)}</td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{num(r.rawPnlUsd ?? null, 2)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.benchPnlUsd ?? null, 2)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.hedgedPnlUsd ?? null, 2)}</td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums border-l border-white/10",
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.rawPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.rawPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.rawPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.benchPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.benchPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.benchPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.hedgedPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.hedgedPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.hedgedPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
                         </tr>
                       );
                     })}
@@ -3245,11 +4595,11 @@ export default function PaperArbitrageTapePage() {
                 </table>
               </div>
 
-              <div className="mt-3 rounded-xl border border-white/[0.06] bg-[#0a0a0a]/45 p-3">
+              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
                 <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
               </div>
-            </GlassCard>
+            </div>
           </div>
         )}
 
