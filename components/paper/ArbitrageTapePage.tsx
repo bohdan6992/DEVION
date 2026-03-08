@@ -1067,7 +1067,7 @@ function StartsByTimeChart({
   const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
   const barW = Math.max(3, Math.floor((groupW - 1) / 2));
   const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
-  const xTickItems = useMemo(() => {
+  const xTickItems = (() => {
     const src = bins.map(([idx], i) => ({ idx, i }));
     const target = Math.max(4, Math.min(10, src.length));
     const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
@@ -1082,7 +1082,7 @@ function StartsByTimeChart({
       lastX = x;
     }
     return out;
-  }, [bins, groupW, barGap]);
+  })();
   const totalOk = bins.reduce((s, [, v]) => s + v.ok, 0);
   const totalBad = bins.reduce((s, [, v]) => s + v.bad, 0);
   const total = totalOk + totalBad;
@@ -1380,7 +1380,7 @@ function PeakStrengthByTimeChart({
     ...r,
     count: bins.filter((b) => b.avgAbs >= r.min && b.avgAbs < r.max).reduce((s, b) => s + b.count, 0),
   }));
-  const xTickItems = useMemo(() => {
+  const xTickItems = (() => {
     const src = bins.map((b, i) => ({ idx: b.idx, i }));
     const target = Math.max(4, Math.min(10, src.length));
     const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
@@ -1395,7 +1395,7 @@ function PeakStrengthByTimeChart({
       lastX = x;
     }
     return out;
-  }, [bins, barW, barGap]);
+  })();
 
   return (
     <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
@@ -1595,7 +1595,7 @@ function PeakReversionTwoThirdsChart({
   const totalNo = bins.reduce((s, [, v]) => s + v.no, 0);
   const total = totalYes + totalNo;
   const yesRate = total ? totalYes / total : 0;
-  const xTickItems = useMemo(() => {
+  const xTickItems = (() => {
     const src = bins.map(([idx], i) => ({ idx, i }));
     const target = Math.max(4, Math.min(10, src.length));
     const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
@@ -1610,7 +1610,7 @@ function PeakReversionTwoThirdsChart({
       lastX = x;
     }
     return out;
-  }, [bins, groupW, barGap]);
+  })();
 
   return (
     <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
@@ -4388,49 +4388,57 @@ export default function PaperArbitrageTapePage() {
               </GlassCard>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {(analytics?.equityCurve?.length ?? 0) > 0 && (
-                <div className="p-0">
-                  <EquityChart
-                    points={analytics!.equityCurve!}
-                    title={`EQUITY CURVE | ${equityCurveMode}`}
-                    meta={`points ${intn(analytics?.equityCurve?.length ?? 0)}`}
-                  />
+            {analyticsSorted.length > 0 ? (
+              <>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {(analytics?.equityCurve?.length ?? 0) > 0 && (
+                    <div className="p-0">
+                      <EquityChart
+                        points={analytics!.equityCurve!}
+                        title={`EQUITY CURVE | ${equityCurveMode}`}
+                        meta={`points ${intn(analytics?.equityCurve?.length ?? 0)}`}
+                      />
+                    </div>
+                  )}
+
+                  <div className="p-0">
+                    <StartsEndsByTimeChart
+                      rows={analyticsSorted}
+                      title="START VS END BY TIME | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                    />
+                  </div>
                 </div>
-              )}
 
-              <div className="p-0">
-                <StartsEndsByTimeChart
-                  rows={analyticsSorted}
-                  title="START VS END BY TIME | 5M"
-                  meta={`rows ${intn(analyticsSorted.length)}`}
-                />
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                  <div className="p-0">
+                    <StartsByTimeChart
+                      rows={analyticsSorted}
+                      title="START EVENTS BY TIME (OK/BAD) | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakStrengthByTimeChart
+                      rows={analyticsSorted}
+                      title="PEAK STRENGTH BY TIME | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakReversionTwoThirdsChart
+                      rows={analyticsSorted}
+                      title="PEAK REVERSION ≥ 2/3 | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
+                No analytics rows yet. Run analytics for selected date/day range to render charts.
               </div>
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-              <div className="p-0">
-                <StartsByTimeChart
-                  rows={analyticsSorted}
-                  title="START EVENTS BY TIME (OK/BAD) | 5M"
-                  meta={`rows ${intn(analyticsSorted.length)}`}
-                />
-              </div>
-              <div className="p-0">
-                <PeakStrengthByTimeChart
-                  rows={analyticsSorted}
-                  title="PEAK STRENGTH BY TIME | 5M"
-                  meta={`rows ${intn(analyticsSorted.length)}`}
-                />
-              </div>
-              <div className="p-0">
-                <PeakReversionTwoThirdsChart
-                  rows={analyticsSorted}
-                  title="PEAK REVERSION ≥ 2/3 | 5M"
-                  meta={`rows ${intn(analyticsSorted.length)}`}
-                />
-              </div>
-            </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
