@@ -1244,6 +1244,21 @@ type HedgeInfo = {
   targetBp: number;
   currentBp: number;
   needBp: number;
+  buyBp: number;
+  sellBp: number;
+};
+
+type MutualExclusionInfo = {
+  key: string;
+  aBench: string;
+  bBench: string;
+  ratio: number;
+  active: boolean;
+  cancelA: number;
+  cancelB: number;
+  favorTicker: string | null;
+  favorDir: "buy" | "sell" | "none";
+  favorSum: number;
 };
 
 const getBenchmarkKey = (s: any) => String(getStrAny(s, ["benchmark", "Benchmark", "bench", "Bench"], "UNKNOWN")).toUpperCase();
@@ -1288,6 +1303,7 @@ const getHedgeBeta = (s: any) => {
 
 const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   const map = new Map<string, HedgeInfo>();
+  const exclusions: MutualExclusionInfo[] = [];
 
   // Hedge logic (per your contract):
   // - Consider ONLY active positions (PositionBp != 0)
@@ -1364,17 +1380,137 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     sums.set(bench, cur);
   }
 
+  const needByBench = new Map<string, number>();
   for (const [bench, v] of sums.entries()) {
-    const need = v.buySum - v.sellSum;
+    needByBench.set(bench, v.buySum - v.sellSum);
+  }
+
+  const applyPairMutualExclusion = (aBench: string, bBench: string, bPerA: number) => {
+    if (!Number.isFinite(bPerA) || bPerA <= 0) {
+      exclusions.push({
+        key: `${aBench}/${bBench}`,
+        aBench,
+        bBench,
+        ratio: bPerA,
+        active: false,
+        cancelA: 0,
+        cancelB: 0,
+        favorTicker: null,
+        favorDir: "none",
+        favorSum: 0,
+      });
+      return;
+    }
+
+    let aNeed = needByBench.get(aBench) ?? 0;
+    let bNeed = needByBench.get(bBench) ?? 0;
+
+    if (aNeed === 0 || bNeed === 0 || Math.sign(aNeed) === Math.sign(bNeed)) {
+      exclusions.push({
+        key: `${aBench}/${bBench}`,
+        aBench,
+        bBench,
+        ratio: bPerA,
+        active: false,
+        cancelA: 0,
+        cancelB: 0,
+        favorTicker: null,
+        favorDir: "none",
+        favorSum: 0,
+      });
+      return;
+    }
+
+    const aBuy = aNeed > 0;
+    const aCapInA = Math.abs(aNeed);
+    const bCapInA = Math.abs(bNeed) / bPerA;
+    const x = Math.min(aCapInA, bCapInA);
+    if (!(x > 0)) {
+      exclusions.push({
+        key: `${aBench}/${bBench}`,
+        aBench,
+        bBench,
+        ratio: bPerA,
+        active: false,
+        cancelA: 0,
+        cancelB: 0,
+        favorTicker: null,
+        favorDir: "none",
+        favorSum: 0,
+      });
+      return;
+    }
+
+    if (aBuy) {
+      aNeed -= x;
+      bNeed += x * bPerA;
+    } else {
+      aNeed += x;
+      bNeed -= x * bPerA;
+    }
+
+    needByBench.set(aBench, aNeed);
+    needByBench.set(bBench, bNeed);
+
+    const eps = 1e-8;
+    let favorTicker: string | null = null;
+    let favorDir: "buy" | "sell" | "none" = "none";
+    let favorSum = 0;
+
+    if (Math.abs(aNeed) > eps && Math.abs(bNeed) <= eps) {
+      favorTicker = aBench;
+      favorDir = aNeed > 0 ? "buy" : "sell";
+      favorSum = Math.abs(aNeed);
+    } else if (Math.abs(bNeed) > eps && Math.abs(aNeed) <= eps) {
+      favorTicker = bBench;
+      favorDir = bNeed > 0 ? "buy" : "sell";
+      favorSum = Math.abs(bNeed);
+    } else if (Math.abs(aNeed) > eps || Math.abs(bNeed) > eps) {
+      const aNorm = Math.abs(aNeed);
+      const bNorm = Math.abs(bNeed) / bPerA;
+      if (aNorm >= bNorm) {
+        favorTicker = aBench;
+        favorDir = aNeed > 0 ? "buy" : "sell";
+        favorSum = Math.abs(aNeed);
+      } else {
+        favorTicker = bBench;
+        favorDir = bNeed > 0 ? "buy" : "sell";
+        favorSum = Math.abs(bNeed);
+      }
+    }
+
+    exclusions.push({
+      key: `${aBench}/${bBench}`,
+      aBench,
+      bBench,
+      ratio: bPerA,
+      active: true,
+      cancelA: x,
+      cancelB: x * bPerA,
+      favorTicker,
+      favorDir,
+      favorSum,
+    });
+  };
+
+  // Cross-cancel only for QQQ/SPY/IWM per user-defined ratios:
+  // QQQ/SPY = 1.44, QQQ/IWM = 0.79.
+  applyPairMutualExclusion("QQQ", "SPY", 1.44);
+  applyPairMutualExclusion("QQQ", "IWM", 0.79);
+
+  for (const [bench, v] of sums.entries()) {
+    const need = needByBench.get(bench) ?? 0;
     map.set(bench, {
       benchmark: bench,
-      targetBp: need, // kept for compatibility (header currently shows need only)
+      targetBp: need,
       currentBp: 0,
       needBp: need,
+      buyBp: need > 0 ? need : 0,
+      sellBp: need < 0 ? Math.abs(need) : 0,
     });
   }
 
-  return map;
+  return { byBench: map, exclusions };
 };
 
 function fmtBp0(v: number | null | undefined) {
@@ -1394,9 +1530,9 @@ function HedgeHeaderMinimal({
   info,
 }: {
   bench: string;
-  info: { targetBp: number; currentBp: number; needBp: number } | null;
+  info: { targetBp: number; currentBp: number; needBp: number; buyBp: number; sellBp: number } | null;
 }) {
-  const need = info ? splitSides(info.needBp) : { left: "", right: "" };
+  const need = info ? { left: fmtBp0(info.sellBp), right: fmtBp0(info.buyBp) } : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
   return (
@@ -1413,12 +1549,12 @@ function HedgeHeaderMinimal({
       {/* NEED (big) */}
       <div className="mt-3 grid grid-cols-2 gap-6">
         <div className="text-left">
-          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+          <span className="text-[22px] font-mono tabular-nums text-rose-400 leading-none">
             {need.left}
           </span>
         </div>
         <div className="text-right">
-          <span className="text-[22px] font-mono tabular-nums text-zinc-100 leading-none">
+          <span className="text-[22px] font-mono tabular-nums text-emerald-400 leading-none">
             {need.right}
           </span>
         </div>
@@ -2711,9 +2847,9 @@ export default function BridgeArbitrageSignals() {
       }));
   }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
 
-
-
-  const hedgeByBench = useMemo(() => computeHedgeByBench(items), [items]);
+  const hedgeComputed = useMemo(() => computeHedgeByBench(items), [items]);
+  const hedgeByBench = hedgeComputed.byBench;
+  const pairMutualExclusion = hedgeComputed.exclusions;
 
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
 
@@ -3841,7 +3977,45 @@ export default function BridgeArbitrageSignals() {
         )}
 
         {!error && hasAny && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <div className="space-y-3">
+            {(() => {
+              const visible = new Set(benchBlocks.map((b) => b.benchmark));
+              const activePairs = pairMutualExclusion.filter((p) => p.active && visible.has(p.aBench) && visible.has(p.bBench));
+              if (!activePairs.length) return null;
+
+              return (
+                <div className="px-3 py-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.03]">
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-amber-300">
+                      QQQ/SPY/IWM Mutual Exclusion
+                    </span>
+                    <div className="h-px flex-1 bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
+                  </div>
+                  <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
+                    {activePairs.map((p) => {
+                      const dirArrow = p.favorDir === "buy" ? "↑" : p.favorDir === "sell" ? "↓" : "-";
+                      const dirClass =
+                        p.favorDir === "buy" ? "text-emerald-400" : p.favorDir === "sell" ? "text-rose-400" : "text-zinc-400";
+                      const tickerLabel = p.favorTicker ?? "-";
+
+                      return (
+                        <div key={p.key} className="px-2 py-1 rounded border border-white/10 bg-black/20 text-[10px] font-mono uppercase tracking-wide">
+                          <span className="text-zinc-300">{p.key}</span>
+                          <span className="mx-1 text-zinc-600">r=</span>
+                          <span className="text-zinc-200">{fmtNum(p.ratio, 2)}</span>
+                          <span className="mx-2 text-zinc-600">|</span>
+                          <span className="text-zinc-400">Excl Σ {fmtBp0(p.cancelA)}</span>
+                          <span className="mx-2 text-zinc-600">|</span>
+                          <span className={dirClass}>Σ {fmtBp0(p.favorSum)} {dirArrow} {tickerLabel}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {benchBlocks.map((bench) => {
               const accent = BENCH_COLORS[bench.benchmark] ?? BENCH_COLORS.DEFAULT;
 
@@ -3939,6 +4113,7 @@ export default function BridgeArbitrageSignals() {
                 </div>
               );
             })}
+            </div>
           </div>
         )}
       </div>
