@@ -21,6 +21,8 @@ export type ArbitrageSignal = {
 
   "BidLstClsΔ%"?: number | string | null;
   "AskLstClsΔ%"?: number | string | null;
+  BidLstClsDeltaPct?: number | string | null;
+  AskLstClsDeltaPct?: number | string | null;
   Bid?: number | string | null;
   Ask?: number | string | null;
 
@@ -116,8 +118,8 @@ type ArbType = "any" | "hard" | "soft";
 ========================= */
 const betaLabels: Record<BetaKey, string> = {
   lt1: "< 1.0",
-  b1_1_5: "1.0 – 1.5",
-  b1_5_2: "1.5 – 2.0",
+  b1_1_5: "1.0 - 1.5",
+  b1_5_2: "1.5 - 2.0",
   gt2: "> 2.0",
   unknown: "N/A",
 };
@@ -166,14 +168,14 @@ const clampFloat = (v: any, min: number) => {
 
 const fmtNum = (v: number | null | undefined, digits = 2) =>
   v == null || Number.isNaN(v)
-    ? "—"
+    ? "-"
     : v.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 
 const fmtMaybeInt = (v: number | null | undefined) =>
-  v == null || Number.isNaN(v) ? "—" : Math.round(v).toLocaleString("en-US");
+  v == null || Number.isNaN(v) ? "-" : Math.round(v).toLocaleString("en-US");
 
 const fmtPct = (v: number | null | undefined, digits = 2) =>
-  v == null || Number.isNaN(v) ? "—" : `${fmtNum(v, digits)}%`;
+  v == null || Number.isNaN(v) ? "-" : `${fmtNum(v, digits)}%`;
 
 const fmtBpInt = (v: number) => {
   const n = Math.round(Math.abs(v));
@@ -190,7 +192,11 @@ const toNum = (v: any): number | null => {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   const s = String(v).trim();
   if (!s) return null;
-  const n = Number(s.replace(",", "."));
+  const cleaned = s
+    .replace(/\u2212/g, "-")
+    .replace(/[%\s]/g, "")
+    .replace(/,/g, "");
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 };
 
@@ -278,9 +284,46 @@ const getMeta = (d: any) => d?.meta ?? d?.Meta ?? null;
 const getBestObj = (d: any) => d?.best ?? d?.Best ?? null;
 
 const pick = (obj: any, keys: string[]) => {
+  if (!obj || typeof obj !== "object") return undefined;
+  const isUsableValue = (value: any) => {
+    if (value === undefined || value === null) return false;
+    if (typeof value !== "string") return true;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    if (trimmed === "-" || trimmed === "—") return false;
+    return true;
+  };
   for (const k of keys) {
     const v = obj?.[k];
-    if (v !== undefined && v !== null) return v;
+    if (isUsableValue(v)) return v;
+  }
+  const normalizeFieldKey = (value: string) =>
+    value
+      .normalize("NFKD")
+      .replaceAll("Δ", " delta ")
+      .replace(/Δ|∆/g, " delta ")
+      .replace(/%/g, " percent ")
+      .replace(/[^a-zA-Z0-9]+/g, " ")
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => {
+        if (token === "delta" || token === "percent" || token === "pct" || token === "pcnt") return "pct";
+        return token;
+      })
+      .filter((token, index, arr) => !(token === "pct" && arr[index - 1] === "pct"))
+      .join("");
+
+  const keyMap = new Map<string, any>();
+  for (const [rawKey, rawValue] of Object.entries(obj)) {
+    if (!isUsableValue(rawValue)) continue;
+    const normalized = normalizeFieldKey(String(rawKey));
+    if (!keyMap.has(normalized)) keyMap.set(normalized, rawValue);
+  }
+
+  for (const k of keys) {
+    const normalized = normalizeFieldKey(k);
+    if (keyMap.has(normalized)) return keyMap.get(normalized);
   }
   return undefined;
 };
@@ -304,8 +347,18 @@ const getBestRating = (d: any) =>
 const getBestTotal = (d: any) =>
   toNum(getBestObj(d)?.total ?? getBestObj(d)?.Total ?? getBestObj(d)?.count ?? getBestObj(d)?.Count ?? null);
 
-const getCompany = (d: any) => String(getMeta(d)?.company ?? getMeta(d)?.Company ?? d?.company ?? d?.Company ?? "—");
-const getCountry = (d: any) => String(getMeta(d)?.country ?? getMeta(d)?.Country ?? d?.country ?? d?.Country ?? "—");
+const getBestTotalByType = (d: any, type: ArbType): number | null => {
+  const best = getBestObj(d);
+  const anyTotal = toNum(best?.total ?? best?.Total ?? best?.count ?? best?.Count ?? (d as any)?._bestTotal ?? (d as any)?.total);
+  const hardTotal = toNum(best?.hard ?? best?.Hard ?? (d as any)?._bestHard);
+  const softTotal = toNum(best?.soft ?? best?.Soft ?? (d as any)?._bestSoft);
+  if (type === "hard") return hardTotal;
+  if (type === "soft") return softTotal;
+  return anyTotal;
+};
+
+const getCompany = (d: any) => String(getMeta(d)?.company ?? getMeta(d)?.Company ?? d?.company ?? d?.Company ?? "-");
+const getCountry = (d: any) => String(getMeta(d)?.country ?? getMeta(d)?.Country ?? d?.country ?? d?.Country ?? "-");
 const getSector = (d: any) =>
   String(
     getMeta(d)?.sectorL3 ??
@@ -316,9 +369,9 @@ const getSector = (d: any) =>
       d?.SectorL3 ??
       d?.sector ??
       d?.Sector ??
-      "—"
+      "-"
   );
-const getExchange = (d: any) => String(d?.exchange ?? d?.Exchange ?? getMeta(d)?.exchange ?? getMeta(d)?.Exchange ?? "—");
+const getExchange = (d: any) => String(d?.exchange ?? d?.Exchange ?? getMeta(d)?.exchange ?? getMeta(d)?.Exchange ?? "-");
 
 const getCountryStr = (s: any) => String(getCountry(s) ?? "").trim().toUpperCase();
 const isUSA = (s: any) => {
@@ -345,7 +398,7 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 ========================= */
 const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
 const numLastClose = (s: any) =>
-  getNumAny(s, ["LstCls", "lstCls", "lstClose", "lastClose", "LastClose", "close", "Close"]);
+  getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "close", "Close"]);
 
 const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv"]);
 const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
@@ -364,6 +417,21 @@ const numClsToClsPct = (s: any) =>
   getNumAny(s, ["ClsToCls%", "clsToCls%", "clsToClsPct", "ClsToClsPct", "ClsToClsPcnt", "clsToClsPcnt"]);
 const numLo = (s: any) => getNumAny(s, ["lo", "Lo", "low", "Low"]);
 const numLstClsNewsCnt = (s: any) => getNumAny(s, ["LstClsNewsCnt", "lstClsNewsCnt", "lstClsNewsCount", "LstClsNewsCount"]);
+const numVolRel = (s: any) => getNumAny(s, ["VolRel", "volRel", "vol_rel"]);
+const numPreMhBidLstPrcPct = (s: any) =>
+  getNumAny(s, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
+const numPreMhLoLstPrcPct = (s: any) =>
+  getNumAny(s, ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcÎ”%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"]);
+const numPreMhHiLstClsPct = (s: any) =>
+  getNumAny(s, ["PreMhHiLstClsΔ%", "PreMhHiLstClsÎ”%", "PreMhHiLstClsPct", "preMhHiLstClsPct"]);
+const numPreMhLoLstClsPct = (s: any) =>
+  getNumAny(s, ["PreMhLoLstClsΔ%", "PreMhLoLstClsÎ”%", "PreMhLoLstClsPct", "preMhLoLstClsPct"]);
+const numLstPrcLstClsPct = (s: any) =>
+  getNumAny(s, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "lstPrcLstClsPct"]);
+const numImbExch925 = (s: any) => getNumAny(s, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
+const numImbExch1555 = (s: any) => getNumAny(s, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
+const numAvPostMhVol90NF = (s: any) =>
+  getNumAny(s, ["AvPostMhVol90NF", "avPostMhVol90NF"]);
 
 const numVolNFfromLstCls = (s: any) => {
   const vol = numPreMktVolNF(s);
@@ -562,6 +630,17 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
   const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
   const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
 
+  const canonical = { ...raw, meta };
+  const volRel = getNumAny(canonical, ["VolRel", "volRel", "vol_rel"]);
+  const avPostMhVol90NF = getNumAny(canonical, ["AvPostMhVol90NF", "avPostMhVol90NF"]);
+  const preMhBidLstPrcPct = getNumAny(canonical, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
+  const preMhLoLstPrcPct = getNumAny(canonical, ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcÎ”%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"]);
+  const preMhHiLstClsPct = getNumAny(canonical, ["PreMhHiLstClsΔ%", "PreMhHiLstClsÎ”%", "PreMhHiLstClsPct", "preMhHiLstClsPct"]);
+  const preMhLoLstClsPct = getNumAny(canonical, ["PreMhLoLstClsΔ%", "PreMhLoLstClsÎ”%", "PreMhLoLstClsPct", "preMhLoLstClsPct"]);
+  const lstPrcLstClsPct = getNumAny(canonical, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "lstPrcLstClsPct"]);
+  const imbExch925 = getNumAny(canonical, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
+  const imbExch1555 = getNumAny(canonical, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
+
   // make sure these exist at top-level for filters/options
   const country = raw?.country ?? raw?.Country ?? meta?.country ?? meta?.Country ?? undefined;
   const exchange = raw?.exchange ?? raw?.Exchange ?? meta?.exchange ?? meta?.Exchange ?? undefined;
@@ -591,6 +670,15 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
     country,
     exchange,
     sector,
+    VolRel: volRel,
+    AvPostMhVol90NF: avPostMhVol90NF,
+    PreMhBidLstPrcPct: preMhBidLstPrcPct,
+    PreMhLoLstPrcPct: preMhLoLstPrcPct,
+    PreMhHiLstClsPct: preMhHiLstClsPct,
+    PreMhLoLstClsPct: preMhLoLstClsPct,
+    LstPrcLstClsPct: lstPrcLstClsPct,
+    ImbExch925: imbExch925,
+    ImbExch1555: imbExch1555,
 
     _bestRating,
     _bestTotal,
@@ -923,7 +1011,7 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
     };
   }, [open]);
 
-  const currentLabel = options.find((o) => o.value === value)?.label ?? "—";
+  const currentLabel = options.find((o) => o.value === value)?.label ?? "-";
 
   const menu =
     open && pos
@@ -1190,25 +1278,25 @@ const SignalCard: React.FC<SignalCardProps> = ({
         <div className="flex items-baseline gap-1.5">
           <span className="text-[10px] font-mono text-zinc-600 lowercase">{pxLabel}</span>
           <span className={`font-mono tabular-nums leading-none font-bold ${compact ? "text-[13px]" : "text-[15px]"} ${pxColor}`}>
-            {px == null ? "—" : fmtNum(px, 2)}
+            {px == null ? "-" : fmtNum(px, 2)}
           </span>
         </div>
       </div>
 
       <div className={`flex items-center justify-between w-full font-mono ${compact ? "text-[9px]" : "text-[10px]"} opacity-80`}>
         <div className="flex items-center gap-1.5">
-          <span className="text-zinc-600">σ</span>
-          <span className="text-zinc-400 tabular-nums">{s.sig == null ? "—" : fmtNum(toNum(s.sig), 2)}</span>
+          <span className="text-zinc-600">SIG</span>
+          <span className="text-zinc-400 tabular-nums">{s.sig == null ? "-" : fmtNum(toNum(s.sig), 2)}</span>
         </div>
 
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
             <span className="text-zinc-600">Z</span>
-            <span className="text-zinc-400 tabular-nums">{z == null ? "—" : fmtNum(z, 2)}</span>
+            <span className="text-zinc-400 tabular-nums">{z == null ? "-" : fmtNum(z, 2)}</span>
           </div>
           <div className="flex items-center gap-1">
             <span className="text-zinc-600">S</span>
-            <span className="text-zinc-400 tabular-nums">{zs == null ? "—" : fmtNum(zs, 1)}</span>
+            <span className="text-zinc-400 tabular-nums">{zs == null ? "-" : fmtNum(zs, 1)}</span>
           </div>
         </div>
       </div>
@@ -1314,8 +1402,8 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
   //     unknown => ignore
   // - Per ticker hedge (bp): hedge = PositionBp * beta
   // - Per benchmark (ETF) group:
-  //     buySum  = Σ hedge for short positions
-  //     sellSum = Σ hedge for long positions
+  //     buySum  = sum hedge for short positions
+  //     sellSum = sum hedge for long positions
   //     needBp  = buySum - sellSum
   //       needBp > 0 => BUY hedge (green/right)
   //       needBp < 0 => SELL hedge (red/left)
@@ -1689,6 +1777,24 @@ export default function BridgeArbitrageSignals() {
 
   const [volNFfromLstClsMin, setVolNFfromLstClsMin] = useState("");
   const [volNFfromLstClsMax, setVolNFfromLstClsMax] = useState("");
+  const [avPostMhVol90NFMin, setAvPostMhVol90NFMin] = useState("");
+  const [avPostMhVol90NFMax, setAvPostMhVol90NFMax] = useState("");
+  const [volRelMin, setVolRelMin] = useState("");
+  const [volRelMax, setVolRelMax] = useState("");
+  const [preMhBidLstPrcPctMin, setPreMhBidLstPrcPctMin] = useState("");
+  const [preMhBidLstPrcPctMax, setPreMhBidLstPrcPctMax] = useState("");
+  const [preMhLoLstPrcPctMin, setPreMhLoLstPrcPctMin] = useState("");
+  const [preMhLoLstPrcPctMax, setPreMhLoLstPrcPctMax] = useState("");
+  const [preMhHiLstClsPctMin, setPreMhHiLstClsPctMin] = useState("");
+  const [preMhHiLstClsPctMax, setPreMhHiLstClsPctMax] = useState("");
+  const [preMhLoLstClsPctMin, setPreMhLoLstClsPctMin] = useState("");
+  const [preMhLoLstClsPctMax, setPreMhLoLstClsPctMax] = useState("");
+  const [lstPrcLstClsPctMin, setLstPrcLstClsPctMin] = useState("");
+  const [lstPrcLstClsPctMax, setLstPrcLstClsPctMax] = useState("");
+  const [imbExch925Min, setImbExch925Min] = useState("");
+  const [imbExch925Max, setImbExch925Max] = useState("");
+  const [imbExch1555Min, setImbExch1555Min] = useState("");
+  const [imbExch1555Max, setImbExch1555Max] = useState("");
 
   /* ===== Boolean filters (Red Group - Exclude) ===== */
   const [excludeDividend, setExcludeDividend] = useState(false);
@@ -1738,6 +1844,7 @@ export default function BridgeArbitrageSignals() {
   const applyFileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* ===== Data ===== */
+  const [allItems, setAllItems] = useState<ArbitrageSignal[]>([]);
   const [items, setItems] = useState<ArbitrageSignal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1767,9 +1874,9 @@ export default function BridgeArbitrageSignals() {
       const ee = getExchange(item);
       const ss = getSector(item);
 
-      if (cc && cc !== "—") c.add(cc);
-      if (ee && ee !== "—") e.add(ee);
-      if (ss && ss !== "—") s.add(ss);
+      if (cc && cc !== "-") c.add(cc);
+      if (ee && ee !== "-") e.add(ee);
+      if (ss && ss !== "-") s.add(ss);
     }
 
     return {
@@ -2066,6 +2173,10 @@ export default function BridgeArbitrageSignals() {
           'lstPrcLMin','lstPrcLMax','lstClsMin','lstClsMax','yClsMin','yClsMax','tClsMin','tClsMax',
           'clsToClsPctMin','clsToClsPctMax','loMin','loMax','lstClsNewsCntMin','lstClsNewsCntMax',
           'marketCapMMin','marketCapMMax','preMhVolNFMin','preMhVolNFMax','volNFfromLstClsMin','volNFfromLstClsMax',
+          'avPostMhVol90NFMin','avPostMhVol90NFMax','volRelMin','volRelMax',
+          'preMhBidLstPrcPctMin','preMhBidLstPrcPctMax','preMhLoLstPrcPctMin','preMhLoLstPrcPctMax',
+          'preMhHiLstClsPctMin','preMhHiLstClsPctMax','preMhLoLstClsPctMin','preMhLoLstClsPctMax',
+          'lstPrcLstClsPctMin','lstPrcLstClsPctMax','imbExch925Min','imbExch925Max','imbExch1555Min','imbExch1555Max',
         ] as const) {
           if (typeof s?.[key] === 'string') {
             const v = s[key];
@@ -2106,6 +2217,24 @@ export default function BridgeArbitrageSignals() {
               case 'preMhVolNFMax': setPreMhVolNFMax(v); break;
               case 'volNFfromLstClsMin': setVolNFfromLstClsMin(v); break;
               case 'volNFfromLstClsMax': setVolNFfromLstClsMax(v); break;
+              case 'avPostMhVol90NFMin': setAvPostMhVol90NFMin(v); break;
+              case 'avPostMhVol90NFMax': setAvPostMhVol90NFMax(v); break;
+              case 'volRelMin': setVolRelMin(v); break;
+              case 'volRelMax': setVolRelMax(v); break;
+              case 'preMhBidLstPrcPctMin': setPreMhBidLstPrcPctMin(v); break;
+              case 'preMhBidLstPrcPctMax': setPreMhBidLstPrcPctMax(v); break;
+              case 'preMhLoLstPrcPctMin': setPreMhLoLstPrcPctMin(v); break;
+              case 'preMhLoLstPrcPctMax': setPreMhLoLstPrcPctMax(v); break;
+              case 'preMhHiLstClsPctMin': setPreMhHiLstClsPctMin(v); break;
+              case 'preMhHiLstClsPctMax': setPreMhHiLstClsPctMax(v); break;
+              case 'preMhLoLstClsPctMin': setPreMhLoLstClsPctMin(v); break;
+              case 'preMhLoLstClsPctMax': setPreMhLoLstClsPctMax(v); break;
+              case 'lstPrcLstClsPctMin': setLstPrcLstClsPctMin(v); break;
+              case 'lstPrcLstClsPctMax': setLstPrcLstClsPctMax(v); break;
+              case 'imbExch925Min': setImbExch925Min(v); break;
+              case 'imbExch925Max': setImbExch925Max(v); break;
+              case 'imbExch1555Min': setImbExch1555Min(v); break;
+              case 'imbExch1555Max': setImbExch1555Max(v); break;
             }
           }
         }
@@ -2165,6 +2294,15 @@ export default function BridgeArbitrageSignals() {
           marketCapMMin, marketCapMMax,
           preMhVolNFMin, preMhVolNFMax,
           volNFfromLstClsMin, volNFfromLstClsMax,
+          avPostMhVol90NFMin, avPostMhVol90NFMax,
+          volRelMin, volRelMax,
+          preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
+          preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
+          preMhHiLstClsPctMin, preMhHiLstClsPctMax,
+          preMhLoLstClsPctMin, preMhLoLstClsPctMax,
+          lstPrcLstClsPctMin, lstPrcLstClsPctMax,
+          imbExch925Min, imbExch925Max,
+          imbExch1555Min, imbExch1555Max,
         })
       );
     } catch {}
@@ -2197,6 +2335,15 @@ export default function BridgeArbitrageSignals() {
     marketCapMMin, marketCapMMax,
     preMhVolNFMin, preMhVolNFMax,
     volNFfromLstClsMin, volNFfromLstClsMax,
+    avPostMhVol90NFMin, avPostMhVol90NFMax,
+    volRelMin, volRelMax,
+    preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
+    preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
+    preMhHiLstClsPctMin, preMhHiLstClsPctMax,
+    preMhLoLstClsPctMin, preMhLoLstClsPctMax,
+    lstPrcLstClsPctMin, lstPrcLstClsPctMax,
+    imbExch925Min, imbExch925Max,
+    imbExch1555Min, imbExch1555Max,
   ]);
 
   /* =========================
@@ -2223,6 +2370,15 @@ export default function BridgeArbitrageSignals() {
       MarketCapM: mm(marketCapMMin, marketCapMMax),
       PreMhVolNF: mm(preMhVolNFMin, preMhVolNFMax),
       VolNFfromLstCls: mm(volNFfromLstClsMin, volNFfromLstClsMax),
+      AvPostMhVol90NF: mm(avPostMhVol90NFMin, avPostMhVol90NFMax),
+      VolRel: mm(volRelMin, volRelMax),
+      PreMhBidLstPrcPct: mm(preMhBidLstPrcPctMin, preMhBidLstPrcPctMax),
+      PreMhLoLstPrcPct: mm(preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
+      PreMhHiLstClsPct: mm(preMhHiLstClsPctMin, preMhHiLstClsPctMax),
+      PreMhLoLstClsPct: mm(preMhLoLstClsPctMin, preMhLoLstClsPctMax),
+      LstPrcLstClsPct: mm(lstPrcLstClsPctMin, lstPrcLstClsPctMax),
+      ImbExch925: mm(imbExch925Min, imbExch925Max),
+      ImbExch1555: mm(imbExch1555Min, imbExch1555Max),
     };
   }, [
     adv20Min, adv20Max,
@@ -2243,6 +2399,15 @@ export default function BridgeArbitrageSignals() {
     marketCapMMin, marketCapMMax,
     preMhVolNFMin, preMhVolNFMax,
     volNFfromLstClsMin, volNFfromLstClsMax,
+    avPostMhVol90NFMin, avPostMhVol90NFMax,
+    volRelMin, volRelMax,
+    preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
+    preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
+    preMhHiLstClsPctMin, preMhHiLstClsPctMax,
+    preMhLoLstClsPctMin, preMhLoLstClsPctMax,
+    lstPrcLstClsPctMin, lstPrcLstClsPctMax,
+    imbExch925Min, imbExch925Max,
+    imbExch1555Min, imbExch1555Max,
   ]);
 
   const snapshot = useMemo(() => {
@@ -2299,7 +2464,7 @@ export default function BridgeArbitrageSignals() {
     listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    activeMode, // ✅ ADD THIS
+    activeMode, // include in dependencies
     includeUSA, includeChina,
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
@@ -2329,7 +2494,7 @@ export default function BridgeArbitrageSignals() {
 
     const base = Number(f.zapShowAbs ?? 0);
     const zapThr = Math.max(0.3, base);   // for ZAP
-    const sigThr = Math.max(0.05, base);  // for σZAP
+    const sigThr = Math.max(0.05, base);  // for SIGZAP
     const eqNeedle = f.equityType.trim().toLowerCase();
 
     for (const s of arr ?? []) {
@@ -2370,6 +2535,15 @@ export default function BridgeArbitrageSignals() {
       if (!passMinMax(numMarketCapM(s), f.bounds.MarketCapM.min, f.bounds.MarketCapM.max)) continue;
       if (!passMinMax(numPreMktVolNF(s), f.bounds.PreMhVolNF.min, f.bounds.PreMhVolNF.max)) continue;
       if (!passMinMax(numVolNFfromLstCls(s), f.bounds.VolNFfromLstCls.min, f.bounds.VolNFfromLstCls.max)) continue;
+      if (!passMinMax(numAvPostMhVol90NF(s), f.bounds.AvPostMhVol90NF.min, f.bounds.AvPostMhVol90NF.max)) continue;
+      if (!passMinMax(numVolRel(s), f.bounds.VolRel.min, f.bounds.VolRel.max)) continue;
+      if (!passMinMax(numPreMhBidLstPrcPct(s), f.bounds.PreMhBidLstPrcPct.min, f.bounds.PreMhBidLstPrcPct.max)) continue;
+      if (!passMinMax(numPreMhLoLstPrcPct(s), f.bounds.PreMhLoLstPrcPct.min, f.bounds.PreMhLoLstPrcPct.max)) continue;
+      if (!passMinMax(numPreMhHiLstClsPct(s), f.bounds.PreMhHiLstClsPct.min, f.bounds.PreMhHiLstClsPct.max)) continue;
+      if (!passMinMax(numPreMhLoLstClsPct(s), f.bounds.PreMhLoLstClsPct.min, f.bounds.PreMhLoLstClsPct.max)) continue;
+      if (!passMinMax(numLstPrcLstClsPct(s), f.bounds.LstPrcLstClsPct.min, f.bounds.LstPrcLstClsPct.max)) continue;
+      if (!passMinMax(numImbExch925(s), f.bounds.ImbExch925.min, f.bounds.ImbExch925.max)) continue;
+      if (!passMinMax(numImbExch1555(s), f.bounds.ImbExch1555.min, f.bounds.ImbExch1555.max)) continue;
 
       // minRate/minTotal
       if (mr != null) {
@@ -2377,7 +2551,7 @@ export default function BridgeArbitrageSignals() {
         if (r == null || r < mr) continue;
       }
       if (mt != null) {
-        const t = getBestTotal(s) ?? (s as any)._bestTotal ?? toNum((s as any).total) ?? null;
+        const t = getBestTotalByType(s, f.type);
         if (t == null || t < mt) continue;
       }
 
@@ -2491,6 +2665,7 @@ export default function BridgeArbitrageSignals() {
 
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
+        setAllItems([]);
         setItems([]);
         setError(`HTTP ${r.status}: ${txt || r.statusText}`);
         return;
@@ -2508,11 +2683,12 @@ export default function BridgeArbitrageSignals() {
         .filter(Boolean) as ArbitrageSignal[];
 
       const filtered = applyAllClientFilters(normalized, f);
-
+      setAllItems(normalized);
       setItems(filtered);
       setUpdatedAt(Date.now());
     } catch (e: any) {
       if (myId !== reqIdRef.current) return;
+      setAllItems([]);
       setItems([]);
       setError(e?.message ?? "Unknown error");
     } finally {
@@ -2564,6 +2740,12 @@ export default function BridgeArbitrageSignals() {
     if (isEditingRef.current) return;
     fetchSignals();
   }, [snapshotKey, fetchSignals]);
+
+  // Re-apply client filters immediately on any local filter change.
+  useEffect(() => {
+    if (isEditingRef.current) return;
+    setItems(applyAllClientFilters(allItems, snapshot));
+  }, [allItems, snapshot, applyAllClientFilters, isEditing]);
 
   /* =========================
     Flash Logic (stable, cleanup-safe)
@@ -2875,14 +3057,14 @@ export default function BridgeArbitrageSignals() {
      Active derived fields
   ========================= */
   const activeMeta = getMeta(activeData);
-  const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "—")).toUpperCase();
+  const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "-")).toUpperCase();
   const bestObj = activeData?.best ?? activeData?.Best ?? null;
   const bestParams = getBestParams(activeData);
 
   const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
   const activeSigma = toNum(bestObj?.sigma ?? bestObj?.Sigma) ?? getNumAny(activeData, ["sig", "Sig", "sigma", "Sigma"]);
-  const activeSector2 = getStrAny(activeData, ["sector", "Sector", "lvl2", "level2", "Level2"], "—");
-  const activeExchange2 = getStrAny(activeData, ["exchange", "Exchange"], "—");
+  const activeSector2 = getStrAny(activeData, ["sector", "Sector", "lvl2", "level2", "Level2"], "-");
+  const activeExchange2 = getStrAny(activeData, ["exchange", "Exchange"], "-");
   const activeMarketCapM2 =
     getNumAny(activeData, ["marketCapM", "MarketCapM"]) ??
     (getNumAny(activeData, ["marketCap", "MarketCap"]) != null ? getNumAny(activeData, ["marketCap", "MarketCap"]) : null);
@@ -2950,8 +3132,8 @@ export default function BridgeArbitrageSignals() {
 
             <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
               <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
-              <span className="text-zinc-700 mx-1">•</span>
-              <span className="opacity-70">minRate {minRate ?? "—"} • minTotal {minTotal ?? "—"} • limit {limit ?? "—"}</span>
+              <span className="text-zinc-700 mx-1">|</span>
+              <span className="opacity-70">minRate {minRate ?? "-"} | minTotal {minTotal ?? "-"} | limit {limit ?? "-"}</span>
             </div>
           </div>
           
@@ -3025,7 +3207,7 @@ export default function BridgeArbitrageSignals() {
                 type="button"
                 onClick={() => setActiveMode("off")}
                 className={[
-                  "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "h-8 px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border active:scale-[0.98]",
                   activeMode === "off"
                     ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
                     : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400",
@@ -3260,7 +3442,7 @@ export default function BridgeArbitrageSignals() {
               </div>
             ))}
 
-            {/* COLLAPSE BUTTON — MUST BE LAST (after OFFSET) */}
+            {/* COLLAPSE BUTTON - MUST BE LAST (after OFFSET) */}
               <button
                 onClick={() => setFiltersCollapsed(!filtersCollapsed)}
                 className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
@@ -3325,6 +3507,15 @@ export default function BridgeArbitrageSignals() {
             <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="VolNFfromLstCls" min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPostMhVol90NF" min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolRel" min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstPrc%" min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstPrc%" min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstCls%" min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstCls%" min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcLstCls%" min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch9:25" min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch15:55" min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
           </div>
         )}
 
@@ -3431,7 +3622,7 @@ export default function BridgeArbitrageSignals() {
                 { value: "alpha", label: "ABC" },
                 { value: "sigma", label: "SIG" },
                 { value: "zapAbs", label: "|ZAP|" },
-                { value: "sigZapAbs", label: "|σZAP|" },
+                { value: "sigZapAbs", label: "|SIGZAP|" },
                 { value: "rate", label: "RATE" },
                 { value: "posBpAbs", label: "BP" },
                 { value: "beta", label: "BETA" },
@@ -3457,7 +3648,7 @@ export default function BridgeArbitrageSignals() {
               ].join(" ")}
               title={sortKey === "pin" ? "PIN sort (dir N/A)" : "Toggle ASC/DESC"}
             >
-              {sortKey === "pin" ? "PIN" : sortDir === "asc" ? "↑" : "↓"}
+              {sortKey === "pin" ? "PIN" : sortDir === "asc" ? "^" : "v"}
             </button>
           </div>
 
@@ -3524,7 +3715,7 @@ export default function BridgeArbitrageSignals() {
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>σ</span>
+              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>SIG</span>
               <span className="uppercase">ZAP</span>
             </button>
 
@@ -3546,7 +3737,7 @@ export default function BridgeArbitrageSignals() {
                 "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
                 zapMode !== "off" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
               ].join(" ")}
-              title="Threshold for filtering (ZAP or σZAP depending on mode)"
+              title="Threshold for filtering (ZAP or SIGZAP depending on mode)"
             />
 
             {/* 2) SILVER (too high) */}
@@ -3789,23 +3980,23 @@ export default function BridgeArbitrageSignals() {
                     </span>
                     <div className="h-0.5 w-6 bg-emerald-500/50 rounded-full" />
                   </div>
-                  <span className="text-2xl font-bold text-white tracking-tight">{activeTicker ?? "—"}</span>
+                  <span className="text-2xl font-bold text-white tracking-tight">{activeTicker ?? "-"}</span>
 
                   <div className="flex gap-2 hidden sm:flex">
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      BENCH: <span className="text-white ml-1">{activeBench !== "—" ? activeBench : "—"}</span>
+                      BENCH: <span className="text-white ml-1">{activeBench !== "-" ? activeBench : "-"}</span>
                     </span>
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      β: <span className="text-white ml-1">{activeBeta == null ? "—" : fmtNum(activeBeta, 2)}</span>
+                      BETA: <span className="text-white ml-1">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span>
                     </span>
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      σ: <span className="text-white ml-1">{activeSigma == null ? "—" : fmtNum(activeSigma, 2)}</span>
+                      SIG: <span className="text-white ml-1">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span>
                     </span>
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      RATE: <span className="text-emerald-400 ml-1">{bestRating == null ? "—" : `${Math.round(bestRating * 100)}%`}</span>
+                      RATE: <span className="text-emerald-400 ml-1">{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span>
                     </span>
                     <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      N: <span className="text-white ml-1">{bestTotalEff == null ? "—" : fmtMaybeInt(bestTotalEff)}</span>
+                      N: <span className="text-white ml-1">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span>
                     </span>
                   </div>
                 </div>
@@ -3861,38 +4052,42 @@ export default function BridgeArbitrageSignals() {
                   const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
 
 
-                  const bidDelta = s ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct) : null;
-                  const askDelta = s ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct) : null;
+                  const bidDelta = s
+                    ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct ?? (s as any)["BidLstClsDelta%"])
+                    : null;
+                  const askDelta = s
+                    ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct ?? (s as any)["AskLstClsDelta%"])
+                    : null;
 
                   const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
                     <div className="flex flex-col gap-1 p-3 rounded-xl border border-white/5 bg-white/[0.02]">
                       <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">{label}</span>
-                      <span className={`text-xs font-mono tabular-nums font-medium truncate ${colorClass}`}>{value ?? "—"}</span>
+                      <span className={`text-xs font-mono tabular-nums font-medium truncate ${colorClass}`}>{value ?? "-"}</span>
                     </div>
                   );
 
                   return (
                     <div className="space-y-4">
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-                        {renderCell("Company", s ? getCompany(s) : "—")}
-                        {renderCell("Country", s ? getCountry(s) : "—")}
-                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "—", s ? "text-emerald-300" : "text-zinc-500")}
-                        {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "—")}
-                        {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "—")}
-                        {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "—")}
-                        {renderCell("BidLstClsΔ%", s ? fmtPct(bidDelta, 2) : "—", s && bidDelta != null ? (bidDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
-                        {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "—", s ? "text-cyan-300" : "text-zinc-500")}
+                        {renderCell("Company", s ? getCompany(s) : "-")}
+                        {renderCell("Country", s ? getCountry(s) : "-")}
+                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-300" : "text-zinc-500")}
+                        {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
+                        {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
+                        {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
+                        {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
+                        {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-cyan-300" : "text-zinc-500")}
                       </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-                        {renderCell("SectorL3", s ? (getSector(s) !== "—" ? getSector(s) : activeSector2) : "—")}
-                        {renderCell("Exchange", s ? (getExchange(s) !== "—" ? getExchange(s) : activeExchange2) : "—")}
-                        {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "—")}
-                        {renderCell("Spread", s ? (numSpread(s) == null ? "—" : fmtNum(numSpread(s)!, 4)) : "—")}
-                        {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "—")}
-                        {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "—")}
-                        {renderCell("AskLstClsΔ%", s ? fmtPct(askDelta, 2) : "—", s && askDelta != null ? (askDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
-                        {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "—", s ? "text-rose-300" : "text-zinc-500")}
+                        {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : activeSector2) : "-")}
+                        {renderCell("Exchange", s ? (getExchange(s) !== "-" ? getExchange(s) : activeExchange2) : "-")}
+                        {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
+                        {renderCell("Spread", s ? (numSpread(s) == null ? "-" : fmtNum(numSpread(s)!, 4)) : "-")}
+                        {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
+                        {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
+                        {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
+                        {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "-", s ? "text-rose-300" : "text-zinc-500")}
                       </div>
                     </div>
                   );
@@ -3902,24 +4097,49 @@ export default function BridgeArbitrageSignals() {
                 {activePanelMode === "expanded" && (
                   <div className="space-y-4 pt-4 border-t border-white/5 animate-in fade-in slide-in-from-top-4 duration-300">
                     {/* встав свій expanded-блок сюди */}
-                      <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
+                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
                       <div className="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
                         <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Pricing & Liquidity</span>
                         <span className="text-[10px] font-mono text-zinc-600">parsed from root/meta</span>
                       </div>
                       <div className="p-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                         {[
-                          { k: "LstCls", v: activeData ? (numLastClose(activeData) == null ? "—" : fmtNum(numLastClose(activeData)!, 2)) : "—" },
-                          { k: "VWAP", v: activeData ? (numVWAP(activeData) == null ? "—" : fmtNum(numVWAP(activeData)!, 2)) : "—" },
-                          { k: "RoundLot", v: activeData ? (numRoundLot(activeData) == null ? "—" : fmtMaybeInt(numRoundLot(activeData))) : "—" },
-                          { k: "YCls", v: activeData ? (numYCls(activeData) == null ? "—" : fmtNum(numYCls(activeData)!, 2)) : "—" },
-                          { k: "TCls", v: activeData ? (numTCls(activeData) == null ? "—" : fmtNum(numTCls(activeData)!, 2)) : "—" },
-                          { k: "ClsToCls%", v: activeData ? fmtPct(numClsToClsPct(activeData), 2) : "—" },
-                          { k: "Lo", v: activeData ? (numLo(activeData) == null ? "—" : fmtNum(numLo(activeData)!, 2)) : "—" },
+                          { k: "LstCls", v: activeData ? (numLastClose(activeData) == null ? "-" : fmtNum(numLastClose(activeData)!, 2)) : "-" },
+                          { k: "VWAP", v: activeData ? (numVWAP(activeData) == null ? "-" : fmtNum(numVWAP(activeData)!, 2)) : "-" },
+                          { k: "RoundLot", v: activeData ? (numRoundLot(activeData) == null ? "-" : fmtMaybeInt(numRoundLot(activeData))) : "-" },
+                          { k: "YCls", v: activeData ? (numYCls(activeData) == null ? "-" : fmtNum(numYCls(activeData)!, 2)) : "-" },
+                          { k: "TCls", v: activeData ? (numTCls(activeData) == null ? "-" : fmtNum(numTCls(activeData)!, 2)) : "-" },
+                          { k: "ClsToCls%", v: activeData ? fmtPct(numClsToClsPct(activeData), 2) : "-" },
+                          { k: "Lo", v: activeData ? (numLo(activeData) == null ? "-" : fmtNum(numLo(activeData)!, 2)) : "-" },
                           {
                             k: "LstClsNewsCnt",
-                            v: activeData ? (numLstClsNewsCnt(activeData) == null ? "—" : fmtMaybeInt(numLstClsNewsCnt(activeData))) : "—",
+                            v: activeData ? (numLstClsNewsCnt(activeData) == null ? "-" : fmtMaybeInt(numLstClsNewsCnt(activeData))) : "-",
                           },
+                        ].map((item) => (
+                          <div key={item.k} className="flex flex-col gap-1 p-2 border border-white/5 rounded bg-black/20">
+                            <span className="text-[10px] text-zinc-500 font-mono uppercase">{item.k}</span>
+                            <span className="text-xs text-zinc-300 font-mono tabular-nums">{item.v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
+                      <div className="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Extended Tape Fields</span>
+                        <span className="text-[10px] font-mono text-zinc-600">new analytics columns</span>
+                      </div>
+                      <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                        {[
+                          { k: "VolRel", v: activeData ? fmtNum(numVolRel(activeData), 2) : "-" },
+                          { k: "PreMhHiLstPrc%", v: activeData ? fmtPct(numPreMhBidLstPrcPct(activeData), 2) : "-" },
+                          { k: "PreMhLoLstPrc%", v: activeData ? fmtPct(numPreMhLoLstPrcPct(activeData), 2) : "-" },
+                          { k: "PreMhHiLstCls%", v: activeData ? fmtPct(numPreMhHiLstClsPct(activeData), 2) : "-" },
+                          { k: "PreMhLoLstCls%", v: activeData ? fmtPct(numPreMhLoLstClsPct(activeData), 2) : "-" },
+                          { k: "LstPrcLstCls%", v: activeData ? fmtPct(numLstPrcLstClsPct(activeData), 2) : "-" },
+                          { k: "ImbExch9:25", v: activeData ? fmtMaybeInt(numImbExch925(activeData)) : "-" },
+                          { k: "ImbExch15:55", v: activeData ? fmtMaybeInt(numImbExch1555(activeData)) : "-" },
+                          { k: "AvPostMhVol90NF", v: activeData ? fmtMaybeInt(numAvPostMhVol90NF(activeData)) : "-" },
                         ].map((item) => (
                           <div key={item.k} className="flex flex-col gap-1 p-2 border border-white/5 rounded bg-black/20">
                             <span className="text-[10px] text-zinc-500 font-mono uppercase">{item.k}</span>
@@ -3994,7 +4214,7 @@ export default function BridgeArbitrageSignals() {
                   </div>
                   <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
                     {activePairs.map((p) => {
-                      const dirArrow = p.favorDir === "buy" ? "↑" : p.favorDir === "sell" ? "↓" : "-";
+                      const dirArrow = p.favorDir === "buy" ? "^" : p.favorDir === "sell" ? "v" : "-";
                       const dirClass =
                         p.favorDir === "buy" ? "text-emerald-400" : p.favorDir === "sell" ? "text-rose-400" : "text-zinc-400";
                       const tickerLabel = p.favorTicker ?? "-";
@@ -4005,9 +4225,9 @@ export default function BridgeArbitrageSignals() {
                           <span className="mx-1 text-zinc-600">r=</span>
                           <span className="text-zinc-200">{fmtNum(p.ratio, 2)}</span>
                           <span className="mx-2 text-zinc-600">|</span>
-                          <span className="text-zinc-400">Excl Σ {fmtBp0(p.cancelA)}</span>
+                          <span className="text-zinc-400">Excl Sum {fmtBp0(p.cancelA)}</span>
                           <span className="mx-2 text-zinc-600">|</span>
-                          <span className={dirClass}>Σ {fmtBp0(p.favorSum)} {dirArrow} {tickerLabel}</span>
+                          <span className={dirClass}>Sum {fmtBp0(p.favorSum)} {dirArrow} {tickerLabel}</span>
                         </div>
                       );
                     })}
@@ -4043,13 +4263,13 @@ export default function BridgeArbitrageSignals() {
                         <div key={g.id} className="border border-white/5 bg-white/[0.01] rounded-xl overflow-hidden">
                           <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-white/[0.02]">
                             <div className="w-5 h-5 rounded flex items-center justify-center bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px]">
-                              ↓
+                              v
                             </div>
                             <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
                               {betaLabels[g.betaKey]}
                             </div>
                             <div className="w-5 h-5 rounded flex items-center justify-center bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px]">
-                              ↑
+                              ^
                             </div>
                           </div>
 
@@ -4120,3 +4340,5 @@ export default function BridgeArbitrageSignals() {
     </div>
   );
 }
+
+

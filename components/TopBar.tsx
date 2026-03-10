@@ -274,10 +274,10 @@ export default function TopBar() {
               onChange={(v: any) => setTheme(v)}
               items={[
                 { key: "light", label: "Light" },
-                { key: "aurora", label: "Dark" },
+                { key: "aurora", label: "ASHER" },
                 { key: "matrix", label: "Matrix" },
                 { key: "neon", label: "Neon" },
-                { key: "dark", label: "Aurora" },
+                { key: "dark", label: "Dark" },
                 { key: "space", label: "Space" },
               ]}
               isDark={isDark}

@@ -99,6 +99,13 @@ type PaperArbClosedDto = {
   ticker: string;
   benchTicker: string;
   side: TapeArbSide;
+  dateNy?: string | null;
+  date?: string | null;
+  day?: string | null;
+  tradeDate?: string | null;
+  tradeDateNy?: string | null;
+  sessionDate?: string | null;
+  sessionDateNy?: string | null;
 
   startMinuteIdx: number;
   peakMinuteIdx: number;
@@ -127,6 +134,7 @@ type PaperArbAnalyticsRequest = {
 
   metric?: PaperArbMetric;
   startAbs?: number;
+  startAbsMax?: number | null;
   endAbs?: number;
   session?: PaperArbSession;
   closeMode?: PaperArbCloseMode;
@@ -197,7 +205,9 @@ type PaperArbAnalyticsRequest = {
 
   // news/flags
   requireHasNews?: boolean | null;
+  excludeHasNews?: boolean | null;
   requireHasReport?: boolean | null;
+  excludeHasReport?: boolean | null;
   minNewsCnt?: number | null;
   maxNewsCnt?: number | null;
 
@@ -210,6 +220,8 @@ type PaperArbAnalyticsRequest = {
   excludeSSR?: boolean | null;
   excludeETF?: boolean | null;
   excludeCrap?: boolean | null;
+  includeUSA?: boolean | null;
+  includeChina?: boolean | null;
 
   // medians
   minMdnPreMhVol90?: number | null;
@@ -223,6 +235,24 @@ type PaperArbAnalyticsRequest = {
 
   minMdnPostMhVol90NF?: number | null;
   maxMdnPostMhVol90NF?: number | null;
+  minAvPostMhVol90NF?: number | null;
+  maxAvPostMhVol90NF?: number | null;
+  minVolRel?: number | null;
+  maxVolRel?: number | null;
+  minPreMhBidLstPrcPct?: number | null;
+  maxPreMhBidLstPrcPct?: number | null;
+  minPreMhLoLstPrcPct?: number | null;
+  maxPreMhLoLstPrcPct?: number | null;
+  minPreMhHiLstClsPct?: number | null;
+  maxPreMhHiLstClsPct?: number | null;
+  minPreMhLoLstClsPct?: number | null;
+  maxPreMhLoLstClsPct?: number | null;
+  minLstPrcLstClsPct?: number | null;
+  maxLstPrcLstClsPct?: number | null;
+  minImbExch925?: number | null;
+  maxImbExch925?: number | null;
+  minImbExch1555?: number | null;
+  maxImbExch1555?: number | null;
 
   // extra shared filters (compatible if server ignores unknown keys)
   minAvPreMhv?: number | null;
@@ -252,6 +282,9 @@ type PaperArbAnalyticsRequest = {
   // analytics-only output knobs
   includeEquityCurve?: boolean;
   equityCurveMode?: "Daily" | "Trade";
+  optimizerBucketCount?: number | null;
+  optimizerGroups?: string[] | null;
+  optimizerParameterKeys?: string[] | null;
 
   topN?: number;
   minTradesPerTicker?: number;
@@ -292,6 +325,51 @@ type PaperArbAnalyticsResponse = {
   topTickers?: PaperArbTickerStatsDto[] | null;
 };
 
+type PaperArbOptimizerRangeBucketDto = {
+  bucketId: string;
+  label: string;
+  fromValue?: number | null;
+  toValue?: number | null;
+  trades: number;
+  wins: number;
+  losses: number;
+  totalPnlUsd: number;
+  avgPnlUsd: number;
+  winRate: number;
+  score: number;
+  coveragePct: number;
+};
+
+type PaperArbOptimizerParameterDto = {
+  key: string;
+  group: string;
+  label: string;
+  observedMin?: number | null;
+  observedMax?: number | null;
+  valueCount: number;
+  baseTrades: number;
+  baseWins: number;
+  baseLosses: number;
+  baseTotalPnlUsd: number;
+  baseAvgPnlUsd: number;
+  baseWinRate: number;
+  buckets: PaperArbOptimizerRangeBucketDto[];
+  lowerTailBuckets: PaperArbOptimizerRangeBucketDto[];
+  upperTailBuckets: PaperArbOptimizerRangeBucketDto[];
+};
+
+type PaperArbOptimizerRangesResponse = {
+  dateFrom: string;
+  dateTo: string;
+  metric: string;
+  session: string;
+  closeMode: string;
+  pnlMode: string;
+  bucketCount: number;
+  parametersAnalyzed: number;
+  parameters: PaperArbOptimizerParameterDto[];
+};
+
 type EpisodeScanResult = {
   startAbs: number;
   endAbs: number;
@@ -302,6 +380,46 @@ type EpisodeScanResult = {
   totalPnlUsd: number;
   avgPnlUsd: number;
 };
+
+type OptimizerScenario = {
+  id: string;
+  parameter: string;
+  variant: string;
+  summary: string;
+  apply: (req: PaperArbAnalyticsRequest) => void;
+};
+
+type OptimizerResultRow = {
+  id: string;
+  parameter: string;
+  variant: string;
+  summary: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnlUsd: number;
+  avgPnlUsd: number;
+  score: number;
+};
+
+type OptimizerImpactRow = {
+  id: string;
+  parameter: string;
+  variant: string;
+  summary: string;
+  impactLevel: "STRONG" | "MEDIUM" | "LIGHT";
+  impactPct: number;
+  deltaScore: number;
+  deltaPnlUsd: number;
+  trades: number;
+  totalPnlUsd: number;
+  avgPnlUsd: number;
+  winRate: number;
+};
+
+type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score";
+type OptimizerRangeGroupKey = "RATING GATES" | "ZAP THRESHOLDS" | "TAPE FILTERS";
 
 // =========================
 // UTILS
@@ -415,6 +533,105 @@ function toYmd(d: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(d);
 }
 
+type SharedRangeFilterKey =
+  | "adv20"
+  | "adv20nf"
+  | "adv90"
+  | "adv90nf"
+  | "avpremhv"
+  | "roundlot"
+  | "vwap"
+  | "spread"
+  | "lstprcl"
+  | "lstcls"
+  | "ycls"
+  | "tcls"
+  | "clstocls"
+  | "lo"
+  | "lstclsnewscnt"
+  | "marketcapm"
+  | "premhvolnf"
+  | "volnffromlstcls"
+  | "avpostmhvol90nf"
+  | "volrel"
+  | "premhbidlstprc"
+  | "premhlolstprc"
+  | "premhhilstcls"
+  | "premhlolstcls"
+  | "lstprclstcls"
+  | "imbexch925"
+  | "imbexch1555";
+
+type SharedRangeFilterMode = "on" | "off";
+
+const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRangeFilterMode> = {
+  adv20: "on",
+  adv20nf: "on",
+  adv90: "on",
+  adv90nf: "on",
+  avpremhv: "on",
+  roundlot: "on",
+  vwap: "on",
+  spread: "on",
+  lstprcl: "on",
+  lstcls: "on",
+  ycls: "on",
+  tcls: "on",
+  clstocls: "on",
+  lo: "on",
+  lstclsnewscnt: "on",
+  marketcapm: "on",
+  premhvolnf: "on",
+  volnffromlstcls: "on",
+  avpostmhvol90nf: "on",
+  volrel: "on",
+  premhbidlstprc: "on",
+  premhlolstprc: "on",
+  premhhilstcls: "on",
+  premhlolstcls: "on",
+  lstprclstcls: "on",
+  imbexch925: "on",
+  imbexch1555: "on",
+};
+
+function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string | null) {
+  const candidates = [
+    row.dateNy,
+    row.date,
+    row.day,
+    row.tradeDateNy,
+    row.tradeDate,
+    row.sessionDateNy,
+    row.sessionDate,
+    fallbackDate ?? null,
+  ];
+
+  for (const candidate of candidates) {
+    const ymd = String(candidate ?? "").trim();
+    if (toYmd(ymd)) return ymd;
+  }
+  return null;
+}
+
+function ratingBandFromSession(session: PaperArbSession): PaperArbRatingBand {
+  switch (session) {
+    case "BLUE":
+      return "BLUE";
+    case "ARK":
+      return "ARK";
+    case "OPEN":
+      return "OPEN";
+    case "INTRA":
+      return "INTRA";
+    case "POST":
+      return "POST";
+    case "NIGHT":
+    case "GLOB":
+    default:
+      return "GLOBAL";
+  }
+}
+
 function buildPaperQuery(params: Record<string, any>) {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -485,6 +702,39 @@ async function apiPost<T>(path: string, body: any): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function apiPostWithTimeout<T>(path: string, body: any, timeoutMs: number): Promise<T> {
+  const token = getToken();
+  const fullUrl = apiUrl(path);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(fullUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body ?? {}),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const pd = await parseProblemDetailsSafe(res);
+      const txt = pd
+        ? `${pd.title ?? res.statusText}${pd.detail ? ` :: ${pd.detail}` : ""}`
+        : await res.text().catch(() => "");
+      throw new Error(`${res.status} ${res.statusText} for ${fullUrl}${txt ? ` :: ${txt}` : ""}`);
+    }
+    return (await res.json()) as T;
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      throw new Error(`Timeout after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // Accept either:
 // - { ok, days: string[] }
 // - string[]
@@ -504,6 +754,9 @@ function normalizeRows<T>(j: any): T[] {
   if (j && Array.isArray(j.items)) return j.items as T[];
   return [];
 }
+
+const EPISODES_SEARCH_CACHE_TTL_MS = 12_000;
+const EPISODES_SEARCH_CACHE_MAX = 24;
 
 // =========================
 // DESIGN SYSTEM COMPONENTS (kept from your file)
@@ -636,49 +889,75 @@ function GlassSelect({
 
 function MinMaxRow({
   label,
+  filterKey,
   minValue,
   maxValue,
   setMin,
   setMax,
+  mode = "on",
+  onToggleMode,
   card = false,
   clearable = false,
   placeholderMin = "min",
   placeholderMax = "max",
 }: {
   label: string;
+  filterKey?: SharedRangeFilterKey;
   minValue: string;
   maxValue: string;
   setMin: (v: string) => void;
   setMax: (v: string) => void;
+  mode?: SharedRangeFilterMode;
+  onToggleMode?: (key: SharedRangeFilterKey) => void;
   card?: boolean;
   clearable?: boolean;
   placeholderMin?: string;
   placeholderMax?: string;
 }) {
   const hasValue = Boolean((minValue ?? "").trim() || (maxValue ?? "").trim());
+  const isOff = mode === "off";
 
   if (card) {
     return (
       <div
         className={clsx(
           "rounded-xl border p-2.5 transition-all",
-          hasValue ? "border-emerald-500/30 bg-emerald-500/[0.05]" : "border-white/[0.08] bg-[#06080d]"
+          hasValue
+            ? isOff
+              ? "border-amber-500/30 bg-amber-500/[0.05]"
+              : "border-emerald-500/30 bg-emerald-500/[0.05]"
+            : "border-white/[0.08] bg-[#06080d]"
         )}
       >
         <div className="flex items-center justify-between mb-2">
           <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">{label}</div>
-          {clearable && hasValue && (
-            <button
-              type="button"
-              onClick={() => {
-                setMin("");
-                setMax("");
-              }}
-              className="text-[10px] font-mono text-rose-400 hover:text-rose-300 transition-colors"
-            >
-              CLR
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {clearable && filterKey && hasValue && onToggleMode && (
+              <button
+                type="button"
+                onClick={() => onToggleMode(filterKey)}
+                className={clsx(
+                  "text-[10px] font-mono transition-colors uppercase",
+                  isOff ? "text-amber-300 hover:text-amber-200" : "text-emerald-300 hover:text-emerald-200"
+                )}
+                title={isOff ? "Stored but ignored in requests" : "Applied to requests"}
+              >
+                {isOff ? "OFF" : "ON"}
+              </button>
+            )}
+            {clearable && hasValue && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMin("");
+                  setMax("");
+                }}
+                className="text-[10px] font-mono text-rose-400 hover:text-rose-300 transition-colors"
+              >
+                CLR
+              </button>
+            )}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <GlassInput
@@ -1019,6 +1298,282 @@ function EquityChart({
         ))}
       </svg>
     </div>
+  );
+}
+
+function OptimizerBarChart({
+  rows,
+  valueKey,
+  title,
+  meta,
+  color = "emerald",
+  maxRows,
+}: {
+  rows: OptimizerResultRow[];
+  valueKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
+  title: string;
+  meta?: string;
+  color?: "emerald" | "sky";
+  maxRows?: number;
+}) {
+  const items = maxRows != null ? rows.slice(0, maxRows) : rows;
+  if (!items.length) {
+    return (
+      <div className="w-full h-[300px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No optimizer results yet.
+      </div>
+    );
+  }
+
+  const values = items.map((r) => Number(r[valueKey] ?? 0));
+  const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
+  const barClass = color === "sky" ? "bg-sky-400/80" : "bg-emerald-400/80";
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#06070c]/90 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+      </div>
+      <div
+        className={clsx(
+          "space-y-2",
+          items.length > 12 && "max-h-[520px] overflow-y-auto pr-1"
+        )}
+      >
+        {items.map((row) => {
+          const v = Number(row[valueKey] ?? 0);
+          const widthPct = Math.max(2, (Math.abs(v) / maxAbs) * 100);
+          return (
+            <div key={`${valueKey}-${row.id}`} className="grid grid-cols-[140px_1fr_64px] gap-3 items-center">
+              <div className="text-[10px] font-mono text-zinc-400 truncate" title={`${row.parameter} | ${row.variant}`}>
+                {row.parameter} {row.variant}
+              </div>
+              <div className="h-5 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                <div
+                  className={clsx("h-full", barClass)}
+                  style={{ width: `${widthPct}%`, opacity: v < 0 ? 0.45 : 1 }}
+                />
+              </div>
+              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
+                {valueKey === "trades" ? intn(v) : valueKey === "winRate" ? `${num(v * 100, 1)}%` : num(v, 2)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OptimizerParameterRangeCard({
+  parameter,
+  rankMetric,
+  minTradesFilter,
+  bucketCount,
+}: {
+  parameter: PaperArbOptimizerParameterDto;
+  rankMetric: OptimizerRangeRankMetric;
+  minTradesFilter: number;
+  bucketCount: number;
+}) {
+  const sortBucketsByMetric = (items: PaperArbOptimizerRangeBucketDto[]) =>
+    [...items].sort((a, b) => {
+      const aMetric = rankMetric === "winRate" ? a.winRate : rankMetric === "totalPnlUsd" ? a.totalPnlUsd : rankMetric === "score" ? a.score : a.avgPnlUsd;
+      const bMetric = rankMetric === "winRate" ? b.winRate : rankMetric === "totalPnlUsd" ? b.totalPnlUsd : rankMetric === "score" ? b.score : b.avgPnlUsd;
+      if (bMetric !== aMetric) return bMetric - aMetric;
+      if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
+      return b.trades - a.trades;
+    });
+  const buckets = [...(parameter.buckets ?? [])]
+    .filter((bucket) => bucket.trades >= minTradesFilter)
+    .sort((a, b) => {
+    const av = a.fromValue ?? Number.NEGATIVE_INFINITY;
+    const bv = b.fromValue ?? Number.NEGATIVE_INFINITY;
+    return av - bv;
+  });
+  const maxAbsScore = Math.max(0.000001, ...buckets.map((b) => Math.abs(b.score)));
+  const baseTotalPnl = parameter.baseTotalPnlUsd ?? 0;
+  const baseAvgPnl = parameter.baseAvgPnlUsd ?? 0;
+  const baseWinRate = parameter.baseWinRate ?? 0;
+  const bestBucket = useMemo(
+    () => sortBucketsByMetric(buckets)[0] ?? null,
+    [buckets, rankMetric]
+  );
+  const bestLowerTail = useMemo(
+    () => sortBucketsByMetric((parameter.lowerTailBuckets ?? []).filter((bucket) => bucket.trades >= minTradesFilter))[0] ?? null,
+    [parameter.lowerTailBuckets, minTradesFilter, rankMetric]
+  );
+  const bestUpperTail = useMemo(
+    () => sortBucketsByMetric((parameter.upperTailBuckets ?? []).filter((bucket) => bucket.trades >= minTradesFilter))[0] ?? null,
+    [parameter.upperTailBuckets, minTradesFilter, rankMetric]
+  );
+
+  return (
+    <GlassCard className="p-0 overflow-hidden border border-white/[0.08] bg-[linear-gradient(180deg,rgba(7,9,16,0.96),rgba(4,5,9,0.98))] shadow-[0_20px_60px_-36px_rgba(0,0,0,0.9)]">
+      <div className="border-b border-white/[0.06] bg-[linear-gradient(135deg,rgba(16,185,129,0.08),rgba(56,189,248,0.04))] px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="text-[10px] uppercase tracking-[0.24em] font-mono text-zinc-500">{parameter.group}</div>
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-emerald-300">
+                {parameter.label}
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-zinc-300 mt-2">
+              observed {num(parameter.observedMin, 2)} .. {num(parameter.observedMax, 2)} | values {intn(parameter.valueCount)} | buckets {intn(bucketCount)}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-right">
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
+              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base Trades</div>
+              <div className="text-[12px] font-mono text-zinc-200 mt-1">{intn(parameter.baseTrades)}</div>
+            </div>
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
+              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base PnL</div>
+              <div className={clsx("text-[12px] font-mono mt-1", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+                {num(baseTotalPnl, 2)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
+              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base Avg</div>
+              <div className={clsx("text-[12px] font-mono mt-1", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+                {num(baseAvgPnl, 2)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
+        {[
+          { label: "BEST RANGE", item: bestBucket },
+          { label: "BEST <= X", item: bestLowerTail },
+          { label: "BEST >= X", item: bestUpperTail },
+        ].map((entry) => (
+          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-3">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-1">{entry.label}</div>
+            <div className="text-[12px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
+            <div className="text-[10px] font-mono mt-2">
+              <span className={clsx(entry.item && entry.item.avgPnlUsd > 0 ? "text-emerald-300" : entry.item && entry.item.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-400")}>
+                avg {num(entry.item?.avgPnlUsd, 2)}
+              </span>
+              {" | "}
+              <span className="text-zinc-400">trades {intn(entry.item?.trades)}</span>
+            </div>
+            <div className="text-[10px] font-mono text-zinc-500 mt-1">
+              pnl {num(entry.item?.totalPnlUsd, 2)} | hit {num((entry.item?.winRate ?? 0) * 100, 1)}%
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[10px] font-mono">
+              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-white/[0.04] text-zinc-400")}>
+                dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
+              </span>
+              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-white/[0.04] text-zinc-400")}>
+                dPnL {num((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl, 2)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-8 gap-1.5 mb-4">
+        {buckets.map((bucket) => (
+          <div
+            key={`heat-${bucket.bucketId}`}
+            className={clsx(
+              "h-8 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono",
+              bucket.avgPnlUsd > 0
+                ? "bg-emerald-500/20 text-emerald-300"
+                : bucket.avgPnlUsd < 0
+                  ? "bg-rose-500/20 text-rose-300"
+                  : "bg-white/[0.04] text-zinc-400"
+            )}
+            title={`${bucket.label} | avg ${num(bucket.avgPnlUsd, 2)} | pnl ${num(bucket.totalPnlUsd, 2)} | trades ${intn(bucket.trades)}`}
+            style={{ opacity: Math.max(0.35, bucket.coveragePct) }}
+          >
+            {num(bucket.avgPnlUsd, 1)}
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-2 mb-4 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Range Strength</div>
+          <div className="text-[10px] font-mono text-zinc-600">relative score map</div>
+        </div>
+        {buckets.map((bucket) => {
+          const widthPct = Math.max(6, (Math.abs(bucket.score) / maxAbsScore) * 100);
+          return (
+            <div key={bucket.bucketId} className="grid grid-cols-[160px_1fr_72px] gap-3 items-center">
+              <div className="text-[10px] font-mono text-zinc-400 truncate" title={bucket.label}>
+                {bucket.label}
+              </div>
+              <div className="h-5 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                <div
+                  className={clsx(
+                    "h-full",
+                    bucket.score >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"
+                  )}
+                  style={{ width: `${widthPct}%`, opacity: bucket.coveragePct < 0.08 ? 0.4 : 1 }}
+                />
+              </div>
+              <div className={clsx("text-right text-[10px] font-mono tabular-nums", bucket.score >= 0 ? "text-emerald-300" : "text-rose-300")}>
+                {num(bucket.score, 2)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
+        <table className="min-w-[980px] w-full text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
+            <tr>
+              <th className="text-left p-2 uppercase tracking-widest text-[10px]">Range</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Trades</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Coverage</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">WinRate</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dWin</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">TotalPnL</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dPnL</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Avg/Trade</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dAvg</th>
+              <th className="text-right p-2 uppercase tracking-widest text-[10px]">W/L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buckets.map((bucket) => (
+              <tr key={`${parameter.key}-${bucket.bucketId}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
+                <td className="p-2 text-zinc-200">{bucket.label}</td>
+                <td className="p-2 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
+                <td className="p-2 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
+                <td className="p-2 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
+                <td className={clsx("p-2 text-right tabular-nums", bucket.winRate - baseWinRate > 0 ? "text-emerald-300" : bucket.winRate - baseWinRate < 0 ? "text-rose-300" : "text-zinc-300")}>
+                  {num((bucket.winRate - baseWinRate) * 100, 1)}%
+                </td>
+                <td className={clsx("p-2 text-right tabular-nums", bucket.totalPnlUsd > 0 ? "text-emerald-300" : bucket.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                  {num(bucket.totalPnlUsd, 2)}
+                </td>
+                <td className={clsx("p-2 text-right tabular-nums", bucket.totalPnlUsd - baseTotalPnl > 0 ? "text-emerald-300" : bucket.totalPnlUsd - baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                  {num(bucket.totalPnlUsd - baseTotalPnl, 2)}
+                </td>
+                <td className={clsx("p-2 text-right tabular-nums font-bold", bucket.avgPnlUsd > 0 ? "text-emerald-300" : bucket.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                  {num(bucket.avgPnlUsd, 2)}
+                </td>
+                <td className={clsx("p-2 text-right tabular-nums font-bold", bucket.avgPnlUsd - baseAvgPnl > 0 ? "text-emerald-300" : bucket.avgPnlUsd - baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                  {num(bucket.avgPnlUsd - baseAvgPnl, 2)}
+                </td>
+                <td className="p-2 text-right tabular-nums text-zinc-300">
+                  {intn(bucket.wins)} / {intn(bucket.losses)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -1736,6 +2291,7 @@ export default function PaperArbitrageTapePage() {
   const [metric, setMetric] = useState<PaperArbMetric>("SigmaZap");
   const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
   const [startAbs, setStartAbs] = useState<number>(0.1);
+  const [startAbsMax, setStartAbsMax] = useState<string>("");
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
@@ -1874,12 +2430,34 @@ export default function PaperArbitrageTapePage() {
   const [maxYCls, setMaxYCls] = useState<string>("");
   const [minTCls, setMinTCls] = useState<string>("");
   const [maxTCls, setMaxTCls] = useState<string>("");
+  const [minLstClsNewsCnt, setMinLstClsNewsCnt] = useState<string>("");
+  const [maxLstClsNewsCnt, setMaxLstClsNewsCnt] = useState<string>("");
   const [minVolNFfromLstCls, setMinVolNFfromLstCls] = useState<string>("");
   const [maxVolNFfromLstCls, setMaxVolNFfromLstCls] = useState<string>("");
+  const [minAvPostMhVol90NF, setMinAvPostMhVol90NF] = useState<string>("");
+  const [maxAvPostMhVol90NF, setMaxAvPostMhVol90NF] = useState<string>("");
+  const [minVolRel, setMinVolRel] = useState<string>("");
+  const [maxVolRel, setMaxVolRel] = useState<string>("");
+  const [minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct] = useState<string>("");
+  const [maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct] = useState<string>("");
+  const [minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct] = useState<string>("");
+  const [maxPreMhLoLstPrcPct, setMaxPreMhLoLstPrcPct] = useState<string>("");
+  const [minPreMhHiLstClsPct, setMinPreMhHiLstClsPct] = useState<string>("");
+  const [maxPreMhHiLstClsPct, setMaxPreMhHiLstClsPct] = useState<string>("");
+  const [minPreMhLoLstClsPct, setMinPreMhLoLstClsPct] = useState<string>("");
+  const [maxPreMhLoLstClsPct, setMaxPreMhLoLstClsPct] = useState<string>("");
+  const [minLstPrcLstClsPct, setMinLstPrcLstClsPct] = useState<string>("");
+  const [maxLstPrcLstClsPct, setMaxLstPrcLstClsPct] = useState<string>("");
+  const [minImbExch925, setMinImbExch925] = useState<string>("");
+  const [maxImbExch925, setMaxImbExch925] = useState<string>("");
+  const [minImbExch1555, setMinImbExch1555] = useState<string>("");
+  const [maxImbExch1555, setMaxImbExch1555] = useState<string>("");
 
   // news flags
   const [requireHasNews, setRequireHasNews] = useState<boolean>(false);
+  const [excludeHasNews, setExcludeHasNews] = useState<boolean>(false);
   const [requireHasReport, setRequireHasReport] = useState<boolean>(false);
+  const [excludeHasReport, setExcludeHasReport] = useState<boolean>(false);
   const [minNewsCnt, setMinNewsCnt] = useState<string>("");
   const [maxNewsCnt, setMaxNewsCnt] = useState<string>("");
 
@@ -1894,6 +2472,8 @@ export default function PaperArbitrageTapePage() {
   const [excludeSSR, setExcludeSSR] = useState<boolean>(false);
   const [excludeETF, setExcludeETF] = useState<boolean>(false);
   const [excludeCrap, setExcludeCrap] = useState<boolean>(false);
+  const [includeUSA, setIncludeUSA] = useState<boolean>(false);
+  const [includeChina, setIncludeChina] = useState<boolean>(false);
 
   // medians
   const [minMdnPreMhVol90, setMinMdnPreMhVol90] = useState<string>("");
@@ -1913,6 +2493,9 @@ export default function PaperArbitrageTapePage() {
   const [maxImbARCA, setMaxImbARCA] = useState<string>("");
   const [minImbExchValue, setMinImbExchValue] = useState<string>("");
   const [maxImbExchValue, setMaxImbExchValue] = useState<string>("");
+  const [sharedRangeFilterModes, setSharedRangeFilterModes] = useState<Record<SharedRangeFilterKey, SharedRangeFilterMode>>(
+    DEFAULT_SHARED_RANGE_FILTER_MODES
+  );
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
   const [scanStartMin, setScanStartMin] = useState<number>(0.05);
@@ -1927,6 +2510,33 @@ export default function PaperArbitrageTapePage() {
   const [scanLoading, setScanLoading] = useState<boolean>(false);
   const [scanErr, setScanErr] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [optimizerRows, setOptimizerRows] = useState<OptimizerResultRow[]>([]);
+  const [optimizerLoading, setOptimizerLoading] = useState<boolean>(false);
+  const [optimizerErr, setOptimizerErr] = useState<string | null>(null);
+  const [optimizerProgress, setOptimizerProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [optimizerRanges, setOptimizerRanges] = useState<PaperArbOptimizerRangesResponse | null>(null);
+  const [optimizerRangesLoading, setOptimizerRangesLoading] = useState<boolean>(false);
+  const [optimizerRangesErr, setOptimizerRangesErr] = useState<string | null>(null);
+  const [optimizerRangeGroupStatus, setOptimizerRangeGroupStatus] = useState<Record<OptimizerRangeGroupKey, { loading: boolean; error: string | null }>>({
+    "RATING GATES": { loading: false, error: null },
+    "ZAP THRESHOLDS": { loading: false, error: null },
+    "TAPE FILTERS": { loading: false, error: null },
+  });
+  const [optimizerRangeRankMetric, setOptimizerRangeRankMetric] = useState<OptimizerRangeRankMetric>("avgPnlUsd");
+  const [optimizerRangeMinTrades, setOptimizerRangeMinTrades] = useState<number>(25);
+  const [optimizerBucketCount, setOptimizerBucketCount] = useState<number>(8);
+  const episodesSearchCacheRef = useRef<Map<string, { ts: number; rows: PaperArbClosedDto[] }>>(new Map());
+  const episodesSearchInFlightRef = useRef<Map<string, Promise<PaperArbClosedDto[]>>>(new Map());
+
+  const toggleSharedRangeFilterMode = (key: SharedRangeFilterKey) => {
+    setSharedRangeFilterModes((prev) => ({
+      ...prev,
+      [key]: prev[key] === "off" ? "on" : "off",
+    }));
+  };
+
+  const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
+    sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
 
   // ========= Derived: variant (for display)
   const variantString = useMemo(() => {
@@ -1934,6 +2544,7 @@ export default function PaperArbitrageTapePage() {
     return [
       `metric=${metric}`,
       `startAbs=${startAbs}`,
+      `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
       `scope=${scopeMode}`,
@@ -1944,21 +2555,77 @@ export default function PaperArbitrageTapePage() {
       `priceMode=LastPrint`,
       `pnlMode=${pnlMode}`,
     ].join(" | ");
-  }, [metric, startAbs, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|LastPrint`;
+    const s = `${metric}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|LastPrint`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
+
+  const forceEpisodesSearch = useMemo(() => {
+    const has = (v: string) => String(v ?? "").trim().length > 0;
+    const startAbsMaxNum = optNumOrNull(startAbsMax);
+    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && startAbsMaxNum >= startAbs;
+    return (
+      has(minAdv20) || has(maxAdv20) ||
+      has(minAdv20NF) || has(maxAdv20NF) ||
+      has(minAdv90) || has(maxAdv90) ||
+      has(minAdv90NF) || has(maxAdv90NF) ||
+      has(minAvPreMhv) || has(maxAvPreMhv) ||
+      has(minRoundLot) || has(maxRoundLot) ||
+      has(minVWAP) || has(maxVWAP) ||
+      has(minSpread) || has(maxSpread) ||
+      has(minLstPrcL) || has(maxLstPrcL) ||
+      has(minLstCls) || has(maxLstCls) ||
+      has(minYCls) || has(maxYCls) ||
+      has(minTCls) || has(maxTCls) ||
+      has(minClsToClsPct) || has(maxClsToClsPct) ||
+      has(minLo) || has(maxLo) ||
+      has(minLstClsNewsCnt) || has(maxLstClsNewsCnt) ||
+      has(minMarketCapM) || has(maxMarketCapM) ||
+      has(minPreMktVolNF) || has(maxPreMktVolNF) ||
+      has(minVolNFfromLstCls) || has(maxVolNFfromLstCls) ||
+      has(minAvPostMhVol90NF) || has(maxAvPostMhVol90NF) ||
+      has(minVolRel) || has(maxVolRel) ||
+      has(minPreMhBidLstPrcPct) || has(maxPreMhBidLstPrcPct) ||
+      has(minPreMhLoLstPrcPct) || has(maxPreMhLoLstPrcPct) ||
+      has(minPreMhHiLstClsPct) || has(maxPreMhHiLstClsPct) ||
+      has(minPreMhLoLstClsPct) || has(maxPreMhLoLstClsPct) ||
+      has(minLstPrcLstClsPct) || has(maxLstPrcLstClsPct) ||
+      has(minImbExch925) || has(maxImbExch925) ||
+      has(minImbExch1555) || has(maxImbExch1555) ||
+      hasValidStartAbsMax ||
+      has(minNewsCnt) || has(maxNewsCnt) ||
+      requireHasNews || excludeHasNews || requireHasReport || excludeHasReport ||
+      includeUSA || includeChina ||
+      requireIsPTP || requireIsSSR || requireIsETF || requireIsCrap ||
+      excludePTP || excludeSSR || excludeETF || excludeCrap
+    );
+  }, [
+    minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
+    minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
+    minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
+    minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt,
+    minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls,
+    minAvPostMhVol90NF, maxAvPostMhVol90NF, minVolRel, maxVolRel,
+    minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
+    minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
+    minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
+    startAbsMax, startAbs,
+    minNewsCnt, maxNewsCnt,
+    requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
+    requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
+    excludePTP, excludeSSR, excludeETF, excludeCrap,
+  ]);
 
   // ========= Preflight validation
   const validationErrors = useMemo(() => {
     const e: string[] = [];
 
-    const needsRange = tab === "analytics" || (tab === "episodes" && episodesUseSearch);
+    const needsRange = tab === "analytics" || (tab === "episodes" && (episodesUseSearch || forceEpisodesSearch));
 
     if (!needsRange) {
       if (!toYmd(dateNy)) e.push("dateNy must be YYYY-MM-DD");
@@ -1975,9 +2642,19 @@ export default function PaperArbitrageTapePage() {
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
     return e;
-  }, [tab, episodesUseSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles]);
+  }, [tab, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles]);
 
   const canRun = validationErrors.length === 0 && !loading;
+  const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
+  const bumpStartAbsMax = (delta: number) => {
+    setStartAbsMax((prev) => {
+      const raw = String(prev ?? "").trim();
+      const parsed = Number(raw.replace(",", "."));
+      const cur = Number.isFinite(parsed) ? parsed : startAbs;
+      const next = Math.max(0, +(cur + delta).toFixed(4));
+      return String(next);
+    });
+  };
 
   // ========= Tab/date mode behavior rules
   useEffect(() => {
@@ -1994,7 +2671,7 @@ export default function PaperArbitrageTapePage() {
     // - legacy GET => day
     // - search POST => range
     if (tab === "episodes") {
-      if (!episodesUseSearch) {
+      if (!(episodesUseSearch || forceEpisodesSearch)) {
         if (dateMode !== "day") {
           setDateMode("day");
           setDateNy(dateFrom || dateNy);
@@ -2018,7 +2695,7 @@ export default function PaperArbitrageTapePage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, episodesUseSearch]);
+  }, [tab, episodesUseSearch, forceEpisodesSearch]);
 
   // ========= Load available days on mount
   useEffect(() => {
@@ -2099,12 +2776,30 @@ export default function PaperArbitrageTapePage() {
         if (s.metric === "SigmaZap" || s.metric === "ZapPct") setMetric(s.metric);
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
         if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
+        if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
+        if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score") {
+          setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
+        }
+        if (typeof s.optimizerRangeMinTrades === "number") setOptimizerRangeMinTrades(Math.max(0, Math.trunc(s.optimizerRangeMinTrades)));
+        if (typeof s.optimizerBucketCount === "number") setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(s.optimizerBucketCount))));
 
         if (typeof s.includeEquityCurve === "boolean") setIncludeEquityCurve(s.includeEquityCurve);
         if (s.equityCurveMode === "Daily" || s.equityCurveMode === "Trade") setEquityCurveMode(s.equityCurveMode);
+        if (s.sharedRangeFilterModes && typeof s.sharedRangeFilterModes === "object") {
+          const normalizedModes = Object.fromEntries(
+            Object.entries(s.sharedRangeFilterModes).map(([k, v]) => [
+              k,
+              v === "off" || v === "hold" ? "off" : "on",
+            ])
+          );
+          setSharedRangeFilterModes({
+            ...DEFAULT_SHARED_RANGE_FILTER_MODES,
+            ...normalizedModes,
+          });
+        }
         if (typeof s.topN === "number") setTopN(s.topN);
         if (s.scopeMode === "ALL" || s.scopeMode === "TOP") setScopeMode(s.scopeMode);
         if (typeof s.offset === "number") setOffset(s.offset);
@@ -2189,17 +2884,31 @@ export default function PaperArbitrageTapePage() {
         applyStr(s.minLstCls, setMinLstCls); applyStr(s.maxLstCls, setMaxLstCls);
         applyStr(s.minYCls, setMinYCls); applyStr(s.maxYCls, setMaxYCls);
         applyStr(s.minTCls, setMinTCls); applyStr(s.maxTCls, setMaxTCls);
+        applyStr(s.minLstClsNewsCnt, setMinLstClsNewsCnt); applyStr(s.maxLstClsNewsCnt, setMaxLstClsNewsCnt);
+        if (typeof s.minLstClsNewsCnt !== "string" && typeof s.minNewsCnt === "string") setMinLstClsNewsCnt(s.minNewsCnt);
+        if (typeof s.maxLstClsNewsCnt !== "string" && typeof s.maxNewsCnt === "string") setMaxLstClsNewsCnt(s.maxNewsCnt);
         applyStr(s.minVolNFfromLstCls, setMinVolNFfromLstCls); applyStr(s.maxVolNFfromLstCls, setMaxVolNFfromLstCls);
         applyStr(s.minNewsCnt, setMinNewsCnt); applyStr(s.maxNewsCnt, setMaxNewsCnt);
         applyStr(s.minMdnPreMhVol90, setMinMdnPreMhVol90); applyStr(s.maxMdnPreMhVol90, setMaxMdnPreMhVol90);
         applyStr(s.minPreMhMDV90NF, setMinPreMhMDV90NF); applyStr(s.maxPreMhMDV90NF, setMaxPreMhMDV90NF);
         applyStr(s.minPreMhMDV20NF, setMinPreMhMDV20NF); applyStr(s.maxPreMhMDV20NF, setMaxPreMhMDV20NF);
         applyStr(s.minMdnPostMhVol90NF, setMinMdnPostMhVol90NF); applyStr(s.maxMdnPostMhVol90NF, setMaxMdnPostMhVol90NF);
+        applyStr(s.minAvPostMhVol90NF, setMinAvPostMhVol90NF); applyStr(s.maxAvPostMhVol90NF, setMaxAvPostMhVol90NF);
+        applyStr(s.minVolRel, setMinVolRel); applyStr(s.maxVolRel, setMaxVolRel);
+        applyStr(s.minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct); applyStr(s.maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct);
+        applyStr(s.minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct); applyStr(s.maxPreMhLoLstPrcPct, setMaxPreMhLoLstPrcPct);
+        applyStr(s.minPreMhHiLstClsPct, setMinPreMhHiLstClsPct); applyStr(s.maxPreMhHiLstClsPct, setMaxPreMhHiLstClsPct);
+        applyStr(s.minPreMhLoLstClsPct, setMinPreMhLoLstClsPct); applyStr(s.maxPreMhLoLstClsPct, setMaxPreMhLoLstClsPct);
+        applyStr(s.minLstPrcLstClsPct, setMinLstPrcLstClsPct); applyStr(s.maxLstPrcLstClsPct, setMaxLstPrcLstClsPct);
+        applyStr(s.minImbExch925, setMinImbExch925); applyStr(s.maxImbExch925, setMaxImbExch925);
+        applyStr(s.minImbExch1555, setMinImbExch1555); applyStr(s.maxImbExch1555, setMaxImbExch1555);
         applyStr(s.minImbARCA, setMinImbARCA); applyStr(s.maxImbARCA, setMaxImbARCA);
         applyStr(s.minImbExchValue, setMinImbExchValue); applyStr(s.maxImbExchValue, setMaxImbExchValue);
 
         if (typeof s.requireHasNews === "boolean") setRequireHasNews(s.requireHasNews);
+        if (typeof s.excludeHasNews === "boolean") setExcludeHasNews(s.excludeHasNews);
         if (typeof s.requireHasReport === "boolean") setRequireHasReport(s.requireHasReport);
+        if (typeof s.excludeHasReport === "boolean") setExcludeHasReport(s.excludeHasReport);
         if (typeof s.requireIsPTP === "boolean") setRequireIsPTP(s.requireIsPTP);
         if (typeof s.requireIsSSR === "boolean") setRequireIsSSR(s.requireIsSSR);
         if (typeof s.requireIsETF === "boolean") setRequireIsETF(s.requireIsETF);
@@ -2208,6 +2917,8 @@ export default function PaperArbitrageTapePage() {
         if (typeof s.excludeSSR === "boolean") setExcludeSSR(s.excludeSSR);
         if (typeof s.excludeETF === "boolean") setExcludeETF(s.excludeETF);
         if (typeof s.excludeCrap === "boolean") setExcludeCrap(s.excludeCrap);
+        if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
+        if (typeof s.includeChina === "boolean") setIncludeChina(s.includeChina);
       }
     } catch {
       // ignore broken storage
@@ -2233,11 +2944,16 @@ export default function PaperArbitrageTapePage() {
       metric,
       closeMode,
       startAbs,
+      startAbsMax,
       endAbs,
       minHoldCandles,
       pnlMode,
+      optimizerRangeRankMetric,
+      optimizerRangeMinTrades,
+      optimizerBucketCount,
       includeEquityCurve,
       equityCurveMode,
+      sharedRangeFilterModes,
       topN,
       scopeMode,
       offset,
@@ -2305,10 +3021,14 @@ export default function PaperArbitrageTapePage() {
       maxYCls,
       minTCls,
       maxTCls,
+      minLstClsNewsCnt,
+      maxLstClsNewsCnt,
       minVolNFfromLstCls,
       maxVolNFfromLstCls,
       requireHasNews,
+      excludeHasNews,
       requireHasReport,
+      excludeHasReport,
       minNewsCnt,
       maxNewsCnt,
       requireIsPTP,
@@ -2319,6 +3039,8 @@ export default function PaperArbitrageTapePage() {
       excludeSSR,
       excludeETF,
       excludeCrap,
+      includeUSA,
+      includeChina,
       minMdnPreMhVol90,
       maxMdnPreMhVol90,
       minPreMhMDV90NF,
@@ -2327,6 +3049,24 @@ export default function PaperArbitrageTapePage() {
       maxPreMhMDV20NF,
       minMdnPostMhVol90NF,
       maxMdnPostMhVol90NF,
+      minAvPostMhVol90NF,
+      maxAvPostMhVol90NF,
+      minVolRel,
+      maxVolRel,
+      minPreMhBidLstPrcPct,
+      maxPreMhBidLstPrcPct,
+      minPreMhLoLstPrcPct,
+      maxPreMhLoLstPrcPct,
+      minPreMhHiLstClsPct,
+      maxPreMhHiLstClsPct,
+      minPreMhLoLstClsPct,
+      maxPreMhLoLstClsPct,
+      minLstPrcLstClsPct,
+      maxLstPrcLstClsPct,
+      minImbExch925,
+      maxImbExch925,
+      minImbExch1555,
+      maxImbExch1555,
       minImbARCA,
       maxImbARCA,
       minImbExchValue,
@@ -2334,8 +3074,8 @@ export default function PaperArbitrageTapePage() {
     }),
     [
       tab, ruleBand, zapUiMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, endAbs, minHoldCandles, pnlMode,
-      includeEquityCurve, equityCurveMode, topN, scopeMode, offset, minTradesPerTicker,
+      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, pnlMode,
+      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset, minTradesPerTicker,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       exchangesText, countriesText, sectorsL3Text, imbExchsText, minTierBp, maxTierBp,
@@ -2345,11 +3085,17 @@ export default function PaperArbitrageTapePage() {
       minSpreadBps, maxSpreadBps, minGap, maxGap, minGapPct, maxGapPct, minClsToClsPct,
       maxClsToClsPct, minVWAP, maxVWAP, minLo, maxLo, minAvPreMhv, maxAvPreMhv, minLstPrcL,
       maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
-      minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, requireHasReport, minNewsCnt,
+      minLstClsNewsCnt, maxLstClsNewsCnt, minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, minNewsCnt,
       maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludePTP,
       excludeSSR, excludeETF, excludeCrap, minMdnPreMhVol90, maxMdnPreMhVol90,
+      includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
-      minMdnPostMhVol90NF, maxMdnPostMhVol90NF, minImbARCA, maxImbARCA,
+      minMdnPostMhVol90NF, maxMdnPostMhVol90NF,
+      minAvPostMhVol90NF, maxAvPostMhVol90NF, minVolRel, maxVolRel,
+      minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
+      minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
+      minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
+      minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
     ]
   );
@@ -2372,37 +3118,87 @@ export default function PaperArbitrageTapePage() {
       dateNy: d,
       metric,
       startAbs,
+      startAbsMax: optNumOrNull(startAbsMax),
       endAbs,
       session,
       closeMode,
       minHoldCandles: mh,
       pnlMode,
+
+      // shared min/max filters
+      minAdv20: rangeValueOrNull("adv20", minAdv20),
+      maxAdv20: rangeValueOrNull("adv20", maxAdv20),
+      minAdv20NF: rangeValueOrNull("adv20nf", minAdv20NF),
+      maxAdv20NF: rangeValueOrNull("adv20nf", maxAdv20NF),
+      minAdv90: rangeValueOrNull("adv90", minAdv90),
+      maxAdv90: rangeValueOrNull("adv90", maxAdv90),
+      minAdv90NF: rangeValueOrNull("adv90nf", minAdv90NF),
+      maxAdv90NF: rangeValueOrNull("adv90nf", maxAdv90NF),
+      minAvPreMhv: rangeValueOrNull("avpremhv", minAvPreMhv),
+      maxAvPreMhv: rangeValueOrNull("avpremhv", maxAvPreMhv),
+      minRoundLot: rangeValueOrNull("roundlot", minRoundLot),
+      maxRoundLot: rangeValueOrNull("roundlot", maxRoundLot),
+      minVWAP: rangeValueOrNull("vwap", minVWAP),
+      maxVWAP: rangeValueOrNull("vwap", maxVWAP),
+      minSpread: rangeValueOrNull("spread", minSpread),
+      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minLstPrcL: rangeValueOrNull("lstprcl", minLstPrcL),
+      maxLstPrcL: rangeValueOrNull("lstprcl", maxLstPrcL),
+      minLstCls: rangeValueOrNull("lstcls", minLstCls),
+      maxLstCls: rangeValueOrNull("lstcls", maxLstCls),
+      minYCls: rangeValueOrNull("ycls", minYCls),
+      maxYCls: rangeValueOrNull("ycls", maxYCls),
+      minTCls: rangeValueOrNull("tcls", minTCls),
+      maxTCls: rangeValueOrNull("tcls", maxTCls),
+      minClsToClsPct: rangeValueOrNull("clstocls", minClsToClsPct),
+      maxClsToClsPct: rangeValueOrNull("clstocls", maxClsToClsPct),
+      minLo: rangeValueOrNull("lo", minLo),
+      maxLo: rangeValueOrNull("lo", maxLo),
+      minLstClsNewsCnt: rangeValueOrNull("lstclsnewscnt", minLstClsNewsCnt),
+      maxLstClsNewsCnt: rangeValueOrNull("lstclsnewscnt", maxLstClsNewsCnt),
+      minMarketCapM: rangeValueOrNull("marketcapm", minMarketCapM),
+      maxMarketCapM: rangeValueOrNull("marketcapm", maxMarketCapM),
+      minPreMhVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
+      maxPreMhVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
+      minVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", minVolNFfromLstCls),
+      maxVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", maxVolNFfromLstCls),
+      minAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", minAvPostMhVol90NF),
+      maxAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", maxAvPostMhVol90NF),
+      minVolRel: rangeValueOrNull("volrel", minVolRel),
+      maxVolRel: rangeValueOrNull("volrel", maxVolRel),
+      minPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", minPreMhBidLstPrcPct),
+      maxPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", maxPreMhBidLstPrcPct),
+      minPreMhLoLstPrcPct: rangeValueOrNull("premhlolstprc", minPreMhLoLstPrcPct),
+      maxPreMhLoLstPrcPct: rangeValueOrNull("premhlolstprc", maxPreMhLoLstPrcPct),
+      minPreMhHiLstClsPct: rangeValueOrNull("premhhilstcls", minPreMhHiLstClsPct),
+      maxPreMhHiLstClsPct: rangeValueOrNull("premhhilstcls", maxPreMhHiLstClsPct),
+      minPreMhLoLstClsPct: rangeValueOrNull("premhlolstcls", minPreMhLoLstClsPct),
+      maxPreMhLoLstClsPct: rangeValueOrNull("premhlolstcls", maxPreMhLoLstClsPct),
+      minLstPrcLstClsPct: rangeValueOrNull("lstprclstcls", minLstPrcLstClsPct),
+      maxLstPrcLstClsPct: rangeValueOrNull("lstprclstcls", maxLstPrcLstClsPct),
+      minImbExch925: rangeValueOrNull("imbexch925", minImbExch925),
+      maxImbExch925: rangeValueOrNull("imbexch925", maxImbExch925),
+      minImbExch1555: rangeValueOrNull("imbexch1555", minImbExch1555),
+      maxImbExch1555: rangeValueOrNull("imbexch1555", maxImbExch1555),
     };
   }
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
+    const startAbsMaxNum = optNumOrNull(startAbsMax);
+    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && startAbsMaxNum >= startAbs ? startAbsMaxNum : null;
     const applyTickers = splitListUpper(tickersText);
     const pinTickers = splitListUpper(benchTickersText);
     const reqTickers =
       listMode === "apply" ? applyTickers : listMode === "pin" ? pinTickers : [];
 
-    const rrEnabled = ratingRules
-      .filter((r) => ratingEnabledBands[r.band])
-      .map((r) => ({
-        band: r.band,
-        minRate: Math.max(0, Number(r.minRate) || 0),
-        minTotal: Math.max(0, clampInt(r.minTotal, 0)),
-      }));
-
-    const activeRule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
-    const rrForRequest = rrEnabled.length
-      ? rrEnabled
-      : [{
-          band: activeRule.band,
-          minRate: Math.max(0, Number(activeRule.minRate) || 0),
-          minTotal: Math.max(0, clampInt(activeRule.minTotal, 0)),
-        }];
+    const sessionBand = ratingBandFromSession(session);
+    const sessionRule = ratingRules.find((r) => r.band === sessionBand) ?? { band: sessionBand, minRate: 0, minTotal: 0 };
+    const rrForRequest = [{
+      band: sessionRule.band,
+      minRate: Math.max(0, Number(sessionRule.minRate) || 0),
+      minTotal: Math.max(0, clampInt(sessionRule.minTotal, 0)),
+    }];
 
     const req: PaperArbAnalyticsRequest = {
       dateFrom: from,
@@ -2410,6 +3206,7 @@ export default function PaperArbitrageTapePage() {
 
       metric,
       startAbs,
+      startAbsMax: startAbsMaxEff,
       endAbs,
       session,
       closeMode,
@@ -2432,29 +3229,29 @@ export default function PaperArbitrageTapePage() {
       minBeta: optNumOrNull(minBeta),
       maxBeta: optNumOrNull(maxBeta),
 
-      minMarketCapM: optNumOrNull(minMarketCapM),
-      maxMarketCapM: optNumOrNull(maxMarketCapM),
+      minMarketCapM: rangeValueOrNull("marketcapm", minMarketCapM),
+      maxMarketCapM: rangeValueOrNull("marketcapm", maxMarketCapM),
 
-      minRoundLot: optNumOrNull(minRoundLot),
-      maxRoundLot: optNumOrNull(maxRoundLot),
+      minRoundLot: rangeValueOrNull("roundlot", minRoundLot),
+      maxRoundLot: rangeValueOrNull("roundlot", maxRoundLot),
 
-      minAdv20: optNumOrNull(minAdv20),
-      maxAdv20: optNumOrNull(maxAdv20),
-      minAdv20NF: optNumOrNull(minAdv20NF),
-      maxAdv20NF: optNumOrNull(maxAdv20NF),
+      minAdv20: rangeValueOrNull("adv20", minAdv20),
+      maxAdv20: rangeValueOrNull("adv20", maxAdv20),
+      minAdv20NF: rangeValueOrNull("adv20nf", minAdv20NF),
+      maxAdv20NF: rangeValueOrNull("adv20nf", maxAdv20NF),
 
-      minAdv90: optNumOrNull(minAdv90),
-      maxAdv90: optNumOrNull(maxAdv90),
-      minAdv90NF: optNumOrNull(minAdv90NF),
-      maxAdv90NF: optNumOrNull(maxAdv90NF),
+      minAdv90: rangeValueOrNull("adv90", minAdv90),
+      maxAdv90: rangeValueOrNull("adv90", maxAdv90),
+      minAdv90NF: rangeValueOrNull("adv90nf", minAdv90NF),
+      maxAdv90NF: rangeValueOrNull("adv90nf", maxAdv90NF),
 
       minPreMktVol: optNumOrNull(minPreMktVol),
       maxPreMktVol: optNumOrNull(maxPreMktVol),
-      minPreMktVolNF: optNumOrNull(minPreMktVolNF),
-      maxPreMktVolNF: optNumOrNull(maxPreMktVolNF),
+      minPreMktVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
+      maxPreMktVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
 
-      minSpread: optNumOrNull(minSpread),
-      maxSpread: optNumOrNull(maxSpread),
+      minSpread: rangeValueOrNull("spread", minSpread),
+      maxSpread: rangeValueOrNull("spread", maxSpread),
       minSpreadBps: optNumOrNull(minSpreadBps),
       maxSpreadBps: optNumOrNull(maxSpreadBps),
 
@@ -2463,17 +3260,19 @@ export default function PaperArbitrageTapePage() {
       minGapPct: optNumOrNull(minGapPct),
       maxGapPct: optNumOrNull(maxGapPct),
 
-      minClsToClsPct: optNumOrNull(minClsToClsPct),
-      maxClsToClsPct: optNumOrNull(maxClsToClsPct),
+      minClsToClsPct: rangeValueOrNull("clstocls", minClsToClsPct),
+      maxClsToClsPct: rangeValueOrNull("clstocls", maxClsToClsPct),
 
-      minVWAP: optNumOrNull(minVWAP),
-      maxVWAP: optNumOrNull(maxVWAP),
+      minVWAP: rangeValueOrNull("vwap", minVWAP),
+      maxVWAP: rangeValueOrNull("vwap", maxVWAP),
 
-      minLo: optNumOrNull(minLo),
-      maxLo: optNumOrNull(maxLo),
+      minLo: rangeValueOrNull("lo", minLo),
+      maxLo: rangeValueOrNull("lo", maxLo),
 
       requireHasNews: requireHasNews ? true : null,
+      excludeHasNews: excludeHasNews ? true : null,
       requireHasReport: requireHasReport ? true : null,
+      excludeHasReport: excludeHasReport ? true : null,
       minNewsCnt: optNumOrNull(minNewsCnt),
       maxNewsCnt: optNumOrNull(maxNewsCnt),
 
@@ -2486,6 +3285,8 @@ export default function PaperArbitrageTapePage() {
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      includeUSA: includeUSA ? true : null,
+      includeChina: includeChina ? true : null,
 
       minMdnPreMhVol90: optNumOrNull(minMdnPreMhVol90),
       maxMdnPreMhVol90: optNumOrNull(maxMdnPreMhVol90),
@@ -2499,22 +3300,40 @@ export default function PaperArbitrageTapePage() {
       minMdnPostMhVol90NF: optNumOrNull(minMdnPostMhVol90NF),
       maxMdnPostMhVol90NF: optNumOrNull(maxMdnPostMhVol90NF),
 
-      minAvPreMhv: optNumOrNull(minAvPreMhv),
-      maxAvPreMhv: optNumOrNull(maxAvPreMhv),
-      minLstPrcL: optNumOrNull(minLstPrcL),
-      maxLstPrcL: optNumOrNull(maxLstPrcL),
-      minLstCls: optNumOrNull(minLstCls),
-      maxLstCls: optNumOrNull(maxLstCls),
-      minYCls: optNumOrNull(minYCls),
-      maxYCls: optNumOrNull(maxYCls),
-      minTCls: optNumOrNull(minTCls),
-      maxTCls: optNumOrNull(maxTCls),
-      minLstClsNewsCnt: optNumOrNull(minNewsCnt),
-      maxLstClsNewsCnt: optNumOrNull(maxNewsCnt),
-      minPreMhVolNF: optNumOrNull(minPreMktVolNF),
-      maxPreMhVolNF: optNumOrNull(maxPreMktVolNF),
-      minVolNFfromLstCls: optNumOrNull(minVolNFfromLstCls),
-      maxVolNFfromLstCls: optNumOrNull(maxVolNFfromLstCls),
+      minAvPreMhv: rangeValueOrNull("avpremhv", minAvPreMhv),
+      maxAvPreMhv: rangeValueOrNull("avpremhv", maxAvPreMhv),
+      minLstPrcL: rangeValueOrNull("lstprcl", minLstPrcL),
+      maxLstPrcL: rangeValueOrNull("lstprcl", maxLstPrcL),
+      minLstCls: rangeValueOrNull("lstcls", minLstCls),
+      maxLstCls: rangeValueOrNull("lstcls", maxLstCls),
+      minYCls: rangeValueOrNull("ycls", minYCls),
+      maxYCls: rangeValueOrNull("ycls", maxYCls),
+      minTCls: rangeValueOrNull("tcls", minTCls),
+      maxTCls: rangeValueOrNull("tcls", maxTCls),
+      minLstClsNewsCnt: rangeValueOrNull("lstclsnewscnt", minLstClsNewsCnt),
+      maxLstClsNewsCnt: rangeValueOrNull("lstclsnewscnt", maxLstClsNewsCnt),
+      minPreMhVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
+      maxPreMhVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
+      minVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", minVolNFfromLstCls),
+      maxVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", maxVolNFfromLstCls),
+      minAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", minAvPostMhVol90NF),
+      maxAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", maxAvPostMhVol90NF),
+      minVolRel: rangeValueOrNull("volrel", minVolRel),
+      maxVolRel: rangeValueOrNull("volrel", maxVolRel),
+      minPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", minPreMhBidLstPrcPct),
+      maxPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", maxPreMhBidLstPrcPct),
+      minPreMhLoLstPrcPct: rangeValueOrNull("premhlolstprc", minPreMhLoLstPrcPct),
+      maxPreMhLoLstPrcPct: rangeValueOrNull("premhlolstprc", maxPreMhLoLstPrcPct),
+      minPreMhHiLstClsPct: rangeValueOrNull("premhhilstcls", minPreMhHiLstClsPct),
+      maxPreMhHiLstClsPct: rangeValueOrNull("premhhilstcls", maxPreMhHiLstClsPct),
+      minPreMhLoLstClsPct: rangeValueOrNull("premhlolstcls", minPreMhLoLstClsPct),
+      maxPreMhLoLstClsPct: rangeValueOrNull("premhlolstcls", maxPreMhLoLstClsPct),
+      minLstPrcLstClsPct: rangeValueOrNull("lstprclstcls", minLstPrcLstClsPct),
+      maxLstPrcLstClsPct: rangeValueOrNull("lstprclstcls", maxLstPrcLstClsPct),
+      minImbExch925: rangeValueOrNull("imbexch925", minImbExch925),
+      maxImbExch925: rangeValueOrNull("imbexch925", maxImbExch925),
+      minImbExch1555: rangeValueOrNull("imbexch1555", minImbExch1555),
+      maxImbExch1555: rangeValueOrNull("imbexch1555", maxImbExch1555),
 
       imbExchs: splitListUpper(imbExchsText).length ? splitListUpper(imbExchsText) : null,
       minImbARCA: optNumOrNull(minImbARCA),
@@ -2526,6 +3345,35 @@ export default function PaperArbitrageTapePage() {
     return req;
   }
 
+  async function fetchEpisodesSearchRows(req: PaperArbAnalyticsRequest): Promise<PaperArbClosedDto[]> {
+    const key = JSON.stringify(req);
+    const now = Date.now();
+    const cached = episodesSearchCacheRef.current.get(key);
+    if (cached && now - cached.ts <= EPISODES_SEARCH_CACHE_TTL_MS) {
+      return cached.rows;
+    }
+
+    const inFlight = episodesSearchInFlightRef.current.get(key);
+    if (inFlight) return inFlight;
+
+    const requestPromise = apiPost<any>("/api/paper/arbitrage/episodes/search", req)
+      .then((j) => normalizeRows<PaperArbClosedDto>(j) ?? [])
+      .then((rows) => {
+        episodesSearchCacheRef.current.set(key, { ts: Date.now(), rows });
+        if (episodesSearchCacheRef.current.size > EPISODES_SEARCH_CACHE_MAX) {
+          const oldestKey = episodesSearchCacheRef.current.keys().next().value;
+          if (oldestKey) episodesSearchCacheRef.current.delete(oldestKey);
+        }
+        return rows;
+      })
+      .finally(() => {
+        episodesSearchInFlightRef.current.delete(key);
+      });
+
+    episodesSearchInFlightRef.current.set(key, requestPromise);
+    return requestPromise;
+  }
+
   // ========= Run handler
   async function run() {
     if (!canRun) return;
@@ -2535,13 +3383,15 @@ export default function PaperArbitrageTapePage() {
 
     try {
       if (tab === "active") {
+        setAnalytics(null);
         const params = buildGetParams(dateNy);
         const qs = buildPaperQuery(params);
         const j = await apiGet<any>(`/api/paper/arbitrage/active${qs}`);
         const rows = normalizeRows<PaperArbActiveRow>(j);
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
-        if (!episodesUseSearch) {
+        setAnalytics(null);
+        if (!(episodesUseSearch || forceEpisodesSearch)) {
           const params = buildGetParams(dateNy);
           const qs = buildPaperQuery(params);
           const j = await apiGet<any>(`/api/paper/arbitrage/episodes${qs}`);
@@ -2549,23 +3399,24 @@ export default function PaperArbitrageTapePage() {
           setEpisodesRows(rows ?? []);
         } else {
           const req = buildPostRequest(dateFrom, dateTo);
-          const j = await apiPost<any>("/api/paper/arbitrage/episodes/search", req);
-          const rows = normalizeRows<PaperArbClosedDto>(j);
-          setEpisodesRows(rows ?? []);
+          const rows = await fetchEpisodesSearchRows(req);
+          setEpisodesRows(rows);
         }
       } else {
         const req = buildPostRequest(dateFrom, dateTo);
-        req.includeEquityCurve = true;
+        req.includeEquityCurve = includeEquityCurve;
         req.equityCurveMode = equityCurveMode;
         req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
         req.startCutoffMinuteIdx = Math.max(0, clampInt(offset, 0));
         req.minTradesPerTicker = Math.max(0, clampInt(minTradesPerTicker, 0));
-        const [j, ej] = await Promise.all([
+
+        const [analyticsResp, rows] = await Promise.all([
           apiPost<PaperArbAnalyticsResponse>("/api/paper/arbitrage/analytics", req),
-          apiPost<any>("/api/paper/arbitrage/episodes/search", buildPostRequest(dateFrom, dateTo)),
+          fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo)),
         ]);
-        setAnalytics(j ?? null);
-        setEpisodesRows(normalizeRows<PaperArbClosedDto>(ej) ?? []);
+
+        setAnalytics(analyticsResp ?? null);
+        setEpisodesRows(rows);
       }
       setUpdatedAt(new Date());
     } catch (e: any) {
@@ -2607,6 +3458,7 @@ export default function PaperArbitrageTapePage() {
         const c = combos[i];
         const req = buildPostRequest(from, to);
         req.startAbs = c.s;
+        req.startAbsMax = null;
         req.endAbs = c.e;
         const j = await apiPost<any>("/api/paper/arbitrage/episodes/search", req);
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
@@ -2642,6 +3494,399 @@ export default function PaperArbitrageTapePage() {
       setScanErr(e?.message ?? String(e));
     } finally {
       setScanLoading(false);
+    }
+  }
+
+  const optimizerScenarios = useMemo<OptimizerScenario[]>(() => {
+    const scenarios: OptimizerScenario[] = [];
+    const currentRatingRule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+    const pushRangeScenarios = (
+      key: SharedRangeFilterKey,
+      label: string,
+      minValue: string,
+      maxValue: string,
+      reqMinKey: keyof PaperArbAnalyticsRequest,
+      reqMaxKey: keyof PaperArbAnalyticsRequest,
+      aliasMinKey?: keyof PaperArbAnalyticsRequest,
+      aliasMaxKey?: keyof PaperArbAnalyticsRequest
+    ) => {
+      const minNum = optNumOrNull(minValue);
+      const maxNum = optNumOrNull(maxValue);
+      if (minNum == null && maxNum == null) return;
+
+      if (minNum != null) {
+        scenarios.push({
+          id: `${key}-min`,
+          parameter: label,
+          variant: "MIN",
+          summary: `min >= ${num(minNum, 2)}`,
+          apply: (req) => {
+            (req as any)[reqMinKey] = minNum;
+            if (aliasMinKey) (req as any)[aliasMinKey] = minNum;
+          },
+        });
+      }
+      if (maxNum != null) {
+        scenarios.push({
+          id: `${key}-max`,
+          parameter: label,
+          variant: "MAX",
+          summary: `max <= ${num(maxNum, 2)}`,
+          apply: (req) => {
+            (req as any)[reqMaxKey] = maxNum;
+            if (aliasMaxKey) (req as any)[aliasMaxKey] = maxNum;
+          },
+        });
+      }
+      if (minNum != null && maxNum != null) {
+        scenarios.push({
+          id: `${key}-range`,
+          parameter: label,
+          variant: "RANGE",
+          summary: `${num(minNum, 2)} .. ${num(maxNum, 2)}`,
+          apply: (req) => {
+            (req as any)[reqMinKey] = minNum;
+            (req as any)[reqMaxKey] = maxNum;
+            if (aliasMinKey) (req as any)[aliasMinKey] = minNum;
+            if (aliasMaxKey) (req as any)[aliasMaxKey] = maxNum;
+          },
+        });
+      }
+    };
+
+    scenarios.push({
+      id: "baseline",
+      parameter: "BASE",
+      variant: "OFF",
+      summary: "Manual inputs only",
+      apply: () => {},
+    });
+
+    pushRangeScenarios("adv20", "ADV20", minAdv20, maxAdv20, "minAdv20", "maxAdv20");
+    pushRangeScenarios("adv20nf", "ADV20NF", minAdv20NF, maxAdv20NF, "minAdv20NF", "maxAdv20NF");
+    pushRangeScenarios("adv90", "ADV90", minAdv90, maxAdv90, "minAdv90", "maxAdv90");
+    pushRangeScenarios("adv90nf", "ADV90NF", minAdv90NF, maxAdv90NF, "minAdv90NF", "maxAdv90NF");
+    pushRangeScenarios("avpremhv", "AvPreMhv", minAvPreMhv, maxAvPreMhv, "minAvPreMhv", "maxAvPreMhv");
+    pushRangeScenarios("roundlot", "RoundLot", minRoundLot, maxRoundLot, "minRoundLot", "maxRoundLot");
+    pushRangeScenarios("vwap", "VWAP", minVWAP, maxVWAP, "minVWAP", "maxVWAP");
+    pushRangeScenarios("spread", "Spread", minSpread, maxSpread, "minSpread", "maxSpread");
+    pushRangeScenarios("lstprcl", "LstPrcL", minLstPrcL, maxLstPrcL, "minLstPrcL", "maxLstPrcL");
+    pushRangeScenarios("lstcls", "LstCls", minLstCls, maxLstCls, "minLstCls", "maxLstCls");
+    pushRangeScenarios("ycls", "YCls", minYCls, maxYCls, "minYCls", "maxYCls");
+    pushRangeScenarios("tcls", "TCls", minTCls, maxTCls, "minTCls", "maxTCls");
+    pushRangeScenarios("clstocls", "ClsToCls%", minClsToClsPct, maxClsToClsPct, "minClsToClsPct", "maxClsToClsPct");
+    pushRangeScenarios("lo", "Lo", minLo, maxLo, "minLo", "maxLo");
+    pushRangeScenarios("lstclsnewscnt", "LstClsNewsCnt", minLstClsNewsCnt, maxLstClsNewsCnt, "minLstClsNewsCnt", "maxLstClsNewsCnt");
+    pushRangeScenarios("marketcapm", "MarketCapM", minMarketCapM, maxMarketCapM, "minMarketCapM", "maxMarketCapM");
+    pushRangeScenarios("premhvolnf", "PreMhVolNF", minPreMktVolNF, maxPreMktVolNF, "minPreMhVolNF", "maxPreMhVolNF", "minPreMktVolNF", "maxPreMktVolNF");
+    pushRangeScenarios("volnffromlstcls", "VolNFfromLstCls", minVolNFfromLstCls, maxVolNFfromLstCls, "minVolNFfromLstCls", "maxVolNFfromLstCls");
+    pushRangeScenarios("avpostmhvol90nf", "AvPostMhVol90NF", minAvPostMhVol90NF, maxAvPostMhVol90NF, "minAvPostMhVol90NF", "maxAvPostMhVol90NF");
+    pushRangeScenarios("volrel", "VolRel", minVolRel, maxVolRel, "minVolRel", "maxVolRel");
+    pushRangeScenarios("premhbidlstprc", "PreMhHiLstPrc%", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, "minPreMhBidLstPrcPct", "maxPreMhBidLstPrcPct");
+    pushRangeScenarios("premhlolstprc", "PreMhLoLstPrc%", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, "minPreMhLoLstPrcPct", "maxPreMhLoLstPrcPct");
+    pushRangeScenarios("premhhilstcls", "PreMhHiLstCls%", minPreMhHiLstClsPct, maxPreMhHiLstClsPct, "minPreMhHiLstClsPct", "maxPreMhHiLstClsPct");
+    pushRangeScenarios("premhlolstcls", "PreMhLoLstCls%", minPreMhLoLstClsPct, maxPreMhLoLstClsPct, "minPreMhLoLstClsPct", "maxPreMhLoLstClsPct");
+    pushRangeScenarios("lstprclstcls", "LstPrcLstCls%", minLstPrcLstClsPct, maxLstPrcLstClsPct, "minLstPrcLstClsPct", "maxLstPrcLstClsPct");
+    pushRangeScenarios("imbexch925", "ImbExch9:25", minImbExch925, maxImbExch925, "minImbExch925", "maxImbExch925");
+    pushRangeScenarios("imbexch1555", "ImbExch15:55", minImbExch1555, maxImbExch1555, "minImbExch1555", "maxImbExch1555");
+
+    if (currentRatingRule.minRate > 0) {
+      scenarios.push({
+        id: "minrate",
+        parameter: "MINRATE",
+        variant: "ON",
+        summary: `minRate >= ${num(currentRatingRule.minRate, 2)}`,
+        apply: (req) => {
+          if (req.ratingRules?.[0]) req.ratingRules[0].minRate = Math.max(0, Number(currentRatingRule.minRate) || 0);
+        },
+      });
+    }
+    if (currentRatingRule.minTotal > 0) {
+      scenarios.push({
+        id: "mintotal",
+        parameter: "MINTOTAL",
+        variant: "ON",
+        summary: `minTotal >= ${intn(currentRatingRule.minTotal)}`,
+        apply: (req) => {
+          if (req.ratingRules?.[0]) req.ratingRules[0].minTotal = Math.max(0, clampInt(currentRatingRule.minTotal, 0));
+        },
+      });
+    }
+
+    const startAbsMaxNum = optNumOrNull(startAbsMax);
+    if (startAbsMaxNum != null && startAbsMaxNum > 0) {
+      scenarios.push({
+        id: "startabsmax",
+        parameter: zapUiMode === "sigma" ? "SIG START MAX" : "ZAP START MAX",
+        variant: "ON",
+        summary: `startMax <= ${num(startAbsMaxNum, 2)}`,
+        apply: (req) => {
+          req.startAbsMax = startAbsMaxNum;
+        },
+      });
+    }
+    if (endAbs > 0) {
+      scenarios.push({
+        id: "endabs",
+        parameter: zapUiMode === "sigma" ? "SIG END" : "ZAP END",
+        variant: "ON",
+        summary: `end <= ${num(endAbs, 2)}`,
+        apply: (req) => {
+          req.endAbs = endAbs;
+        },
+      });
+    }
+
+    const hasCurrentStack = scenarios.length > 1;
+    if (hasCurrentStack) {
+      scenarios.push({
+        id: "current-stack",
+        parameter: "STACK",
+        variant: "CURRENT",
+        summary: "All current ON values",
+        apply: (req) => {
+          const current = buildPostRequest(dateMode === "day" ? dateNy : dateFrom, dateMode === "day" ? dateNy : dateTo);
+          Object.assign(req, current);
+        },
+      });
+    }
+
+    return scenarios;
+  }, [
+    dateMode,
+    dateNy,
+    dateFrom,
+    dateTo,
+    endAbs,
+    maxAdv20,
+    maxAdv20NF,
+    maxAdv90,
+    maxAdv90NF,
+    maxAvPreMhv,
+    maxClsToClsPct,
+    maxLo,
+    maxLstCls,
+    maxLstClsNewsCnt,
+    maxLstPrcL,
+    maxMarketCapM,
+    maxPreMktVolNF,
+    maxRoundLot,
+    maxSpread,
+    maxTCls,
+    maxVolNFfromLstCls,
+    maxVWAP,
+    maxYCls,
+    minAdv20,
+    minAdv20NF,
+    minAdv90,
+    minAdv90NF,
+    minAvPreMhv,
+    minClsToClsPct,
+    minLo,
+    minLstCls,
+    minLstClsNewsCnt,
+    minLstPrcL,
+    minMarketCapM,
+    minPreMktVolNF,
+    minRoundLot,
+    minSpread,
+    minTCls,
+    minVolNFfromLstCls,
+    minVWAP,
+    minYCls,
+    ratingRules,
+    ruleBand,
+    sharedRangeFilterModes,
+    startAbsMax,
+    zapUiMode,
+  ]);
+
+  const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
+    req.minAdv20 = null; req.maxAdv20 = null;
+    req.minAdv20NF = null; req.maxAdv20NF = null;
+    req.minAdv90 = null; req.maxAdv90 = null;
+    req.minAdv90NF = null; req.maxAdv90NF = null;
+    req.minAvPreMhv = null; req.maxAvPreMhv = null;
+    req.minRoundLot = null; req.maxRoundLot = null;
+    req.minVWAP = null; req.maxVWAP = null;
+    req.minSpread = null; req.maxSpread = null;
+    req.minLstPrcL = null; req.maxLstPrcL = null;
+    req.minLstCls = null; req.maxLstCls = null;
+    req.minYCls = null; req.maxYCls = null;
+    req.minTCls = null; req.maxTCls = null;
+    req.minClsToClsPct = null; req.maxClsToClsPct = null;
+    req.minLo = null; req.maxLo = null;
+    req.minLstClsNewsCnt = null; req.maxLstClsNewsCnt = null;
+    req.minMarketCapM = null; req.maxMarketCapM = null;
+    req.minPreMhVolNF = null; req.maxPreMhVolNF = null;
+    req.minPreMktVolNF = null; req.maxPreMktVolNF = null;
+    req.minVolNFfromLstCls = null; req.maxVolNFfromLstCls = null;
+    req.minAvPostMhVol90NF = null; req.maxAvPostMhVol90NF = null;
+    req.minVolRel = null; req.maxVolRel = null;
+    req.minPreMhBidLstPrcPct = null; req.maxPreMhBidLstPrcPct = null;
+    req.minPreMhLoLstPrcPct = null; req.maxPreMhLoLstPrcPct = null;
+    req.minPreMhHiLstClsPct = null; req.maxPreMhHiLstClsPct = null;
+    req.minPreMhLoLstClsPct = null; req.maxPreMhLoLstClsPct = null;
+    req.minLstPrcLstClsPct = null; req.maxLstPrcLstClsPct = null;
+    req.minImbExch925 = null; req.maxImbExch925 = null;
+    req.minImbExch1555 = null; req.maxImbExch1555 = null;
+    req.startAbsMax = null;
+    if (req.ratingRules?.[0]) {
+      req.ratingRules[0].minRate = 0;
+      req.ratingRules[0].minTotal = 0;
+    }
+  };
+
+  async function loadOptimizerRangesByGroup(from: string, to: string) {
+    const tasks: Array<{
+      group: OptimizerRangeGroupKey;
+      parameterKeys?: string[];
+      timeoutMs: number;
+      bucketCount?: number;
+    }> = [
+      { group: "TAPE FILTERS", timeoutMs: 60000 },
+      { group: "RATING GATES", timeoutMs: 30000 },
+      { group: "ZAP THRESHOLDS", parameterKeys: ["startabsmax"], timeoutMs: 90000, bucketCount: 5 },
+      { group: "ZAP THRESHOLDS", parameterKeys: ["endabs"], timeoutMs: 90000, bucketCount: 6 },
+    ];
+    const groupPending = tasks.reduce<Record<OptimizerRangeGroupKey, number>>(
+      (acc, task) => {
+        acc[task.group] += 1;
+        return acc;
+      },
+      { "RATING GATES": 0, "ZAP THRESHOLDS": 0, "TAPE FILTERS": 0 }
+    );
+    const groupErrors: Record<OptimizerRangeGroupKey, string[]> = {
+      "RATING GATES": [],
+      "ZAP THRESHOLDS": [],
+      "TAPE FILTERS": [],
+    };
+
+    setOptimizerRanges(null);
+    setOptimizerRangesErr(null);
+    setOptimizerRangesLoading(true);
+    setOptimizerRangeGroupStatus({
+      "RATING GATES": { loading: true, error: null },
+      "ZAP THRESHOLDS": { loading: true, error: null },
+      "TAPE FILTERS": { loading: true, error: null },
+    });
+    let anyGroupReady = false;
+    const failedGroups: string[] = [];
+
+    for (const task of tasks) {
+      const { group, parameterKeys, timeoutMs, bucketCount } = task;
+      const groupReq = buildPostRequest(from, to);
+      groupReq.optimizerBucketCount = bucketCount ?? Math.max(3, Math.min(16, Math.trunc(optimizerBucketCount)));
+      groupReq.optimizerGroups = [group];
+      groupReq.optimizerParameterKeys = parameterKeys ?? null;
+      try {
+        const resp = await apiPostWithTimeout<PaperArbOptimizerRangesResponse>(
+          "/api/paper/arbitrage/optimizer/ranges",
+          groupReq,
+          timeoutMs
+        );
+
+        setOptimizerRanges((prev) => ({
+          dateFrom: resp?.dateFrom ?? prev?.dateFrom ?? from,
+          dateTo: resp?.dateTo ?? prev?.dateTo ?? to,
+          metric: resp?.metric ?? prev?.metric ?? metric,
+          session: resp?.session ?? prev?.session ?? session,
+          closeMode: resp?.closeMode ?? prev?.closeMode ?? closeMode,
+          pnlMode: resp?.pnlMode ?? prev?.pnlMode ?? pnlMode,
+          bucketCount: resp?.bucketCount ?? prev?.bucketCount ?? optimizerBucketCount,
+          parametersAnalyzed: new Map(
+            [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
+          ).size,
+          parameters: [...new Map(
+            [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
+          ).values()],
+        }));
+        anyGroupReady = true;
+        groupPending[group] = Math.max(0, groupPending[group] - 1);
+        setOptimizerRangeGroupStatus((prev) => ({
+          ...prev,
+          [group]: {
+            loading: groupPending[group] > 0,
+            error: groupErrors[group][0] ?? null,
+          },
+        }));
+      } catch (e: any) {
+        const msg = e?.message ?? String(e);
+        failedGroups.push(`${group}: ${msg}`);
+        groupErrors[group].push(msg);
+        groupPending[group] = Math.max(0, groupPending[group] - 1);
+        setOptimizerRangeGroupStatus((prev) => ({
+          ...prev,
+          [group]: {
+            loading: groupPending[group] > 0,
+            error: groupErrors[group][0] ?? null,
+          },
+        }));
+      }
+    }
+
+    setOptimizerRangesErr(!anyGroupReady && failedGroups.length ? failedGroups[0] : null);
+    setOptimizerRangesLoading(false);
+  }
+
+  async function runEpisodesOptimizer() {
+    if (optimizerLoading) return;
+    const from = dateMode === "day" ? dateNy : dateFrom;
+    const to = dateMode === "day" ? dateNy : dateTo;
+    if (!toYmd(from) || !toYmd(to) || from > to) {
+      setOptimizerErr("Invalid date range for optimizer.");
+      return;
+    }
+    if (!optimizerScenarios.length) {
+      setOptimizerErr("No optimizer scenarios configured.");
+      return;
+    }
+
+    setOptimizerLoading(true);
+    setOptimizerErr(null);
+    setOptimizerProgress({ done: 0, total: optimizerScenarios.length });
+
+    const out: OptimizerResultRow[] = [];
+    try {
+      for (let i = 0; i < optimizerScenarios.length; i++) {
+        const scenario = optimizerScenarios[i];
+        const req = buildPostRequest(from, to);
+        clearOptimizerFields(req);
+        scenario.apply(req);
+
+        const rows = await fetchEpisodesSearchRows(req);
+        const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
+        const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
+        const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
+        const trades = rows.length;
+        const winRate = trades > 0 ? wins / trades : 0;
+        out.push({
+          id: scenario.id,
+          parameter: scenario.parameter,
+          variant: scenario.variant,
+          summary: scenario.summary,
+          trades,
+          wins,
+          losses,
+          winRate,
+          totalPnlUsd: total,
+          avgPnlUsd: trades > 0 ? total / trades : 0,
+          score: trades > 0 ? total / trades : Number.NEGATIVE_INFINITY,
+        });
+        setOptimizerProgress({ done: i + 1, total: optimizerScenarios.length });
+      }
+
+      out.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
+        return b.trades - a.trades;
+      });
+      setOptimizerRows(out);
+      void loadOptimizerRangesByGroup(from, to);
+    } catch (e: any) {
+      setOptimizerErr(e?.message ?? String(e));
+    } finally {
+      setOptimizerLoading(false);
     }
   }
 
@@ -2783,6 +4028,245 @@ export default function PaperArbitrageTapePage() {
     const avg = rows.length ? total / rows.length : 0;
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
+
+  const optimizerBestRow = useMemo(() => optimizerRows[0] ?? null, [optimizerRows]);
+  const optimizerBaselineRow = useMemo(
+    () => optimizerRows.find((row) => row.id === "baseline" || row.parameter === "BASE") ?? null,
+    [optimizerRows]
+  );
+  const optimizerBestByParameter = useMemo(() => {
+    const best = new Map<string, OptimizerResultRow>();
+    for (const row of optimizerRows) {
+      const prev = best.get(row.parameter);
+      if (!prev || row.score > prev.score || (row.score === prev.score && row.totalPnlUsd > prev.totalPnlUsd)) {
+        best.set(row.parameter, row);
+      }
+    }
+    return Array.from(best.values());
+  }, [optimizerRows]);
+  const optimizerImpactRows = useMemo<OptimizerImpactRow[]>(() => {
+    const baseScore = optimizerBaselineRow?.score ?? 0;
+    const basePnl = optimizerBaselineRow?.totalPnlUsd ?? 0;
+    const source = optimizerRows.filter(
+      (row) => row.id !== "baseline" && row.parameter !== "BASE" && row.id !== "current-stack" && row.parameter !== "STACK"
+    );
+    const maxAbsDeltaScore = Math.max(0.000001, ...source.map((row) => Math.abs(row.score - baseScore)));
+
+    return source
+      .map((row) => {
+        const deltaScore = row.score - baseScore;
+        const impactPct = Math.min(1, Math.abs(deltaScore) / maxAbsDeltaScore);
+        const impactLevel: OptimizerImpactRow["impactLevel"] =
+          impactPct >= 0.67 ? "STRONG" : impactPct >= 0.34 ? "MEDIUM" : "LIGHT";
+
+        return {
+          id: row.id,
+          parameter: row.parameter,
+          variant: row.variant,
+          summary: row.summary,
+          impactLevel,
+          impactPct,
+          deltaScore,
+          deltaPnlUsd: row.totalPnlUsd - basePnl,
+          trades: row.trades,
+          totalPnlUsd: row.totalPnlUsd,
+          avgPnlUsd: row.avgPnlUsd,
+          winRate: row.winRate,
+        };
+      })
+      .sort((a, b) => {
+        if (Math.abs(b.deltaScore) !== Math.abs(a.deltaScore)) return Math.abs(b.deltaScore) - Math.abs(a.deltaScore);
+        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
+        return b.trades - a.trades;
+      });
+  }, [optimizerRows, optimizerBaselineRow]);
+  const optimizerRangeParameters = useMemo(() => optimizerRanges?.parameters ?? [], [optimizerRanges]);
+  const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
+    optimizerRangeRankMetric === "winRate"
+      ? bucket.winRate
+      : optimizerRangeRankMetric === "totalPnlUsd"
+        ? bucket.totalPnlUsd
+        : optimizerRangeRankMetric === "score"
+          ? bucket.score
+          : bucket.avgPnlUsd;
+  const optimizerRangeParametersSorted = useMemo(() => {
+    return [...optimizerRangeParameters].sort((a, b) => {
+      const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
+        .filter((x) => x.trades >= optimizerRangeMinTrades)
+        .sort((x, y) => {
+        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+        return y.trades - x.trades;
+      })[0];
+      const bestB = [...(b.buckets ?? []), ...(b.lowerTailBuckets ?? []), ...(b.upperTailBuckets ?? [])]
+        .filter((x) => x.trades >= optimizerRangeMinTrades)
+        .sort((x, y) => {
+        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+        return y.trades - x.trades;
+      })[0];
+      const aAvg = bestA ? optimizerRankValue(bestA) : Number.NEGATIVE_INFINITY;
+      const bAvg = bestB ? optimizerRankValue(bestB) : Number.NEGATIVE_INFINITY;
+      if (bAvg !== aAvg) return bAvg - aAvg;
+      const aPnl = bestA?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+      const bPnl = bestB?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+      if (bPnl !== aPnl) return bPnl - aPnl;
+      return (bestB?.trades ?? 0) - (bestA?.trades ?? 0);
+    });
+  }, [optimizerRangeParameters, optimizerRangeMinTrades, optimizerRangeRankMetric]);
+  const optimizerRangeGroups = useMemo(() => {
+    const groupOrder = ["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"];
+    const map = new Map<string, PaperArbOptimizerParameterDto[]>();
+    for (const parameter of optimizerRangeParametersSorted) {
+      const key = parameter.group || "OTHER";
+      const arr = map.get(key) ?? [];
+      arr.push(parameter);
+      map.set(key, arr);
+    }
+    return [...map.entries()]
+      .sort((a, b) => {
+        const ia = groupOrder.indexOf(a[0]);
+        const ib = groupOrder.indexOf(b[0]);
+        const va = ia >= 0 ? ia : Number.MAX_SAFE_INTEGER;
+        const vb = ib >= 0 ? ib : Number.MAX_SAFE_INTEGER;
+        return va - vb || a[0].localeCompare(b[0]);
+      })
+      .map(([group, parameters]) => ({ group, parameters }));
+  }, [optimizerRangeParametersSorted]);
+  const optimizerBestRangeBuckets = useMemo(() => {
+    const compareBuckets = (
+      left: PaperArbOptimizerRangeBucketDto,
+      right: PaperArbOptimizerRangeBucketDto
+    ) => {
+      const rankDiff = optimizerRankValue(right) - optimizerRankValue(left);
+      if (rankDiff !== 0) return rankDiff;
+      const pnlDiff = right.totalPnlUsd - left.totalPnlUsd;
+      if (pnlDiff !== 0) return pnlDiff;
+      return right.trades - left.trades;
+    };
+
+    const bestByParameter = new Map<string, { parameter: string; bucket: PaperArbOptimizerRangeBucketDto }>();
+
+    for (const parameter of optimizerRangeParametersSorted) {
+      const eligibleBuckets = [
+        ...(parameter.buckets ?? []),
+        ...(parameter.lowerTailBuckets ?? []),
+        ...(parameter.upperTailBuckets ?? []),
+      ].filter((bucket) => bucket.trades >= optimizerRangeMinTrades);
+
+      if (!eligibleBuckets.length) continue;
+
+      const bestBucket = [...eligibleBuckets].sort(compareBuckets)[0];
+      bestByParameter.set(parameter.key, {
+        parameter: parameter.label,
+        bucket: bestBucket,
+      });
+    }
+
+    return [...bestByParameter.values()].sort((a, b) => compareBuckets(a.bucket, b.bucket));
+  }, [optimizerRangeParametersSorted, optimizerRangeMinTrades, optimizerRangeRankMetric]);
+  const optimizerBestRangeRows = useMemo<OptimizerResultRow[]>(
+    () =>
+      optimizerBestRangeBuckets.map(({ parameter, bucket }) => ({
+        id: bucket.bucketId,
+        parameter,
+        variant: bucket.label,
+        summary: `${parameter} ${bucket.label}`,
+        trades: bucket.trades,
+        wins: bucket.wins,
+        losses: bucket.losses,
+        winRate: bucket.winRate,
+        totalPnlUsd: bucket.totalPnlUsd,
+        avgPnlUsd: bucket.avgPnlUsd,
+        score: bucket.score,
+      })),
+    [optimizerBestRangeBuckets]
+  );
+
+  const analyticsSummary = useMemo(() => {
+    const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
+    const trades = pnl.length;
+    const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
+    const wins = pnl.filter((x) => x > 0).length;
+    const losses = pnl.filter((x) => x < 0).length;
+    const winRate = trades > 0 ? wins / trades : 0;
+
+    const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
+    const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
+    const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const avgWin = wins > 0 ? sumWin / wins : 0;
+    const avgLoss = losses > 0 ? sumLossAbs / losses : 0;
+    const expectancyUsd = (winRate * avgWin) - ((1 - winRate) * avgLoss);
+
+    let equity = 0;
+    let peak = 0;
+    let maxDrawdownUsd = 0;
+    const equityCurve: PaperArbEquityPointDto[] = [];
+
+    if (equityCurveMode === "Daily") {
+      const fallbackDate = dateMode === "day" && toYmd(dateNy) ? dateNy : null;
+      const dailyTotals = new Map<string, number>();
+
+      for (const row of filteredEpisodes) {
+        const key = getEpisodeDateKey(row, fallbackDate);
+        if (!key) continue;
+        dailyTotals.set(key, (dailyTotals.get(key) ?? 0) + (row.totalPnlUsd ?? 0));
+      }
+
+      for (const key of [...dailyTotals.keys()].sort((a, b) => a.localeCompare(b))) {
+        const p = dailyTotals.get(key) ?? 0;
+        equity += p;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdownUsd) maxDrawdownUsd = dd;
+        equityCurve.push({ key, equity, pnl: p });
+      }
+    } else {
+      const fallbackDate = dateMode === "day" && toYmd(dateNy) ? dateNy : null;
+      const tradeRows = filteredEpisodes
+        .map((row, index) => ({
+          row,
+          index,
+          dateKey: getEpisodeDateKey(row, fallbackDate),
+          minute: Number.isFinite(row.endMinuteIdx) ? row.endMinuteIdx : null,
+        }))
+        .sort((a, b) => {
+          const da = a.dateKey ?? "";
+          const db = b.dateKey ?? "";
+          if (da !== db) return da.localeCompare(db);
+          const ma = a.minute ?? Number.MAX_SAFE_INTEGER;
+          const mb = b.minute ?? Number.MAX_SAFE_INTEGER;
+          if (ma !== mb) return ma - mb;
+          return a.index - b.index;
+        });
+
+      for (const item of tradeRows) {
+        const p = item.row.totalPnlUsd ?? 0;
+        equity += p;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdownUsd) maxDrawdownUsd = dd;
+        const key = item.dateKey
+          ? `${item.dateKey}${item.minute != null ? ` ${item.minute}` : ""}`
+          : `${item.index + 1}`;
+        equityCurve.push({ key, equity, pnl: p });
+      }
+    }
+
+    const serverEquityCurve = includeEquityCurve ? (analytics?.equityCurve ?? null) : null;
+
+    return {
+      trades,
+      totalPnlUsd: analytics?.totalPnlUsd ?? totalPnlUsd,
+      winRate: analytics?.winRate ?? winRate,
+      profitFactor: analytics?.profitFactor ?? profitFactor,
+      avgPnlUsd: analytics?.avgPnlUsd ?? avgPnlUsd,
+      expectancyUsd: analytics?.expectancyUsd ?? expectancyUsd,
+      maxDrawdownUsd: analytics?.maxDrawdownUsd ?? maxDrawdownUsd,
+      equityCurve: serverEquityCurve && serverEquityCurve.length > 0 ? serverEquityCurve : equityCurve,
+    };
+  }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, analytics, includeEquityCurve]);
 
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
@@ -3424,7 +4908,21 @@ export default function PaperArbitrageTapePage() {
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
               <GlassSelect
                 value={session}
-                onChange={(e) => setSession(e.target.value as PaperArbSession)}
+                onChange={(e) => {
+                  const nextSession = e.target.value as PaperArbSession;
+                  setSession(nextSession);
+                  const band = ratingBandFromSession(nextSession);
+                  setRuleBand(band);
+                  setRatingEnabledBands({
+                    BLUE: band === "BLUE",
+                    ARK: band === "ARK",
+                    OPEN: band === "OPEN",
+                    INTRA: band === "INTRA",
+                    PRINT: band === "PRINT",
+                    POST: band === "POST",
+                    GLOBAL: band === "GLOBAL",
+                  });
+                }}
                 options={[
                   { value: "GLOB", label: "GLOB" },
                   { value: "BLUE", label: "BLUE" },
@@ -3467,23 +4965,37 @@ export default function PaperArbitrageTapePage() {
 
           {showSharedMinMax && (
             <div className="mt-3 pt-3 border-t border-white/[0.06] grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-              <MinMaxRow label="ADV20" minValue={minAdv20} maxValue={maxAdv20} setMin={setMinAdv20} setMax={setMaxAdv20} card clearable />
-              <MinMaxRow label="ADV20NF" minValue={minAdv20NF} maxValue={maxAdv20NF} setMin={setMinAdv20NF} setMax={setMaxAdv20NF} card clearable />
-              <MinMaxRow label="ADV90" minValue={minAdv90} maxValue={maxAdv90} setMin={setMinAdv90} setMax={setMaxAdv90} card clearable />
-              <MinMaxRow label="ADV90NF" minValue={minAdv90NF} maxValue={maxAdv90NF} setMin={setMinAdv90NF} setMax={setMaxAdv90NF} card clearable />
-              <MinMaxRow label="AvPreMhv" minValue={minAvPreMhv} maxValue={maxAvPreMhv} setMin={setMinAvPreMhv} setMax={setMaxAvPreMhv} card clearable />
-              <MinMaxRow label="RoundLot" minValue={minRoundLot} maxValue={maxRoundLot} setMin={setMinRoundLot} setMax={setMaxRoundLot} card clearable />
-              <MinMaxRow label="VWAP" minValue={minVWAP} maxValue={maxVWAP} setMin={setMinVWAP} setMax={setMaxVWAP} card clearable />
-              <MinMaxRow label="Spread" minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable />
-              <MinMaxRow label="LstPrcL" minValue={minLstPrcL} maxValue={maxLstPrcL} setMin={setMinLstPrcL} setMax={setMaxLstPrcL} card clearable />
-              <MinMaxRow label="LstCls" minValue={minLstCls} maxValue={maxLstCls} setMin={setMinLstCls} setMax={setMaxLstCls} card clearable />
-              <MinMaxRow label="YCls" minValue={minYCls} maxValue={maxYCls} setMin={setMinYCls} setMax={setMaxYCls} card clearable />
-              <MinMaxRow label="TCls" minValue={minTCls} maxValue={maxTCls} setMin={setMinTCls} setMax={setMaxTCls} card clearable />
-              <MinMaxRow label="ClsToCls%" minValue={minClsToClsPct} maxValue={maxClsToClsPct} setMin={setMinClsToClsPct} setMax={setMaxClsToClsPct} card clearable />
-              <MinMaxRow label="Lo" minValue={minLo} maxValue={maxLo} setMin={setMinLo} setMax={setMaxLo} card clearable />
-              <MinMaxRow label="LstClsNewsCnt" minValue={minNewsCnt} maxValue={maxNewsCnt} setMin={setMinNewsCnt} setMax={setMaxNewsCnt} card clearable />
+              <MinMaxRow label="ADV20" filterKey="adv20" mode={sharedRangeFilterModes.adv20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv20} maxValue={maxAdv20} setMin={setMinAdv20} setMax={setMaxAdv20} card clearable />
+              <MinMaxRow label="ADV20NF" filterKey="adv20nf" mode={sharedRangeFilterModes.adv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv20NF} maxValue={maxAdv20NF} setMin={setMinAdv20NF} setMax={setMaxAdv20NF} card clearable />
+              <MinMaxRow label="ADV90" filterKey="adv90" mode={sharedRangeFilterModes.adv90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv90} maxValue={maxAdv90} setMin={setMinAdv90} setMax={setMaxAdv90} card clearable />
+              <MinMaxRow label="ADV90NF" filterKey="adv90nf" mode={sharedRangeFilterModes.adv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv90NF} maxValue={maxAdv90NF} setMin={setMinAdv90NF} setMax={setMaxAdv90NF} card clearable />
+              <MinMaxRow label="AvPreMhv" filterKey="avpremhv" mode={sharedRangeFilterModes.avpremhv} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhv} maxValue={maxAvPreMhv} setMin={setMinAvPreMhv} setMax={setMaxAvPreMhv} card clearable />
+              <MinMaxRow label="RoundLot" filterKey="roundlot" mode={sharedRangeFilterModes.roundlot} onToggleMode={toggleSharedRangeFilterMode} minValue={minRoundLot} maxValue={maxRoundLot} setMin={setMinRoundLot} setMax={setMaxRoundLot} card clearable />
+              <MinMaxRow label="VWAP" filterKey="vwap" mode={sharedRangeFilterModes.vwap} onToggleMode={toggleSharedRangeFilterMode} minValue={minVWAP} maxValue={maxVWAP} setMin={setMinVWAP} setMax={setMaxVWAP} card clearable />
+              <MinMaxRow label="Spread" filterKey="spread" mode={sharedRangeFilterModes.spread} onToggleMode={toggleSharedRangeFilterMode} minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable />
+              <MinMaxRow label="LstPrcL" filterKey="lstprcl" mode={sharedRangeFilterModes.lstprcl} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcL} maxValue={maxLstPrcL} setMin={setMinLstPrcL} setMax={setMaxLstPrcL} card clearable />
+              <MinMaxRow label="LstCls" filterKey="lstcls" mode={sharedRangeFilterModes.lstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstCls} maxValue={maxLstCls} setMin={setMinLstCls} setMax={setMaxLstCls} card clearable />
+              <MinMaxRow label="YCls" filterKey="ycls" mode={sharedRangeFilterModes.ycls} onToggleMode={toggleSharedRangeFilterMode} minValue={minYCls} maxValue={maxYCls} setMin={setMinYCls} setMax={setMaxYCls} card clearable />
+              <MinMaxRow label="TCls" filterKey="tcls" mode={sharedRangeFilterModes.tcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minTCls} maxValue={maxTCls} setMin={setMinTCls} setMax={setMaxTCls} card clearable />
+              <MinMaxRow label="ClsToCls%" filterKey="clstocls" mode={sharedRangeFilterModes.clstocls} onToggleMode={toggleSharedRangeFilterMode} minValue={minClsToClsPct} maxValue={maxClsToClsPct} setMin={setMinClsToClsPct} setMax={setMaxClsToClsPct} card clearable />
+              <MinMaxRow label="Lo" filterKey="lo" mode={sharedRangeFilterModes.lo} onToggleMode={toggleSharedRangeFilterMode} minValue={minLo} maxValue={maxLo} setMin={setMinLo} setMax={setMaxLo} card clearable />
+              <MinMaxRow
+                label="LstClsNewsCnt"
+                filterKey="lstclsnewscnt"
+                mode={sharedRangeFilterModes.lstclsnewscnt}
+                onToggleMode={toggleSharedRangeFilterMode}
+                minValue={minLstClsNewsCnt}
+                maxValue={maxLstClsNewsCnt}
+                setMin={setMinLstClsNewsCnt}
+                setMax={setMaxLstClsNewsCnt}
+                card
+                clearable
+              />
               <MinMaxRow
                 label="MarketCapM"
+                filterKey="marketcapm"
+                mode={sharedRangeFilterModes.marketcapm}
+                onToggleMode={toggleSharedRangeFilterMode}
                 minValue={minMarketCapM}
                 maxValue={maxMarketCapM}
                 setMin={setMinMarketCapM}
@@ -3491,15 +5003,28 @@ export default function PaperArbitrageTapePage() {
                 card
                 clearable
               />
-              <MinMaxRow label="PreMhVolNF" minValue={minPreMktVolNF} maxValue={maxPreMktVolNF} setMin={setMinPreMktVolNF} setMax={setMaxPreMktVolNF} card clearable />
+              <MinMaxRow label="PreMhVolNF" filterKey="premhvolnf" mode={sharedRangeFilterModes.premhvolnf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMktVolNF} maxValue={maxPreMktVolNF} setMin={setMinPreMktVolNF} setMax={setMaxPreMktVolNF} card clearable />
               <MinMaxRow
                 label="VolNFfromLstCls"
+                filterKey="volnffromlstcls"
+                mode={sharedRangeFilterModes.volnffromlstcls}
+                onToggleMode={toggleSharedRangeFilterMode}
                 minValue={minVolNFfromLstCls}
                 maxValue={maxVolNFfromLstCls}
                 setMin={setMinVolNFfromLstCls}
                 setMax={setMaxVolNFfromLstCls}
                 card
+                clearable
               />
+              <MinMaxRow label="AvPostMhVol90NF" filterKey="avpostmhvol90nf" mode={sharedRangeFilterModes.avpostmhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPostMhVol90NF} maxValue={maxAvPostMhVol90NF} setMin={setMinAvPostMhVol90NF} setMax={setMaxAvPostMhVol90NF} card clearable />
+              <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable />
+              <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable />
+              <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable />
+              <MinMaxRow label="PreMhHiLstCls%" filterKey="premhhilstcls" mode={sharedRangeFilterModes.premhhilstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhHiLstClsPct} maxValue={maxPreMhHiLstClsPct} setMin={setMinPreMhHiLstClsPct} setMax={setMaxPreMhHiLstClsPct} card clearable />
+              <MinMaxRow label="PreMhLoLstCls%" filterKey="premhlolstcls" mode={sharedRangeFilterModes.premhlolstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstClsPct} maxValue={maxPreMhLoLstClsPct} setMin={setMinPreMhLoLstClsPct} setMax={setMaxPreMhLoLstClsPct} card clearable />
+              <MinMaxRow label="LstPrcLstCls%" filterKey="lstprclstcls" mode={sharedRangeFilterModes.lstprclstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcLstClsPct} maxValue={maxLstPrcLstClsPct} setMin={setMinLstPrcLstClsPct} setMax={setMaxLstPrcLstClsPct} card clearable />
+              <MinMaxRow label="ImbExch9:25" filterKey="imbexch925" mode={sharedRangeFilterModes.imbexch925} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch925} maxValue={maxImbExch925} setMin={setMinImbExch925} setMax={setMaxImbExch925} card clearable />
+              <MinMaxRow label="ImbExch15:55" filterKey="imbexch1555" mode={sharedRangeFilterModes.imbexch1555} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch1555} maxValue={maxImbExch1555} setMin={setMinImbExch1555} setMax={setMaxImbExch1555} card clearable />
             </div>
           )}
         </GlassCard>
@@ -3621,11 +5146,12 @@ export default function PaperArbitrageTapePage() {
                     onClick={() => setEpisodesUseSearch(false)}
                     className={clsx(
                       "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
-                      !episodesUseSearch
+                      !episodesUseSearchEffective
                         ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
                         : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     )}
-                    title="GET /api/paper/arbitrage/episodes (single day)"
+                    title={forceEpisodesSearch ? "Disabled: extended filters require SEARCH(POST)" : "GET /api/paper/arbitrage/episodes (single day)"}
+                    disabled={forceEpisodesSearch}
                   >
                     GET
                   </button>
@@ -3634,7 +5160,7 @@ export default function PaperArbitrageTapePage() {
                     onClick={() => setEpisodesUseSearch(true)}
                     className={clsx(
                       "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
-                      episodesUseSearch
+                      episodesUseSearchEffective
                         ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
                         : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     )}
@@ -3657,8 +5183,9 @@ export default function PaperArbitrageTapePage() {
                     type="button"
                     onClick={() => {
                       const wants = m.key as DateMode;
-                      const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearch);
+                      const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearchEffective);
                       if (wants === "range" && !canRange) return;
+                      if (tab === "episodes" && wants === "day" && forceEpisodesSearch) return;
                       if (tab === "episodes") {
                         if (wants === "day") {
                           setEpisodesUseSearch(false);
@@ -3754,6 +5281,12 @@ export default function PaperArbitrageTapePage() {
 
         <GlassCard className="p-3">
           <div className="flex flex-wrap gap-4 items-start">
+            <span className="text-zinc-500 mt-2.5 text-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+              </svg>
+            </span>
+
             <div className="inline-flex flex-wrap items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
               {[
                 {
@@ -3766,9 +5299,12 @@ export default function PaperArbitrageTapePage() {
                 {
                   label: "News",
                   disabled: false,
-                  title: "Toggle",
-                  active: requireHasNews,
-                  onClick: () => setRequireHasNews((v) => !v),
+                  title: "Exclude news=true",
+                  active: excludeHasNews,
+                  onClick: () => {
+                    setExcludeHasNews((v) => !v);
+                    setRequireHasNews(false);
+                  },
                 },
                 {
                   label: "PTP",
@@ -3793,9 +5329,12 @@ export default function PaperArbitrageTapePage() {
                 {
                   label: "Rep",
                   disabled: false,
-                  title: "Toggle",
-                  active: requireHasReport,
-                  onClick: () => setRequireHasReport((v) => !v),
+                  title: "Exclude report=true",
+                  active: excludeHasReport,
+                  onClick: () => {
+                    setExcludeHasReport((v) => !v);
+                    setRequireHasReport(false);
+                  },
                 },
                 {
                   label: "ETF",
@@ -3838,7 +5377,30 @@ export default function PaperArbitrageTapePage() {
               ))}
             </div>
 
-            <div className="inline-flex flex-wrap items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+            <div className="w-px h-6 bg-white/5" />
+
+            <div className="flex items-center gap-2 p-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10">
+              {[
+                { label: "USA", active: includeUSA, onClick: () => setIncludeUSA((v) => !v) },
+                { label: "CHINA", active: includeChina, onClick: () => setIncludeChina((v) => !v) },
+              ].map((b) => (
+                <button
+                  key={b.label}
+                  type="button"
+                  onClick={b.onClick}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all",
+                    b.active
+                      ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
+                      : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
+                  )}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
               <button
                 type="button"
                 onClick={() => {
@@ -3846,13 +5408,14 @@ export default function PaperArbitrageTapePage() {
                   setMetric("ZapPct");
                 }}
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border uppercase",
+                  "h-[26px] px-3 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-center gap-1 active:scale-[0.98]",
                   zapUiMode === "zap"
                     ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
               >
-                ZAP
+                <span className="text-[12px] leading-[1]" style={{ textTransform: "none" }}>%</span>
+                <span className="uppercase">ZAP</span>
               </button>
 
               <button
@@ -3862,45 +5425,118 @@ export default function PaperArbitrageTapePage() {
                   setMetric("SigmaZap");
                 }}
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-baseline gap-1",
+                  "h-[26px] px-3 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-center gap-1 active:scale-[0.98]",
                   zapUiMode === "sigma"
                     ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
               >
-                <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>
-                  SIGMA
+                <span className="text-[12px] leading-[1]" style={{ textTransform: "none" }}>
+                  σ
                 </span>
                 <span className="uppercase">ZAP</span>
               </button>
 
-              <GlassInput
-                type="number"
-                step={0.1}
-                min={0}
-                value={startAbs}
-                disabled={zapUiMode === "off"}
-                onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                className={clsx("w-[66px] text-right", zapUiMode === "off" && "opacity-60")}
-              />
-              <GlassInput
-                type="number"
-                step={1}
-                min={0}
-                value={minHoldCandles}
-                disabled={zapUiMode === "off"}
-                onChange={(e) => setMinHoldCandles(Math.max(0, clampInt(e.target.value, 0)))}
-                className={clsx("w-[56px] text-right", zapUiMode === "off" && "opacity-60")}
-              />
-              <GlassInput
-                type="number"
-                step={0.1}
-                min={0}
-                value={endAbs}
-                disabled={zapUiMode === "off"}
-                onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
-                className={clsx("w-[66px] text-right", zapUiMode === "off" && "opacity-60")}
-              />
+              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+                <input
+                  type="number"
+                  step={0.1}
+                  min={0}
+                  value={startAbs}
+                  disabled={zapUiMode === "off"}
+                  onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
+                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                />
+                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    aria-label="Increase start abs"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    aria-label="Decrease start abs"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+                <input
+                  type="number"
+                  step={0.1}
+                  min={0}
+                  value={startAbsMax}
+                  disabled={zapUiMode === "off"}
+                  onChange={(e) => setStartAbsMax(e.target.value)}
+                  placeholder="start max"
+                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                />
+                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => bumpStartAbsMax(0.1)}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    aria-label="Increase start max"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => bumpStartAbsMax(-0.1)}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    aria-label="Decrease start max"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+                <input
+                  type="number"
+                  step={0.05}
+                  min={0}
+                  value={endAbs}
+                  disabled={zapUiMode === "off"}
+                  onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
+                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                />
+                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    aria-label="Increase end abs"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapUiMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    aria-label="Decrease end abs"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
 
               <button
                 type="button"
@@ -3908,11 +5544,12 @@ export default function PaperArbitrageTapePage() {
                   setZapUiMode("off");
                   setMetric("SigmaZap");
                   setStartAbs(0.1);
+                  setStartAbsMax("");
                   setMinHoldCandles(0);
                   setEndAbs(0.05);
                 }}
                 className={clsx(
-                  "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "h-[26px] px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border active:scale-[0.98]",
                   zapUiMode === "off"
                     ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
                     : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
@@ -4042,155 +5679,331 @@ export default function PaperArbitrageTapePage() {
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">CLOSED COUNT</div>
-                <div className="text-sm font-mono mt-1">{intn(episodesSummary.count)}</div>
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">SCENARIOS</div>
+                <div className="text-sm font-mono mt-1">{intn(optimizerScenarios.length)}</div>
               </GlassCard>
               <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">TOTAL PNL</div>
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SCORE</div>
                 <div
                   className={clsx(
                     "text-sm font-mono mt-1",
-                    episodesSummary.total > 0
+                    (optimizerBestRow?.score ?? 0) > 0
                       ? "text-emerald-300"
-                      : episodesSummary.total < 0
+                      : (optimizerBestRow?.score ?? 0) < 0
                         ? "text-rose-300"
                         : "text-zinc-200"
                   )}
                 >
-                  {num(episodesSummary.total, 2)}
+                  {optimizerBestRow ? num(optimizerBestRow.score, 2) : "-"}
                 </div>
               </GlassCard>
               <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">W / L</div>
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST PNL</div>
                 <div className="text-sm font-mono mt-1">
-                  {intn(episodesSummary.wins)} / {intn(episodesSummary.losses)}
+                  {optimizerBestRow ? num(optimizerBestRow.totalPnlUsd, 2) : "-"}
                 </div>
               </GlassCard>
               <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">AVG PNL</div>
-                <div className="text-sm font-mono mt-1">{num(episodesSummary.avg, 2)}</div>
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST TRADES</div>
+                <div className="text-sm font-mono mt-1">{optimizerBestRow ? intn(optimizerBestRow.trades) : "-"}</div>
+              </GlassCard>
+              <GlassCard className="p-3">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">RANGE PARAMS</div>
+                <div className="text-sm font-mono mt-1">{intn(optimizerRangeParameters.length)}</div>
+              </GlassCard>
+              <GlassCard className="p-3">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST RANGE</div>
+                <div className="text-sm font-mono mt-1">
+                  {optimizerBestRangeBuckets[0] ? `${optimizerBestRangeBuckets[0].parameter} | ${optimizerBestRangeBuckets[0].bucket.label}` : "-"}
+                </div>
               </GlassCard>
             </div>
 
             <GlassCard className="p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  EPISODES AUTO SCAN | find best StartAbs / EndAbs
+                  EPISODES OPTIMIZER | impact scan by single parameter
                 </div>
                 <div className="text-[10px] font-mono text-zinc-600">
-                  {scanLoading ? `progress ${scanProgress.done}/${scanProgress.total}` : `results ${intn(scanRows.length)}`}
+                  {optimizerLoading ? `progress ${optimizerProgress.done}/${optimizerProgress.total}` : `results ${intn(optimizerRows.length)}`}
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-2 mb-3">
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.MIN</span>
-                  <input type="number" step={0.01} value={scanStartMin} onChange={(e) => setScanStartMin(clampNumber(e.target.value, 0.01))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
+              <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr_auto] gap-3 items-start mb-3">
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Manual Inputs Used As Base</div>
+                  <div className="text-[11px] font-mono text-zinc-300 leading-6">
+                    SESSION {session} | BAND {ruleBand} | {closeMode} | {pnlMode} | {equityCurveMode} | METRIC {metric}
+                    <br />
+                    DATE {dateMode === "day" ? dateNy : `${dateFrom} .. ${dateTo}`} | SIDE {sideFilter || "ANY"} | MINHOLD {intn(minHoldCandles)} | TRADES {intn(minTradesPerTicker)}
+                    <br />
+                    BOOLS red/green groups and your manual toggles stay fixed. Optimizer scans one parameter at a time over all entered min/max values.
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.MAX</span>
-                  <input type="number" step={0.01} value={scanStartMax} onChange={(e) => setScanStartMax(clampNumber(e.target.value, 0.01))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">S.STEP</span>
-                  <input type="number" step={0.01} value={scanStartStep} onChange={(e) => setScanStartStep(clampNumber(e.target.value, 0.001))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.MIN</span>
-                  <input type="number" step={0.01} value={scanEndMin} onChange={(e) => setScanEndMin(clampNumber(e.target.value, 0))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.MAX</span>
-                  <input type="number" step={0.01} value={scanEndMax} onChange={(e) => setScanEndMax(clampNumber(e.target.value, 0))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">E.STEP</span>
-                  <input type="number" step={0.01} value={scanEndStep} onChange={(e) => setScanEndStep(clampNumber(e.target.value, 0.001))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg border border-white/5 bg-black/20">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase">TOP</span>
-                  <input type="number" step={1} min={1} max={200} value={scanTopK} onChange={(e) => setScanTopK(Math.max(1, Math.min(200, clampInt(e.target.value, 20))))} className="w-full bg-transparent text-right text-xs font-mono text-emerald-200 focus:outline-none" />
-                </div>
-                <div className="col-span-2 md:col-span-2 xl:col-span-2 flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
-                  <button
-                    type="button"
-                    onClick={() => setScanObjective("pnl")}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      scanObjective === "pnl"
-                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    TOTAL PNL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScanObjective("winrate")}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      scanObjective === "winrate"
-                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25"
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    WIN RATE
-                  </button>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Score</div>
+                  <div className="text-[11px] font-mono text-zinc-300 leading-6">
+                    Ranking metric = <span className="text-emerald-300">TotalPnL / Trades</span>
+                    <br />
+                    Baseline row = all evaluated numeric filters OFF
+                    <br />
+                    Each next row = one parameter impact on top of baseline
+                  </div>
                 </div>
                 <div className="flex items-center justify-end">
                   <button
                     type="button"
-                    disabled={scanLoading}
-                    onClick={runEpisodesAutoScan}
+                    disabled={optimizerLoading}
+                    onClick={runEpisodesOptimizer}
                     className={clsx(
                       "px-3 py-1.5 rounded-lg border text-[10px] font-mono font-bold uppercase transition-all",
-                      scanLoading
+                      optimizerLoading
                         ? "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed"
                         : "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
                     )}
                   >
-                    {scanLoading ? "SCANNING..." : "RUN SCAN"}
+                    {optimizerLoading ? "RUNNING..." : "RUN OPTIMIZER"}
                   </button>
                 </div>
               </div>
 
-              {scanErr && <div className="text-xs font-mono text-rose-300 mb-2">{scanErr}</div>}
+              {optimizerErr && <div className="text-xs font-mono text-rose-300 mb-2">{optimizerErr}</div>}
 
-              <div className="overflow-auto rounded-xl border border-white/10 bg-[#070707]/95">
-                <table className="min-w-[880px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#0b0b0b]/95 text-zinc-400 border-b border-white/10">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                <OptimizerBarChart
+                  rows={optimizerRows}
+                  valueKey="score"
+                  title="SCORE BY CONFIGURATION"
+                  meta={`top ${intn(Math.min(12, optimizerRows.length))}`}
+                  maxRows={12}
+                />
+                <OptimizerBarChart
+                  rows={optimizerBestByParameter}
+                  valueKey="totalPnlUsd"
+                  title="BEST PNL BY PARAMETER"
+                  meta={`params ${intn(optimizerBestByParameter.length)}`}
+                  color="sky"
+                />
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+                  PARAMETER RANGE MAPS
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">
+                  {optimizerRangesLoading
+                    ? "loading range maps..."
+                    : `params ${intn(optimizerRangeParametersSorted.length)} | best buckets ${intn(optimizerBestRangeRows.length)}`}
+                </div>
+              </div>
+
+              {optimizerRangesErr && <div className="text-xs font-mono text-amber-300 mb-3">range maps: {optimizerRangesErr}</div>}
+
+              <div className="flex flex-wrap gap-2 mb-3">
+                {(Object.entries(optimizerRangeGroupStatus) as Array<[OptimizerRangeGroupKey, { loading: boolean; error: string | null }]>).map(([group, status]) => (
+                  <div
+                    key={`group-status-${group}`}
+                    className={clsx(
+                      "rounded-full border px-2.5 py-1 text-[10px] font-mono uppercase tracking-widest",
+                      status.loading
+                        ? "border-sky-500/25 bg-sky-500/10 text-sky-300"
+                        : status.error
+                          ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                          : "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                    )}
+                  >
+                    {group}: {status.loading ? "loading" : status.error ? "partial" : "ready"}
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-3 mb-4">
+                <div className="grid grid-cols-1 xl:grid-cols-[auto_auto_auto_1fr] gap-3 items-center">
+                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Rank By</div>
+                  <select
+                    value={optimizerRangeRankMetric}
+                    onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
+                    className="bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
+                  >
+                    <option value="avgPnlUsd">Avg/Trade</option>
+                    <option value="totalPnlUsd">TotalPnL</option>
+                    <option value="winRate">WinRate</option>
+                    <option value="score">Score</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Buckets</div>
+                  <input
+                    type="number"
+                    min={3}
+                    max={16}
+                    step={1}
+                    value={optimizerBucketCount}
+                    onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
+                    className="w-16 bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
+                  />
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Min Trades</div>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={optimizerRangeMinTrades}
+                    onChange={(e) => setOptimizerRangeMinTrades(Math.max(0, Math.trunc(Number(e.target.value) || 0)))}
+                    className="w-20 bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
+                  />
+                </div>
+                <div className="text-[10px] font-mono text-zinc-500">
+                  Best zones and group order use the selected ranking metric, bucket granularity, and ignore buckets below the minimum trades threshold.
+                </div>
+              </div>
+              </div>
+
+              {optimizerRangesLoading && !optimizerRangeGroups.length && (
+                <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))] px-4 py-6 mb-4">
+                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Preparing Range Maps</div>
+                  <div className="h-2 rounded-full bg-white/[0.05] overflow-hidden">
+                    <div className="h-full w-1/2 bg-[linear-gradient(90deg,rgba(16,185,129,0.8),rgba(56,189,248,0.8))] animate-pulse" />
+                  </div>
+                  <div className="text-[11px] font-mono text-zinc-500 mt-3">
+                    First part is already ready. Range maps continue loading separately in the background.
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mb-3">
+                <OptimizerBarChart
+                  rows={optimizerBestRangeRows}
+                  valueKey={optimizerRangeRankMetric === "totalPnlUsd" ? "totalPnlUsd" : optimizerRangeRankMetric === "winRate" ? "winRate" : optimizerRangeRankMetric === "score" ? "score" : "avgPnlUsd"}
+                  title={
+                    optimizerRangeRankMetric === "totalPnlUsd"
+                      ? "BEST RANGE TOTAL PNL"
+                      : optimizerRangeRankMetric === "winRate"
+                        ? "BEST RANGE WIN RATE"
+                        : optimizerRangeRankMetric === "score"
+                          ? "BEST RANGE SCORE"
+                        : "BEST RANGE AVG / TRADE"
+                  }
+                  meta={`params ${intn(optimizerBestRangeRows.length)}`}
+                />
+                <OptimizerBarChart
+                  rows={optimizerBestRangeRows}
+                  valueKey="trades"
+                  title="BEST RANGE TRADES"
+                  meta={`params ${intn(optimizerBestRangeRows.length)}`}
+                  color="sky"
+                />
+              </div>
+
+              <div className="space-y-4">
+                {optimizerRangeGroups.map((group) => (
+                  <div key={`group-${group.group}`} className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">{group.group}</div>
+                      <div className="text-[10px] font-mono text-zinc-600">params {intn(group.parameters.length)}</div>
+                    </div>
+                    <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+                      {group.parameters.map((parameter) => (
+                        <OptimizerParameterRangeCard
+                          key={`range-${parameter.key}`}
+                          parameter={parameter}
+                          rankMetric={optimizerRangeRankMetric}
+                          minTradesFilter={optimizerRangeMinTrades}
+                          bucketCount={optimizerBucketCount}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {!optimizerRangeGroups.length && (
+                  <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono">
+                    Run optimizer to see per-parameter profitability ranges.
+                  </div>
+                )}
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+                  PARAMETER IMPACT VS BASE
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">
+                  scenarios {intn(optimizerImpactRows.length)} | baseline {optimizerBaselineRow ? num(optimizerBaselineRow.score, 2) : "-"} score
+                </div>
+              </div>
+
+              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
+                <table className="min-w-[1080px] w-full text-xs font-mono">
+                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
                     <tr>
-                      <th className="text-right p-2">#</th>
-                      <th className="text-right p-2">StartAbs</th>
-                      <th className="text-right p-2">EndAbs</th>
-                      <th className="text-right p-2">Trades</th>
-                      <th className="text-right p-2">W/L</th>
-                      <th className="text-right p-2">WinRate</th>
-                      <th className="text-right p-2">TotalPnL</th>
-                      <th className="text-right p-2">AvgPnL</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Impact</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaScore</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaPnL</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Avg/Trade</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Applied</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {scanRows.map((r, i) => (
-                      <tr key={`${r.startAbs}-${r.endAbs}-${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03]">
-                        <td className="p-2 text-right text-zinc-500">{i + 1}</td>
-                        <td className="p-2 text-right text-zinc-200">{num(r.startAbs, 3)}</td>
-                        <td className="p-2 text-right text-zinc-200">{num(r.endAbs, 3)}</td>
-                        <td className="p-2 text-right text-zinc-300">{intn(r.trades)}</td>
-                        <td className="p-2 text-right text-zinc-300">{intn(r.wins)} / {intn(r.losses)}</td>
-                        <td className="p-2 text-right text-zinc-200">{num(r.winRate * 100, 1)}%</td>
-                        <td className={clsx("p-2 text-right font-bold", r.totalPnlUsd > 0 ? "text-emerald-300" : r.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-200")}>
-                          {num(r.totalPnlUsd, 2)}
+                    {optimizerImpactRows.map((row) => (
+                      <tr key={`impact-${row.id}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
+                        <td className="p-2.5 text-zinc-100 font-semibold">
+                          {row.parameter} <span className="text-zinc-500 font-normal">{row.variant}</span>
                         </td>
-                        <td className={clsx("p-2 text-right", r.avgPnlUsd > 0 ? "text-emerald-300" : r.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-200")}>
-                          {num(r.avgPnlUsd, 2)}
+                        <td className="p-2.5">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={clsx(
+                                "inline-flex min-w-[64px] justify-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest",
+                                row.impactLevel === "STRONG"
+                                  ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-300"
+                                  : row.impactLevel === "MEDIUM"
+                                    ? "border-amber-500/35 bg-amber-500/10 text-amber-300"
+                                    : "border-white/10 bg-white/[0.04] text-zinc-300"
+                              )}
+                            >
+                              {row.impactLevel}
+                            </span>
+                            <div className="h-2 w-24 rounded-full bg-white/[0.05] overflow-hidden">
+                              <div
+                                className={clsx(
+                                  "h-full",
+                                  row.deltaScore >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"
+                                )}
+                                style={{ width: `${Math.max(8, row.impactPct * 100)}%` }}
+                              />
+                            </div>
+                          </div>
                         </td>
+                        <td className={clsx("p-2.5 text-right tabular-nums font-bold", row.deltaScore > 0 ? "text-emerald-300" : row.deltaScore < 0 ? "text-rose-300" : "text-zinc-300")}>
+                          {num(row.deltaScore, 2)}
+                        </td>
+                        <td className={clsx("p-2.5 text-right tabular-nums", row.deltaPnlUsd > 0 ? "text-emerald-300" : row.deltaPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                          {num(row.deltaPnlUsd, 2)}
+                        </td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(row.trades)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(row.winRate * 100, 1)}%</td>
+                        <td className={clsx("p-2.5 text-right tabular-nums", row.totalPnlUsd > 0 ? "text-emerald-300" : row.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                          {num(row.totalPnlUsd, 2)}
+                        </td>
+                        <td className={clsx("p-2.5 text-right tabular-nums", row.avgPnlUsd > 0 ? "text-emerald-300" : row.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                          {num(row.avgPnlUsd, 2)}
+                        </td>
+                        <td className="p-2.5 text-zinc-400">{row.summary}</td>
                       </tr>
                     ))}
-                    {!scanRows.length && (
+                    {!optimizerImpactRows.length && (
                       <tr>
-                        <td colSpan={8} className="p-4 text-center text-zinc-500">
-                          Run scan to see best parameter combinations.
+                        <td colSpan={9} className="p-6 text-center text-zinc-500">
+                          Run optimizer to see per-parameter impact versus baseline.
                         </td>
                       </tr>
                     )}
@@ -4201,136 +6014,57 @@ export default function PaperArbitrageTapePage() {
 
             <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">
-                EPISODES | rows {episodesSorted.length} | click header to sort{" "}
-                {episodesUseSearch ? "| SEARCH(POST)" : "| GET(day)"}
+                OPTIMIZER RESULTS | rows {optimizerRows.length}
               </div>
 
               <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-                <table className="min-w-[1400px] w-full text-xs font-mono">
+                <table className="min-w-[1180px] w-full text-xs font-mono">
                   <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
                     <tr>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("ticker")}>Ticker{sortMark(episodesSort.key === "ticker", episodesSort.dir)}</button></th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("bench")}>Bench{sortMark(episodesSort.key === "bench", episodesSort.dir)}</button></th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("side")}>Side{sortMark(episodesSort.key === "side", episodesSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("startTime")}>StartTime{sortMark(episodesSort.key === "startTime", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("peakTime")}>PeakTime{sortMark(episodesSort.key === "peakTime", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("endTime")}>EndTime{sortMark(episodesSort.key === "endTime", episodesSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("startAbs")}>StartAbs{sortMark(episodesSort.key === "startAbs", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("peakAbs")}>PeakAbs{sortMark(episodesSort.key === "peakAbs", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("endAbs")}>EndAbs{sortMark(episodesSort.key === "endAbs", episodesSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("total")}>Total{sortMark(episodesSort.key === "total", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("raw")}>Raw{sortMark(episodesSort.key === "raw", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("benchPnl")}>Bench{sortMark(episodesSort.key === "benchPnl", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("hedged")}>Hedged{sortMark(episodesSort.key === "hedged", episodesSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("closeMode")}>CloseMode{sortMark(episodesSort.key === "closeMode", episodesSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleEpisodesSort("minHold")}>MinHold{sortMark(episodesSort.key === "minHold", episodesSort.dir)}</button></th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">#</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Variant</th>
+                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Summary</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Score</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">W/L</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
+                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">AvgPnL</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {episodesSorted.map((r, i) => {
-                      const pnl = r.totalPnlUsd ?? 0;
+                    {optimizerRows.map((r, i) => {
                       return (
-                        <tr key={`${r.ticker}|${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                          <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                          <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
-                          <td className="p-2.5">
-                            <SideBadge side={r.side} />
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxWithClock(r.startMinuteIdx)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxWithClock(r.peakMinuteIdx)}</td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
-                            )}
-                          >
-                            {minuteIdxWithClock(r.endMinuteIdx)}
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.startMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetricAbs ?? null, 3)}</td>
-
+                        <tr key={`${r.id}|${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
+                          <td className="p-2.5 text-zinc-500">{i + 1}</td>
+                          <td className="p-2.5 text-zinc-100 font-semibold">{r.parameter}</td>
+                          <td className="p-2.5 text-zinc-300">{r.variant}</td>
+                          <td className="p-2.5 text-zinc-400">{r.summary}</td>
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums font-bold",
-                              pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-zinc-200"
+                              r.score > 0 ? "text-emerald-300" : r.score < 0 ? "text-rose-300" : "text-zinc-200"
                             )}
                           >
-                            {num(r.totalPnlUsd ?? null, 2)}
+                            {Number.isFinite(r.score) ? num(r.score, 2) : "-"}
                           </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.rawPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
-                                  : (r.rawPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.rawPnlUsd ?? null, 2)}
-                            </span>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.trades)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.wins)} / {intn(r.losses)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.winRate * 100, 1)}%</td>
+                          <td className={clsx("p-2.5 text-right tabular-nums", r.totalPnlUsd > 0 ? "text-emerald-300" : r.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            {num(r.totalPnlUsd, 2)}
                           </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.benchPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
-                                  : (r.benchPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.benchPnlUsd ?? null, 2)}
-                            </span>
+                          <td className={clsx("p-2.5 text-right tabular-nums", r.avgPnlUsd > 0 ? "text-emerald-300" : r.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            {num(r.avgPnlUsd, 2)}
                           </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.hedgedPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
-                                  : (r.hedgedPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.hedgedPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.closeMode ?? closeMode}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.minHoldCandles ?? minHoldCandles)}</td>
                         </tr>
                       );
                     })}
-                    {!episodesSorted.length && (
+                    {!optimizerRows.length && (
                       <tr>
-                        <td colSpan={15} className="p-6 text-center text-zinc-500">
-                          No closed episodes for this query.
+                        <td colSpan={10} className="p-6 text-center text-zinc-500">
+                          Run optimizer to see parameter impact configurations.
                         </td>
                       </tr>
                     )}
@@ -4351,52 +6085,50 @@ export default function PaperArbitrageTapePage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">TRADES</div>
-                <div className="text-sm font-mono mt-1">{intn(analytics?.trades ?? null)}</div>
+                <div className="text-sm font-mono mt-1">{intn(analyticsSummary.trades)}</div>
               </GlassCard>
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">TOTAL PNL</div>
                 <div
                   className={clsx(
                     "text-sm font-mono mt-1",
-                    (analytics?.totalPnlUsd ?? 0) > 0
+                    analyticsSummary.totalPnlUsd > 0
                       ? "text-emerald-300"
-                      : (analytics?.totalPnlUsd ?? 0) < 0
+                      : analyticsSummary.totalPnlUsd < 0
                         ? "text-rose-300"
                         : "text-zinc-200"
                   )}
                 >
-                  {num(analytics?.totalPnlUsd ?? null, 2)}
+                  {num(analyticsSummary.totalPnlUsd, 2)}
                 </div>
               </GlassCard>
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">WIN RATE</div>
-                <div className="text-sm font-mono mt-1">
-                  {analytics?.winRate == null ? "-" : `${num(analytics.winRate * 100, 1)}%`}
-                </div>
+                <div className="text-sm font-mono mt-1">{`${num(analyticsSummary.winRate * 100, 1)}%`}</div>
               </GlassCard>
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">PROFIT FACTOR</div>
-                <div className="text-sm font-mono mt-1">{num(analytics?.profitFactor ?? null, 2)}</div>
+                <div className="text-sm font-mono mt-1">{num(analyticsSummary.profitFactor, 2)}</div>
               </GlassCard>
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">EXPECTANCY</div>
-                <div className="text-sm font-mono mt-1">{num(analytics?.expectancyUsd ?? null, 2)}</div>
+                <div className="text-sm font-mono mt-1">{num(analyticsSummary.expectancyUsd, 2)}</div>
               </GlassCard>
               <GlassCard className="p-3">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">MAX DRAWDOWN</div>
-                <div className="text-sm font-mono mt-1">{num(analytics?.maxDrawdownUsd ?? null, 2)}</div>
+                <div className="text-sm font-mono mt-1">{num(analyticsSummary.maxDrawdownUsd, 2)}</div>
               </GlassCard>
             </div>
 
             {analyticsSorted.length > 0 ? (
               <>
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                  {(analytics?.equityCurve?.length ?? 0) > 0 && (
+                  {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
                     <div className="p-0">
                       <EquityChart
-                        points={analytics!.equityCurve!}
+                        points={analyticsSummary.equityCurve}
                         title={`EQUITY CURVE | ${equityCurveMode}`}
-                        meta={`points ${intn(analytics?.equityCurve?.length ?? 0)}`}
+                        meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)}`}
                       />
                     </div>
                   )}
@@ -4616,6 +6348,16 @@ export default function PaperArbitrageTapePage() {
           Tip: any change in Metric/Session/StartAbs/EndAbs/CloseMode/MinHold/PnLMode changes variant and may rebuild cache
           on backend.
         </div>
+        <style jsx global>{`
+          input.center-spin[type="number"] {
+            -moz-appearance: textfield;
+          }
+          input.center-spin[type="number"]::-webkit-outer-spin-button,
+          input.center-spin[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+          }
+        `}</style>
       </div>
     </div>
   );

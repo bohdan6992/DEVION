@@ -1,4 +1,4 @@
-// pages/_app.tsx
+﻿// pages/_app.tsx
 import type { AppProps, AppContext } from "next/app";
 import App from "next/app";
 import Script from "next/script";
@@ -12,12 +12,12 @@ import "@/styles/globals.css";
 import { useAutoScale } from "@/hooks/useAutoScale";
 import UiProvider from "@/components/UiProvider";
 import TopBarMaybe from "@/components/TopBar";
+import ThemeStarfieldCanvas from "@/components/theme/ThemeStarfieldCanvas";
 
-// 🔽 ДОДАНО: Sifter
+// Added: Sifter
 import { SifterProvider } from "@/components/sifter/SifterProvider";
 import { SifterDock } from "@/components/sifter/SifterDock";
 
-// краще так, без дивних типів
 const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 
 type ThemeKey =
@@ -37,11 +37,9 @@ export default function MyApp({
   initialTheme = "light",
   initialLang = "UA",
 }: MyAppProps) {
-  // ✅ ключ: перший клієнтський рендер має не відрізнятись від SSR
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
-  // ці хуки хай працюють тільки на клієнті, після mount
   useAutoScale({
     baseWidth: 1920,
     targetId: "app-scale",
@@ -58,9 +56,9 @@ export default function MyApp({
     if (!mounted) return;
     const root = document.documentElement;
     const darkThemes = new Set([
-      "dark","neon","cyberpunk","solaris","sakura","oceanic",
-      "matrix","asher","inferno","aurora","desert","midnight","space",
-      "forest","candy","monochrome",
+      "dark", "neon", "cyberpunk", "solaris", "sakura", "oceanic",
+      "matrix", "asher", "inferno", "aurora", "desert", "midnight", "space",
+      "forest", "candy", "monochrome",
     ]);
     const apply = () => {
       const t = (root.getAttribute("data-theme") || String(initialTheme)) as ThemeKey;
@@ -82,7 +80,6 @@ export default function MyApp({
         <meta name="color-scheme" content="dark light" />
       </Head>
 
-      {/* Ініціалізація теми ДО гідрації */}
       <Script id="tt-theme-init" strategy="beforeInteractive">{`
         (function(){
           try{
@@ -113,19 +110,18 @@ export default function MyApp({
         crossOrigin="anonymous"
       />
 
-      {/* ✅ оце прибирає hydration mismatch */}
       {!mounted ? null : (
         <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
-          {/* 🔽 Sifter живе всередині UiProvider, щоб мати той самий контекст теми */}
+          <ThemeStarfieldCanvas />
           <SifterProvider>
-            <SafeTopBar />
-            <div id="tt-offset" aria-hidden="true" />
-            <div id="app-scale">
-              <Component {...pageProps} />
+            <div style={{ position: "relative", zIndex: 1 }}>
+              <SafeTopBar />
+              <div id="tt-offset" aria-hidden="true" />
+              <div id="app-scale">
+                <Component {...pageProps} />
+              </div>
+              <SifterDock />
             </div>
-
-            {/* 🔽 Docked overlay, доступний на всіх сторінках */}
-            <SifterDock />
           </SifterProvider>
         </UiProvider>
       )}
@@ -133,13 +129,13 @@ export default function MyApp({
   );
 }
 
-// SSR: дефолтні тема/мова з cookie
+// SSR: default theme/lang from cookie
 import { parse as parseCookie } from "cookie";
 MyApp.getInitialProps = async (appCtx: AppContext) => {
   const appProps = await App.getInitialProps(appCtx);
   const cookieStr = appCtx.ctx.req?.headers?.cookie ?? "";
   const parsed = cookieStr ? parseCookie(cookieStr) : {};
   const initialTheme = (parsed["tt-theme"] as ThemeKey) || "light";
-  const initialLang  = (parsed["tt-lang"]  as LangKey)  || "UA";
+  const initialLang = (parsed["tt-lang"] as LangKey) || "UA";
   return { ...appProps, initialTheme, initialLang };
 };

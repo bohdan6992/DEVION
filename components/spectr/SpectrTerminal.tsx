@@ -138,6 +138,30 @@ function getVal(row: any, key: string) {
   return undefined;
 }
 
+function getColLabel(key: string): string {
+  const aliases: Record<string, string> = {
+    PreMhBidLstPrcPct: "PreMhHiLstPrc%",
+    preMhBidLstPrcPct: "PreMhHiLstPrc%",
+    premhbidlstprcpct: "PreMhHiLstPrc%",
+    PreMhHiLstClsPct: "PreMhHiLstCls%",
+    preMhHiLstClsPct: "PreMhHiLstCls%",
+    premhhilstclspct: "PreMhHiLstCls%",
+    PreMhLoLstClsPct: "PreMhLoLstCls%",
+    preMhLoLstClsPct: "PreMhLoLstCls%",
+    premhlolstclspct: "PreMhLoLstCls%",
+    PreMhLoLstPrcPct: "PreMhLoLstPrc%",
+    preMhLoLstPrcPct: "PreMhLoLstPrc%",
+    premhlolstprcpct: "PreMhLoLstPrc%",
+    AvPostMhVol90NF: "AvPostMhVol90NF",
+    avPostMhVol90NF: "AvPostMhVol90NF",
+    avpostmhvol90nf: "AvPostMhVol90NF",
+    VolRel: "VolRel",
+    volRel: "VolRel",
+    volrel: "VolRel",
+  };
+  return aliases[key] ?? key;
+}
+
 function fmt(v: any): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number") {
@@ -712,7 +736,7 @@ export  function TapePage() {
                         >
                            {isSelected && <div className="w-2 h-2 bg-black rounded-sm" />}
                         </div>
-                        <span className={clsx("text-[11px] font-mono font-bold truncate", isSelected ? "text-emerald-100" : "text-zinc-500")}>{key}</span>
+                        <span className={clsx("text-[11px] font-mono font-bold truncate", isSelected ? "text-emerald-100" : "text-zinc-500")}>{getColLabel(key)}</span>
                       </div>
                       
                       {isSelected && (
@@ -796,7 +820,7 @@ export  function TapePage() {
                         style={isSticky && idx === 1 ? { left: '80px' } : {}} 
                       >
                         <div className="flex items-center gap-1">
-                          {c}
+                          {getColLabel(c)}
                           {isFilterActive && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />}
                         </div>
                       </th>
