@@ -1,10 +1,10 @@
 import dynamic from "next/dynamic";
 
-const PaperArbitrageTapePage = dynamic(
-  () => import("@/components/paper/ArbitrageTapePage"),
+const ArbitrageScanner = dynamic(
+  () => import("@/components/scanner/ArbitrageScanner"),
   { ssr: false }
 );
 
 export default function Page() {
-  return <PaperArbitrageTapePage />;
+  return <ArbitrageScanner />;
 }

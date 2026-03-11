@@ -1,7 +1,7 @@
 import dynamic from "next/dynamic";
 
 const UniversalSignalsTerminal = dynamic(
-  () => import("@/components/terminals/UniversalSignalsTerminal"),
+  () => import("@/components/sonar/UniversalSignalsTerminal"),
   { ssr: false }
 );
 

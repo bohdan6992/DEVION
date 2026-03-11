@@ -1,7 +1,7 @@
 import { useRouter } from "next/router";
-import ArbitrageMatrix from "@/components/strategies/ArbitrageMatrix";
-import ChronoMatrix from "@/components/strategies/ChronoMatrix";
-import OpendoorMatrix from "@/components/strategies/OpendoorMatrix";
+import ArbitrageMatrix from "@/components/matrix/ArbitrageMatrix";
+import ChronoMatrix from "@/components/matrix/ChronoMatrix";
+import OpendoorMatrix from "@/components/matrix/OpendoorMatrix";
 
 function UnknownStrategyScreen({ strategy }: { strategy: string }) {
   return (

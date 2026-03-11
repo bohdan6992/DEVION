@@ -1,4 +1,4 @@
-// components/terminals/OpenDoorTerminal.tsx
+// components/sonar/OpenDoorTerminal.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { getOpendoorSignals } from "@/lib/trapClient";
 

@@ -1669,7 +1669,7 @@ function HedgeHeaderMinimal({
 /* =========================
    COMPONENT
 ========================= */
-export default function BridgeArbitrageSignals() {
+export default function ArbitrageSonar() {
   // kept for future theme usage; not required right now
   useUi();
   const isDark = true;
@@ -3142,7 +3142,7 @@ export default function BridgeArbitrageSignals() {
 
           {/* ========================= MODE + ACTIVE FILTER ========================= */}
           <div className="flex items-center gap-3">
-            {/* Group 1: MONEY / PAPER / SIGNAL */}
+            {/* Group 1: MONEY / SCANNER / SONAR */}
             <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
               {/* MONEY (inactive for now) */}
               <button
@@ -3154,22 +3154,22 @@ export default function BridgeArbitrageSignals() {
                 MONEY
               </button>
 
-              {/* PAPER */}
+              {/* SCANNER */}
               <Link
                 href="/paper/arbitrage"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
                 title="Open /paper/arbitrage"
               >
-                PAPER
+                SCANNER
               </Link>
 
-              {/* SIGNAL (current) */}
+              {/* SONAR (current) */}
               <button
                 type="button"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]"
-                title="SIGNAL (current)"
+                title="SONAR (current)"
               >
-                SIGNAL
+                SONAR
               </button>
             </div>
 

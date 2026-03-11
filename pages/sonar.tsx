@@ -1,4 +1,4 @@
-import BridgeSonarSignals from "@/components/terminals/BridgeSonarSignals";
+import BridgeSonarSignals from "@/components/sonar/BridgeSonarSignals";
 
 export default function SonarPage() {
   return <BridgeSonarSignals />;

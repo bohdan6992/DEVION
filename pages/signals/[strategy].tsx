@@ -3,13 +3,13 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/router";
 import React from "react";
 
-const BridgeArbitrageSignals = dynamic(
-  () => import("@/components/terminals/BridgeArbitrageSignals"),
+const ArbitrageSonar = dynamic(
+  () => import("@/components/sonar/ArbitrageSonar"),
   { ssr: false, loading: () => null }
 );
 
 const OpenDoorTerminal = dynamic(
-  () => import("@/components/terminals/1111"),
+  () => import("@/components/sonar/1111"),
   { ssr: false, loading: () => null }
 );
 
@@ -23,7 +23,7 @@ export default function StrategySignalsPage() {
     <main className="w-full">
       <React.Suspense fallback={null}>
         {strategy === "arbitrage" ? (
-          <BridgeArbitrageSignals />
+          <ArbitrageSonar />
         ) : strategy === "opendoor" ? (
           <OpenDoorTerminal />
         ) : null}

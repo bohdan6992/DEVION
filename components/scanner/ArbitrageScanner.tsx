@@ -1,6 +1,7 @@
 ﻿"use client";
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { todayNyYmd } from "../../lib/time";
 import { getToken } from "../../lib/authClient";
@@ -96,6 +97,7 @@ type PaperArbActiveRow = {
 };
 
 type PaperArbClosedDto = {
+  episodeId?: string | null;
   ticker: string;
   benchTicker: string;
   side: TapeArbSide;
@@ -106,6 +108,9 @@ type PaperArbClosedDto = {
   tradeDateNy?: string | null;
   sessionDate?: string | null;
   sessionDateNy?: string | null;
+  startTsNy?: string | null;
+  peakTsNy?: string | null;
+  endTsNy?: string | null;
 
   startMinuteIdx: number;
   peakMinuteIdx: number;
@@ -125,6 +130,32 @@ type PaperArbClosedDto = {
   benchPnlUsd?: number | null;
   hedgedPnlUsd?: number | null;
   totalPnlUsd?: number | null; // depends on pnlMode on server, but server returns it already
+
+  adv20?: number | null;
+  adv20NF?: number | null;
+  adv90?: number | null;
+  adv90NF?: number | null;
+  avPreMhv?: number | null;
+  roundLot?: number | null;
+  vwap?: number | null;
+  spread?: number | null;
+  lstPrcL?: number | null;
+  lstCls?: number | null;
+  yCls?: number | null;
+  tCls?: number | null;
+  clsToClsPct?: number | null;
+  lo?: number | null;
+  newsCnt?: number | null;
+  marketCapM?: number | null;
+  preMktVolNF?: number | null;
+  avPostMhVol90NF?: number | null;
+  volRel?: number | null;
+  preMhBidLstPrcPct?: number | null;
+  preMhLoLstPrcPct?: number | null;
+  preMhHiLstClsPct?: number | null;
+  preMhLoLstClsPct?: number | null;
+  imbExch925?: number | null;
+  imbExch1555?: number | null;
 };
 
 // Big request: Analytics + EpisodesSearch
@@ -421,6 +452,168 @@ type OptimizerImpactRow = {
 type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score";
 type OptimizerRangeGroupKey = "RATING GATES" | "ZAP THRESHOLDS" | "TAPE FILTERS";
 
+type ScopeResearchChartType =
+  | "simple_box"
+  | "beauty_violin"
+  | "results_by_bins"
+  | "results_more_less_parameter"
+  | "distribution"
+  | "scatter_by_date"
+  | "cumsum_chart"
+  | "trade_performance";
+type ScopeResearchThresholdMode = "less_than" | "more_than";
+type ScopeResearchValueFormat = "number" | "currency" | "clock" | "minutes" | "percent";
+type ScopeResearchParameterKey =
+  | "startMinuteIdx"
+  | "peakMinuteIdx"
+  | "endMinuteIdx"
+  | "timeToPeak"
+  | "timeToClose"
+  | "startMetricAbs"
+  | "peakMetricAbs"
+  | "endMetricAbs"
+  | "reversionAbs"
+  | "reversionPct"
+  | "minHoldCandles"
+  | "adv20"
+  | "adv20NF"
+  | "adv90"
+  | "adv90NF"
+  | "avPreMhv"
+  | "roundLot"
+  | "vwap"
+  | "spread"
+  | "lstPrcL"
+  | "lstCls"
+  | "yCls"
+  | "tCls"
+  | "clsToClsPct"
+  | "lo"
+  | "newsCnt"
+  | "marketCapM"
+  | "preMktVolNF"
+  | "avPostMhVol90NF"
+  | "volRel"
+  | "preMhBidLstPrcPct"
+  | "preMhLoLstPrcPct"
+  | "preMhHiLstClsPct"
+  | "preMhLoLstClsPct"
+  | "volNFfromLstCls"
+  | "imbExch925"
+  | "imbExch1555";
+type ScopeResearchResultKey =
+  | "avgPnlUsd"
+  | "totalPnlUsd"
+  | "winRate"
+  | "score"
+  | "rawPnlUsd"
+  | "benchPnlUsd"
+  | "hedgedPnlUsd"
+  | "peakMetricAbs"
+  | "endMetricAbs";
+type ScopeResearchOption<T extends string> = {
+  value: T;
+  label: string;
+  format: ScopeResearchValueFormat;
+};
+type GlassSelectOption = { value: string; label: string; disabled?: boolean };
+type GlassSelectGroup = { label: string; options: GlassSelectOption[] };
+type ScopeResearchExtraFilterSelection = {
+  id: string;
+  parameterKey: ScopeResearchParameterKey;
+  from: number | null;
+  to: number | null;
+};
+type ScopeResearchExtraFilterDraft = {
+  id: string;
+  parameterKey: ScopeResearchParameterKey;
+  from: string;
+  to: string;
+};
+type ScopeResearchParallelFilterSelection = ScopeResearchExtraFilterSelection;
+type ScopeResearchParallelFilterDraft = ScopeResearchExtraFilterDraft;
+type ScopeResearchSelection = {
+  chartType: ScopeResearchChartType;
+  parameterKey: ScopeResearchParameterKey;
+  resultKey: ScopeResearchResultKey;
+  bucketCount: number;
+  minSamples: number;
+  thresholdMode: ScopeResearchThresholdMode;
+  domainFrom: number | null;
+  domainTo: number | null;
+  extraFilters: ScopeResearchExtraFilterSelection[];
+  parallelFilters: ScopeResearchParallelFilterSelection[];
+};
+type ScopeResearchDraft = Omit<ScopeResearchSelection, "domainFrom" | "domainTo"> & {
+  domainFrom: string;
+  domainTo: string;
+  extraFilters: ScopeResearchExtraFilterDraft[];
+  parallelFilters: ScopeResearchParallelFilterDraft[];
+};
+type ScopePanelKey = "left" | "right";
+type ScopeResearchStats = {
+  count: number;
+  total: number;
+  avg: number;
+  median: number;
+  winRate: number;
+  score: number;
+  q1: number;
+  q3: number;
+  lowerFence: number;
+  upperFence: number;
+  min: number;
+  max: number;
+};
+type ScopeResearchBinRow = ScopeResearchStats & {
+  label: string;
+  from: number;
+  to: number;
+  values: number[];
+};
+type ScopeResearchThresholdRow = ScopeResearchStats & {
+  label: string;
+  threshold: number;
+};
+type ScopeResearchPoint = {
+  row: PaperArbClosedDto;
+  parameter: number;
+  result: number;
+  dateKey: string;
+  sortKey: number;
+};
+type ScopeResearchComputed = {
+  selection: ScopeResearchSelection;
+  parameter: ScopeResearchOption<ScopeResearchParameterKey>;
+  result: ScopeResearchOption<ScopeResearchResultKey>;
+  sourceResult: ScopeResearchOption<ScopeResearchResultKey>;
+  sourceCount: number;
+  points: ScopeResearchPoint[];
+  bins: ScopeResearchBinRow[];
+  thresholds: ScopeResearchThresholdRow[];
+  bestBin: ScopeResearchBinRow | null;
+  bestThreshold: ScopeResearchThresholdRow | null;
+  bestBox: ScopeResearchBinRow | null;
+  parallelSeries: Array<{
+    id: string;
+    label: string;
+    rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
+  }>;
+  parallelPointSeries: Array<{
+    id: string;
+    label: string;
+    points: ScopeResearchPoint[];
+  }>;
+};
+
+type ScopeChartTooltipData = {
+  x: number;
+  y: number;
+  title: string;
+  lines: string[];
+  accent?: "emerald" | "amber" | "cyan" | "fuchsia";
+};
+
 // =========================
 // UTILS
 // =========================
@@ -504,7 +697,8 @@ function tickerKey(x: string | null | undefined): string {
 }
 function optNumOrNull(v: any): number | null {
   if (v === "" || v === null || v === undefined) return null;
-  const n = Number(v);
+  const normalized = typeof v === "string" ? v.trim().replace(",", ".") : v;
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
 }
 function buildRangeValues(min: number, max: number, step: number): number[] {
@@ -594,7 +788,184 @@ const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRang
   imbexch1555: "on",
 };
 
+const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchParameterKey>> = [
+  { value: "startMinuteIdx", label: "Start Time", format: "clock" },
+  { value: "peakMinuteIdx", label: "Peak Time", format: "clock" },
+  { value: "endMinuteIdx", label: "End Time", format: "clock" },
+  { value: "timeToPeak", label: "Time To Peak", format: "minutes" },
+  { value: "timeToClose", label: "Time To Close", format: "minutes" },
+  { value: "startMetricAbs", label: "Start Abs", format: "number" },
+  { value: "peakMetricAbs", label: "Peak Abs", format: "number" },
+  { value: "endMetricAbs", label: "End Abs", format: "number" },
+  { value: "reversionAbs", label: "Peak-End Abs", format: "number" },
+  { value: "reversionPct", label: "Reversion %", format: "percent" },
+  { value: "minHoldCandles", label: "Min Hold", format: "minutes" },
+  { value: "adv20", label: "ADV20", format: "number" },
+  { value: "adv20NF", label: "ADV20NF", format: "number" },
+  { value: "adv90", label: "ADV90", format: "number" },
+  { value: "adv90NF", label: "ADV90NF", format: "number" },
+  { value: "avPreMhv", label: "AvPreMhv", format: "number" },
+  { value: "roundLot", label: "RoundLot", format: "number" },
+  { value: "vwap", label: "VWAP", format: "number" },
+  { value: "spread", label: "Spread", format: "number" },
+  { value: "lstPrcL", label: "LstPrcL", format: "number" },
+  { value: "lstCls", label: "LstCls", format: "number" },
+  { value: "yCls", label: "YCls", format: "number" },
+  { value: "tCls", label: "TCls", format: "number" },
+  { value: "clsToClsPct", label: "ClsToCls%", format: "percent" },
+  { value: "lo", label: "Lo", format: "number" },
+  { value: "newsCnt", label: "LstClsNewsCnt", format: "number" },
+  { value: "marketCapM", label: "MarketCapM", format: "number" },
+  { value: "preMktVolNF", label: "PreMhVolNF", format: "number" },
+  { value: "volNFfromLstCls", label: "VolNFfromLstCls", format: "number" },
+  { value: "avPostMhVol90NF", label: "AvPostMhVol90NF", format: "number" },
+  { value: "volRel", label: "VolRel", format: "number" },
+  { value: "preMhBidLstPrcPct", label: "PreMhBidLstPrc%", format: "percent" },
+  { value: "preMhLoLstPrcPct", label: "PreMhLoLstPrc%", format: "percent" },
+  { value: "preMhHiLstClsPct", label: "PreMhHiLstCls%", format: "percent" },
+  { value: "preMhLoLstClsPct", label: "PreMhLoLstCls%", format: "percent" },
+  { value: "imbExch925", label: "ImbExch925", format: "number" },
+  { value: "imbExch1555", label: "ImbExch1555", format: "number" },
+];
+
+const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
+  {
+    label: "OPTION FILTERS",
+    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
+      [
+        "startMinuteIdx",
+        "peakMinuteIdx",
+        "endMinuteIdx",
+        "timeToPeak",
+        "timeToClose",
+        "startMetricAbs",
+        "peakMetricAbs",
+        "endMetricAbs",
+        "reversionAbs",
+        "reversionPct",
+        "minHoldCandles",
+      ].includes(option.value)
+    ).map((option) => ({ value: option.value, label: option.label })),
+  },
+  {
+    label: "RATING FILTERS",
+    options: [
+      { value: "__rating_filters_unavailable", label: "Requires rating values in episode rows", disabled: true },
+    ],
+  },
+  {
+    label: "TAPE FILTERS",
+    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
+      [
+        "adv20",
+        "adv20NF",
+        "adv90",
+        "adv90NF",
+        "avPreMhv",
+        "roundLot",
+        "vwap",
+        "spread",
+        "lstPrcL",
+        "lstCls",
+        "yCls",
+        "tCls",
+        "clsToClsPct",
+        "lo",
+        "newsCnt",
+        "marketCapM",
+        "preMktVolNF",
+        "volNFfromLstCls",
+        "avPostMhVol90NF",
+        "volRel",
+        "preMhBidLstPrcPct",
+        "preMhLoLstPrcPct",
+        "preMhHiLstClsPct",
+        "preMhLoLstClsPct",
+        "imbExch925",
+        "imbExch1555",
+      ].includes(option.value)
+    ).map((option) => ({ value: option.value, label: option.label })),
+  },
+];
+
+const SCOPE_RESEARCH_RESULT_OPTIONS: Array<ScopeResearchOption<ScopeResearchResultKey>> = [
+  { value: "avgPnlUsd", label: "Avg/Trade", format: "number" },
+  { value: "totalPnlUsd", label: "TotalPnL", format: "currency" },
+  { value: "winRate", label: "WinRate", format: "percent" },
+  { value: "score", label: "Score", format: "number" },
+  { value: "rawPnlUsd", label: "Raw PnL", format: "currency" },
+  { value: "benchPnlUsd", label: "Bench PnL", format: "currency" },
+  { value: "hedgedPnlUsd", label: "Hedged PnL", format: "currency" },
+  { value: "peakMetricAbs", label: "Peak Abs", format: "number" },
+  { value: "endMetricAbs", label: "End Abs", format: "number" },
+];
+
+function scopeResearchResultOptionsForChart(chartType: ScopeResearchChartType): Array<ScopeResearchOption<ScopeResearchResultKey>> {
+  if (chartType === "results_by_bins" || chartType === "results_more_less_parameter") {
+    return SCOPE_RESEARCH_RESULT_OPTIONS;
+  }
+  return SCOPE_RESEARCH_RESULT_OPTIONS.filter(
+    (option) => option.value !== "avgPnlUsd" && option.value !== "winRate" && option.value !== "score"
+  );
+}
+
+function scopeResearchNormalizeResultKey(
+  chartType: ScopeResearchChartType,
+  resultKey: ScopeResearchResultKey
+): ScopeResearchResultKey {
+  const allowed = scopeResearchResultOptionsForChart(chartType);
+  return allowed.some((option) => option.value === resultKey) ? resultKey : "totalPnlUsd";
+}
+
+const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
+  "RATING GATES": "RATING FILTERS",
+  "ZAP THRESHOLDS": "ZAP FILTERS",
+  "TAPE FILTERS": "TAPE FILTERS",
+};
+
+const DEFAULT_SCOPE_RESEARCH_DRAFTS: Record<ScopePanelKey, ScopeResearchDraft> = {
+  left: {
+    chartType: "results_by_bins",
+    parameterKey: "peakMetricAbs",
+    resultKey: "totalPnlUsd",
+    bucketCount: 8,
+    minSamples: 12,
+    thresholdMode: "more_than",
+    domainFrom: "",
+    domainTo: "",
+    extraFilters: [],
+    parallelFilters: [],
+  },
+  right: {
+    chartType: "scatter_by_date",
+    parameterKey: "startMetricAbs",
+    resultKey: "totalPnlUsd",
+    bucketCount: 8,
+    minSamples: 12,
+    thresholdMode: "more_than",
+    domainFrom: "",
+    domainTo: "",
+    extraFilters: [],
+    parallelFilters: [],
+  },
+};
+
 function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string | null) {
+  const extractYmd = (value: string | null | undefined) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const head = raw.slice(0, 10);
+    if (toYmd(head)) return head;
+    const match = raw.match(/\b\d{4}-\d{2}-\d{2}\b/);
+    return match?.[0] && toYmd(match[0]) ? match[0] : null;
+  };
+
+  const tsCandidates = [row.startTsNy, row.peakTsNy, row.endTsNy, row.episodeId];
+  for (const candidate of tsCandidates) {
+    const ymd = extractYmd(candidate);
+    if (ymd) return ymd;
+  }
+
   const candidates = [
     row.dateNy,
     row.date,
@@ -607,8 +978,8 @@ function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string | null)
   ];
 
   for (const candidate of candidates) {
-    const ymd = String(candidate ?? "").trim();
-    if (toYmd(ymd)) return ymd;
+    const ymd = extractYmd(candidate);
+    if (ymd) return ymd;
   }
   return null;
 }
@@ -630,6 +1001,602 @@ function ratingBandFromSession(session: PaperArbSession): PaperArbRatingBand {
     default:
       return "GLOBAL";
   }
+}
+
+function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchParameterKey): number | null {
+  switch (key) {
+    case "startMinuteIdx":
+      return Number.isFinite(row.startMinuteIdx) ? row.startMinuteIdx : null;
+    case "peakMinuteIdx":
+      return Number.isFinite(row.peakMinuteIdx) ? row.peakMinuteIdx : null;
+    case "endMinuteIdx":
+      return Number.isFinite(row.endMinuteIdx) ? row.endMinuteIdx : null;
+    case "timeToPeak":
+      return Number.isFinite(row.startMinuteIdx) && Number.isFinite(row.peakMinuteIdx)
+        ? row.peakMinuteIdx - row.startMinuteIdx
+        : null;
+    case "timeToClose":
+      return Number.isFinite(row.startMinuteIdx) && Number.isFinite(row.endMinuteIdx)
+        ? row.endMinuteIdx - row.startMinuteIdx
+        : null;
+    case "startMetricAbs":
+      return row.startMetricAbs ?? null;
+    case "peakMetricAbs":
+      return row.peakMetricAbs ?? null;
+    case "endMetricAbs":
+      return row.endMetricAbs ?? null;
+    case "reversionAbs": {
+      const peak = row.peakMetricAbs ?? null;
+      const end = row.endMetricAbs ?? null;
+      return peak != null && end != null ? peak - end : null;
+    }
+    case "reversionPct": {
+      const peak = row.peakMetricAbs ?? null;
+      const end = row.endMetricAbs ?? null;
+      return peak != null && end != null && peak !== 0 ? (peak - end) / peak : null;
+    }
+    case "minHoldCandles":
+      return row.minHoldCandles ?? null;
+    case "adv20":
+      return row.adv20 ?? null;
+    case "adv20NF":
+      return row.adv20NF ?? null;
+    case "adv90":
+      return row.adv90 ?? null;
+    case "adv90NF":
+      return row.adv90NF ?? null;
+    case "avPreMhv":
+      return row.avPreMhv ?? null;
+    case "roundLot":
+      return row.roundLot ?? null;
+    case "vwap":
+      return row.vwap ?? null;
+    case "spread":
+      return row.spread ?? null;
+    case "lstPrcL":
+      return row.lstPrcL ?? null;
+    case "lstCls":
+      return row.lstCls ?? null;
+    case "yCls":
+      return row.yCls ?? null;
+    case "tCls":
+      return row.tCls ?? null;
+    case "clsToClsPct":
+      return row.clsToClsPct ?? null;
+    case "lo":
+      return row.lo ?? null;
+    case "newsCnt":
+      return row.newsCnt ?? null;
+    case "marketCapM":
+      return row.marketCapM ?? null;
+    case "preMktVolNF":
+      return row.preMktVolNF ?? null;
+    case "volNFfromLstCls":
+      return row.preMktVolNF != null && row.lstCls != null ? row.preMktVolNF * row.lstCls : null;
+    case "avPostMhVol90NF":
+      return row.avPostMhVol90NF ?? null;
+    case "volRel":
+      return row.volRel ?? null;
+    case "preMhBidLstPrcPct":
+      return row.preMhBidLstPrcPct ?? null;
+    case "preMhLoLstPrcPct":
+      return row.preMhLoLstPrcPct ?? null;
+    case "preMhHiLstClsPct":
+      return row.preMhHiLstClsPct ?? null;
+    case "preMhLoLstClsPct":
+      return row.preMhLoLstClsPct ?? null;
+    case "imbExch925":
+      return row.imbExch925 ?? null;
+    case "imbExch1555":
+      return row.imbExch1555 ?? null;
+  }
+}
+
+function scopeResearchResultValue(row: PaperArbClosedDto, key: ScopeResearchResultKey): number | null {
+  switch (key) {
+    case "avgPnlUsd":
+    case "totalPnlUsd":
+    case "winRate":
+    case "score":
+      return row.totalPnlUsd ?? null;
+    case "rawPnlUsd":
+      return row.rawPnlUsd ?? null;
+    case "benchPnlUsd":
+      return row.benchPnlUsd ?? null;
+    case "hedgedPnlUsd":
+      return row.hedgedPnlUsd ?? null;
+    case "peakMetricAbs":
+      return row.peakMetricAbs ?? null;
+    case "endMetricAbs":
+      return row.endMetricAbs ?? null;
+  }
+}
+
+function scopeResearchMetricValue(row: ScopeResearchStats, key: ScopeResearchResultKey): number {
+  switch (key) {
+    case "avgPnlUsd":
+      return row.avg;
+    case "totalPnlUsd":
+      return row.total;
+    case "winRate":
+      return row.winRate;
+    case "score":
+      return row.score;
+    default:
+      return row.avg;
+  }
+}
+
+function scopeResearchMetricLabel(key: ScopeResearchResultKey): string {
+  switch (key) {
+    case "avgPnlUsd":
+      return "avg/trade";
+    case "totalPnlUsd":
+      return "total";
+    case "winRate":
+      return "win";
+    case "score":
+      return "score";
+    default:
+      return "avg";
+  }
+}
+
+function scopeResearchSourceResultKey(key: ScopeResearchResultKey): ScopeResearchResultKey {
+  switch (key) {
+    case "avgPnlUsd":
+    case "totalPnlUsd":
+    case "winRate":
+    case "score":
+      return "totalPnlUsd";
+    default:
+      return key;
+  }
+}
+
+function scopeResearchOptionByValue<T extends string>(options: Array<ScopeResearchOption<T>>, value: T): ScopeResearchOption<T> {
+  return options.find((option) => option.value === value) ?? options[0];
+}
+
+function scopeResearchPercentile(sortedValues: number[], p: number): number {
+  if (!sortedValues.length) return 0;
+  if (sortedValues.length === 1) return sortedValues[0] ?? 0;
+  const pos = Math.max(0, Math.min(sortedValues.length - 1, (sortedValues.length - 1) * p));
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  const weight = pos - lo;
+  const left = sortedValues[lo] ?? sortedValues[0] ?? 0;
+  const right = sortedValues[hi] ?? sortedValues[sortedValues.length - 1] ?? left;
+  return left + (right - left) * weight;
+}
+
+function scopeResearchSummarize(values: number[]): ScopeResearchStats {
+  const sorted = [...values].sort((a, b) => a - b);
+  const count = sorted.length;
+  const total = sorted.reduce((sum, value) => sum + value, 0);
+  const avg = count ? total / count : 0;
+  const median = scopeResearchPercentile(sorted, 0.5);
+  const q1 = scopeResearchPercentile(sorted, 0.25);
+  const q3 = scopeResearchPercentile(sorted, 0.75);
+  const iqr = q3 - q1;
+  const lowerFence = q1 - iqr * 1.5;
+  const upperFence = q3 + iqr * 1.5;
+  return {
+    count,
+    total,
+    avg,
+    median,
+    winRate: count ? sorted.filter((value) => value > 0).length / count : 0,
+    score: avg,
+    q1,
+    q3,
+    lowerFence,
+    upperFence,
+    min: sorted[0] ?? 0,
+    max: sorted[count - 1] ?? 0,
+  };
+}
+
+function scopeResearchEdges(values: number[], bucketCount: number): number[] {
+  if (!values.length) return [];
+  const sorted = [...values].filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return [];
+  const minValue = sorted[0] ?? 0;
+  const maxValue = sorted[sorted.length - 1] ?? minValue;
+  if (minValue === maxValue) return [minValue - 0.5, maxValue + 0.5];
+
+  const count = Math.max(2, Math.min(32, Math.trunc(bucketCount) || 8));
+  const quantileEdges = Array.from({ length: count + 1 }, (_, index) => {
+    const p = index / count;
+    return scopeResearchPercentile(sorted, p);
+  });
+  quantileEdges[0] = minValue;
+  quantileEdges[quantileEdges.length - 1] = maxValue;
+
+  const deduped = quantileEdges.filter((edge, index, arr) => {
+    if (index === 0) return true;
+    return Math.abs(edge - (arr[index - 1] ?? edge)) > 1e-9;
+  });
+
+  if (deduped.length >= 3) {
+    return deduped;
+  }
+
+  const step = (maxValue - minValue) / count;
+  const fallbackEdges = Array.from({ length: count + 1 }, (_, index) => minValue + step * index);
+  fallbackEdges[0] = minValue;
+  fallbackEdges[fallbackEdges.length - 1] = maxValue;
+  return fallbackEdges;
+}
+
+function scopeResearchFormatValue(value: number, format: ScopeResearchValueFormat, digits = 2): string {
+  if (!Number.isFinite(value)) return "-";
+  switch (format) {
+    case "currency":
+      return `$${num(value, digits)}`;
+    case "clock":
+      return minuteIdxToClockLabel(Math.round(value));
+    case "minutes":
+      return `${intn(value)}m`;
+    case "percent":
+      return `${num(value * 100, 1)}%`;
+    case "number":
+    default:
+      return num(value, digits);
+  }
+}
+
+function scopeResearchRangeLabel(from: number, to: number, format: ScopeResearchValueFormat): string {
+  return `${scopeResearchFormatValue(from, format, format === "percent" ? 3 : 2)} .. ${scopeResearchFormatValue(
+    to,
+    format,
+    format === "percent" ? 3 : 2
+  )}`;
+}
+
+function scopeResearchLabelLines(label: string): [string, string?] {
+  const trimmed = label.trim();
+  if (trimmed.includes(" .. ")) {
+    const [left, right] = trimmed.split(" .. ");
+    return [left?.trim() ?? trimmed, `.. ${right?.trim() ?? ""}`.trim()];
+  }
+  if (trimmed.startsWith(">=") || trimmed.startsWith("<=")) {
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 2) {
+      return [parts.slice(0, 2).join(" "), parts.slice(2).join(" ") || undefined];
+    }
+  }
+  const mid = Math.ceil(trimmed.length / 2);
+  if (trimmed.length > 18) {
+    return [trimmed.slice(0, mid).trim(), trimmed.slice(mid).trim()];
+  }
+  return [trimmed];
+}
+
+function scopeResearchDailySeries(points: ScopeResearchPoint[]) {
+  const sorted = [...points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
+  const grouped = Array.from(
+    sorted.reduce((map, point) => {
+      const entry = map.get(point.dateKey) ?? { dateKey: point.dateKey, total: 0, count: 0, avgParam: 0, items: [] as ScopeResearchPoint[] };
+      entry.total += point.result;
+      entry.count += 1;
+      entry.avgParam += point.parameter;
+      entry.items.push(point);
+      map.set(point.dateKey, entry);
+      return map;
+    }, new Map<string, { dateKey: string; total: number; count: number; avgParam: number; items: ScopeResearchPoint[] }>())
+  ).map(([, entry]) => ({
+    ...entry,
+    avgParam: entry.count ? entry.avgParam / entry.count : 0,
+  }));
+
+  let running = 0;
+  return grouped.map((row, index) => {
+    running += row.total;
+    return { ...row, index, cumulative: running };
+  });
+}
+
+function ScopeResearchInsufficientState({
+  message,
+  detail = "Widen range, lower `Min N`, or reduce `Bins`.",
+}: {
+  message: string;
+  detail?: string;
+}) {
+  return (
+    <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-5 flex items-center justify-center">
+      <div className="max-w-[420px] text-center">
+        <div className="text-[11px] uppercase tracking-[0.18em] font-mono text-zinc-400">{message}</div>
+        <div className="mt-2 text-[11px] font-mono text-zinc-500">{detail}</div>
+      </div>
+    </div>
+  );
+}
+
+function buildScopeResearchSelectionFromDraft(draft: ScopeResearchDraft): ScopeResearchSelection {
+  return {
+    chartType: draft.chartType,
+    parameterKey: draft.parameterKey,
+    resultKey: scopeResearchNormalizeResultKey(draft.chartType, draft.resultKey),
+    bucketCount: draft.bucketCount,
+    minSamples: draft.minSamples,
+    thresholdMode: draft.thresholdMode,
+    domainFrom: optNumOrNull(draft.domainFrom),
+    domainTo: optNumOrNull(draft.domainTo),
+    extraFilters: draft.extraFilters.map((filter) => ({
+      id: filter.id,
+      parameterKey: filter.parameterKey,
+      from: optNumOrNull(filter.from),
+      to: optNumOrNull(filter.to),
+    })),
+    parallelFilters: draft.parallelFilters.map((filter) => ({
+      id: filter.id,
+      parameterKey: filter.parameterKey,
+      from: optNumOrNull(filter.from),
+      to: optNumOrNull(filter.to),
+    })),
+  };
+}
+
+function scopeResearchFilterMatchesRow(
+  row: PaperArbClosedDto,
+  filters: Array<{ parameterKey: ScopeResearchParameterKey; from: number | null; to: number | null }>
+) {
+  return filters.every((filter) => {
+    const value = scopeResearchParameterValue(row, filter.parameterKey);
+    if (value == null || !Number.isFinite(value)) return false;
+    const lo = filter.from != null && filter.to != null ? Math.min(filter.from, filter.to) : filter.from;
+    const hi = filter.from != null && filter.to != null ? Math.max(filter.from, filter.to) : filter.to;
+    if (lo != null && value < lo) return false;
+    if (hi != null && value > hi) return false;
+    return true;
+  });
+}
+
+function scopeResearchFilterLabel(
+  filter: { parameterKey: ScopeResearchParameterKey; from: number | null; to: number | null }
+) {
+  const option = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, filter.parameterKey);
+  const lo = filter.from != null && filter.to != null ? Math.min(filter.from, filter.to) : filter.from;
+  const hi = filter.from != null && filter.to != null ? Math.max(filter.from, filter.to) : filter.to;
+  if (lo != null && hi != null) {
+    return `${option.label} ${scopeResearchFormatValue(lo, option.format)} .. ${scopeResearchFormatValue(hi, option.format)}`;
+  }
+  if (lo != null) return `${option.label} >= ${scopeResearchFormatValue(lo, option.format)}`;
+  if (hi != null) return `${option.label} <= ${scopeResearchFormatValue(hi, option.format)}`;
+  return option.label;
+}
+
+function computeScopeResearch(
+  rows: PaperArbClosedDto[],
+  selection: ScopeResearchSelection | null,
+  fallbackDate: string,
+  fixedEdges?: number[],
+  includeParallel = true
+): ScopeResearchComputed | null {
+  if (!selection) return null;
+
+  const parameter = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, selection.parameterKey);
+  const result = scopeResearchOptionByValue(SCOPE_RESEARCH_RESULT_OPTIONS, selection.resultKey);
+  const sourceResult = scopeResearchOptionByValue(SCOPE_RESEARCH_RESULT_OPTIONS, scopeResearchSourceResultKey(selection.resultKey));
+  const rawPoints = rows
+    .filter((row) => scopeResearchFilterMatchesRow(row, selection.extraFilters))
+    .map((row) => {
+      const parameterValue = scopeResearchParameterValue(row, selection.parameterKey);
+      const resultValue = scopeResearchResultValue(row, selection.resultKey);
+      const dateKey = getEpisodeDateKey(row, fallbackDate) ?? "unknown";
+      return {
+        row,
+        parameter: parameterValue,
+        result: resultValue,
+        dateKey,
+        sortKey: Number(dateKey.replace(/-/g, "")) || 0,
+      };
+    })
+    .filter(
+      (point): point is ScopeResearchPoint =>
+        point.parameter != null && point.result != null && Number.isFinite(point.parameter) && Number.isFinite(point.result)
+    );
+  const domainLo = selection.domainFrom != null && selection.domainTo != null ? Math.min(selection.domainFrom, selection.domainTo) : selection.domainFrom;
+  const domainHi = selection.domainFrom != null && selection.domainTo != null ? Math.max(selection.domainFrom, selection.domainTo) : selection.domainTo;
+  const points = rawPoints.filter((point) => {
+    if (domainLo != null && point.parameter < domainLo) return false;
+    if (domainHi != null && point.parameter > domainHi) return false;
+    return true;
+  });
+
+  if (!points.length) {
+    return {
+      selection,
+      parameter,
+        result,
+        sourceResult,
+        sourceCount: 0,
+      points: [],
+      bins: [],
+      thresholds: [],
+      bestBin: null,
+      bestThreshold: null,
+      bestBox: null,
+      parallelSeries: [],
+      parallelPointSeries: [],
+    };
+  }
+
+  const parameterValues = points.map((point) => point.parameter);
+  const edges = fixedEdges && fixedEdges.length >= 2 ? fixedEdges : scopeResearchEdges(parameterValues, selection.bucketCount);
+  const minSamples = Math.max(1, Math.trunc(selection.minSamples) || 1);
+  const bins =
+    edges.length < 2
+      ? []
+      : Array.from({ length: edges.length - 1 }, (_, index) => ({
+          from: edges[index] ?? 0,
+          to: edges[index + 1] ?? 0,
+          values: [] as number[],
+        }))
+          .map((bucket, _, source) => {
+            for (const point of points) {
+              const bucketIndex = source.findIndex((candidate, candidateIndex) =>
+                candidateIndex === source.length - 1
+                  ? point.parameter >= candidate.from && point.parameter <= candidate.to
+                  : point.parameter >= candidate.from && point.parameter < candidate.to
+              );
+              if (bucketIndex >= 0 && source[bucketIndex] === bucket) {
+                bucket.values.push(point.result);
+              }
+            }
+            return bucket;
+          })
+          .map((bucket) =>
+            bucket.values.length < minSamples
+              ? null
+              : ({
+                  label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
+                  from: bucket.from,
+                  to: bucket.to,
+                  values: [...bucket.values],
+                  ...scopeResearchSummarize(bucket.values),
+                } satisfies ScopeResearchBinRow)
+          )
+          .filter(Boolean) as ScopeResearchBinRow[];
+
+  const thresholdSeeds = edges.slice(1, -1).length ? edges.slice(1, -1) : edges.slice(0, -1);
+  const thresholds = thresholdSeeds
+    .map((threshold) => {
+      const subset = points
+        .filter((point) => (selection.thresholdMode === "less_than" ? point.parameter <= threshold : point.parameter >= threshold))
+        .map((point) => point.result);
+      if (subset.length < minSamples) return null;
+      return {
+        label: `${selection.thresholdMode === "less_than" ? "<=" : ">="} ${scopeResearchFormatValue(
+          threshold,
+          parameter.format,
+          parameter.format === "percent" ? 3 : 2
+        )}`,
+        threshold,
+        ...scopeResearchSummarize(subset),
+      } satisfies ScopeResearchThresholdRow;
+    })
+    .filter(Boolean) as ScopeResearchThresholdRow[];
+
+  const bestBin = bins.length
+    ? [...bins].sort((a, b) => {
+        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
+        return delta !== 0 ? delta : b.count - a.count;
+      })[0] ?? null
+    : null;
+  const bestThreshold = thresholds.length
+    ? [...thresholds].sort((a, b) => {
+        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
+        return delta !== 0 ? delta : b.count - a.count;
+      })[0] ?? null
+    : null;
+  const bestBox = bins.length
+    ? [...bins].sort((a, b) => {
+        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
+        return delta !== 0 ? delta : b.count - a.count;
+      })[0] ?? null
+    : null;
+  const parallelSeries = includeParallel
+    ? selection.parallelFilters
+        .map((filter) => {
+          const computed = computeScopeResearch(
+            rows,
+            {
+              ...selection,
+              extraFilters: [...selection.extraFilters, filter],
+              parallelFilters: [],
+            },
+            fallbackDate,
+            edges,
+            false
+          );
+          if (!computed) return null;
+          const seriesRows =
+            selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins;
+          if (seriesRows.length < 2) return null;
+          return {
+            id: filter.id,
+            label: scopeResearchFilterLabel(filter),
+            rows: seriesRows,
+          };
+        })
+        .filter(Boolean) as ScopeResearchComputed["parallelSeries"]
+    : [];
+  const parallelPointSeries = includeParallel
+    ? selection.parallelFilters
+        .map((filter) => {
+          const computed = computeScopeResearch(
+            rows,
+            {
+              ...selection,
+              extraFilters: [...selection.extraFilters, filter],
+              parallelFilters: [],
+            },
+            fallbackDate,
+            edges,
+            false
+          );
+          if (!computed || !computed.points.length) return null;
+          return {
+            id: filter.id,
+            label: scopeResearchFilterLabel(filter),
+            points: computed.points,
+          };
+        })
+        .filter(Boolean) as ScopeResearchComputed["parallelPointSeries"]
+    : [];
+
+  return {
+    selection,
+    parameter,
+    result,
+    sourceResult,
+    sourceCount: points.length,
+    points,
+    bins,
+    thresholds,
+    bestBin,
+    bestThreshold,
+    bestBox,
+    parallelSeries,
+    parallelPointSeries,
+  };
+}
+
+function renderScopeChartTooltip(tooltip: ScopeChartTooltipData | null) {
+  if (!tooltip) return null;
+  const accentClass =
+    tooltip.accent === "amber"
+      ? "border-amber-400/25 shadow-[0_10px_30px_rgba(245,158,11,0.12)]"
+      : tooltip.accent === "cyan"
+        ? "border-cyan-400/25 shadow-[0_10px_30px_rgba(34,211,238,0.12)]"
+        : tooltip.accent === "fuchsia"
+          ? "border-fuchsia-400/25 shadow-[0_10px_30px_rgba(217,70,239,0.12)]"
+          : "border-emerald-400/25 shadow-[0_10px_30px_rgba(16,185,129,0.12)]";
+  return (
+    <div
+      className={clsx(
+        "pointer-events-none absolute z-20 min-w-[160px] max-w-[280px] rounded-xl border bg-[#06080d]/96 px-3 py-2 backdrop-blur-xl",
+        accentClass
+      )}
+      style={{
+        left: `${tooltip.x}px`,
+        top: `${tooltip.y}px`,
+        transform: "translate(-50%, -110%)",
+      }}
+    >
+      <div className="text-[10px] font-mono uppercase tracking-[0.16em] text-zinc-300">{tooltip.title}</div>
+      <div className="mt-1 space-y-0.5">
+        {tooltip.lines.map((line, index) => (
+          <div key={`${tooltip.title}-${index}`} className="text-[11px] font-mono text-zinc-400 whitespace-nowrap">
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function buildPaperQuery(params: Record<string, any>) {
@@ -850,26 +1817,174 @@ function GlassSelect({
 }: {
   value: string;
   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  options: { value: string; label: string }[];
+  options: Array<GlassSelectOption | GlassSelectGroup>;
   className?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const flatOptions = useMemo(
+    () =>
+      options.flatMap((opt) =>
+        "options" in opt ? opt.options.map((groupOption) => ({ ...groupOption, group: opt.label })) : [{ ...opt, group: null as string | null }]
+      ),
+    [options]
+  );
+  const selected = flatOptions.find((opt) => opt.value === value) ?? flatOptions.find((opt) => !opt.disabled) ?? null;
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePosition = () => {
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const viewportHeight = window.innerHeight || 0;
+      const viewportWidth = window.innerWidth || 0;
+      const roomBelow = viewportHeight - rect.bottom;
+      const roomAbove = rect.top;
+      const nextOpenUpward = roomBelow < 360 && roomAbove > roomBelow;
+      const maxWidth = Math.max(180, Math.min(320, viewportWidth - 24));
+      const width = Math.max(rect.width, 180);
+      const left = Math.min(Math.max(12, rect.left), Math.max(12, viewportWidth - Math.min(width, maxWidth) - 12));
+      setOpenUpward(nextOpenUpward);
+      setPanelStyle({
+        position: "fixed",
+        left,
+        width,
+        maxWidth,
+        top: nextOpenUpward ? undefined : Math.min(viewportHeight - 12, rect.bottom + 6),
+        bottom: nextOpenUpward ? Math.max(12, viewportHeight - rect.top + 6) : undefined,
+      });
+    };
+    updatePosition();
+    const onPointerDown = (event: MouseEvent) => {
+      const targetNode = event.target as Node;
+      if (!rootRef.current?.contains(targetNode) && !panelRef.current?.contains(targetNode)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const active = panelRef.current?.querySelector<HTMLButtonElement>("[data-selected='true']");
+    active?.scrollIntoView({ block: "nearest" });
+  }, [open, value]);
+
+  const emitChange = (nextValue: string) => {
+    onChange({ target: { value: nextValue } } as React.ChangeEvent<HTMLSelectElement>);
+    setOpen(false);
+  };
+
   return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={onChange}
+    <div ref={rootRef} className={clsx("relative", open && "z-[220] isolate")}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         className={clsx(
-          "appearance-none bg-black/20 border border-white/10 rounded-md px-2.5 py-1.5 pr-8 text-[11px] text-zinc-200 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all font-mono cursor-pointer",
+          "flex w-full items-center gap-2 rounded-lg border border-white/[0.06] bg-[#090b10] px-3 py-1.5 text-[11px] font-mono text-zinc-100 transition-all hover:border-white/[0.1] hover:bg-[#0c1018] focus:outline-none focus:border-emerald-500/30 focus:bg-[#0c1018]",
           className
         )}
       >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value} className="bg-zinc-900 text-white">
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-50 text-zinc-400">
+        <span className="min-w-0 flex-1 truncate text-left">{selected?.label ?? value}</span>
+        <span className={clsx("pointer-events-none text-zinc-500 transition-transform", open && "rotate-180 text-zinc-300")}>
+          <svg
+            width="10"
+            height="6"
+            viewBox="0 0 10 6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M1 1L5 5L9 1" />
+          </svg>
+        </span>
+      </button>
+      {open && typeof document !== "undefined" && panelStyle
+        ? createPortal(
+            <div
+              ref={panelRef}
+              style={panelStyle}
+              className="z-[9999] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0d14]/[0.99] shadow-[0_18px_48px_-18px_rgba(0,0,0,0.9)] backdrop-blur-xl"
+            >
+              <div className="max-h-[340px] overflow-y-auto py-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                {options.map((opt) =>
+                  "options" in opt ? (
+                    <div key={`group-${opt.label}`} className="px-1.5 py-1">
+                      <div className="px-2.5 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">
+                        {opt.label}
+                      </div>
+                      <div className="space-y-0.5">
+                        {opt.options.map((groupOption) => {
+                          const isSelected = groupOption.value === value;
+                          return (
+                            <button
+                              key={groupOption.value}
+                              type="button"
+                              data-selected={isSelected}
+                              disabled={groupOption.disabled}
+                              onClick={() => !groupOption.disabled && emitChange(groupOption.value)}
+                              className={clsx(
+                                "flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[11px] font-mono transition-all",
+                                groupOption.disabled
+                                  ? "cursor-not-allowed text-zinc-600"
+                                  : isSelected
+                                    ? "bg-emerald-500/12 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.22)]"
+                                    : "text-zinc-200 hover:bg-white/[0.04] hover:text-white"
+                              )}
+                              title={groupOption.disabled ? "Unavailable" : groupOption.label}
+                            >
+                              <span className="min-w-0 flex-1 truncate">{groupOption.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={opt.value} className="px-1.5 py-0.5">
+                      <button
+                        type="button"
+                        data-selected={opt.value === value}
+                        disabled={opt.disabled}
+                        onClick={() => !opt.disabled && emitChange(opt.value)}
+                        className={clsx(
+                          "flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[11px] font-mono transition-all",
+                          opt.disabled
+                            ? "cursor-not-allowed text-zinc-600"
+                            : opt.value === value
+                              ? "bg-emerald-500/12 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.22)]"
+                              : "text-zinc-200 hover:bg-white/[0.04] hover:text-white"
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+      <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 opacity-0">
         <svg
           width="10"
           height="6"
@@ -1366,6 +2481,118 @@ function OptimizerBarChart({
   );
 }
 
+function OptimizerDualMetricChart({
+  rows,
+  leftKey,
+  rightKey,
+  title,
+  meta,
+  leftLabel,
+  rightLabel,
+}: {
+  rows: OptimizerResultRow[];
+  leftKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
+  rightKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
+  title: string;
+  meta?: string;
+  leftLabel: string;
+  rightLabel: string;
+}) {
+  if (!rows.length) {
+    return (
+      <div className="w-full h-[300px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No optimizer results yet.
+      </div>
+    );
+  }
+
+  const leftValues = rows.map((row) => Number(row[leftKey] ?? 0));
+  const rightValues = rows.map((row) => Number(row[rightKey] ?? 0));
+  const leftMaxAbs = Math.max(1, ...leftValues.map((value) => Math.abs(value)));
+  const rightMaxAbs = Math.max(1, ...rightValues.map((value) => Math.abs(value)));
+  const formatValue = (key: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate", value: number) =>
+    key === "trades" ? intn(value) : key === "winRate" ? `${num(value * 100, 1)}%` : num(value, 2);
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#06070c]/90 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+      </div>
+      <div className="mb-2 grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">
+        <div />
+        <div>{leftLabel}</div>
+        <div />
+        <div>{rightLabel}</div>
+        <div />
+      </div>
+      <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+        {rows.map((row) => {
+          const left = Number(row[leftKey] ?? 0);
+          const right = Number(row[rightKey] ?? 0);
+          const leftWidthPct = Math.max(2, (Math.abs(left) / leftMaxAbs) * 100);
+          const rightWidthPct = Math.max(2, (Math.abs(right) / rightMaxAbs) * 100);
+          return (
+            <div key={`dual-${row.id}`} className="grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center">
+              <div className="text-[10px] font-mono text-zinc-400 truncate" title={`${row.parameter} | ${row.variant}`}>
+                {row.parameter} {row.variant}
+              </div>
+              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                <div
+                  className="h-full bg-emerald-400/80"
+                  style={{ width: `${leftWidthPct}%`, opacity: left < 0 ? 0.45 : 1 }}
+                />
+              </div>
+              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
+                {formatValue(leftKey, left)}
+              </div>
+              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                <div
+                  className="h-full bg-sky-400/80"
+                  style={{ width: `${rightWidthPct}%`, opacity: right < 0 ? 0.45 : 1 }}
+                />
+              </div>
+              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
+                {formatValue(rightKey, right)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EyeToggleIcon({ closed }: { closed: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {closed ? (
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+          <path d="M9.9 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a18.4 18.4 0 0 1-3 3.8" />
+          <path d="M6.6 6.6C4.1 8.3 2 12 2 12a18.6 18.6 0 0 0 7.5 5.7" />
+        </>
+      ) : (
+        <>
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function OptimizerParameterRangeCard({
   parameter,
   rankMetric,
@@ -1411,33 +2638,33 @@ function OptimizerParameterRangeCard({
 
   return (
     <GlassCard className="p-0 overflow-hidden border border-white/[0.08] bg-[linear-gradient(180deg,rgba(7,9,16,0.96),rgba(4,5,9,0.98))] shadow-[0_20px_60px_-36px_rgba(0,0,0,0.9)]">
-      <div className="border-b border-white/[0.06] bg-[linear-gradient(135deg,rgba(16,185,129,0.08),rgba(56,189,248,0.04))] px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+      <div className="border-b border-white/[0.06] bg-[linear-gradient(135deg,rgba(16,185,129,0.08),rgba(56,189,248,0.04))] px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2.5">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <div className="text-[10px] uppercase tracking-[0.24em] font-mono text-zinc-500">{parameter.group}</div>
-              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-emerald-300">
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-emerald-300">
                 {parameter.label}
               </span>
             </div>
-            <div className="text-[11px] font-mono text-zinc-300 mt-2">
-              observed {num(parameter.observedMin, 2)} .. {num(parameter.observedMax, 2)} | values {intn(parameter.valueCount)} | buckets {intn(bucketCount)}
+            <div className="text-[10px] font-mono text-zinc-300 mt-1.5">
+              {num(parameter.observedMin, 2)} .. {num(parameter.observedMax, 2)} | n {intn(parameter.valueCount)} | b {intn(bucketCount)}
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-right">
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
-              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base Trades</div>
-              <div className="text-[12px] font-mono text-zinc-200 mt-1">{intn(parameter.baseTrades)}</div>
+          <div className="grid grid-cols-3 gap-1.5 text-right">
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Trades</div>
+              <div className="text-[11px] font-mono text-zinc-200 mt-0.5">{intn(parameter.baseTrades)}</div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
-              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base PnL</div>
-              <div className={clsx("text-[12px] font-mono mt-1", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">PnL</div>
+              <div className={clsx("text-[11px] font-mono mt-0.5", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
                 {num(baseTotalPnl, 2)}
               </div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5">
-              <div className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">Base Avg</div>
-              <div className={clsx("text-[12px] font-mono mt-1", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Avg</div>
+              <div className={clsx("text-[11px] font-mono mt-0.5", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
                 {num(baseAvgPnl, 2)}
               </div>
             </div>
@@ -1445,27 +2672,27 @@ function OptimizerParameterRangeCard({
         </div>
       </div>
 
-      <div className="p-4">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
+      <div className="p-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5 mb-3">
         {[
           { label: "BEST RANGE", item: bestBucket },
           { label: "BEST <= X", item: bestLowerTail },
           { label: "BEST >= X", item: bestUpperTail },
         ].map((entry) => (
-          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-3">
-            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-1">{entry.label}</div>
-            <div className="text-[12px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
-            <div className="text-[10px] font-mono mt-2">
+          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-2.5">
+            <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500 mb-1">{entry.label}</div>
+            <div className="text-[11px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
+            <div className="text-[10px] font-mono mt-1.5">
               <span className={clsx(entry.item && entry.item.avgPnlUsd > 0 ? "text-emerald-300" : entry.item && entry.item.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-400")}>
                 avg {num(entry.item?.avgPnlUsd, 2)}
               </span>
               {" | "}
               <span className="text-zinc-400">trades {intn(entry.item?.trades)}</span>
             </div>
-            <div className="text-[10px] font-mono text-zinc-500 mt-1">
+            <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
               pnl {num(entry.item?.totalPnlUsd, 2)} | hit {num((entry.item?.winRate ?? 0) * 100, 1)}%
             </div>
-            <div className="mt-2 flex items-center gap-2 text-[10px] font-mono">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
               <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-white/[0.04] text-zinc-400")}>
                 dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
               </span>
@@ -1477,12 +2704,12 @@ function OptimizerParameterRangeCard({
         ))}
       </div>
 
-      <div className="grid grid-cols-8 gap-1.5 mb-4">
+      <div className="grid grid-cols-7 xl:grid-cols-8 gap-1 mb-3">
         {buckets.map((bucket) => (
           <div
             key={`heat-${bucket.bucketId}`}
             className={clsx(
-              "h-8 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono",
+              "h-7 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono",
               bucket.avgPnlUsd > 0
                 ? "bg-emerald-500/20 text-emerald-300"
                 : bucket.avgPnlUsd < 0
@@ -1497,19 +2724,19 @@ function OptimizerParameterRangeCard({
         ))}
       </div>
 
-      <div className="space-y-2 mb-4 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+      <div className="space-y-1.5 mb-3 rounded-xl border border-white/[0.06] bg-black/20 p-2.5">
         <div className="flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Range Strength</div>
-          <div className="text-[10px] font-mono text-zinc-600">relative score map</div>
+          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Range Strength</div>
+          <div className="text-[9px] font-mono text-zinc-600">score</div>
         </div>
         {buckets.map((bucket) => {
           const widthPct = Math.max(6, (Math.abs(bucket.score) / maxAbsScore) * 100);
           return (
-            <div key={bucket.bucketId} className="grid grid-cols-[160px_1fr_72px] gap-3 items-center">
+            <div key={bucket.bucketId} className="grid grid-cols-[118px_1fr_58px] gap-2 items-center">
               <div className="text-[10px] font-mono text-zinc-400 truncate" title={bucket.label}>
                 {bucket.label}
               </div>
-              <div className="h-5 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+              <div className="h-[18px] rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
                 <div
                   className={clsx(
                     "h-full",
@@ -1527,44 +2754,44 @@ function OptimizerParameterRangeCard({
       </div>
 
       <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-        <table className="min-w-[980px] w-full text-xs font-mono">
+        <table className="min-w-[760px] w-full text-[11px] font-mono">
           <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
             <tr>
-              <th className="text-left p-2 uppercase tracking-widest text-[10px]">Range</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Trades</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Coverage</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">WinRate</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dWin</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">TotalPnL</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dPnL</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">Avg/Trade</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">dAvg</th>
-              <th className="text-right p-2 uppercase tracking-widest text-[10px]">W/L</th>
+              <th className="text-left px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Range</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">N</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Cov</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Win</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dW</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">PnL</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dP</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Avg</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dA</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">W/L</th>
             </tr>
           </thead>
           <tbody>
             {buckets.map((bucket) => (
               <tr key={`${parameter.key}-${bucket.bucketId}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                <td className="p-2 text-zinc-200">{bucket.label}</td>
-                <td className="p-2 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
-                <td className="p-2 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
-                <td className="p-2 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
-                <td className={clsx("p-2 text-right tabular-nums", bucket.winRate - baseWinRate > 0 ? "text-emerald-300" : bucket.winRate - baseWinRate < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className="px-2 py-1.5 text-zinc-200 whitespace-nowrap">{bucket.label}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
+                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.winRate - baseWinRate > 0 ? "text-emerald-300" : bucket.winRate - baseWinRate < 0 ? "text-rose-300" : "text-zinc-300")}>
                   {num((bucket.winRate - baseWinRate) * 100, 1)}%
                 </td>
-                <td className={clsx("p-2 text-right tabular-nums", bucket.totalPnlUsd > 0 ? "text-emerald-300" : bucket.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.totalPnlUsd > 0 ? "text-emerald-300" : bucket.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
                   {num(bucket.totalPnlUsd, 2)}
                 </td>
-                <td className={clsx("p-2 text-right tabular-nums", bucket.totalPnlUsd - baseTotalPnl > 0 ? "text-emerald-300" : bucket.totalPnlUsd - baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.totalPnlUsd - baseTotalPnl > 0 ? "text-emerald-300" : bucket.totalPnlUsd - baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
                   {num(bucket.totalPnlUsd - baseTotalPnl, 2)}
                 </td>
-                <td className={clsx("p-2 text-right tabular-nums font-bold", bucket.avgPnlUsd > 0 ? "text-emerald-300" : bucket.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", bucket.avgPnlUsd > 0 ? "text-emerald-300" : bucket.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
                   {num(bucket.avgPnlUsd, 2)}
                 </td>
-                <td className={clsx("p-2 text-right tabular-nums font-bold", bucket.avgPnlUsd - baseAvgPnl > 0 ? "text-emerald-300" : bucket.avgPnlUsd - baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", bucket.avgPnlUsd - baseAvgPnl > 0 ? "text-emerald-300" : bucket.avgPnlUsd - baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
                   {num(bucket.avgPnlUsd - baseAvgPnl, 2)}
                 </td>
-                <td className="p-2 text-right tabular-nums text-zinc-300">
+                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300 whitespace-nowrap">
                   {intn(bucket.wins)} / {intn(bucket.losses)}
                 </td>
               </tr>
@@ -2259,6 +3486,1344 @@ function PeakReversionTwoThirdsChart({
   );
 }
 
+function ScopeResearchSeriesChart({
+  rows,
+  parallelSeries = [],
+  title,
+  meta,
+  resultKey,
+  resultFormat,
+  accent = "emerald",
+}: {
+  rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
+  parallelSeries?: Array<{
+    id: string;
+    label: string;
+    rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
+  }>;
+  title: string;
+  meta?: string;
+  resultKey: ScopeResearchResultKey;
+  resultFormat: ScopeResearchValueFormat;
+  accent?: "emerald" | "amber";
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 14;
+  const padRight = 68;
+  const padTop = 72;
+  const padBottom = 118;
+  const splitGap = 10;
+  const topH = 286;
+  const barsTop = padTop + topH + splitGap;
+  const barsH = h - barsTop - padBottom;
+
+  if (!rows.length) {
+    return (
+      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No scope data for selected settings.
+      </div>
+    );
+  }
+  if (rows.length < 3) {
+    return <ScopeResearchInsufficientState message="Need at least 3 populated groups for this graph." />;
+  }
+
+  const maxCount = Math.max(1, ...rows.map((row) => row.count));
+  const metricLabel = scopeResearchMetricLabel(resultKey);
+  const metricValues = rows.map((row) => scopeResearchMetricValue(row, resultKey));
+  const medianValues = rows.map((row) => row.median);
+  const winRateValues = rows.map((row) => row.winRate);
+  const parallelMetricValues = parallelSeries.flatMap((series) => series.rows.map((row) => scopeResearchMetricValue(row, resultKey)));
+  const supportValues =
+    resultKey === "winRate" ? [] : resultKey === "avgPnlUsd" || resultKey === "score" ? medianValues : winRateValues;
+  const minMetric = Math.min(...metricValues, ...(supportValues.length ? supportValues : []), ...(parallelMetricValues.length ? parallelMetricValues : [0]));
+  const maxMetric = Math.max(...metricValues, ...(supportValues.length ? supportValues : []), ...(parallelMetricValues.length ? parallelMetricValues : [0]));
+  const metricSpan = maxMetric - minMetric || 1;
+  const xAt = (index: number) =>
+    rows.length === 1 ? (padLeft + (w - padRight)) / 2 : padLeft + (index / (rows.length - 1)) * (w - padLeft - padRight);
+  const yMetric = (value: number) => padTop + (1 - (value - minMetric) / metricSpan) * topH;
+  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
+  const lineD = metricValues.map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yMetric(value).toFixed(2)}`).join(" ");
+  const medianD = medianValues
+    .map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yMetric(value).toFixed(2)}`)
+    .join(" ");
+  const winD = winRateValues
+    .map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${(padTop + (1 - value) * topH).toFixed(2)}`)
+    .join(" ");
+  const areaD = `${lineD} L ${xAt(rows.length - 1).toFixed(2)} ${(padTop + topH).toFixed(2)} L ${xAt(0).toFixed(2)} ${(padTop + topH).toFixed(2)} Z`;
+  const xTicks = rows.filter((_, index) => {
+    if (rows.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(rows.length / 6));
+    return index === 0 || index === rows.length - 1 || index % step === 0;
+  });
+  const accentStops =
+    accent === "amber"
+      ? {
+          strokeA: "rgba(251,191,36,0.95)",
+          strokeB: "rgba(245,158,11,0.9)",
+          fillA: "rgba(251,191,36,0.28)",
+          fillB: "rgba(251,191,36,0.02)",
+          bar: "rgba(245,158,11,0.7)",
+        }
+      : {
+          strokeA: "rgba(45,212,191,0.95)",
+          strokeB: "rgba(110,231,183,0.95)",
+          fillA: "rgba(16,185,129,0.3)",
+          fillB: "rgba(16,185,129,0.02)",
+          bar: "rgba(56,189,248,0.58)",
+        };
+  const parallelPalette = [
+    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
+    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
+    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
+    { stroke: "rgba(251,113,133,0.95)", chip: "border-rose-500/15 bg-rose-500/8 text-rose-300/90" },
+  ];
+
+  const showTooltip = (
+    event: React.MouseEvent<SVGElement>,
+    row: ScopeResearchBinRow | ScopeResearchThresholdRow,
+    seriesLabel?: string
+  ) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: seriesLabel ? `${seriesLabel} | ${row.label}` : row.label,
+      accent: accent === "amber" ? "amber" : "emerald",
+      lines: [
+        `${metricLabel} ${scopeResearchFormatValue(scopeResearchMetricValue(row, resultKey), resultFormat)}`,
+        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
+        `total ${scopeResearchFormatValue(row.total, resultFormat)}`,
+        `count ${intn(row.count)}`,
+        `win ${num(row.winRate * 100, 1)}%`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">{metricLabel}</span>
+        {resultKey !== "winRate" ? <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">median</span> : null}
+        {resultKey !== "totalPnlUsd" ? <span className="rounded-full border border-violet-500/15 bg-violet-500/8 px-2 py-0.5 text-violet-300/90">win</span> : null}
+        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
+        {parallelSeries.map((series, index) => (
+          <span
+            key={`parallel-chip-${series.id}`}
+            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
+            title={series.label}
+          >
+            {series.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <linearGradient id={`scope-line-${chartId}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={accentStops.strokeA} />
+            <stop offset="100%" stopColor={accentStops.strokeB} />
+          </linearGradient>
+          <linearGradient id={`scope-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={accentStops.fillA} />
+            <stop offset="100%" stopColor={accentStops.fillB} />
+          </linearGradient>
+          <linearGradient id={`scope-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={accentStops.bar} />
+            <stop offset="100%" stopColor="rgba(15,23,42,0.18)" />
+          </linearGradient>
+          <filter id={`scope-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={topH} fill="rgba(8,15,26,0.45)" rx="14" />
+        <rect x={padLeft} y={barsTop} width={w - padLeft - padRight} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + topH - t * topH;
+          const value = minMetric + metricSpan * t;
+          return (
+            <g key={`metric-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(value, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={padTop + topH} y2={padTop + topH} stroke="rgba(255,255,255,0.12)" />
+        <path d={areaD} fill={`url(#scope-fill-${chartId})`} />
+        {resultKey !== "winRate" ? <path d={medianD} fill="none" stroke="rgba(244,244,245,0.35)" strokeWidth="1.2" strokeDasharray="5 5" /> : null}
+        {resultKey !== "totalPnlUsd" ? <path d={winD} fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.4" strokeDasharray="4 5" /> : null}
+        <path d={lineD} fill="none" stroke={`url(#scope-line-${chartId})`} strokeWidth="2.8" filter={`url(#scope-glow-${chartId})`} />
+        {parallelSeries.map((series, seriesIndex) => {
+          const color = parallelPalette[seriesIndex % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
+          const rowsByLabel = new Map(series.rows.map((row) => [row.label, row]));
+          const points = rows
+            .map((row, index) => {
+              const match = rowsByLabel.get(row.label);
+              return match ? { row: match, index } : null;
+            })
+            .filter(Boolean) as Array<{ row: ScopeResearchBinRow | ScopeResearchThresholdRow; index: number }>;
+          if (points.length < 2) return null;
+          const pathD = points
+            .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(point.index).toFixed(2)} ${yMetric(scopeResearchMetricValue(point.row, resultKey)).toFixed(2)}`)
+            .join(" ");
+          return (
+            <g key={`parallel-series-${series.id}`}>
+              <path d={pathD} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" opacity="0.95" />
+              {points.map((point) => (
+                <circle
+                  key={`parallel-point-${series.id}-${point.index}`}
+                  cx={xAt(point.index)}
+                  cy={yMetric(scopeResearchMetricValue(point.row, resultKey))}
+                  r="3.2"
+                  fill={color}
+                  onMouseMove={(event) => showTooltip(event, point.row, series.label)}
+                  onMouseEnter={(event) => showTooltip(event, point.row, series.label)}
+                />
+              ))}
+            </g>
+          );
+        })}
+        {rows.map((row, index) => {
+          const x = xAt(index);
+          const barW = Math.max(14, Math.min(34, (w - padLeft - padRight) / Math.max(1, rows.length) - 10));
+          const y = yBar(row.count);
+          return (
+            <g key={`${row.label}-${index}`}>
+              <rect
+                x={x - Math.max(20, barW)}
+                y={padTop}
+                width={Math.max(40, barW * 2)}
+                height={h - padTop - padBottom + 8}
+                fill="transparent"
+                onMouseMove={(event) => showTooltip(event, row)}
+                onMouseEnter={(event) => showTooltip(event, row)}
+              />
+              <rect
+                x={x - barW / 2}
+                y={y}
+                width={barW}
+                height={Math.max(3, barsTop + barsH - y)}
+                rx="5"
+                fill={`url(#scope-bars-${chartId})`}
+                stroke="rgba(125,211,252,0.35)"
+                strokeWidth="0.8"
+              />
+              <circle cx={x} cy={yMetric(scopeResearchMetricValue(row, resultKey))} r="4.2" fill={accentStops.strokeA} onMouseMove={(event) => showTooltip(event, row)} />
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
+        {xTicks.map((row) => {
+          const index = rows.findIndex((candidate) => candidate.label === row.label);
+          const x = xAt(index);
+          const [line1, line2] = scopeResearchLabelLines(row.label);
+          return (
+            <g key={`tick-${row.label}`}>
+              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.2)" />
+              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                <tspan x={x} dy="0">{line1}</tspan>
+                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchBoxChart({
+  rows,
+  title,
+  meta,
+  resultFormat,
+}: {
+  rows: ScopeResearchBinRow[];
+  title: string;
+  meta?: string;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 14;
+  const padRight = 68;
+  const padTop = 58;
+  const padBottom = 118;
+  if (!rows.length) {
+    return (
+      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No box groups for selected settings.
+      </div>
+    );
+  }
+  if (rows.length < 3) {
+    return <ScopeResearchInsufficientState message="Need at least 3 populated boxes for `simple_box`." />;
+  }
+  const minY = Math.min(...rows.map((row) => row.lowerFence));
+  const maxY = Math.max(...rows.map((row) => row.upperFence));
+  const span = maxY - minY || 1;
+  const plotH = h - padTop - padBottom;
+  const xAt = (index: number) =>
+    rows.length === 1 ? (padLeft + (w - padRight)) / 2 : padLeft + (index / Math.max(1, rows.length - 1)) * (w - padLeft - padRight);
+  const yAt = (value: number) => padTop + (1 - (value - minY) / span) * plotH;
+  const boxWidth = Math.max(24, Math.min(46, (w - padLeft - padRight) / Math.max(1, rows.length) - 14));
+  const xTicks = rows.filter((_, index) => {
+    if (rows.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(rows.length / 6));
+    return index === 0 || index === rows.length - 1 || index % step === 0;
+  });
+
+  const showTooltip = (event: React.MouseEvent<SVGElement>, row: ScopeResearchBinRow) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: row.label,
+      accent: "cyan",
+      lines: [
+        `avg ${scopeResearchFormatValue(row.avg, resultFormat)}`,
+        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
+        `q1 ${scopeResearchFormatValue(row.q1, resultFormat)}`,
+        `q3 ${scopeResearchFormatValue(row.q3, resultFormat)}`,
+        `min/max ${scopeResearchFormatValue(row.min, resultFormat)} / ${scopeResearchFormatValue(row.max, resultFormat)}`,
+        `count ${intn(row.count)}`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <filter id={`scope-box-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2.2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={plotH} fill="rgba(8,15,26,0.34)" rx="14" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + plotH - t * plotH;
+          const value = minY + span * t;
+          return (
+            <g key={`box-y-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(value, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        {rows.map((row, index) => {
+          const x = xAt(index);
+          const yMin = yAt(row.min);
+          const yMax = yAt(row.max);
+          const yQ1 = yAt(row.q1);
+          const yMedian = yAt(row.median);
+          const yQ3 = yAt(row.q3);
+          const yLow = yAt(row.lowerFence);
+          const yHigh = yAt(row.upperFence);
+          return (
+            <g key={`${row.label}-${index}`}>
+              <rect
+                x={x - Math.max(24, boxWidth)}
+                y={padTop}
+                width={Math.max(48, boxWidth * 2)}
+                height={plotH}
+                fill="transparent"
+                onMouseEnter={(event) => showTooltip(event, row)}
+                onMouseMove={(event) => showTooltip(event, row)}
+              />
+              <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke="rgba(255,255,255,0.35)" />
+              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMax} y2={yMax} stroke="rgba(251,113,133,0.6)" />
+              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMin} y2={yMin} stroke="rgba(251,113,133,0.6)" />
+              <rect
+                x={x - boxWidth / 2}
+                y={yQ3}
+                width={boxWidth}
+                height={Math.max(3, yQ1 - yQ3)}
+                rx="6"
+                fill="rgba(34,211,238,0.16)"
+                stroke="rgba(34,211,238,0.75)"
+                filter={`url(#scope-box-glow-${chartId})`}
+              />
+              <line x1={x - boxWidth / 2} x2={x + boxWidth / 2} y1={yMedian} y2={yMedian} stroke="rgba(110,231,183,0.95)" strokeWidth="2" />
+              <circle cx={x} cy={yAt(row.avg)} r="4.2" fill="rgba(250,204,21,0.92)" onMouseMove={(event) => showTooltip(event, row)} />
+              <text x={x} y={padTop - 10} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
+                {intn(row.count)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
+        {xTicks.map((row) => {
+          const index = rows.findIndex((candidate) => candidate.label === row.label);
+          const x = xAt(index);
+          const [line1, line2] = scopeResearchLabelLines(row.label);
+          return (
+            <g key={`box-tick-${row.label}`}>
+              <line x1={x} x2={x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.2)" />
+              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                <tspan x={x} dy="0">{line1}</tspan>
+                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchDistributionChart({
+  points,
+  title,
+  meta,
+  resultFormat,
+}: {
+  points: ScopeResearchPoint[];
+  title: string;
+  meta?: string;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 22;
+  const padRight = 74;
+  const padTop = 72;
+  const padBottom = 96;
+  const values = points.map((point) => point.result).filter(Number.isFinite);
+  const edges = scopeResearchEdges(values, Math.min(24, Math.max(8, Math.round(Math.sqrt(values.length)))));
+  const bins =
+    edges.length < 2
+      ? []
+      : Array.from({ length: edges.length - 1 }, (_, index) => {
+          const from = edges[index] ?? 0;
+          const to = edges[index + 1] ?? 0;
+          const items = points.filter((point) =>
+            index === edges.length - 2 ? point.result >= from && point.result <= to : point.result >= from && point.result < to
+          );
+          return {
+            label: scopeResearchRangeLabel(from, to, resultFormat),
+            from,
+            to,
+            count: items.length,
+            positive: to >= 0,
+          };
+        }).filter((bin) => bin.count > 0);
+
+  if (!bins.length) {
+    return (
+      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No distribution data for selected settings.
+      </div>
+    );
+  }
+  if (bins.length < 3) {
+    return <ScopeResearchInsufficientState message="Need at least 3 populated bars for `distribution`." />;
+  }
+
+  const plotW = w - padLeft - padRight;
+  const plotH = h - padTop - padBottom;
+  const maxCount = Math.max(1, ...bins.map((bin) => bin.count));
+  const minValue = edges[0] ?? 0;
+  const maxValue = edges[edges.length - 1] ?? 1;
+  const meanValue = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const barW = Math.max(10, Math.min(58, plotW / bins.length - 8));
+  const xAt = (index: number) => padLeft + ((index + 0.5) / bins.length) * plotW;
+  const yCount = (value: number) => padTop + plotH - (value / maxCount) * plotH;
+  const meanX = padLeft + ((meanValue - minValue) / (maxValue - minValue || 1)) * plotW;
+  const xTicks = bins.filter((_, index) => {
+    if (bins.length <= 7) return true;
+    const step = Math.max(1, Math.ceil(bins.length / 7));
+    return index === 0 || index === bins.length - 1 || index % step === 0;
+  });
+
+  const showTooltip = (
+    event: React.MouseEvent<SVGElement>,
+    bin: { label: string; count: number; from: number; to: number; positive: boolean }
+  ) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: bin.label,
+      accent: "fuchsia",
+      lines: [
+        `count ${intn(bin.count)}`,
+        `from ${scopeResearchFormatValue(bin.from, resultFormat)}`,
+        `to ${scopeResearchFormatValue(bin.to, resultFormat)}`,
+        bin.positive ? "positive bucket" : "negative bucket",
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">positive</span>
+        <span className="rounded-full border border-rose-500/15 bg-rose-500/8 px-2 py-0.5 text-rose-300/90">negative</span>
+        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">mean</span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <linearGradient id={`scope-dist-pos-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(16,185,129,0.78)" />
+            <stop offset="100%" stopColor="rgba(16,185,129,0.14)" />
+          </linearGradient>
+          <linearGradient id={`scope-dist-neg-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(244,63,94,0.78)" />
+            <stop offset="100%" stopColor="rgba(244,63,94,0.14)" />
+          </linearGradient>
+        </defs>
+        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + plotH - t * plotH;
+          return (
+            <g key={`dist-grid-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {intn(Math.round(maxCount * t))}
+              </text>
+            </g>
+          );
+        })}
+        {bins.map((bin, index) => {
+          const x = xAt(index);
+          const y = yCount(bin.count);
+          return (
+            <g key={`dist-bar-${bin.label}-${index}`}>
+              <rect
+                x={x - Math.max(18, barW)}
+                y={padTop}
+                width={Math.max(36, barW * 2)}
+                height={plotH}
+                fill="transparent"
+                onMouseEnter={(event) => showTooltip(event, bin)}
+                onMouseMove={(event) => showTooltip(event, bin)}
+              />
+              <rect
+                x={x - barW / 2}
+                y={y}
+                width={barW}
+                height={Math.max(3, padTop + plotH - y)}
+                rx="8"
+                fill={bin.positive ? `url(#scope-dist-pos-${chartId})` : `url(#scope-dist-neg-${chartId})`}
+                stroke={bin.positive ? "rgba(16,185,129,0.32)" : "rgba(244,63,94,0.32)"}
+              />
+            </g>
+          );
+        })}
+        <line x1={meanX} x2={meanX} y1={padTop} y2={padTop + plotH} stroke="rgba(244,244,245,0.55)" strokeDasharray="5 5" />
+        <line x1={padLeft} x2={w - padRight} y1={padTop + plotH} y2={padTop + plotH} stroke="rgba(255,255,255,0.12)" />
+        {xTicks.map((bin) => {
+          const index = bins.findIndex((candidate) => candidate.label === bin.label);
+          const x = xAt(index);
+          const [line1, line2] = scopeResearchLabelLines(bin.label);
+          return (
+            <g key={`dist-tick-${bin.label}`}>
+              <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
+              <text x={x} y={h - 28} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                <tspan x={x} dy="0">{line1}</tspan>
+                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchViolinChart({
+  rows,
+  title,
+  meta,
+  resultFormat,
+}: {
+  rows: ScopeResearchBinRow[];
+  title: string;
+  meta?: string;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 18;
+  const padRight = 68;
+  const padTop = 72;
+  const padBottom = 112;
+  const barsH = 70;
+  const plotH = h - padTop - padBottom - barsH;
+  const barsTop = padTop + plotH + 18;
+  if (!rows.length) {
+    return (
+      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No violin groups for selected settings.
+      </div>
+    );
+  }
+  if (rows.length < 3) {
+    return <ScopeResearchInsufficientState message="Need at least 3 populated violins for `beauty_violin`." />;
+  }
+  const minY = Math.min(...rows.map((row) => row.min));
+  const maxY = Math.max(...rows.map((row) => row.max));
+  const spanY = maxY - minY || 1;
+  const maxCount = Math.max(1, ...rows.map((row) => row.count));
+  const plotW = w - padLeft - padRight;
+  const xAt = (index: number) =>
+    rows.length === 1 ? padLeft + plotW / 2 : padLeft + (index / Math.max(1, rows.length - 1)) * plotW;
+  const yAt = (value: number) => padTop + plotH - ((value - minY) / spanY) * plotH;
+  const barW = Math.max(18, Math.min(44, plotW / Math.max(1, rows.length) - 10));
+  const violinHalfW = Math.max(22, Math.min(54, plotW / Math.max(1, rows.length) * 0.28));
+  const xTicks = rows.filter((_, index) => {
+    if (rows.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(rows.length / 6));
+    return index === 0 || index === rows.length - 1 || index % step === 0;
+  });
+
+  const buildViolinPath = (row: ScopeResearchBinRow, centerX: number) => {
+    if (row.values.length < 2 || row.min === row.max) {
+      const y = yAt(row.median);
+      return `M ${(centerX - 8).toFixed(1)} ${y.toFixed(1)} L ${(centerX + 8).toFixed(1)} ${y.toFixed(1)}`;
+    }
+    const slices = 14;
+    const step = (row.max - row.min) / slices || 1;
+    const counts = Array.from({ length: slices }, (_, index) => {
+      const y0 = row.min + step * index;
+      const y1 = index === slices - 1 ? row.max + 1e-9 : y0 + step;
+      return row.values.filter((value) => value >= y0 && value < y1).length;
+    });
+    const maxSlice = Math.max(1, ...counts);
+    const points = counts.map((count, index) => {
+      const yValue = row.min + step * (index + 0.5);
+      const width = Math.max(4, (count / maxSlice) * violinHalfW);
+      return { y: yAt(yValue), width };
+    });
+    const right = points.map((point, index) => `${index === 0 ? "M" : "L"} ${(centerX + point.width).toFixed(1)} ${point.y.toFixed(1)}`);
+    const left = [...points]
+      .reverse()
+      .map((point) => `L ${(centerX - point.width).toFixed(1)} ${point.y.toFixed(1)}`);
+    return [...right, ...left, "Z"].join(" ");
+  };
+
+  const showTooltip = (event: React.MouseEvent<SVGElement>, row: ScopeResearchBinRow) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: row.label,
+      accent: "fuchsia",
+      lines: [
+        `avg ${scopeResearchFormatValue(row.avg, resultFormat)}`,
+        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
+        `q1/q3 ${scopeResearchFormatValue(row.q1, resultFormat)} / ${scopeResearchFormatValue(row.q3, resultFormat)}`,
+        `range ${scopeResearchFormatValue(row.min, resultFormat)} .. ${scopeResearchFormatValue(row.max, resultFormat)}`,
+        `count ${intn(row.count)}`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        <span className="rounded-full border border-fuchsia-500/15 bg-fuchsia-500/8 px-2 py-0.5 text-fuchsia-300/90">violin</span>
+        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">meanline</span>
+        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <linearGradient id={`scope-violin-fill-${chartId}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="rgba(217,70,239,0.24)" />
+            <stop offset="100%" stopColor="rgba(34,211,238,0.18)" />
+          </linearGradient>
+          <linearGradient id={`scope-violin-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(56,189,248,0.74)" />
+            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
+          </linearGradient>
+          <filter id={`scope-violin-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
+        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + plotH - t * plotH;
+          return (
+            <g key={`violin-grid-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        {rows.map((row, index) => {
+          const x = xAt(index);
+          const barHeight = Math.max(4, (row.count / maxCount) * barsH);
+          const boxTop = yAt(row.q3);
+          const boxBottom = yAt(row.q1);
+          return (
+            <g key={`violin-${row.label}-${index}`}>
+              <rect
+                x={x - Math.max(28, violinHalfW + 10)}
+                y={padTop}
+                width={Math.max(56, (violinHalfW + 10) * 2)}
+                height={barsTop + barsH - padTop}
+                fill="transparent"
+                onMouseEnter={(event) => showTooltip(event, row)}
+                onMouseMove={(event) => showTooltip(event, row)}
+              />
+              <path d={buildViolinPath(row, x)} fill={`url(#scope-violin-fill-${chartId})`} stroke="rgba(217,70,239,0.65)" strokeWidth="1.2" filter={`url(#scope-violin-glow-${chartId})`} />
+              <line x1={x} x2={x} y1={yAt(row.min)} y2={yAt(row.max)} stroke="rgba(255,255,255,0.25)" />
+              <rect x={x - barW / 2} y={boxTop} width={barW} height={Math.max(4, boxBottom - boxTop)} rx="6" fill="rgba(34,211,238,0.14)" stroke="rgba(34,211,238,0.65)" />
+              <line x1={x - barW / 2} x2={x + barW / 2} y1={yAt(row.median)} y2={yAt(row.median)} stroke="rgba(244,244,245,0.85)" strokeWidth="1.8" />
+              <line x1={x - barW / 2} x2={x + barW / 2} y1={yAt(row.avg)} y2={yAt(row.avg)} stroke="rgba(110,231,183,0.95)" strokeWidth="2.1" />
+              <circle cx={x} cy={yAt(row.avg)} r="3.4" fill="rgba(250,204,21,0.94)" />
+              <rect
+                x={x - barW / 2}
+                y={barsTop + barsH - barHeight}
+                width={barW}
+                height={barHeight}
+                rx="7"
+                fill={`url(#scope-violin-bars-${chartId})`}
+                stroke="rgba(56,189,248,0.3)"
+              />
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
+        {xTicks.map((row) => {
+          const index = rows.findIndex((candidate) => candidate.label === row.label);
+          const x = xAt(index);
+          const [line1, line2] = scopeResearchLabelLines(row.label);
+          return (
+            <g key={`violin-tick-${row.label}`}>
+              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
+              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                <tspan x={x} dy="0">{line1}</tspan>
+                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchScatterByDateChart({
+  points,
+  parallelSeries = [],
+  title,
+  meta,
+  parameterFormat,
+  resultFormat,
+}: {
+  points: ScopeResearchPoint[];
+  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
+  title: string;
+  meta?: string;
+  parameterFormat: ScopeResearchValueFormat;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 24;
+  const padRight = 86;
+  const padTop = 72;
+  const padBottom = 88;
+  if (!points.length) {
+    return (
+      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No scatter data for selected settings.
+      </div>
+    );
+  }
+  if (points.length < 3 || new Set(points.map((point) => point.dateKey)).size < 2) {
+    return <ScopeResearchInsufficientState message="Need at least 3 points across 2 dates for `scatter_by_date`." />;
+  }
+  const sorted = [...points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
+  const plotW = w - padLeft - padRight;
+  const plotH = h - padTop - padBottom;
+  const minY = Math.min(...sorted.map((point) => point.result));
+  const maxY = Math.max(...sorted.map((point) => point.result));
+  const spanY = maxY - minY || 1;
+  const meanValue = sorted.reduce((sum, point) => sum + point.result, 0) / Math.max(1, sorted.length);
+  const uniqueDates = Array.from(new Set(sorted.map((point) => point.dateKey)));
+  const xAt = (index: number) => padLeft + (index / Math.max(1, sorted.length - 1)) * plotW;
+  const yAt = (value: number) => padTop + plotH - (value - minY) / spanY * plotH;
+  const dateTicks = uniqueDates.filter((_, index) => {
+    if (uniqueDates.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(uniqueDates.length / 6));
+    return index === 0 || index === uniqueDates.length - 1 || index % step === 0;
+  });
+  const maxParamAbs = Math.max(1, ...sorted.map((row) => Math.abs(row.parameter)));
+  const parallelPalette = [
+    { stroke: "rgba(56,189,248,0.95)", fill: "rgba(56,189,248,0.9)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
+    { stroke: "rgba(217,70,239,0.95)", fill: "rgba(217,70,239,0.9)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
+    { stroke: "rgba(251,191,36,0.95)", fill: "rgba(251,191,36,0.9)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
+  ];
+
+  const showTooltip = (event: React.MouseEvent<SVGElement>, point: ScopeResearchPoint) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: point.dateKey,
+      accent: "cyan",
+      lines: [
+        `param ${scopeResearchFormatValue(point.parameter, parameterFormat)}`,
+        `result ${scopeResearchFormatValue(point.result, resultFormat)}`,
+        `ticker ${point.row.ticker || "-"}`,
+        `bench ${point.row.benchTicker || "-"}`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        <span className="rounded-full border border-cyan-500/15 bg-cyan-500/8 px-2 py-0.5 text-cyan-300/90">result</span>
+        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">mean</span>
+        <span className="rounded-full border border-amber-500/15 bg-amber-500/8 px-2 py-0.5 text-amber-300/90">param glow</span>
+        {parallelSeries.map((series, index) => (
+          <span
+            key={`scatter-chip-${series.id}`}
+            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
+            title={series.label}
+          >
+            {series.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <filter id={`scope-scatter-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + plotH - t * plotH;
+          return (
+            <g key={`scatter-grid-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={yAt(meanValue)} y2={yAt(meanValue)} stroke="rgba(244,244,245,0.45)" strokeDasharray="5 5" />
+        {sorted.map((point, index) => {
+          const x = xAt(index);
+          const y = yAt(point.result);
+          const intensity = Math.min(1, Math.max(0.12, Math.abs(point.parameter) / maxParamAbs));
+          return (
+            <g key={`scatter-${point.dateKey}-${index}`}>
+              <circle
+                cx={x}
+                cy={y}
+                r={9}
+                fill="transparent"
+                onMouseEnter={(event) => showTooltip(event, point)}
+                onMouseMove={(event) => showTooltip(event, point)}
+              />
+              <circle cx={x} cy={y} r={7} fill={`rgba(250,204,21,${0.08 + intensity * 0.18})`} filter={`url(#scope-scatter-glow-${chartId})`} />
+              <circle cx={x} cy={y} r={3.4} fill="rgba(34,211,238,0.92)" stroke="rgba(255,255,255,0.18)" />
+            </g>
+          );
+        })}
+        {parallelSeries.map((series, seriesIndex) => {
+          const color = parallelPalette[seriesIndex % parallelPalette.length];
+          const seriesPoints = [...series.points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
+          return seriesPoints.map((point, index) => {
+            const baseIndex = sorted.findIndex((candidate) => candidate === point);
+            if (baseIndex < 0) return null;
+            const x = xAt(baseIndex);
+            const y = yAt(point.result);
+            return (
+              <g key={`scatter-parallel-${series.id}-${index}`}>
+                <circle cx={x} cy={y} r={8} fill="transparent" onMouseEnter={(event) => showTooltip(event, point)} onMouseMove={(event) => showTooltip(event, point)} />
+                <circle cx={x} cy={y} r={5.2} fill={color.fill} opacity="0.16" />
+                <circle cx={x} cy={y} r={2.6} fill={color.fill} stroke="rgba(255,255,255,0.18)" />
+              </g>
+            );
+          });
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={padTop + plotH} y2={padTop + plotH} stroke="rgba(255,255,255,0.12)" />
+        {dateTicks.map((dateKey) => {
+          const index = sorted.findIndex((candidate) => candidate.dateKey === dateKey);
+          const x = xAt(index);
+          return (
+            <g key={`scatter-tick-${dateKey}-${index}`}>
+              <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
+              <text
+                x={x}
+                y={h - 22}
+                textAnchor="middle"
+                fontSize="11"
+                className="fill-zinc-500 font-mono"
+              >
+                {dateKey.slice(5)}
+              </text>
+            </g>
+          );
+        })}
+        <text x={padLeft + 8} y={22} fontSize="11" className="fill-zinc-500 font-mono">
+          by date | {scopeResearchFormatValue(sorted[0]?.parameter ?? 0, parameterFormat)} ..{" "}
+          {scopeResearchFormatValue(sorted[sorted.length - 1]?.parameter ?? 0, parameterFormat)}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchCumsumChart({
+  points,
+  parallelSeries = [],
+  title,
+  meta,
+  resultFormat,
+}: {
+  points: ScopeResearchPoint[];
+  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
+  title: string;
+  meta?: string;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 24;
+  const padRight = 86;
+  const padTop = 72;
+  const padBottom = 88;
+  if (!points.length) {
+    return (
+      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No cumulative data for selected settings.
+      </div>
+    );
+  }
+  const daily = scopeResearchDailySeries(points);
+  if (daily.length < 2) {
+    return <ScopeResearchInsufficientState message="Need at least 2 points for `cumsum_chart`." detail="Widen range or reduce `Min N`." />;
+  }
+  const series = daily;
+  const plotW = w - padLeft - padRight;
+  const topH = h - padTop - padBottom - 78;
+  const barsTop = padTop + topH + 14;
+  const barsH = 64;
+  const minY = Math.min(0, ...series.map((point) => point.cumulative));
+  const maxY = Math.max(0, ...series.map((point) => point.cumulative));
+  const spanY = maxY - minY || 1;
+  const maxCount = Math.max(1, ...series.map((point) => point.count));
+  const parallelDailySeries = parallelSeries
+    .map((seriesItem) => ({
+      id: seriesItem.id,
+      label: seriesItem.label,
+      series: scopeResearchDailySeries(seriesItem.points),
+    }))
+    .filter((seriesItem) => seriesItem.series.length >= 1);
+  const parallelPalette = [
+    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
+    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
+    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
+  ];
+  const xAt = (index: number) => padLeft + (index / Math.max(1, series.length - 1)) * plotW;
+  const yAt = (value: number) => padTop + topH - (value - minY) / spanY * topH;
+  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
+  const lineD = series.map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`).join(" ");
+  const areaD = `${lineD} L ${xAt(series.length - 1).toFixed(1)} ${(padTop + topH).toFixed(1)} L ${xAt(0).toFixed(1)} ${(padTop + topH).toFixed(1)} Z`;
+  const ticks = series.filter((_, index) => {
+    if (series.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(series.length / 6));
+    return index === 0 || index === series.length - 1 || index % step === 0;
+  });
+  const showTooltip = (
+    event: React.MouseEvent<SVGElement>,
+    point: (typeof series)[number]
+  ) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: point.dateKey,
+      accent: "emerald",
+      lines: [
+        `day pnl ${scopeResearchFormatValue(point.total, resultFormat)}`,
+        `equity ${scopeResearchFormatValue(point.cumulative, resultFormat)}`,
+        `count ${intn(point.count)}`,
+        `avg/trade ${scopeResearchFormatValue(point.count ? point.total / point.count : 0, resultFormat)}`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">equity</span>
+        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
+        {parallelDailySeries.map((seriesItem, index) => (
+          <span
+            key={`cumsum-chip-${seriesItem.id}`}
+            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
+            title={seriesItem.label}
+          >
+            {seriesItem.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <linearGradient id={`scope-cumsum-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(52,211,153,0.24)" />
+            <stop offset="100%" stopColor="rgba(16,185,129,0.02)" />
+          </linearGradient>
+          <linearGradient id={`scope-cumsum-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(56,189,248,0.72)" />
+            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
+          </linearGradient>
+          <filter id={`scope-cumsum-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={padLeft} y={padTop} width={plotW} height={topH} fill="rgba(8,15,26,0.36)" rx="16" />
+        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + topH - t * topH;
+          return (
+            <g key={`cumsum-grid-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        <path d={areaD} fill={`url(#scope-cumsum-fill-${chartId})`} />
+        <path d={lineD} fill="none" stroke="rgba(52,211,153,0.95)" strokeWidth="3" filter={`url(#scope-cumsum-glow-${chartId})`} />
+        {parallelDailySeries.map((seriesItem, index) => {
+          const color = parallelPalette[index % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
+          const byDate = new Map(seriesItem.series.map((item) => [item.dateKey, item]));
+          const aligned = series
+            .map((basePoint) => {
+              const match = byDate.get(basePoint.dateKey);
+              return match ? { ...match, baseIndex: basePoint.index } : null;
+            })
+            .filter(Boolean) as Array<(typeof seriesItem.series)[number] & { baseIndex: number }>;
+          if (!aligned.length) return null;
+          const path = aligned
+            .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xAt(point.baseIndex).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`)
+            .join(" ");
+          return (
+            <g key={`cumsum-parallel-${seriesItem.id}`}>
+              <path d={path} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" />
+              {aligned.map((point) => (
+                <circle key={`cumsum-parallel-point-${seriesItem.id}-${point.baseIndex}`} cx={xAt(point.baseIndex)} cy={yAt(point.cumulative)} r={2.8} fill={color} />
+              ))}
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={yAt(0)} y2={yAt(0)} stroke="rgba(255,255,255,0.14)" />
+        {series.map((point) => (
+          <g key={`cumsum-point-${point.dateKey}-${point.index}`}>
+            <circle
+              cx={xAt(point.index)}
+              cy={yAt(point.cumulative)}
+              r={8}
+              fill="transparent"
+              onMouseEnter={(event) => showTooltip(event, point)}
+              onMouseMove={(event) => showTooltip(event, point)}
+            />
+            <circle cx={xAt(point.index)} cy={yAt(point.cumulative)} r={3.6} fill="rgba(110,231,183,0.96)" />
+            <rect
+              x={xAt(point.index) - 10}
+              y={yBar(point.count)}
+              width={20}
+              height={Math.max(4, barsTop + barsH - yBar(point.count))}
+              rx="6"
+              fill={`url(#scope-cumsum-bars-${chartId})`}
+              stroke="rgba(56,189,248,0.24)"
+            />
+          </g>
+        ))}
+        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
+        {ticks.map((point) => {
+          const x = xAt(point.index);
+          return (
+            <g key={`cumsum-tick-${point.dateKey}-${point.index}`}>
+              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
+              <text x={x} y={h - 22} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                {point.dateKey.slice(5)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ScopeResearchTradePerformanceChart({
+  points,
+  parallelSeries = [],
+  title,
+  meta,
+  resultFormat,
+}: {
+  points: ScopeResearchPoint[];
+  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
+  title: string;
+  meta?: string;
+  resultFormat: ScopeResearchValueFormat;
+}) {
+  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
+  const chartId = useId().replace(/:/g, "");
+  const w = 1100;
+  const h = 520;
+  const padLeft = 20;
+  const padRight = 86;
+  const padTop = 94;
+  const padBottom = 84;
+  if (!points.length) {
+    return (
+      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+        No performance data for selected settings.
+      </div>
+    );
+  }
+  if (points.length < 1 || new Set(points.map((point) => point.dateKey)).size < 1) {
+    return <ScopeResearchInsufficientState message="Need at least 1 date for `trade_performance`." detail="Widen range or lower extra filters." />;
+  }
+
+  const series = scopeResearchDailySeries(points);
+  const summary = scopeResearchSummarize(points.map((point) => point.result));
+  const parallelDailySeries = parallelSeries
+    .map((seriesItem) => ({
+      id: seriesItem.id,
+      label: seriesItem.label,
+      series: scopeResearchDailySeries(seriesItem.points),
+    }))
+    .filter((seriesItem) => seriesItem.series.length >= 1);
+  const bestDay = [...series].sort((a, b) => b.total - a.total)[0] ?? null;
+  const worstDay = [...series].sort((a, b) => a.total - b.total)[0] ?? null;
+  const plotW = w - padLeft - padRight;
+  const topH = h - padTop - padBottom - 80;
+  const barsTop = padTop + topH + 16;
+  const barsH = 64;
+  const minY = Math.min(0, ...series.map((row) => row.cumulative));
+  const maxY = Math.max(0, ...series.map((row) => row.cumulative));
+  const spanY = maxY - minY || 1;
+  const maxCount = Math.max(1, ...series.map((row) => row.count));
+  const parallelPalette = [
+    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
+    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
+    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
+  ];
+  const xAt = (index: number) => padLeft + (index / Math.max(1, series.length - 1)) * plotW;
+  const yAt = (value: number) => padTop + topH - ((value - minY) / spanY) * topH;
+  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
+  const lineD = series.map((row, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(1)} ${yAt(row.cumulative).toFixed(1)}`).join(" ");
+  const areaD = `${lineD} L ${xAt(series.length - 1).toFixed(1)} ${(padTop + topH).toFixed(1)} L ${xAt(0).toFixed(1)} ${(padTop + topH).toFixed(1)} Z`;
+  const ticks = series.filter((_, index) => {
+    if (series.length <= 6) return true;
+    const step = Math.max(1, Math.ceil(series.length / 6));
+    return index === 0 || index === series.length - 1 || index % step === 0;
+  });
+
+  const showTooltip = (event: React.MouseEvent<SVGElement>, point: (typeof series)[number]) => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      title: point.dateKey,
+      accent: "emerald",
+      lines: [
+        `day pnl ${scopeResearchFormatValue(point.total, resultFormat)}`,
+        `equity ${scopeResearchFormatValue(point.cumulative, resultFormat)}`,
+        `count ${intn(point.count)}`,
+        `avg/trade ${scopeResearchFormatValue(point.count ? point.total / point.count : 0, resultFormat)}`,
+      ],
+    });
+  };
+
+  return (
+    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+      {renderScopeChartTooltip(tooltip)}
+      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
+        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
+      </div>
+      <div className="absolute top-7 left-3 right-3 z-10 grid grid-cols-2 xl:grid-cols-4 gap-2">
+        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Trades</div>
+          <div className="mt-1 text-[16px] font-mono text-zinc-100">{intn(summary.count)}</div>
+        </div>
+        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Total</div>
+          <div className="mt-1 text-[16px] font-mono text-emerald-300">{scopeResearchFormatValue(summary.total, resultFormat)}</div>
+        </div>
+        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Best Day</div>
+          <div className="mt-1 text-[14px] font-mono text-cyan-300 truncate">{bestDay ? `${bestDay.dateKey.slice(5)}  ${scopeResearchFormatValue(bestDay.total, resultFormat)}` : "-"}</div>
+        </div>
+        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
+          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Worst Day</div>
+          <div className="mt-1 text-[14px] font-mono text-rose-300 truncate">{worstDay ? `${worstDay.dateKey.slice(5)}  ${scopeResearchFormatValue(worstDay.total, resultFormat)}` : "-"}</div>
+        </div>
+      </div>
+      <div className="absolute top-[78px] left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+        {parallelDailySeries.map((seriesItem, index) => (
+          <span
+            key={`performance-chip-${seriesItem.id}`}
+            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
+            title={seriesItem.label}
+          >
+            {seriesItem.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
+        <defs>
+          <linearGradient id={`scope-performance-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(52,211,153,0.24)" />
+            <stop offset="100%" stopColor="rgba(16,185,129,0.03)" />
+          </linearGradient>
+          <linearGradient id={`scope-performance-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(56,189,248,0.72)" />
+            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
+          </linearGradient>
+        </defs>
+        <rect x={padLeft} y={padTop} width={plotW} height={topH} fill="rgba(8,15,26,0.36)" rx="16" />
+        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const y = padTop + topH - t * topH;
+          return (
+            <g key={`perf-grid-${t}`}>
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
+              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
+                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
+              </text>
+            </g>
+          );
+        })}
+        <path d={areaD} fill={`url(#scope-performance-fill-${chartId})`} />
+        <path d={lineD} fill="none" stroke="rgba(52,211,153,0.94)" strokeWidth="3" />
+        {parallelDailySeries.map((seriesItem, index) => {
+          const color = parallelPalette[index % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
+          const byDate = new Map(seriesItem.series.map((item) => [item.dateKey, item]));
+          const aligned = series
+            .map((basePoint) => {
+              const match = byDate.get(basePoint.dateKey);
+              return match ? { ...match, baseIndex: basePoint.index } : null;
+            })
+            .filter(Boolean) as Array<(typeof seriesItem.series)[number] & { baseIndex: number }>;
+          if (!aligned.length) return null;
+          const path = aligned
+            .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xAt(point.baseIndex).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`)
+            .join(" ");
+          return <path key={`performance-parallel-${seriesItem.id}`} d={path} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" />;
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={yAt(0)} y2={yAt(0)} stroke="rgba(255,255,255,0.14)" />
+        {series.map((point) => {
+          const x = xAt(point.index);
+          const y = yAt(point.cumulative);
+          return (
+            <g key={`perf-point-${point.dateKey}`}>
+              <rect
+                x={x - 12}
+                y={padTop}
+                width={24}
+                height={barsTop + barsH - padTop}
+                fill="transparent"
+                onMouseEnter={(event) => showTooltip(event, point)}
+                onMouseMove={(event) => showTooltip(event, point)}
+              />
+              <circle cx={x} cy={y} r={3.8} fill="rgba(110,231,183,0.96)" />
+              <rect x={x - 10} y={yBar(point.count)} width={20} height={Math.max(4, barsTop + barsH - yBar(point.count))} rx="6" fill={`url(#scope-performance-bars-${chartId})`} stroke="rgba(56,189,248,0.24)" />
+            </g>
+          );
+        })}
+        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
+        {ticks.map((point) => {
+          const x = xAt(point.index);
+          return (
+            <g key={`perf-tick-${point.dateKey}`}>
+              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
+              <text x={x} y={h - 22} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+                {point.dateKey.slice(5)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function fmtHms(d: Date | null): string {
   if (!d) return "";
   const hh = d.getHours().toString().padStart(2, "0");
@@ -2272,7 +4837,7 @@ const PAPER_ARB_FILTERS_LS_KEY = "paper.arb.filters.v1";
 // =========================
 // MAIN PAGE
 // =========================
-export default function PaperArbitrageTapePage() {
+export default function ArbitrageScanner() {
   const [tab, setTab] = useState<TabKey>("active");
   const [ruleBand, setRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
   const [zapUiMode, setZapUiMode] = useState<ZapUiMode>("zap");
@@ -2522,9 +5087,25 @@ export default function PaperArbitrageTapePage() {
     "ZAP THRESHOLDS": { loading: false, error: null },
     "TAPE FILTERS": { loading: false, error: null },
   });
+  const [optimizerRangeGroupHidden, setOptimizerRangeGroupHidden] = useState<Record<OptimizerRangeGroupKey, boolean>>({
+    "RATING GATES": false,
+    "ZAP THRESHOLDS": false,
+    "TAPE FILTERS": false,
+  });
   const [optimizerRangeRankMetric, setOptimizerRangeRankMetric] = useState<OptimizerRangeRankMetric>("avgPnlUsd");
   const [optimizerRangeMinTrades, setOptimizerRangeMinTrades] = useState<number>(25);
   const [optimizerBucketCount, setOptimizerBucketCount] = useState<number>(8);
+  const [scopeResearchDrafts, setScopeResearchDrafts] = useState<Record<ScopePanelKey, ScopeResearchDraft>>(DEFAULT_SCOPE_RESEARCH_DRAFTS);
+  const [scopeResearchSelections, setScopeResearchSelections] = useState<Record<ScopePanelKey, ScopeResearchSelection | null>>({
+    left: buildScopeResearchSelectionFromDraft(DEFAULT_SCOPE_RESEARCH_DRAFTS.left),
+    right: buildScopeResearchSelectionFromDraft(DEFAULT_SCOPE_RESEARCH_DRAFTS.right),
+  });
+  const [scopeResearchFiltersHidden, setScopeResearchFiltersHidden] = useState<
+    Record<ScopePanelKey, { extra: boolean; parallel: boolean }>
+  >({
+    left: { extra: false, parallel: false },
+    right: { extra: false, parallel: false },
+  });
   const episodesSearchCacheRef = useRef<Map<string, { ts: number; rows: PaperArbClosedDto[] }>>(new Map());
   const episodesSearchInFlightRef = useRef<Map<string, Promise<PaperArbClosedDto[]>>>(new Map());
 
@@ -4029,6 +6610,61 @@ export default function PaperArbitrageTapePage() {
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
+  const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
+    const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
+      const values = filteredEpisodes
+        .map((row) => scopeResearchParameterValue(row, parameterKey))
+        .filter((value): value is number => value != null && Number.isFinite(value));
+      if (!values.length) return { min: null as number | null, max: null as number | null, count: 0 };
+      return { min: Math.min(...values), max: Math.max(...values), count: values.length };
+    };
+    return {
+      left: buildBounds(scopeResearchDrafts.left.parameterKey),
+      right: buildBounds(scopeResearchDrafts.right.parameterKey),
+    };
+  }, [filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
+
+  const scopeResearchComputedByPanel = useMemo<Record<ScopePanelKey, ScopeResearchComputed | null>>(
+    () => ({
+      left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
+      right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
+    }),
+    [dateFrom, filteredEpisodes, scopeResearchSelections]
+  );
+  const scopePanels: Array<{ key: ScopePanelKey; label: string }> = [
+    { key: "left", label: "LEFT" },
+    { key: "right", label: "RIGHT" },
+  ];
+  const scopeResearchChartType = scopeResearchDrafts.left.chartType;
+  const setScopeResearchChartType = (next: ScopeResearchChartType) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, chartType: next } }));
+  const scopeResearchParameterKey = scopeResearchDrafts.left.parameterKey;
+  const setScopeResearchParameterKey = (next: ScopeResearchParameterKey) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, parameterKey: next } }));
+  const scopeResearchResultKey = scopeResearchDrafts.left.resultKey;
+  const setScopeResearchResultKey = (next: ScopeResearchResultKey) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, resultKey: next } }));
+  const scopeResearchBucketCount = scopeResearchDrafts.left.bucketCount;
+  const setScopeResearchBucketCount = (next: number) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, bucketCount: next } }));
+  const scopeResearchMinSamples = scopeResearchDrafts.left.minSamples;
+  const setScopeResearchMinSamples = (next: number) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, minSamples: next } }));
+  const scopeResearchThresholdMode = scopeResearchDrafts.left.thresholdMode;
+  const setScopeResearchThresholdMode = (next: ScopeResearchThresholdMode) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, thresholdMode: next } }));
+  const scopeResearchDomainFrom = scopeResearchDrafts.left.domainFrom;
+  const setScopeResearchDomainFrom = (next: string) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, domainFrom: next } }));
+  const scopeResearchDomainTo = scopeResearchDrafts.left.domainTo;
+  const setScopeResearchDomainTo = (next: string) =>
+    setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, domainTo: next } }));
+  const scopeResearchObservedBounds = scopeResearchObservedBoundsByPanel.left;
+  const scopeResearchSelection = scopeResearchSelections.left;
+  const setScopeResearchSelection = (next: ScopeResearchSelection) =>
+    setScopeResearchSelections((prev) => ({ ...prev, left: next }));
+  const scopeResearchComputed = scopeResearchComputedByPanel.left;
+
   const optimizerBestRow = useMemo(() => optimizerRows[0] ?? null, [optimizerRows]);
   const optimizerBaselineRow = useMemo(
     () => optimizerRows.find((row) => row.id === "baseline" || row.parameter === "BASE") ?? null,
@@ -4439,16 +7075,16 @@ export default function PaperArbitrageTapePage() {
               <button
                 type="button"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]"
-                title="PAPER (current)"
+                title="SCANNER (current)"
               >
-                PAPER
+                SCANNER
               </button>
               <Link
                 href="/signals/arbitrage"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
                 title="Open /signals/arbitrage"
               >
-                SIGNAL
+                SONAR
               </Link>
             </div>
 
@@ -4475,7 +7111,7 @@ export default function PaperArbitrageTapePage() {
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                EPISODES
+                SCOPE
               </button>
               <button
                 type="button"
@@ -5875,10 +8511,11 @@ export default function PaperArbitrageTapePage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mb-3">
-                <OptimizerBarChart
+              <div className="mb-3">
+                <OptimizerDualMetricChart
                   rows={optimizerBestRangeRows}
-                  valueKey={optimizerRangeRankMetric === "totalPnlUsd" ? "totalPnlUsd" : optimizerRangeRankMetric === "winRate" ? "winRate" : optimizerRangeRankMetric === "score" ? "score" : "avgPnlUsd"}
+                  leftKey={optimizerRangeRankMetric === "totalPnlUsd" ? "totalPnlUsd" : optimizerRangeRankMetric === "winRate" ? "winRate" : optimizerRangeRankMetric === "score" ? "score" : "avgPnlUsd"}
+                  rightKey="trades"
                   title={
                     optimizerRangeRankMetric === "totalPnlUsd"
                       ? "BEST RANGE TOTAL PNL"
@@ -5889,34 +8526,67 @@ export default function PaperArbitrageTapePage() {
                         : "BEST RANGE AVG / TRADE"
                   }
                   meta={`params ${intn(optimizerBestRangeRows.length)}`}
-                />
-                <OptimizerBarChart
-                  rows={optimizerBestRangeRows}
-                  valueKey="trades"
-                  title="BEST RANGE TRADES"
-                  meta={`params ${intn(optimizerBestRangeRows.length)}`}
-                  color="sky"
+                  leftLabel={
+                    optimizerRangeRankMetric === "totalPnlUsd"
+                      ? "TOTAL PNL"
+                      : optimizerRangeRankMetric === "winRate"
+                        ? "WIN RATE"
+                        : optimizerRangeRankMetric === "score"
+                          ? "SCORE"
+                          : "AVG / TRADE"
+                  }
+                  rightLabel="TRADES"
                 />
               </div>
 
               <div className="space-y-4">
                 {optimizerRangeGroups.map((group) => (
                   <div key={`group-${group.group}`} className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">{group.group}</div>
-                      <div className="text-[10px] font-mono text-zinc-600">params {intn(group.parameters.length)}</div>
+                    <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(255,255,255,0.028),rgba(255,255,255,0.012))] px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[12px] uppercase tracking-[0.24em] text-zinc-300 font-mono">
+                            {OPTIMIZER_GROUP_DISPLAY_LABELS[group.group as OptimizerRangeGroupKey] ?? group.group}
+                          </div>
+                          <div className="text-[10px] font-mono text-zinc-500 mt-1">
+                            params {intn(group.parameters.length)} | rank {optimizerRangeRankMetric}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOptimizerRangeGroupHidden((prev) => ({
+                              ...prev,
+                              [group.group]: !prev[group.group as OptimizerRangeGroupKey],
+                            }))
+                          }
+                          className={clsx(
+                            "inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.16em] transition-all",
+                            optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey]
+                              ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+                              : "border-white/[0.08] bg-black/20 text-zinc-300 hover:bg-white/[0.04]"
+                          )}
+                          aria-label={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? `Show ${group.group}` : `Hide ${group.group}`}
+                          title={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "Show group" : "Hide group"}
+                        >
+                          <EyeToggleIcon closed={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey]} />
+                          {optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "Hidden" : "Visible"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
-                      {group.parameters.map((parameter) => (
-                        <OptimizerParameterRangeCard
-                          key={`range-${parameter.key}`}
-                          parameter={parameter}
-                          rankMetric={optimizerRangeRankMetric}
-                          minTradesFilter={optimizerRangeMinTrades}
-                          bucketCount={optimizerBucketCount}
-                        />
-                      ))}
-                    </div>
+                    {!optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] && (
+                      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+                        {group.parameters.map((parameter) => (
+                          <OptimizerParameterRangeCard
+                            key={`range-${parameter.key}`}
+                            parameter={parameter}
+                            rankMetric={optimizerRangeRankMetric}
+                            minTradesFilter={optimizerRangeMinTrades}
+                            bucketCount={optimizerBucketCount}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {!optimizerRangeGroups.length && (
@@ -5924,6 +8594,840 @@ export default function PaperArbitrageTapePage() {
                     Run optimizer to see per-parameter profitability ranges.
                   </div>
                 )}
+              </div>
+            </GlassCard>
+
+            <GlassCard className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+                  SCOPE
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">
+                  filtered episodes only
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4 mb-4">
+                {scopePanels.map((panel) => {
+                  const draft = scopeResearchDrafts[panel.key];
+                  const computed = scopeResearchComputedByPanel[panel.key];
+                  const bounds = scopeResearchObservedBoundsByPanel[panel.key];
+                  const parameterOption = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, draft.parameterKey);
+                  return (
+                    <div
+                      key={`scope-grid-${panel.key}`}
+                      className="min-w-0 rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.022),rgba(255,255,255,0.01))] p-3"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <span className="text-[10px] font-mono text-zinc-500 uppercase">Rows</span>
+                            <span className="text-[10px] font-mono text-emerald-300">{intn(computed?.sourceCount ?? 0)}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 bg-[#090b10] p-1 rounded-xl border border-white/[0.06]">
+                            {([
+                              { key: "results_by_bins", label: "bins" },
+                              { key: "results_more_less_parameter", label: "more/less" },
+                              { key: "simple_box", label: "simplebox" },
+                              { key: "beauty_violin", label: "violin" },
+                              { key: "distribution", label: "distribution" },
+                              { key: "scatter_by_date", label: "scatter" },
+                              { key: "cumsum_chart", label: "cumsum" },
+                              { key: "trade_performance", label: "performance" },
+                            ] as Array<{ key: ScopeResearchChartType; label: string }>).map((mode) => (
+                              <button
+                                key={`scope-mode-${panel.key}-${mode.key}`}
+                                type="button"
+                                onClick={() =>
+                                  setScopeResearchDrafts((prev) => ({
+                                    ...prev,
+                                    [panel.key]: {
+                                      ...prev[panel.key],
+                                      chartType: mode.key,
+                                      resultKey: scopeResearchNormalizeResultKey(mode.key, prev[panel.key].resultKey),
+                                    },
+                                  }))
+                                }
+                              className={clsx(
+                                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                                  draft.chartType === mode.key
+                                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/25 shadow-[0_0_10px_-3px_rgba(16,185,129,0.25)]"
+                                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                                )}
+                              >
+                                {mode.label}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setScopeResearchSelections((prev) => ({
+                                ...prev,
+                                [panel.key]: buildScopeResearchSelectionFromDraft(draft),
+                              }))
+                            }
+                            className="ml-auto w-9 h-9 flex items-center justify-center rounded-lg border border-emerald-500/35 bg-emerald-500/10 text-emerald-300 transition-all"
+                            title={`Apply ${panel.label}`}
+                            aria-label={`Apply ${panel.label}`}
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 11a8 8 0 1 0 2 5.3" />
+                              <path d="M20 4v7h-7" />
+                            </svg>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5">
+                          <div className="flex items-center justify-between gap-3 px-3 h-8 rounded-lg border border-white/5 bg-black/20 min-w-0">
+                            <div className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Param</div>
+                            <GlassSelect
+                              value={draft.parameterKey}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], parameterKey: e.target.value as ScopeResearchParameterKey },
+                                }))
+                              }
+                              options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                              className="min-w-0 w-[148px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-3 px-3 h-8 rounded-lg border border-white/5 bg-black/20 min-w-0">
+                            <div className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Result</div>
+                            <GlassSelect
+                              value={draft.resultKey}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], resultKey: e.target.value as ScopeResearchResultKey },
+                                }))
+                              }
+                              options={scopeResearchResultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
+                              className="min-w-0 w-[148px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Bins</div>
+                            <GlassInput
+                              type="number"
+                              min={3}
+                              max={24}
+                              step={1}
+                              width={72}
+                              value={draft.bucketCount}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], bucketCount: Math.max(3, Math.min(24, Math.trunc(Number(e.target.value) || 8))) },
+                                }))
+                              }
+                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Min N</div>
+                            <GlassInput
+                              type="number"
+                              min={1}
+                              max={5000}
+                              step={1}
+                              width={72}
+                              value={draft.minSamples}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], minSamples: Math.max(1, Math.trunc(Number(e.target.value) || 1)) },
+                                }))
+                              }
+                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">From</div>
+                            <GlassInput
+                              type="number"
+                              step={0.01}
+                              width={88}
+                              value={draft.domainFrom}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], domainFrom: e.target.value },
+                                }))
+                              }
+                              placeholder={bounds.min != null ? scopeResearchFormatValue(bounds.min, parameterOption.format) : "min"}
+                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">To</div>
+                            <GlassInput
+                              type="number"
+                              step={0.01}
+                              width={88}
+                              value={draft.domainTo}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], domainTo: e.target.value },
+                                }))
+                              }
+                              placeholder={bounds.max != null ? scopeResearchFormatValue(bounds.max, parameterOption.format) : "max"}
+                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Cut</div>
+                            <GlassSelect
+                              value={draft.thresholdMode}
+                              onChange={(e) =>
+                                setScopeResearchDrafts((prev) => ({
+                                  ...prev,
+                                  [panel.key]: { ...prev[panel.key], thresholdMode: e.target.value as ScopeResearchThresholdMode },
+                                }))
+                              }
+                              options={[
+                                { value: "more_than", label: ">= x" },
+                                { value: "less_than", label: "<= x" },
+                              ]}
+                              className={clsx(
+                                "min-w-[92px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right",
+                                draft.chartType !== "results_more_less_parameter" && "opacity-60"
+                              )}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Range</div>
+                            <div className="text-[10px] font-mono text-zinc-400 text-right truncate">
+                              {bounds.min != null && bounds.max != null
+                                ? `range ${scopeResearchFormatValue(bounds.min, parameterOption.format)} .. ${scopeResearchFormatValue(bounds.max, parameterOption.format)}`
+                                : "no observed values"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
+                        <div className="rounded-xl border border-white/[0.07] bg-black/20 p-2.5">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Extra Filters</div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setScopeResearchFiltersHidden((prev) => ({
+                                    ...prev,
+                                    [panel.key]: { ...prev[panel.key], extra: !prev[panel.key].extra },
+                                  }))
+                                }
+                                className={clsx(
+                                  "w-9 h-9 flex items-center justify-center rounded-lg border transition-all",
+                                  scopeResearchFiltersHidden[panel.key].extra
+                                    ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+                                    : "border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300"
+                                )}
+                                title={scopeResearchFiltersHidden[panel.key].extra ? "Show extra filter rows" : "Hide extra filter rows"}
+                              >
+                                <EyeToggleIcon closed={scopeResearchFiltersHidden[panel.key].extra} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setScopeResearchDrafts((prev) => ({
+                                    ...prev,
+                                    [panel.key]: {
+                                      ...prev[panel.key],
+                                      extraFilters: [
+                                        ...prev[panel.key].extraFilters,
+                                        {
+                                          id: `${panel.key}-${Date.now()}-${prev[panel.key].extraFilters.length}`,
+                                          parameterKey: "peakMetricAbs",
+                                          from: "",
+                                          to: "",
+                                        },
+                                      ],
+                                    },
+                                  }))
+                                }
+                                className="w-9 h-9 flex items-center justify-center rounded-lg border border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300 transition-all text-[15px] font-mono leading-none"
+                                title="Add extra filter"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                          {!scopeResearchFiltersHidden[panel.key].extra && draft.extraFilters.length ? (
+                            <div className="space-y-2">
+                              {draft.extraFilters.map((filter) => (
+                                <div key={filter.id} className="space-y-2">
+                                  <div>
+                                    <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">Param</div>
+                                    <GlassSelect
+                                      value={filter.parameterKey}
+                                      onChange={(e) =>
+                                        setScopeResearchDrafts((prev) => ({
+                                          ...prev,
+                                          [panel.key]: {
+                                            ...prev[panel.key],
+                                            extraFilters: prev[panel.key].extraFilters.map((item) =>
+                                              item.id === filter.id
+                                                ? { ...item, parameterKey: e.target.value as ScopeResearchParameterKey }
+                                                : item
+                                            ),
+                                          },
+                                        }))
+                                      }
+                                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                                      className="w-full"
+                                    />
+                                  </div>
+                                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2 items-end">
+                                    <div>
+                                      <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">From</div>
+                                      <GlassInput
+                                        type="number"
+                                        step={0.01}
+                                        width="100%"
+                                        value={filter.from ?? ""}
+                                        onChange={(e) =>
+                                          setScopeResearchDrafts((prev) => ({
+                                            ...prev,
+                                            [panel.key]: {
+                                              ...prev[panel.key],
+                                              extraFilters: prev[panel.key].extraFilters.map((item) =>
+                                                item.id === filter.id ? { ...item, from: e.target.value } : item
+                                              ),
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                    <div>
+                                      <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">To</div>
+                                      <GlassInput
+                                        type="number"
+                                        step={0.01}
+                                        width="100%"
+                                        value={filter.to ?? ""}
+                                        onChange={(e) =>
+                                          setScopeResearchDrafts((prev) => ({
+                                            ...prev,
+                                            [panel.key]: {
+                                              ...prev[panel.key],
+                                              extraFilters: prev[panel.key].extraFilters.map((item) =>
+                                                item.id === filter.id ? { ...item, to: e.target.value } : item
+                                              ),
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setScopeResearchDrafts((prev) => ({
+                                          ...prev,
+                                          [panel.key]: {
+                                            ...prev[panel.key],
+                                            extraFilters: prev[panel.key].extraFilters.filter((item) => item.id !== filter.id),
+                                          },
+                                        }))
+                                      }
+                                      className="h-8 rounded-lg border border-rose-500/20 bg-rose-500/8 text-rose-300 hover:bg-rose-500/14 text-[12px] font-mono"
+                                      title="Remove filter"
+                                    >
+                                      x
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-xl border border-white/[0.07] bg-black/20 p-2.5">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Parallel Filters</div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setScopeResearchFiltersHidden((prev) => ({
+                                    ...prev,
+                                    [panel.key]: { ...prev[panel.key], parallel: !prev[panel.key].parallel },
+                                  }))
+                                }
+                                className={clsx(
+                                  "w-9 h-9 flex items-center justify-center rounded-lg border transition-all",
+                                  scopeResearchFiltersHidden[panel.key].parallel
+                                    ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+                                    : "border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300"
+                                )}
+                                title={scopeResearchFiltersHidden[panel.key].parallel ? "Show parallel filter rows" : "Hide parallel filter rows"}
+                              >
+                                <EyeToggleIcon closed={scopeResearchFiltersHidden[panel.key].parallel} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setScopeResearchDrafts((prev) => ({
+                                    ...prev,
+                                    [panel.key]: {
+                                      ...prev[panel.key],
+                                      parallelFilters: [
+                                        ...prev[panel.key].parallelFilters,
+                                        {
+                                          id: `${panel.key}-parallel-${Date.now()}-${prev[panel.key].parallelFilters.length}`,
+                                          parameterKey: "peakMetricAbs",
+                                          from: "",
+                                          to: "",
+                                        },
+                                      ],
+                                    },
+                                  }))
+                                }
+                                className="w-9 h-9 flex items-center justify-center rounded-lg border border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300 transition-all text-[15px] font-mono leading-none"
+                                title="Add parallel filter"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                          {!scopeResearchFiltersHidden[panel.key].parallel && draft.parallelFilters.length ? (
+                            <div className="space-y-2">
+                              {draft.parallelFilters.map((filter) => (
+                                <div key={filter.id} className="space-y-2">
+                                  <div>
+                                    <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">Param</div>
+                                    <GlassSelect
+                                      value={filter.parameterKey}
+                                      onChange={(e) =>
+                                        setScopeResearchDrafts((prev) => ({
+                                          ...prev,
+                                          [panel.key]: {
+                                            ...prev[panel.key],
+                                            parallelFilters: prev[panel.key].parallelFilters.map((item) =>
+                                              item.id === filter.id
+                                                ? { ...item, parameterKey: e.target.value as ScopeResearchParameterKey }
+                                                : item
+                                            ),
+                                          },
+                                        }))
+                                      }
+                                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                                      className="w-full"
+                                    />
+                                  </div>
+                                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2 items-end">
+                                    <div>
+                                      <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">From</div>
+                                      <GlassInput
+                                        type="number"
+                                        step={0.01}
+                                        width="100%"
+                                        value={filter.from ?? ""}
+                                        onChange={(e) =>
+                                          setScopeResearchDrafts((prev) => ({
+                                            ...prev,
+                                            [panel.key]: {
+                                              ...prev[panel.key],
+                                              parallelFilters: prev[panel.key].parallelFilters.map((item) =>
+                                                item.id === filter.id ? { ...item, from: e.target.value } : item
+                                              ),
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                    <div>
+                                      <div className="text-[9px] uppercase tracking-[0.16em] text-zinc-500 font-mono mb-1">To</div>
+                                      <GlassInput
+                                        type="number"
+                                        step={0.01}
+                                        width="100%"
+                                        value={filter.to ?? ""}
+                                        onChange={(e) =>
+                                          setScopeResearchDrafts((prev) => ({
+                                            ...prev,
+                                            [panel.key]: {
+                                              ...prev[panel.key],
+                                              parallelFilters: prev[panel.key].parallelFilters.map((item) =>
+                                                item.id === filter.id ? { ...item, to: e.target.value } : item
+                                              ),
+                                            },
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setScopeResearchDrafts((prev) => ({
+                                          ...prev,
+                                          [panel.key]: {
+                                            ...prev[panel.key],
+                                            parallelFilters: prev[panel.key].parallelFilters.filter((item) => item.id !== filter.id),
+                                          },
+                                        }))
+                                      }
+                                      className="h-8 rounded-lg border border-rose-500/20 bg-rose-500/8 text-rose-300 hover:bg-rose-500/14 text-[12px] font-mono"
+                                      title="Remove parallel filter"
+                                    >
+                                      x
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        </div>
+                      </div>
+
+                      {computed ? (
+                        <div className="mt-3 min-w-0">
+                          {computed.selection.chartType === "simple_box" ? (
+                            <ScopeResearchBoxChart rows={computed.bins} title="simple_box" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                          ) : computed.selection.chartType === "beauty_violin" ? (
+                            <ScopeResearchViolinChart rows={computed.bins} title="beauty_violin" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                          ) : computed.selection.chartType === "distribution" ? (
+                            <ScopeResearchDistributionChart points={computed.points} title="distribution" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                          ) : computed.selection.chartType === "scatter_by_date" ? (
+                            <ScopeResearchScatterByDateChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="scatter_by_date" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} parameterFormat={computed.parameter.format} resultFormat={computed.sourceResult.format} />
+                          ) : computed.selection.chartType === "cumsum_chart" ? (
+                            <ScopeResearchCumsumChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="cumsum_chart" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                          ) : computed.selection.chartType === "trade_performance" ? (
+                            <ScopeResearchTradePerformanceChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="trade_performance" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                          ) : (
+                            <ScopeResearchSeriesChart
+                              rows={computed.selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins}
+                              parallelSeries={computed.parallelSeries}
+                              title={computed.selection.chartType === "results_more_less_parameter" ? "results_more_less_parameter" : "results_by_bins"}
+                              meta={`${computed.parameter.label} vs ${computed.result.label}`}
+                              resultKey={computed.selection.resultKey}
+                              resultFormat={computed.result.format}
+                              accent={computed.selection.chartType === "results_more_less_parameter" ? "amber" : "emerald"}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono mt-3">
+                          Pick a view and press `Apply {panel.label}`.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden">
+
+              <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))] p-3 mb-4">
+                <div className="grid grid-cols-1 2xl:grid-cols-[auto_auto_auto_auto_auto_auto_auto_1fr_auto] gap-2.5 items-center">
+                  <div className="flex items-center gap-2">
+                    {([
+                      { key: "results_by_bins", label: "bins" },
+                      { key: "results_more_less_parameter", label: "more/less" },
+                      { key: "simple_box", label: "simplebox" },
+                      { key: "beauty_violin", label: "violin" },
+                      { key: "distribution", label: "distribution" },
+                      { key: "scatter_by_date", label: "scatter" },
+                      { key: "cumsum_chart", label: "cumsum" },
+                      { key: "trade_performance", label: "performance" },
+                    ] as Array<{ key: ScopeResearchChartType; label: string }>).map((mode) => (
+                      <button
+                        key={`scope-mode-${mode.key}`}
+                        type="button"
+                        onClick={() => {
+                          setScopeResearchChartType(mode.key);
+                          setScopeResearchResultKey(scopeResearchNormalizeResultKey(mode.key, scopeResearchResultKey));
+                        }}
+                        className={clsx(
+                          "h-8 px-3 rounded-lg border whitespace-nowrap leading-none transition-all text-[10px] font-mono uppercase",
+                          scopeResearchChartType === mode.key
+                            ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                            : "border-white/5 bg-black/20 text-zinc-500 hover:text-zinc-200 hover:border-white/10"
+                        )}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Param</div>
+                    <GlassSelect
+                      value={scopeResearchParameterKey}
+                      onChange={(e) => setScopeResearchParameterKey(e.target.value as ScopeResearchParameterKey)}
+                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Result</div>
+                    <GlassSelect
+                      value={scopeResearchResultKey}
+                      onChange={(e) => setScopeResearchResultKey(e.target.value as ScopeResearchResultKey)}
+                      options={scopeResearchResultOptionsForChart(scopeResearchChartType).map((option) => ({ value: option.value, label: option.label }))}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Bins</div>
+                    <GlassInput
+                      type="number"
+                      min={3}
+                      max={24}
+                      step={1}
+                      width={68}
+                      value={scopeResearchBucketCount}
+                      onChange={(e) => setScopeResearchBucketCount(Math.max(3, Math.min(24, Math.trunc(Number(e.target.value) || 8))))}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Min N</div>
+                    <GlassInput
+                      type="number"
+                      min={1}
+                      max={5000}
+                      step={1}
+                      width={76}
+                      value={scopeResearchMinSamples}
+                      onChange={(e) => setScopeResearchMinSamples(Math.max(1, Math.trunc(Number(e.target.value) || 1)))}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">From</div>
+                    <GlassInput
+                      type="number"
+                      step={0.01}
+                      value={scopeResearchDomainFrom}
+                      onChange={(e) => setScopeResearchDomainFrom(e.target.value)}
+                      width={84}
+                      placeholder={scopeResearchObservedBounds.min != null ? scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format) : "min"}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">To</div>
+                    <GlassInput
+                      type="number"
+                      step={0.01}
+                      value={scopeResearchDomainTo}
+                      onChange={(e) => setScopeResearchDomainTo(e.target.value)}
+                      width={84}
+                      placeholder={scopeResearchObservedBounds.max != null ? scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format) : "max"}
+                    />
+                  </div>
+                  <div className="text-[10px] font-mono text-zinc-600">
+                    {scopeResearchObservedBounds.min != null && scopeResearchObservedBounds.max != null
+                      ? `range ${scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format)} .. ${scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format)}`
+                      : "Detached from optimizer."}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setScopeResearchSelection(buildScopeResearchSelectionFromDraft(scopeResearchDrafts.left))}
+                    className="px-3 py-1.5 rounded-lg border border-white/[0.12] bg-white/[0.04] text-zinc-100 hover:bg-white/[0.07] text-[10px] font-mono font-bold uppercase tracking-[0.16em] transition-all"
+                  >
+                    Apply
+                  </button>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2.5">
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Cut</div>
+                    <GlassSelect
+                      value={scopeResearchThresholdMode}
+                      onChange={(e) => setScopeResearchThresholdMode(e.target.value as ScopeResearchThresholdMode)}
+                      options={[
+                        { value: "more_than", label: ">= x" },
+                        { value: "less_than", label: "<= x" },
+                      ]}
+                      className={clsx(scopeResearchChartType !== "results_more_less_parameter" && "opacity-60")}
+                    />
+                  </div>
+                  <div className="text-[10px] font-mono text-zinc-600">
+                    `results_by_bins`, `results_more_less_parameter`, `simple_box`, `beauty_violin`, `distribution`, `scatter_by_date`, `cumsum_chart`, `trade_performance`.
+                  </div>
+                </div>
+              </div>
+
+              {scopeResearchComputed ? (
+                <>
+                  <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
+                    <GlassCard className="p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] font-mono text-zinc-500">ROWS</div>
+                      <div className="text-sm font-mono mt-1">{intn(scopeResearchComputed.sourceCount)}</div>
+                    </GlassCard>
+                    <GlassCard className="p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] font-mono text-zinc-500">GROUPS</div>
+                      <div className="text-sm font-mono mt-1">
+                        {intn(
+                          scopeResearchComputed.selection.chartType === "results_more_less_parameter"
+                            ? scopeResearchComputed.thresholds.length
+                            : scopeResearchComputed.selection.chartType === "scatter_by_date" ||
+                                scopeResearchComputed.selection.chartType === "cumsum_chart"
+                              ? scopeResearchComputed.points.length
+                              : scopeResearchComputed.bins.length
+                        )}
+                      </div>
+                    </GlassCard>
+                    <GlassCard className="p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] font-mono text-zinc-500">BEST</div>
+                      <div className="text-sm font-mono mt-1 break-words">
+                        {scopeResearchComputed.selection.chartType === "results_more_less_parameter"
+                          ? scopeResearchComputed.bestThreshold?.label ?? "-"
+                          : scopeResearchComputed.selection.chartType === "simple_box"
+                            ? scopeResearchComputed.bestBox?.label ?? "-"
+                            : scopeResearchComputed.selection.chartType === "cumsum_chart"
+                              ? scopeResearchComputed.points[scopeResearchComputed.points.length - 1]?.dateKey ?? "-"
+                              : scopeResearchComputed.selection.chartType === "scatter_by_date"
+                                ? `${scopeResearchComputed.points[0]?.dateKey ?? "-"} .. ${
+                                    scopeResearchComputed.points[scopeResearchComputed.points.length - 1]?.dateKey ?? "-"
+                                  }`
+                                : scopeResearchComputed.bestBin?.label ?? "-"}
+                      </div>
+                    </GlassCard>
+                    <GlassCard className="p-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] font-mono text-zinc-500">VALUE</div>
+                      <div className="text-sm font-mono mt-1 text-emerald-300">
+                        {scopeResearchComputed.selection.chartType === "results_more_less_parameter"
+                          ? scopeResearchFormatValue(
+                              scopeResearchMetricValue(
+                                scopeResearchComputed.bestThreshold ?? scopeResearchSummarize([]),
+                                scopeResearchComputed.selection.resultKey
+                              ),
+                              scopeResearchComputed.result.format
+                            )
+                          : scopeResearchComputed.selection.chartType === "cumsum_chart"
+                            ? scopeResearchFormatValue(
+                                scopeResearchComputed.points.reduce((sum, point) => sum + point.result, 0),
+                                scopeResearchComputed.sourceResult.format
+                              )
+                            : scopeResearchComputed.selection.chartType === "scatter_by_date"
+                              ? scopeResearchFormatValue(
+                                  scopeResearchComputed.points.reduce((sum, point) => sum + point.result, 0) /
+                                    Math.max(1, scopeResearchComputed.points.length),
+                                  scopeResearchComputed.sourceResult.format
+                                )
+                              : scopeResearchFormatValue(
+                                  scopeResearchComputed.selection.chartType === "simple_box"
+                                    ? scopeResearchMetricValue(
+                                        scopeResearchComputed.bestBox ?? scopeResearchSummarize([]),
+                                        scopeResearchComputed.selection.resultKey
+                                      )
+                                    : scopeResearchMetricValue(
+                                        scopeResearchComputed.bestBin ?? scopeResearchSummarize([]),
+                                        scopeResearchComputed.selection.resultKey
+                                      ),
+                                  scopeResearchComputed.result.format
+                                )}
+                      </div>
+                    </GlassCard>
+                  </div>
+
+                  <div className="mb-3 rounded-xl border border-white/[0.08] bg-[#070910]/95 p-3">
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                      <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-300">
+                        {scopeResearchComputed.selection.chartType}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-400">
+                        {scopeResearchComputed.parameter.label}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-400">
+                        {scopeResearchComputed.result.label}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-500">
+                        bins {intn(scopeResearchComputed.selection.bucketCount)}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-500">
+                        min {intn(scopeResearchComputed.selection.minSamples)}
+                      </span>
+                      {(scopeResearchComputed.selection.domainFrom != null || scopeResearchComputed.selection.domainTo != null) && (
+                        <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-500">
+                          {scopeResearchComputed.selection.domainFrom != null
+                            ? scopeResearchFormatValue(scopeResearchComputed.selection.domainFrom, scopeResearchComputed.parameter.format)
+                            : "*"}{" "}
+                          ..{" "}
+                          {scopeResearchComputed.selection.domainTo != null
+                            ? scopeResearchFormatValue(scopeResearchComputed.selection.domainTo, scopeResearchComputed.parameter.format)
+                            : "*"}
+                        </span>
+                      )}
+                      {scopeResearchComputed.selection.chartType === "results_more_less_parameter" && (
+                        <span className="px-2 py-1 rounded-lg border border-white/[0.08] bg-white/[0.03] text-zinc-500">
+                          {scopeResearchComputed.selection.thresholdMode === "more_than" ? ">= x" : "<= x"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {scopeResearchComputed.selection.chartType === "simple_box" ? (
+                    <ScopeResearchBoxChart
+                      rows={scopeResearchComputed.bins}
+                      title="simple_box"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : scopeResearchComputed.selection.chartType === "beauty_violin" ? (
+                    <ScopeResearchViolinChart
+                      rows={scopeResearchComputed.bins}
+                      title="beauty_violin"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : scopeResearchComputed.selection.chartType === "distribution" ? (
+                    <ScopeResearchDistributionChart
+                      points={scopeResearchComputed.points}
+                      title="distribution"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : scopeResearchComputed.selection.chartType === "scatter_by_date" ? (
+                    <ScopeResearchScatterByDateChart
+                      points={scopeResearchComputed.points}
+                      parallelSeries={scopeResearchComputed.parallelPointSeries}
+                      title="scatter_by_date"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      parameterFormat={scopeResearchComputed.parameter.format}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : scopeResearchComputed.selection.chartType === "cumsum_chart" ? (
+                    <ScopeResearchCumsumChart
+                      points={scopeResearchComputed.points}
+                      parallelSeries={scopeResearchComputed.parallelPointSeries}
+                      title="cumsum_chart"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : scopeResearchComputed.selection.chartType === "trade_performance" ? (
+                    <ScopeResearchTradePerformanceChart
+                      points={scopeResearchComputed.points}
+                      parallelSeries={scopeResearchComputed.parallelPointSeries}
+                      title="trade_performance"
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.sourceResult.label}`}
+                      resultFormat={scopeResearchComputed.sourceResult.format}
+                    />
+                  ) : (
+                    <ScopeResearchSeriesChart
+                      rows={
+                        scopeResearchComputed.selection.chartType === "results_more_less_parameter"
+                          ? scopeResearchComputed.thresholds
+                          : scopeResearchComputed.bins
+                      }
+                      title={
+                        scopeResearchComputed.selection.chartType === "results_more_less_parameter"
+                          ? "results_more_less_parameter"
+                          : "results_by_bins"
+                      }
+                      meta={`${scopeResearchComputed.parameter.label} vs ${scopeResearchComputed.result.label}`}
+                      resultKey={scopeResearchComputed.selection.resultKey}
+                      resultFormat={scopeResearchComputed.result.format}
+                      accent={scopeResearchComputed.selection.chartType === "results_more_less_parameter" ? "amber" : "emerald"}
+                    />
+                  )}
+                </>
+              ) : (
+                <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono">
+                  Pick a view and press `Apply`.
+                </div>
+              )}
               </div>
             </GlassCard>
 
