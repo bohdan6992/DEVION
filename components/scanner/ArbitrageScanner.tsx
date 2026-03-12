@@ -8048,7 +8048,6 @@ export default function ArbitrageScanner() {
                     setDateNy(d);
                     setDateFrom(d);
                     setDateTo(d);
-                    setRangePreset("custom");
                   }}
                   options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
                   className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
