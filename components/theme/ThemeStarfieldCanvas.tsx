@@ -2,13 +2,22 @@
 
 import React, { useEffect, useRef } from "react";
 
-type ThemeMode = "space" | "neon" | "dark" | "light" | "aurora" | null;
+type ThemeMode = "space" | "neon" | "dark" | "light" | "aurora" | "matrix" | null;
 
 type Star = { x: number; y: number; size: number; opacity: number; blinkSpeed: number; color: string };
 type Dust = { x: number; y: number; size: number; opacity: number; color: string };
 type Nebula = { x: number; y: number; r: number; color: string };
 type ShootingStar = { x: number; y: number; speed: number; opacity: number; len: number };
-type NeonParticle = { x: number; y: number; size: number; speedX: number; speedY: number; color: string };
+type NeonLaser = {
+  x: number;
+  y: number;
+  length: number;
+  speed: number;
+  vx: number;
+  vy: number;
+  color: string;
+  opacity: number;
+};
 type DarkBlob = {
   x: number;
   y: number;
@@ -29,11 +38,67 @@ type LightBlob = {
   vy: number;
   phase: number;
 };
-type AuroraRing = {
-  z: number;
-  color: string;
-  rotation: number;
+type GoldDustParticleKind = "background" | "normal" | "foreground";
+type GoldDustParticle = {
+  kind: GoldDustParticleKind;
+  x: number;
+  y: number;
+  size: number;
+  speedX: number;
+  speedY: number;
+  alpha: number;
+  flicker: number;
+  flickerOffset: number;
 };
+type GoldDustClusterParticle = {
+  relX: number;
+  relY: number;
+  x: number;
+  y: number;
+  size: number;
+  speedX: number;
+  speedY: number;
+  alpha: number;
+  flicker: number;
+  flickerOffset: number;
+};
+type GoldDustCluster = {
+  x: number;
+  y: number;
+  radius: number;
+  speedX: number;
+  speedY: number;
+  particles: GoldDustClusterParticle[];
+};
+type GoldDustCloud = {
+  x: number;
+  y: number;
+  radiusX: number;
+  radiusY: number;
+  speedX: number;
+  speedY: number;
+  alpha: number;
+};
+type MatrixColumn = {
+  x: number;
+  y: number;
+  speed: number;
+  brightness: number;
+};
+
+const AURORA_BACKGROUND_COUNT = 700;
+const AURORA_PARTICLE_COUNT = 300;
+const AURORA_FOREGROUND_COUNT = 18;
+const AURORA_CLUSTER_COUNT = 6;
+const AURORA_CLUSTER_PARTICLE_COUNT = 22;
+const AURORA_CLOUD_COUNT = 6;
+const MATRIX_FONT_SIZE = 22;
+const MATRIX_CHARS = "ｦｱｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+const NEON_LASER_COUNT = 46;
+const NEON_CONNECT_DISTANCE = 205;
+const NEON_MOUSE_RADIUS = 200;
+const NEON_COLORS = ["#3cf6ff", "#00f7ff", "#ff48f5", "#ff2f92", "#7dffef"];
+const TARGET_FRAME_MS = 1000 / 30;
 
 function readMode(): ThemeMode {
   const theme = (document.documentElement.getAttribute("data-theme") || "").toLowerCase();
@@ -42,6 +107,7 @@ function readMode(): ThemeMode {
   if (theme === "dark") return "dark";
   if (theme === "light") return "light";
   if (theme === "aurora") return "aurora";
+  if (theme === "matrix") return "matrix";
   return null;
 }
 
@@ -52,14 +118,16 @@ export default function ThemeStarfieldCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
     if (!ctx) return;
 
     let width = 0;
     let height = 0;
     let dpr = 1;
     let animationId = 0;
+    let lastFrameTime = 0;
     let running = false;
+    let pageVisible = !document.hidden;
     let mode: ThemeMode = null;
 
     let starLayers: Star[][] = [];
@@ -67,29 +135,46 @@ export default function ThemeStarfieldCanvas() {
     let nebulae: Nebula[] = [];
     let shootingStars: ShootingStar[] = [];
 
-    let gridOffset = 0;
-    let neonParticles: NeonParticle[] = [];
+    let neonLasers: NeonLaser[] = [];
 
     let darkBlobs: DarkBlob[] = [];
     let lightBlobs: LightBlob[] = [];
-    let auroraRings: AuroraRing[] = [];
     let auroraTime = 0;
     let auroraSpeed = 0.05;
     let auroraTargetSpeed = 0.05;
-    let glitchFlashAlpha = 0;
     let mouseX = width * 0.5;
     let mouseY = height * 0.5;
     let noiseCanvas: HTMLCanvasElement | null = null;
+    let staticLayerCanvas: HTMLCanvasElement | null = null;
+    let auroraCloudSprite: HTMLCanvasElement | null = null;
+    let goldDustBackground: GoldDustParticle[] = [];
+    let goldDustParticles: GoldDustParticle[] = [];
+    let goldDustForeground: GoldDustParticle[] = [];
+    let goldDustClusters: GoldDustCluster[] = [];
+    let goldDustClouds: GoldDustCloud[] = [];
+    let matrixColumns: MatrixColumn[] = [];
 
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = Math.min(window.devicePixelRatio || 1, mode === "dark" || mode === "light" ? 1 : 1.1);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    const createLayerCanvas = () => {
+      const layer = document.createElement("canvas");
+      layer.width = Math.max(1, Math.floor(width));
+      layer.height = Math.max(1, Math.floor(height));
+      return layer;
+    };
+
+    const getLayerContext = (layer: HTMLCanvasElement | null) => {
+      if (!layer) return null;
+      return layer.getContext("2d");
     };
 
     const createSpaceScene = () => {
@@ -100,7 +185,7 @@ export default function ThemeStarfieldCanvas() {
       ];
 
       milkyWayParticles = [];
-      const particleCount = Math.floor(Math.max(width, height) * 1.6);
+      const particleCount = Math.floor(Math.max(width, height) * 0.65);
       const angle = -Math.PI / 4;
       const dustColors = ["#ffffff", "#ffd1d1", "#d1e0ff", "#fff4d1"];
 
@@ -121,7 +206,7 @@ export default function ThemeStarfieldCanvas() {
       starLayers = [];
       for (let layer = 0; layer < 2; layer += 1) {
         const layerStars: Star[] = [];
-        const count = 250 - layer * 50;
+        const count = 110 - layer * 20;
         for (let i = 0; i < count; i += 1) {
           layerStars.push({
             x: Math.random() * width,
@@ -136,20 +221,66 @@ export default function ThemeStarfieldCanvas() {
       }
 
       shootingStars = [];
+
+      staticLayerCanvas = createLayerCanvas();
+      const layerCtx = getLayerContext(staticLayerCanvas);
+      if (layerCtx) {
+        layerCtx.fillStyle = "#010103";
+        layerCtx.fillRect(0, 0, width, height);
+
+        for (const n of nebulae) {
+          const g = layerCtx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r);
+          g.addColorStop(0, n.color);
+          g.addColorStop(1, "transparent");
+          layerCtx.fillStyle = g;
+          layerCtx.fillRect(0, 0, width, height);
+        }
+
+        for (const p of milkyWayParticles) {
+          layerCtx.fillStyle = p.color;
+          layerCtx.globalAlpha = p.opacity;
+          layerCtx.beginPath();
+          layerCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          layerCtx.fill();
+        }
+        layerCtx.globalAlpha = 1;
+      }
     };
 
     const createNeonScene = () => {
-      gridOffset = 0;
-      neonParticles = [];
-      for (let i = 0; i < 50; i += 1) {
-        neonParticles.push({
+      neonLasers = Array.from({ length: NEON_LASER_COUNT }, () => {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 1.35 + 0.85;
+        return {
           x: Math.random() * width,
           y: Math.random() * height,
-          size: Math.random() * 2 + 1,
-          speedX: (Math.random() - 0.5) * 2,
-          speedY: (Math.random() - 0.5) * 2,
-          color: Math.random() > 0.5 ? "#00f2ff" : "#ff00ff",
-        });
+          length: Math.random() * 110 + 36,
+          speed,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          color: NEON_COLORS[Math.floor(Math.random() * NEON_COLORS.length)] || "#0ff",
+          opacity: Math.random() * 0.3 + 0.72,
+        };
+      });
+
+      staticLayerCanvas = createLayerCanvas();
+      const layerCtx = getLayerContext(staticLayerCanvas);
+      if (layerCtx) {
+        layerCtx.fillStyle = "#000";
+        layerCtx.fillRect(0, 0, width, height);
+        const centerGlow = layerCtx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.9);
+        centerGlow.addColorStop(0, "rgba(40, 10, 70, 0.12)");
+        centerGlow.addColorStop(0.45, "rgba(8, 28, 60, 0.08)");
+        centerGlow.addColorStop(1, "rgba(0, 0, 0, 0.12)");
+        layerCtx.fillStyle = centerGlow;
+        layerCtx.fillRect(0, 0, width, height);
+
+        const sideGlow = layerCtx.createLinearGradient(0, 0, width, height);
+        sideGlow.addColorStop(0, "rgba(0, 255, 255, 0.035)");
+        sideGlow.addColorStop(0.5, "rgba(0, 0, 0, 0)");
+        sideGlow.addColorStop(1, "rgba(255, 0, 180, 0.04)");
+        layerCtx.fillStyle = sideGlow;
+        layerCtx.fillRect(0, 0, width, height);
       }
     };
 
@@ -174,6 +305,8 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const createDarkScene = () => {
+      staticLayerCanvas = null;
+      auroraCloudSprite = null;
       darkBlobs = [];
       const colors = [
         "rgba(40, 50, 110, 0.4)",
@@ -181,7 +314,7 @@ export default function ThemeStarfieldCanvas() {
         "rgba(80, 40, 100, 0.2)",
         "rgba(20, 80, 90, 0.2)",
       ];
-      for (let i = 0; i < colors.length; i += 1) {
+      for (let i = 0; i < 3; i += 1) {
         const r = Math.random() * 400 + 300;
         darkBlobs.push({
           x: Math.random() * width,
@@ -198,6 +331,8 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const createLightScene = () => {
+      staticLayerCanvas = null;
+      auroraCloudSprite = null;
       lightBlobs = [];
       const colors = [
         "rgba(255, 173, 173, 0.5)",
@@ -207,9 +342,6 @@ export default function ThemeStarfieldCanvas() {
         "rgba(155, 246, 255, 0.5)",
         "rgba(160, 196, 255, 0.5)",
         "rgba(189, 178, 255, 0.5)",
-        "rgba(255, 198, 255, 0.5)",
-        "rgba(144, 224, 239, 0.4)",
-        "rgba(251, 234, 235, 0.6)",
       ];
 
       for (const color of colors) {
@@ -229,27 +361,163 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const createAuroraScene = () => {
-      const ringCount = 40;
+      const makeParticle = (kind: GoldDustParticleKind): GoldDustParticle => {
+        if (kind === "background") {
+          return {
+            kind,
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: Math.random() * 0.9 + 0.3,
+            speedX: (Math.random() - 0.5) * 0.15,
+            speedY: Math.random() * 0.15 + 0.05,
+            alpha: Math.random() * 0.3 + 0.05,
+            flicker: Math.random() * 0.04,
+            flickerOffset: Math.random() * Math.PI,
+          };
+        }
+
+        if (kind === "foreground") {
+          return {
+            kind,
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: Math.random() * 5.5 + 4.5,
+            speedX: (Math.random() - 0.5) * 1.2,
+            speedY: Math.random() * 0.8 + 0.6,
+            alpha: Math.random() * 0.15 + 0.05,
+            flicker: Math.random() * 0.04,
+            flickerOffset: Math.random() * Math.PI,
+          };
+        }
+
+        return {
+          kind,
+          x: Math.random() * width,
+          y: Math.random() * height,
+          size: Math.random() * 3.6 + 1.4,
+          speedX: (Math.random() - 0.5) * 0.35,
+          speedY: Math.random() * 0.3 + 0.1,
+          alpha: Math.random() * 0.45 + 0.05,
+          flicker: Math.random() * 0.04,
+          flickerOffset: Math.random() * Math.PI,
+        };
+      };
+
+      const makeCluster = (): GoldDustCluster => {
+        const cluster: GoldDustCluster = {
+          x: Math.random() * width,
+          y: Math.random() * height,
+          radius: Math.random() * 150 + 100,
+          speedX: (Math.random() - 0.5) * 0.25,
+          speedY: (Math.random() - 0.5) * 0.2 + 0.1,
+          particles: [],
+        };
+
+        for (let i = 0; i < AURORA_CLUSTER_PARTICLE_COUNT; i += 1) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = Math.random() * cluster.radius;
+          cluster.particles.push({
+            relX: Math.cos(angle) * dist,
+            relY: Math.sin(angle) * dist,
+            x: cluster.x,
+            y: cluster.y,
+            size: Math.random() * 1.8 + 0.8,
+            speedX: (Math.random() - 0.5) * 0.25,
+            speedY: (Math.random() - 0.5) * 0.25,
+            alpha: Math.random() * 0.45 + 0.05,
+            flicker: Math.random() * 0.04,
+            flickerOffset: Math.random() * Math.PI,
+          });
+        }
+
+        return cluster;
+      };
+
+      const makeCloud = (): GoldDustCloud => ({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        radiusX: Math.random() * 220 + 140,
+        radiusY: Math.random() * 120 + 70,
+        speedX: (Math.random() - 0.5) * 0.08,
+        speedY: Math.random() * 0.08 + 0.03,
+        alpha: Math.random() * 0.07 + 0.03,
+      });
+
       auroraTime = 0;
       auroraSpeed = 0.05;
       auroraTargetSpeed = 0.05;
-      glitchFlashAlpha = 0;
-      auroraRings = [];
+      goldDustBackground = Array.from({ length: AURORA_BACKGROUND_COUNT }, () => makeParticle("background"));
+      goldDustParticles = Array.from({ length: AURORA_PARTICLE_COUNT }, () => makeParticle("normal"));
+      goldDustForeground = Array.from({ length: AURORA_FOREGROUND_COUNT }, () => makeParticle("foreground"));
+      goldDustClusters = Array.from({ length: AURORA_CLUSTER_COUNT }, () => makeCluster());
+      goldDustClouds = Array.from({ length: AURORA_CLOUD_COUNT }, () => makeCloud());
 
-      for (let i = 0; i < ringCount; i += 1) {
-        auroraRings.push({
-          z: (i / ringCount) * 2000,
-          color: i % 2 === 0 ? "#00f2ff" : "#ff00c1",
-          rotation: Math.random() * Math.PI * 2,
+      staticLayerCanvas = createLayerCanvas();
+      const layerCtx = getLayerContext(staticLayerCanvas);
+      if (layerCtx) {
+        layerCtx.fillStyle = "#010101";
+        layerCtx.fillRect(0, 0, width, height);
+        const grad = layerCtx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width / 1.1);
+        grad.addColorStop(0, "rgba(70, 50, 15, 0.3)");
+        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.fillStyle = grad;
+        layerCtx.fillRect(0, 0, width, height);
+
+        const bloom = layerCtx.createRadialGradient(width / 2, height / 2, width * 0.04, width / 2, height / 2, width * 0.6);
+        bloom.addColorStop(0, "rgba(255, 220, 150, 0.14)");
+        bloom.addColorStop(0.35, "rgba(212, 175, 55, 0.08)");
+        bloom.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.fillStyle = bloom;
+        layerCtx.fillRect(0, 0, width, height);
+      }
+
+      auroraCloudSprite = document.createElement("canvas");
+      auroraCloudSprite.width = 256;
+      auroraCloudSprite.height = 256;
+      const cloudCtx = auroraCloudSprite.getContext("2d");
+      if (cloudCtx) {
+        const bright = "255, 245, 200";
+        const gold = "212, 175, 55";
+        const cloudGrad = cloudCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+        cloudGrad.addColorStop(0, `rgba(${bright}, 1)`);
+        cloudGrad.addColorStop(0.45, `rgba(${gold}, 0.65)`);
+        cloudGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        cloudCtx.fillStyle = cloudGrad;
+        cloudCtx.fillRect(0, 0, 256, 256);
+      }
+    };
+
+    const createMatrixScene = () => {
+      const colCount = Math.floor(width / (MATRIX_FONT_SIZE * 0.8));
+      matrixColumns = [];
+      for (let i = 0; i < colCount; i += 1) {
+        matrixColumns.push({
+          x: i * (MATRIX_FONT_SIZE * 0.9),
+          y: Math.random() * -height,
+          speed: Math.random() * 0.2 + 0.3,
+          brightness: Math.random() * 0.5 + 0.3,
         });
+      }
+
+      staticLayerCanvas = createLayerCanvas();
+      const layerCtx = getLayerContext(staticLayerCanvas);
+      if (layerCtx) {
+        layerCtx.fillStyle = "rgba(0, 2, 0, 0.12)";
+        layerCtx.fillRect(0, 0, width, height);
+        const grad = layerCtx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width / 0.7);
+        grad.addColorStop(0, "rgba(0, 30, 0, 0.2)");
+        grad.addColorStop(0.7, "rgba(0, 5, 0, 0.05)");
+        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.fillStyle = grad;
+        layerCtx.fillRect(0, 0, width, height);
       }
     };
 
     const rebuild = () => {
       mode = readMode();
       canvas.style.display = mode ? "block" : "none";
-      canvas.style.filter = mode === "dark" ? "blur(80px)" : mode === "light" ? "blur(110px)" : "none";
-      canvas.style.transform = mode === "dark" ? "scale(1.1)" : mode === "light" ? "scale(1.15)" : "none";
+      canvas.style.filter = mode === "dark" ? "blur(48px)" : mode === "light" ? "blur(64px)" : "none";
+      canvas.style.transform = mode === "dark" ? "scale(1.04)" : mode === "light" ? "scale(1.08)" : "none";
 
       if (!mode) {
         running = false;
@@ -264,29 +532,16 @@ export default function ThemeStarfieldCanvas() {
       if (mode === "dark") createDarkScene();
       if (mode === "light") createLightScene();
       if (mode === "aurora") createAuroraScene();
+      if (mode === "matrix") createMatrixScene();
       running = true;
     };
 
     const drawSpace = () => {
-      ctx.fillStyle = "#010103";
-      ctx.fillRect(0, 0, width, height);
-
-      for (const n of nebulae) {
-        const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r);
-        g.addColorStop(0, n.color);
-        g.addColorStop(1, "transparent");
-        ctx.fillStyle = g;
+      if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
+      else {
+        ctx.fillStyle = "#010103";
         ctx.fillRect(0, 0, width, height);
       }
-
-      for (const p of milkyWayParticles) {
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = p.opacity;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
 
       for (const layer of starLayers) {
         for (const star of layer) {
@@ -301,7 +556,7 @@ export default function ThemeStarfieldCanvas() {
       }
       ctx.globalAlpha = 1;
 
-      if (Math.random() < 0.002 && shootingStars.length < 1) {
+      if (Math.random() < 0.0012 && shootingStars.length < 1) {
         shootingStars.push({
           x: Math.random() * width,
           y: Math.random() * (height / 2),
@@ -334,64 +589,84 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const drawNeon = () => {
-      ctx.fillStyle = "rgba(5, 5, 5, 0.2)";
-      ctx.fillRect(0, 0, width, height);
+      if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
+      else {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+        ctx.fillRect(0, 0, width, height);
+      }
 
-      const gridSize = 60;
-      gridOffset += 0.5;
-      if (gridOffset >= gridSize) gridOffset = 0;
+      for (const laser of neonLasers) {
+        laser.x += laser.vx;
+        laser.y += laser.vy;
 
-      ctx.lineWidth = 1;
-      for (let x = gridOffset; x < width; x += gridSize) {
-        const opacity = 0.1 + Math.sin(x * 0.01 + gridOffset * 0.05) * 0.05;
-        ctx.strokeStyle = `rgba(0, 242, 255, ${opacity})`;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = "#00f2ff";
+        if (laser.x > width + 100) laser.x = -100;
+        else if (laser.x < -100) laser.x = width + 100;
+        if (laser.y > height + 100) laser.y = -100;
+        else if (laser.y < -100) laser.y = height + 100;
+
+        const dx = mouseX - laser.x;
+        const dy = mouseY - laser.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0 && dist < NEON_MOUSE_RADIUS) {
+          laser.vx += (dx / dist) * 0.05;
+          laser.vy += (dy / dist) * 0.05;
+          const mag = Math.hypot(laser.vx, laser.vy) || 1;
+          laser.vx = (laser.vx / mag) * laser.speed;
+          laser.vy = (laser.vy / mag) * laser.speed;
+        }
+
+        const tailX = laser.x - laser.vx * laser.length * 0.1;
+        const tailY = laser.y - laser.vy * laser.length * 0.1;
+        const coreAlpha = Math.min(1, laser.opacity + 0.12);
+
+        ctx.save();
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
+        ctx.strokeStyle = laser.color;
+        ctx.lineWidth = 3.2;
+        ctx.lineCap = "round";
+        ctx.globalAlpha = laser.opacity;
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = laser.color;
+        ctx.moveTo(laser.x, laser.y);
+        ctx.lineTo(tailX, tailY);
         ctx.stroke();
-      }
 
-      for (let y = gridOffset; y < height; y += gridSize) {
-        const opacity = 0.1 + Math.sin(y * 0.01 + gridOffset * 0.05) * 0.05;
-        ctx.strokeStyle = `rgba(255, 0, 255, ${opacity})`;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = "#ff00ff";
         ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
+        ctx.strokeStyle = "rgba(255,255,255,0.92)";
+        ctx.lineWidth = 1.05;
+        ctx.globalAlpha = coreAlpha;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = laser.color;
+        ctx.moveTo(laser.x, laser.y);
+        ctx.lineTo(tailX, tailY);
         ctx.stroke();
+        ctx.restore();
       }
-      ctx.shadowBlur = 0;
 
-      for (const p of neonParticles) {
-        ctx.fillStyle = p.color;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
+      for (let i = 0; i < neonLasers.length; i += 1) {
+        for (let j = i + 1; j < neonLasers.length; j += 1) {
+          const a = neonLasers[i];
+          const b = neonLasers[j];
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance >= NEON_CONNECT_DISTANCE) continue;
 
-        p.x += p.speedX;
-        p.y += p.speedY;
-        if (p.x < 0 || p.x > width) p.speedX *= -1;
-        if (p.y < 0 || p.y > height) p.speedY *= -1;
+          ctx.beginPath();
+          ctx.strokeStyle = a.color;
+          ctx.lineWidth = 0.65;
+          ctx.globalAlpha = (1 - distance / NEON_CONNECT_DISTANCE) * 0.55;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = a.color;
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
       }
-      ctx.shadowBlur = 0;
 
-      const vignette = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.5,
-        Math.min(width, height) * 0.2,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.7
-      );
-      vignette.addColorStop(0, "rgba(0,0,0,0)");
-      vignette.addColorStop(1, "rgba(0,0,0,0.8)");
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, width, height);
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
     };
 
     const drawDark = () => {
@@ -497,101 +772,169 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const drawAurora = () => {
-      auroraTime += 0.01;
-      auroraSpeed += (auroraTargetSpeed - auroraSpeed) * 0.1;
+      auroraTime = Date.now() * 0.1;
+      auroraSpeed += (auroraTargetSpeed - auroraSpeed) * 0.08;
 
-      // Long motion trail.
-      ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
-      ctx.fillRect(0, 0, width, height);
+      const gold = "212, 175, 55";
+      const bright = "255, 245, 200";
+      const margin = 300;
 
-      const centerX = width * 0.5;
-      const centerY = height * 0.5;
-      const perspective = 400;
+      const drawParticle = (
+        particle: GoldDustParticle | GoldDustClusterParticle,
+        x: number,
+        y: number,
+        alphaMod: number
+      ) => {
+        const distToCenter = Math.abs(x - width / 2) / (width / 2);
+        const lightFactor = Math.max(0, 1 - distToCenter * 1.5);
+        const currentAlpha =
+          particle.alpha * (0.7 + Math.sin(auroraTime * particle.flicker + particle.flickerOffset) * 0.3);
+        const finalAlpha = currentAlpha * (0.2 + lightFactor * alphaMod);
+        const glowStrength = particle.size >= 2.2 ? (lightFactor > 0.4 ? 4.8 : 2.8) : 0;
 
-      auroraRings.sort((a, b) => b.z - a.z);
-
-      for (const ring of auroraRings) {
-        ring.z -= auroraSpeed * 500;
-        if (ring.z <= 0) {
-          ring.z = 2000;
-          ring.rotation += 0.5;
+        if (glowStrength > 0) {
+          ctx.shadowBlur = particle.size * glowStrength;
+          ctx.shadowColor =
+            lightFactor > 0.4
+              ? `rgba(${bright}, ${Math.min(finalAlpha * 1.8, 0.75)})`
+              : `rgba(${gold}, ${Math.min(finalAlpha * 1.5, 0.55)})`;
+        } else {
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
         }
-
-        const scale = perspective / (perspective + ring.z);
-        const size = 1500 * scale;
-
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        ctx.rotate(ring.rotation + auroraTime * 0.2);
-        ctx.strokeStyle = ring.color;
-        ctx.lineWidth = 2 * scale * 5;
-        ctx.globalAlpha = Math.min(1, (2000 - ring.z) / 1000);
-
+        ctx.fillStyle =
+          lightFactor > 0.4 ? `rgba(${bright}, ${finalAlpha})` : `rgba(${gold}, ${finalAlpha})`;
         ctx.beginPath();
-        for (let i = 0; i < 6; i += 1) {
-          const angle = (i * Math.PI * 2) / 6;
-          const px = Math.cos(angle) * size;
-          const py = Math.sin(angle) * size;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
+        ctx.arc(x, y, particle.size, 0, Math.PI * 2);
+        ctx.fill();
+      };
+
+      const updateParticle = (particle: GoldDustParticle) => {
+        particle.x += particle.speedX * (0.8 + auroraSpeed * 4);
+        particle.y += particle.speedY * (0.8 + auroraSpeed * 4);
+        if (particle.y > height + margin) particle.y = -margin;
+        if (particle.y < -margin) particle.y = height + margin;
+        if (particle.x > width + margin) particle.x = -margin;
+        if (particle.x < -margin) particle.x = width + margin;
+      };
+
+      const updateCluster = (cluster: GoldDustCluster) => {
+        cluster.x += cluster.speedX * (0.8 + auroraSpeed * 4);
+        cluster.y += cluster.speedY * (0.8 + auroraSpeed * 4);
+
+        if (cluster.y > height + margin) cluster.y = -margin;
+        if (cluster.y < -margin) cluster.y = height + margin;
+        if (cluster.x > width + margin) cluster.x = -margin;
+        if (cluster.x < -margin) cluster.x = width + margin;
+
+        const clusterDrift = 0.7 + auroraSpeed * 2.5;
+        for (const particle of cluster.particles) {
+          particle.relX += particle.speedX * clusterDrift;
+          particle.relY += particle.speedY * clusterDrift;
+          particle.x = cluster.x + particle.relX;
+          particle.y = cluster.y + particle.relY;
         }
-        ctx.closePath();
-        ctx.stroke();
+      };
 
-        if (ring.z < 800) {
-          ctx.fillStyle = ring.color;
-          for (let j = 0; j < 3; j += 1) {
-            const a = Math.random() * Math.PI * 2;
-            const rx = Math.cos(a) * size;
-            const ry = Math.sin(a) * size;
-            ctx.fillRect(rx, ry, 4 * scale, 20 * scale);
-          }
-        }
-        ctx.restore();
-      }
-      ctx.globalAlpha = 1;
+      const updateCloud = (cloud: GoldDustCloud) => {
+        cloud.x += cloud.speedX * (0.8 + auroraSpeed * 2.5);
+        cloud.y += cloud.speedY * (0.8 + auroraSpeed * 2.5);
+        if (cloud.y > height + margin) cloud.y = -margin;
+        if (cloud.y < -margin) cloud.y = height + margin;
+        if (cloud.x > width + margin) cloud.x = -margin;
+        if (cloud.x < -margin) cloud.x = width + margin;
+      };
 
-      // Core singularity.
-      const coreGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 100);
-      coreGrad.addColorStop(0, "white");
-      coreGrad.addColorStop(0.2, "#00f2ff");
-      coreGrad.addColorStop(1, "transparent");
-      ctx.fillStyle = coreGrad;
-      ctx.globalAlpha = 0.5 + Math.sin(auroraTime * 10) * 0.2;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 50, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // HUD overlay (frame + corner dots).
-      ctx.strokeStyle = "rgba(0, 242, 255, 0.1)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, 1, width - 2, height - 2);
-      ctx.fillStyle = "#00f2ff";
-      ctx.beginPath();
-      ctx.arc(10, 10, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#ff00c1";
-      ctx.beginPath();
-      ctx.arc(width - 10, height - 10, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Random glitch flash.
-      if (Math.random() > 0.995) glitchFlashAlpha = 0.1;
-      if (glitchFlashAlpha > 0) {
-        ctx.fillStyle = `rgba(255,255,255,${glitchFlashAlpha})`;
+      if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
+      else {
+        ctx.fillStyle = "#010101";
         ctx.fillRect(0, 0, width, height);
-        glitchFlashAlpha = Math.max(0, glitchFlashAlpha - 0.02);
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+      for (const cloud of goldDustClouds) {
+        updateCloud(cloud);
+        if (auroraCloudSprite) {
+          ctx.save();
+          ctx.globalAlpha = Math.min(cloud.alpha * 1.8, 0.22);
+          ctx.drawImage(
+            auroraCloudSprite,
+            cloud.x - cloud.radiusX,
+            cloud.y - cloud.radiusY,
+            cloud.radiusX * 2,
+            cloud.radiusY * 2
+          );
+          ctx.restore();
+        }
+      }
+
+      for (const particle of goldDustBackground) {
+        updateParticle(particle);
+        drawParticle(particle, particle.x, particle.y, 0.5);
+      }
+
+      for (const particle of goldDustParticles) {
+        updateParticle(particle);
+        drawParticle(particle, particle.x, particle.y, 0.8);
+      }
+
+      for (const cluster of goldDustClusters) {
+        updateCluster(cluster);
+        for (const particle of cluster.particles) {
+          drawParticle(particle, particle.x, particle.y, 0.8);
+        }
+      }
+
+      for (const particle of goldDustForeground) {
+        updateParticle(particle);
+        drawParticle(particle, particle.x, particle.y, 0.5);
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+    };
+
+    const drawMatrix = () => {
+      if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
+      else {
+        ctx.fillStyle = "rgba(0, 2, 0, 0.12)";
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      ctx.font = `700 ${MATRIX_FONT_SIZE}px monospace`;
+      ctx.shadowBlur = 0;
+
+      for (const col of matrixColumns) {
+        const text = MATRIX_CHARS[Math.floor(Math.random() * MATRIX_CHARS.length)] || "0";
+        const greenIntensity = Math.floor(col.brightness * 150 + 50);
+        ctx.fillStyle = `rgb(0, ${greenIntensity}, 0)`;
+        ctx.fillText(text, col.x, col.y);
+
+        col.y += col.speed * MATRIX_FONT_SIZE * 0.5;
+        if (col.y > height + MATRIX_FONT_SIZE * 5) {
+          col.y = -MATRIX_FONT_SIZE;
+          col.speed = Math.random() * 0.2 + 0.3;
+          col.brightness = Math.random() * 0.5 + 0.3;
+        }
       }
     };
 
-    const animate = () => {
+    const animate = (time: number) => {
+      animationId = 0;
       if (!running) return;
+      if (!pageVisible) return;
+      if (time - lastFrameTime < TARGET_FRAME_MS) {
+        animationId = window.requestAnimationFrame(animate);
+        return;
+      }
+      lastFrameTime = time;
       if (mode === "space") drawSpace();
       if (mode === "neon") drawNeon();
       if (mode === "dark") drawDark();
       if (mode === "light") drawLight();
       if (mode === "aurora") drawAurora();
+      if (mode === "matrix") drawMatrix();
       animationId = window.requestAnimationFrame(animate);
     };
 
@@ -603,6 +946,7 @@ export default function ThemeStarfieldCanvas() {
       if (mode === "dark") createDarkScene();
       if (mode === "light") createLightScene();
       if (mode === "aurora") createAuroraScene();
+      if (mode === "matrix") createMatrixScene();
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -618,25 +962,42 @@ export default function ThemeStarfieldCanvas() {
       auroraTargetSpeed = 0.05;
     };
 
+    const handleVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (!pageVisible) {
+        if (animationId) {
+          window.cancelAnimationFrame(animationId);
+          animationId = 0;
+        }
+        return;
+      }
+      lastFrameTime = 0;
+      if (running && !animationId) animationId = window.requestAnimationFrame(animate);
+    };
+
     const themeObserver = new MutationObserver((records) => {
       for (const record of records) {
         if (record.type === "attributes" && record.attributeName === "data-theme") {
           const wasRunning = running;
           rebuild();
-          if (!wasRunning && running) animate();
+          if (!wasRunning && running && pageVisible && !animationId) {
+            lastFrameTime = 0;
+            animationId = window.requestAnimationFrame(animate);
+          }
           break;
         }
       }
     });
 
     rebuild();
-    if (running) animate();
+    if (running && pageVisible) animationId = window.requestAnimationFrame(animate);
 
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
     });
     window.addEventListener("resize", handleResize);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mousedown", handleMouseDown);
     window.addEventListener("mouseup", handleMouseUp);
@@ -645,6 +1006,7 @@ export default function ThemeStarfieldCanvas() {
       running = false;
       window.cancelAnimationFrame(animationId);
       window.removeEventListener("resize", handleResize);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("mouseup", handleMouseUp);

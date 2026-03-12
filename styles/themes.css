@@ -273,7 +273,7 @@ html, body {
   background-color: var(--bg);
   background-image: var(--bg-image);
   background-repeat: no-repeat;
-  background-attachment: fixed;
+  background-attachment: scroll;
   background-size: cover;
   color: var(--fg);
   font-family: 'Inter', system-ui, sans-serif;
@@ -286,9 +286,12 @@ html, body {
   border: 1px solid var(--card-border);
   border-radius: 24px;
   box-shadow: var(--shadow);
-  /* ÐŸÐ¾Ñ‚ÑƒÐ¶Ð½Ð¸Ð¹ Ð±Ð»ÑŽÑ€ Ð´Ð»Ñ Ð²ÑÑ–Ñ… Ñ‚ÐµÐ¼ */
-  backdrop-filter: blur(35px) saturate(160%);
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(14px) saturate(118%);
+  transition:
+    transform 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    background-color 0.25s ease;
 }
 
 /* Hover effects */
@@ -382,173 +385,68 @@ html[data-theme="matrix"] body > * {
 }
 
 html[data-theme="neon"] body::before {
-  background-image:
-    linear-gradient(112deg, rgba(192, 132, 252, 0) 40%, rgba(192, 132, 252, 0.92) 50%, rgba(192, 132, 252, 0) 60%),
-    linear-gradient(126deg, rgba(167, 139, 250, 0) 42%, rgba(167, 139, 250, 0.84) 50%, rgba(167, 139, 250, 0) 58%),
-    linear-gradient(98deg, rgba(216, 180, 254, 0) 38%, rgba(216, 180, 254, 0.78) 50%, rgba(216, 180, 254, 0) 62%),
-    linear-gradient(136deg, rgba(139, 92, 246, 0) 44%, rgba(139, 92, 246, 0.8) 50%, rgba(139, 92, 246, 0) 56%),
-    radial-gradient(1200px 520px at 18% 22%, rgba(139, 92, 246, 0.3), transparent 70%),
-    radial-gradient(900px 460px at 84% 78%, rgba(167, 139, 250, 0.24), transparent 72%);
-  background-size: 1500px 3px, 1300px 3px, 1450px 3px, 1320px 2px, 100% 100%, 100% 100%;
-  background-position: -48% 12%, -36% 44%, -60% 78%, -42% 28%, center, center;
-  background-repeat: no-repeat;
-  mix-blend-mode: screen;
-  filter: blur(0.2px) saturate(150%) contrast(1.12);
-  opacity: 1;
-  animation:
-    neonLaserSweep 5.8s linear infinite,
-    neonLaserPulse 1.7s ease-in-out infinite;
+  background-image: none;
+  animation: none;
+  opacity: 0;
 }
 
 html[data-theme="neon"] body::after {
-  background-image:
-    repeating-linear-gradient(
-      to bottom,
-      rgba(139, 92, 246, 0.1) 0px,
-      rgba(139, 92, 246, 0.1) 1px,
-      transparent 2px,
-      transparent 7px
-    ),
-    radial-gradient(900px 420px at 50% 8%, rgba(216, 180, 254, 0.12), transparent 72%);
-  background-size: 100% 100%, 100% 100%;
-  mix-blend-mode: screen;
-  opacity: 0.62;
-  animation:
-    neonLaserDrift 7.8s ease-in-out infinite alternate,
-    neonLaserPulse 2.2s ease-in-out infinite;
+  background-image: none;
+  animation: none;
+  opacity: 0;
 }
 
 html[data-theme="light"] body::before {
-  background-image:
-    radial-gradient(900px 560px at 12% 18%, rgba(255, 255, 255, 0.72), transparent 68%),
-    radial-gradient(820px 500px at 84% 14%, rgba(250, 204, 21, 0.4), transparent 70%),
-    radial-gradient(760px 460px at 62% 42%, rgba(251, 191, 36, 0.24), transparent 72%),
-    radial-gradient(860px 520px at 50% 82%, rgba(59, 130, 246, 0.14), transparent 74%),
-    radial-gradient(620px 400px at 68% 56%, rgba(244, 114, 182, 0.12), transparent 76%),
-    linear-gradient(135deg, rgba(255, 248, 214, 0.3), rgba(255, 255, 255, 0.08));
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+  background-image: none;
   mix-blend-mode: normal;
-  opacity: 0.92;
-  filter: saturate(112%) contrast(1.02);
-  animation:
-    lightAuroraFlow 18s ease-in-out infinite alternate,
-    lightGlowPulse 9.5s ease-in-out infinite;
+  opacity: 0;
+  filter: none;
+  animation: none;
 }
 
 html[data-theme="light"] body::after {
-  background-image:
-    radial-gradient(560px 340px at 24% 66%, rgba(56, 189, 248, 0.12), transparent 72%),
-    radial-gradient(620px 360px at 74% 62%, rgba(251, 191, 36, 0.28), transparent 74%),
-    radial-gradient(520px 320px at 34% 28%, rgba(250, 204, 21, 0.2), transparent 74%),
-    radial-gradient(420px 280px at 48% 30%, rgba(168, 85, 247, 0.09), transparent 76%),
-    repeating-linear-gradient(
-      to bottom,
-      rgba(148, 163, 184, 0.06) 0px,
-      rgba(148, 163, 184, 0.06) 1px,
-      transparent 2px,
-      transparent 8px
-    );
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+  background-image: none;
   background-repeat: no-repeat;
   mix-blend-mode: normal;
-  opacity: 0.6;
-  animation:
-    lightOrbDrift 14s ease-in-out infinite alternate,
-    lightGlowPulse 11s ease-in-out infinite;
+  opacity: 0;
+  animation: none;
 }
 
 html[data-theme="dark"] body::before {
-  background-image:
-    radial-gradient(1140px 640px at 14% 20%, rgba(245, 245, 245, 0.34), transparent 60%),
-    radial-gradient(1180px 700px at 82% 28%, rgba(220, 220, 220, 0.3), transparent 62%),
-    radial-gradient(980px 560px at 46% 84%, rgba(195, 195, 195, 0.28), transparent 64%),
-    radial-gradient(760px 460px at 62% 54%, rgba(255, 255, 255, 0.24), transparent 66%),
-    radial-gradient(920px 520px at 28% 62%, rgba(230, 230, 230, 0.22), transparent 68%),
-    radial-gradient(860px 480px at 56% 34%, rgba(255, 255, 255, 0.2), transparent 68%),
-    radial-gradient(760px 440px at 38% 78%, rgba(220, 220, 220, 0.18), transparent 70%);
-  background-size: 124% 124%, 122% 122%, 126% 126%, 120% 120%, 124% 124%, 122% 122%, 120% 120%;
-  background-position: 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%;
-  filter: blur(9px) saturate(102%) contrast(1.18);
-  opacity: 1;
+  background-image: none;
+  background-size: auto;
+  background-position: 50% 50%;
+  filter: none;
+  opacity: 0;
   mix-blend-mode: screen;
-  animation:
-    darkSmokeDriftA 8.4s ease-in-out infinite alternate,
-    darkSmokePulse 3.2s ease-in-out infinite;
+  animation: none;
 }
 
 html[data-theme="dark"] body::after {
-  background-image:
-    radial-gradient(980px 560px at 24% 40%, rgba(255, 255, 255, 0.26), transparent 60%),
-    radial-gradient(1040px 620px at 74% 66%, rgba(230, 230, 230, 0.24), transparent 62%),
-    radial-gradient(780px 460px at 52% 18%, rgba(255, 255, 255, 0.22), transparent 66%),
-    radial-gradient(720px 420px at 40% 72%, rgba(210, 210, 210, 0.2), transparent 68%),
-    radial-gradient(860px 460px at 64% 46%, rgba(245, 245, 245, 0.18), transparent 70%),
-    radial-gradient(820px 420px at 18% 70%, rgba(220, 220, 220, 0.16), transparent 72%);
-  background-size: 128% 128%, 124% 124%, 122% 122%, 126% 126%, 122% 122%, 120% 120%;
-  background-position: 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%, 50% 50%;
-  filter: blur(13px) saturate(96%) contrast(1.14);
-  opacity: 0.98;
+  background-image: none;
+  background-size: auto;
+  background-position: 50% 50%;
+  filter: none;
+  opacity: 0;
   mix-blend-mode: screen;
-  animation:
-    darkSmokeDriftB 9.8s ease-in-out infinite alternate-reverse,
-    darkSmokePulse 3.6s ease-in-out infinite;
+  animation: none;
 }
 
 html[data-theme="matrix"] body::before {
-  z-index: 1;
-  inset: -24vh -6vw;
-  background-image:
-    linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(16,185,129,0.26) 52%, rgba(0,0,0,0) 100%),
-    repeating-linear-gradient(
-      to right,
-      transparent 0px,
-      transparent 63px,
-      rgba(52, 211, 153, 0.16) 64px,
-      transparent 65px
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0px,
-      transparent 63px,
-      rgba(16, 185, 129, 0.16) 64px,
-      transparent 65px
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      rgba(16, 185, 129, 0.07) 0px,
-      rgba(16, 185, 129, 0.07) 1px,
-      transparent 2px,
-      transparent 5px
-    );
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%;
-  mix-blend-mode: screen;
-  opacity: 0.92;
-  animation:
-    matrixSweep 2s linear infinite,
-    matrixPulse 1.55s ease-in-out infinite,
-    matrixLineGlitch 0.8s steps(4, end) infinite,
-    matrixGridFlicker 2.4s steps(6, end) infinite;
+  background-image: none;
+  animation: none;
+  opacity: 0;
 }
 
 html[data-theme="matrix"] body::after {
-  z-index: 0;
-  inset: -24vh -6vw;
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='320' viewBox='0 0 520 320'%3E%3Cstyle%3Etext%7Bfill:%236ee7b7;fill-opacity:.2;font:700 13px monospace;letter-spacing:2.2px%7D%3C/style%3E%3Ctext x='24' y='42'%3E0101 // EXEC // 11AF%3C/text%3E%3Ctext x='136' y='112'%3E%3E ROUTE: DMA NY4%3C/text%3E%3Ctext x='64' y='186'%3E%24 BTC ETH NQ ES%3C/text%3E%3Ctext x='186' y='258'%3ERISK_LOCK = ON%3C/text%3E%3C/svg%3E");
-  background-size: 520px 320px;
-  background-position: 0 -220px;
-  background-repeat: repeat;
-  mix-blend-mode: screen;
-  filter: blur(0.28px) saturate(132%) contrast(1.02);
-  opacity: 0.5;
-  animation:
-    matrixGlyphFall 10.5s linear infinite,
-    matrixGlyphFlicker 1.6s steps(5, end) infinite;
+  background-image: none;
+  animation: none;
+  opacity: 0;
 }
 
 html[data-theme="matrix"] body {
   min-height: 100vh;
-  animation: matrixGlobalFlicker 4.8s steps(8, end) infinite;
+  animation: none;
 }
 
 html[data-theme="matrix"],
@@ -557,47 +455,22 @@ html[data-theme="matrix"] body {
 }
 
 html[data-theme="space"] body::before {
-  background-image:
-    radial-gradient(1800px 520px at 52% 34%, rgba(255,255,255,0.16), rgba(148,163,184,0.06) 36%, transparent 74%),
-    radial-gradient(1100px 300px at 54% 39%, rgba(191,219,254,0.18), rgba(196,181,253,0.06) 42%, transparent 78%),
-    radial-gradient(1000px 620px at 10% 10%, rgba(59,130,246,0.12), transparent 70%),
-    radial-gradient(900px 520px at 88% 8%, rgba(168,85,247,0.1), transparent 68%),
-    radial-gradient(760px 460px at 54% 94%, rgba(99,102,241,0.08), transparent 74%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1024' height='768' viewBox='0 0 1024 768'%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='19' cy='51' r='0.8' fill-opacity='.58'/%3E%3Ccircle cx='88' cy='129' r='1.1' fill-opacity='.72'/%3E%3Ccircle cx='146' cy='83' r='0.9' fill-opacity='.65'/%3E%3Ccircle cx='235' cy='201' r='1.3' fill-opacity='.76'/%3E%3Ccircle cx='304' cy='57' r='1' fill-opacity='.62'/%3E%3Ccircle cx='369' cy='165' r='1.2' fill-opacity='.7'/%3E%3Ccircle cx='442' cy='112' r='0.9' fill-opacity='.6'/%3E%3Ccircle cx='516' cy='226' r='1.1' fill-opacity='.68'/%3E%3Ccircle cx='589' cy='69' r='0.85' fill-opacity='.56'/%3E%3Ccircle cx='661' cy='188' r='1.25' fill-opacity='.74'/%3E%3Ccircle cx='731' cy='121' r='0.95' fill-opacity='.62'/%3E%3Ccircle cx='803' cy='238' r='1.05' fill-opacity='.68'/%3E%3Ccircle cx='879' cy='91' r='0.88' fill-opacity='.58'/%3E%3Ccircle cx='949' cy='213' r='1.1' fill-opacity='.72'/%3E%3Ccircle cx='72' cy='312' r='0.95' fill-opacity='.62'/%3E%3Ccircle cx='154' cy='388' r='1.15' fill-opacity='.72'/%3E%3Ccircle cx='247' cy='349' r='0.85' fill-opacity='.54'/%3E%3Ccircle cx='316' cy='436' r='1.05' fill-opacity='.68'/%3E%3Ccircle cx='404' cy='292' r='1.2' fill-opacity='.72'/%3E%3Ccircle cx='481' cy='405' r='1.08' fill-opacity='.68'/%3E%3Ccircle cx='566' cy='321' r='0.86' fill-opacity='.56'/%3E%3Ccircle cx='644' cy='441' r='1.15' fill-opacity='.72'/%3E%3Ccircle cx='731' cy='356' r='0.9' fill-opacity='.58'/%3E%3Ccircle cx='812' cy='444' r='1.04' fill-opacity='.66'/%3E%3Ccircle cx='894' cy='336' r='1.1' fill-opacity='.7'/%3E%3Ccircle cx='63' cy='523' r='0.86' fill-opacity='.56'/%3E%3Ccircle cx='139' cy='617' r='1.16' fill-opacity='.72'/%3E%3Ccircle cx='219' cy='548' r='0.94' fill-opacity='.6'/%3E%3Ccircle cx='296' cy='664' r='1.1' fill-opacity='.7'/%3E%3Ccircle cx='382' cy='572' r='0.9' fill-opacity='.56'/%3E%3Ccircle cx='466' cy='646' r='1.06' fill-opacity='.66'/%3E%3Ccircle cx='551' cy='556' r='1.18' fill-opacity='.72'/%3E%3Ccircle cx='632' cy='624' r='0.88' fill-opacity='.54'/%3E%3Ccircle cx='716' cy='534' r='1.05' fill-opacity='.66'/%3E%3Ccircle cx='793' cy='652' r='1.13' fill-opacity='.72'/%3E%3Ccircle cx='876' cy='584' r='0.9' fill-opacity='.58'/%3E%3Ccircle cx='962' cy='664' r='1' fill-opacity='.62'/%3E%3C/g%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1365' height='1024' viewBox='0 0 1365 1024'%3E%3Cg fill='%23bfdbfe'%3E%3Ccircle cx='41' cy='78' r='1.7' fill-opacity='.4'/%3E%3Ccircle cx='206' cy='164' r='1.5' fill-opacity='.36'/%3E%3Ccircle cx='364' cy='114' r='1.8' fill-opacity='.42'/%3E%3Ccircle cx='526' cy='229' r='1.6' fill-opacity='.38'/%3E%3Ccircle cx='686' cy='136' r='1.9' fill-opacity='.44'/%3E%3Ccircle cx='845' cy='262' r='1.7' fill-opacity='.4'/%3E%3Ccircle cx='1003' cy='148' r='1.45' fill-opacity='.34'/%3E%3Ccircle cx='1167' cy='246' r='1.8' fill-opacity='.42'/%3E%3Ccircle cx='1318' cy='183' r='1.6' fill-opacity='.36'/%3E%3Ccircle cx='104' cy='398' r='1.8' fill-opacity='.42'/%3E%3Ccircle cx='279' cy='479' r='1.55' fill-opacity='.36'/%3E%3Ccircle cx='446' cy='357' r='1.9' fill-opacity='.44'/%3E%3Ccircle cx='618' cy='521' r='1.65' fill-opacity='.38'/%3E%3Ccircle cx='788' cy='406' r='1.45' fill-opacity='.34'/%3E%3Ccircle cx='955' cy='548' r='1.9' fill-opacity='.44'/%3E%3Ccircle cx='1126' cy='428' r='1.55' fill-opacity='.36'/%3E%3Ccircle cx='1292' cy='562' r='1.8' fill-opacity='.42'/%3E%3Ccircle cx='149' cy='742' r='1.65' fill-opacity='.38'/%3E%3Ccircle cx='334' cy='864' r='1.9' fill-opacity='.44'/%3E%3Ccircle cx='512' cy='726' r='1.45' fill-opacity='.34'/%3E%3Ccircle cx='694' cy='884' r='1.8' fill-opacity='.42'/%3E%3Ccircle cx='872' cy='764' r='1.55' fill-opacity='.36'/%3E%3Ccircle cx='1048' cy='918' r='1.95' fill-opacity='.46'/%3E%3Ccircle cx='1226' cy='792' r='1.66' fill-opacity='.38'/%3E%3C/g%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1100' viewBox='0 0 1600 1100'%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='128' cy='96' r='2.4' fill-opacity='.6'/%3E%3Ccircle cx='404' cy='222' r='2.8' fill-opacity='.66'/%3E%3Ccircle cx='689' cy='132' r='3.1' fill-opacity='.72'/%3E%3Ccircle cx='978' cy='286' r='2.6' fill-opacity='.6'/%3E%3Ccircle cx='1266' cy='166' r='3.2' fill-opacity='.74'/%3E%3Ccircle cx='241' cy='488' r='2.7' fill-opacity='.6'/%3E%3Ccircle cx='582' cy='628' r='3.3' fill-opacity='.78'/%3E%3Ccircle cx='874' cy='522' r='2.5' fill-opacity='.58'/%3E%3Ccircle cx='1172' cy='708' r='3.4' fill-opacity='.8'/%3E%3Ccircle cx='1434' cy='562' r='2.7' fill-opacity='.62'/%3E%3Ccircle cx='328' cy='934' r='3.1' fill-opacity='.74'/%3E%3Ccircle cx='756' cy='980' r='2.9' fill-opacity='.68'/%3E%3Ccircle cx='1128' cy='906' r='3.2' fill-opacity='.76'/%3E%3Ccircle cx='1436' cy='1002' r='2.8' fill-opacity='.66'/%3E%3C/g%3E%3C/svg%3E");
-  background-size:
-    100% 100%,
-    100% 100%,
-    100% 100%,
-    100% 100%,
-    100% 100%,
-    1024px 768px,
-    1365px 1024px,
-    1600px 1100px;
-  background-position: center, center, center, center, center, 0 0, 0 0, 0 0;
-  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat, repeat, repeat;
-  opacity: 0.96;
-  animation:
-    spaceMilkyPulse 12s ease-in-out infinite,
-    spaceStarTwinkleRandom 9.6s steps(14, end) infinite;
+  background-image: none;
+  background-size: auto;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0;
+  animation: none;
 }
 
 html[data-theme="space"] body::after {
-  background-image:
-    radial-gradient(1.6px 1.6px at 12% 24%, rgba(255,255,255,0.6), transparent),
-    radial-gradient(1.8px 1.8px at 38% 66%, rgba(191,219,254,0.55), transparent),
-    radial-gradient(1.4px 1.4px at 64% 34%, rgba(196,181,253,0.5), transparent),
-    radial-gradient(2px 2px at 82% 74%, rgba(255,255,255,0.64), transparent),
-    radial-gradient(2.2px 2.2px at 54% 18%, rgba(147,197,253,0.6), transparent);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
-  background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
+  background-image: none;
+  background-size: auto;
+  background-position: 0 0;
   background-repeat: no-repeat;
-  filter: blur(0.3px);
-  opacity: 0.72;
-  animation:
-    spaceTwinkle 7.2s ease-in-out infinite alternate,
-    spaceStarPulse 8.8s ease-in-out infinite;
+  filter: none;
+  opacity: 0;
+  animation: none;
 }
 
 @keyframes spaceDrift {
@@ -819,7 +692,7 @@ html[data-theme] {
   background: var(--chart-tooltip-bg) !important;
   border: 1px solid var(--card-border) !important;
   border-radius: 16px !important;
-  backdrop-filter: blur(15px);
+  backdrop-filter: blur(8px);
 }
 
 /* Dashboard utilities */
@@ -853,7 +726,7 @@ html[data-theme] {
   border: 1px solid var(--dash-panel-border);
   background: var(--dash-panel-bg);
   box-shadow: var(--dash-panel-shadow);
-  backdrop-filter: blur(18px) saturate(130%);
+  backdrop-filter: blur(10px) saturate(115%);
 }
 
 .dashboard-topline {

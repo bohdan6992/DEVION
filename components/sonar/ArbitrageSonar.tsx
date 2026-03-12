@@ -464,6 +464,33 @@ const isActiveByPositionBp = (s: any) => {
   return f === true;
 };
 
+const getSignalMetricAbs = (
+  s: ArbitrageSignal,
+  zapMode: "zap" | "sigma" | "off"
+): number | null => {
+  if (zapMode === "off") return null;
+  const dir = s.direction;
+  if (dir !== "down" && dir !== "up") return null;
+  const raw =
+    zapMode === "zap"
+      ? dir === "down"
+        ? toNum(s.zapS)
+        : toNum(s.zapL)
+      : dir === "down"
+        ? toNum(s.zapSsigma)
+        : toNum(s.zapLsigma);
+  return raw == null ? null : Math.abs(raw);
+};
+
+const isSignalGoldActive = (
+  s: ArbitrageSignal,
+  zapMode: "zap" | "sigma" | "off",
+  zapGoldAbs: number
+): boolean => {
+  const absM = getSignalMetricAbs(s, zapMode);
+  return zapMode !== "off" && isActiveByPositionBp(s) && absM != null && absM <= Math.max(0, Number(zapGoldAbs ?? 0));
+};
+
 /* =========================
    Beta parsing
 ========================= */
@@ -697,21 +724,44 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
 ========================= */
 type MinMaxProps = {
   label: string;
+  filterKey?: RangeBoundKey;
   min: string;
   max: string;
   setMin: (v: string) => void;
   setMax: (v: string) => void;
+  mode?: "on" | "off";
+  onToggleMode?: (key: RangeBoundKey) => void;
   minPh?: string;
   maxPh?: string;
   startEditing: () => void;
   stopEditing: () => void;
 };
 
+const RANGE_BOUND_KEYS = [
+  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "Spread", "LstPrcL",
+  "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
+  "VolNFfromLstCls", "AvPostMhVol90NF", "VolRel", "PreMhBidLstPrcPct", "PreMhLoLstPrcPct",
+  "PreMhHiLstClsPct", "PreMhLoLstClsPct", "LstPrcLstClsPct", "ImbExch925", "ImbExch1555",
+] as const;
+type RangeBoundKey = typeof RANGE_BOUND_KEYS[number];
+type RangeFilterMode = "on" | "off";
+type RangeFilterModes = Record<RangeBoundKey, RangeFilterMode>;
+
+const createDefaultRangeModes = (): RangeFilterModes =>
+  Object.fromEntries(RANGE_BOUND_KEYS.map((key) => [key, "on"])) as RangeFilterModes;
+
 export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
+  const hasValue = Boolean(props.min || props.max);
+  const isOff = props.mode === "off";
+
   return (
     <div
       className={`group flex flex-col gap-1 p-2 rounded-xl border transition-all ${
-        props.min || props.max ? "border-emerald-500/30 bg-emerald-500/[0.05]" : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
+        hasValue
+          ? isOff
+            ? "border-rose-500/30 bg-rose-500/[0.05]"
+            : "border-emerald-500/30 bg-emerald-500/[0.05]"
+          : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
       }`}
       onFocusCapture={props.startEditing}
       onBlurCapture={(e) => {
@@ -722,18 +772,32 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
     >
       <div className="flex justify-between items-center">
         <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1">{props.label}</span>
-        {(props.min || props.max) && (
-          <button
-            type="button"
-            onClick={() => {
-              props.setMin("");
-              props.setMax("");
-            }}
-            className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
-          >
-            CLR
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {hasValue && props.filterKey && props.onToggleMode && (
+            <button
+              type="button"
+              onClick={() => props.onToggleMode?.(props.filterKey!)}
+              className={`text-[10px] font-mono transition-colors uppercase ${
+                isOff ? "text-rose-300 hover:text-rose-200" : "text-emerald-300 hover:text-white"
+              }`}
+              title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
+            >
+              {isOff ? "OFF" : "ON"}
+            </button>
+          )}
+          {hasValue && (
+            <button
+              type="button"
+              onClick={() => {
+                props.setMin("");
+                props.setMax("");
+              }}
+              className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
+            >
+              CLR
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2">
@@ -757,7 +821,17 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 /* =========================
    UI Helper Components
 ========================= */
-type MsColor = "amber" | "emerald" | "rose" | "cyan";
+type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia";
+
+const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
+  if (theme === "aurora" || theme === "asher") return "amber";
+  if (theme === "neon") return "fuchsia";
+  if (theme === "space") return "cyan";
+  return "emerald";
+};
+
+const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor): MsColor =>
+  color === "emerald" ? getSonarPrimaryMsColor(theme) : color;
 
 
 const MSF = {
@@ -798,8 +872,95 @@ const MSF = {
     divider: "bg-sky-400/20",
     boxChecked: "bg-sky-400 border-transparent",
   },
+  fuchsia: {
+    activeItem: "bg-fuchsia-500/15 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-fuchsia-400 text-black border-transparent",
+    chipInactive: "text-fuchsia-300 border-transparent hover:bg-fuchsia-400/10",
+    arrow: "text-fuchsia-300 hover:text-fuchsia-200 hover:bg-fuchsia-400/10",
+    divider: "bg-fuchsia-400/20",
+    boxChecked: "bg-fuchsia-400 border-transparent",
+  },
 
 } as const;
+
+const getSonarAccent = (theme?: string | null) => {
+  const primary = getSonarPrimaryMsColor(theme);
+  if (primary === "amber") {
+    return {
+      selection: "selection:bg-amber-500/30",
+      dot: "bg-amber-500",
+      badge: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+      button: "bg-amber-500/10 text-amber-300 border-amber-500/20 shadow-[0_0_10px_-3px_rgba(245,158,11,0.2)]",
+      outlineButton: "border-amber-500/50 text-amber-500 hover:bg-amber-500/10 shadow-[0_0_10px_rgba(245,158,11,0.1)]",
+      panel: "border-l-amber-500 shadow-[0_0_40px_-10px_rgba(245,158,11,0.06)]",
+      chip: "border-amber-500/30 bg-amber-500/10 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.18)]",
+      line: "bg-amber-500/50",
+      text: "text-amber-400",
+      softBorder: "border-amber-500/35 bg-amber-500/12 text-amber-300",
+      panelSoft: "border-amber-500/20 bg-amber-500/[0.03]",
+    };
+  }
+  if (primary === "fuchsia") {
+    return {
+      selection: "selection:bg-fuchsia-500/30",
+      dot: "bg-fuchsia-400",
+      badge: "border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-300",
+      button: "bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/20 shadow-[0_0_10px_-3px_rgba(217,70,239,0.2)]",
+      outlineButton: "border-fuchsia-500/50 text-fuchsia-400 hover:bg-fuchsia-500/10 shadow-[0_0_10px_rgba(217,70,239,0.1)]",
+      panel: "border-l-fuchsia-500 shadow-[0_0_40px_-10px_rgba(217,70,239,0.06)]",
+      chip: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 shadow-[0_0_10px_rgba(217,70,239,0.18)]",
+      line: "bg-fuchsia-400/50",
+      text: "text-fuchsia-300",
+      softBorder: "border-fuchsia-500/35 bg-fuchsia-500/12 text-fuchsia-300",
+      panelSoft: "border-fuchsia-500/20 bg-fuchsia-500/[0.03]",
+    };
+  }
+  if (primary === "cyan") {
+    return {
+      selection: "selection:bg-sky-500/30",
+      dot: "bg-sky-400",
+      badge: "border-sky-500/20 bg-sky-500/10 text-sky-300",
+      button: "bg-sky-500/10 text-sky-300 border-sky-500/20 shadow-[0_0_10px_-3px_rgba(56,189,248,0.2)]",
+      outlineButton: "border-sky-500/50 text-sky-400 hover:bg-sky-500/10 shadow-[0_0_10px_rgba(56,189,248,0.1)]",
+      panel: "border-l-sky-500 shadow-[0_0_40px_-10px_rgba(56,189,248,0.06)]",
+      chip: "border-sky-500/30 bg-sky-500/10 text-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.18)]",
+      line: "bg-sky-400/50",
+      text: "text-sky-300",
+      softBorder: "border-sky-500/35 bg-sky-500/12 text-sky-300",
+      panelSoft: "border-sky-500/20 bg-sky-500/[0.03]",
+    };
+  }
+  return {
+    selection: "selection:bg-emerald-500/30",
+    dot: "bg-emerald-500",
+    badge: "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
+    button: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]",
+    outlineButton: "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.1)]",
+    panel: "border-l-emerald-500 shadow-[0_0_40px_-10px_rgba(16,185,129,0.05)]",
+    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]",
+    line: "bg-emerald-500/50",
+    text: "text-emerald-400",
+    softBorder: "border-emerald-500/35 bg-emerald-500/12 text-emerald-300",
+    panelSoft: "border-emerald-500/20 bg-emerald-500/[0.03]",
+  };
+};
+
+const ChevronIcon = ({ open }: { open: boolean }) => (
+  <svg
+    className={`w-3 h-3 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+    viewBox="0 0 20 20"
+    fill="none"
+  >
+    <path
+      d="M6 8L10 12L14 8"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 const MultiSelectFilter = ({
   label,
@@ -818,12 +979,13 @@ const MultiSelectFilter = ({
   toggleEnabled: () => void;
   color?: MsColor;
 }) => {
+  const { theme } = useUi();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const id = useMemo(() => `msf-${slug(label)}`, [label]);
-  const C = MSF[color];
+  const C = MSF[resolveAccentMsColor(theme, color)];
 
   const toggleOption = (val: string) => {
     const next = new Set(selected);
@@ -919,7 +1081,7 @@ const MultiSelectFilter = ({
           {selected.size > 0 && (
             <div className="ml-2 flex items-center gap-1">
               {Array.from(selected).slice(0, 6).map((v) => (
-                <span key={v} className="px-2 py-0.5 rounded-full border border-white/10 bg-black/20 text-[10px] font-mono text-cyan-300">
+                <span key={v} className={`px-2 py-0.5 rounded-full border border-white/10 bg-black/20 text-[10px] font-mono ${getSonarAccent(theme).text}`}>
                   {v}
                 </span>
               ))}
@@ -935,20 +1097,7 @@ const MultiSelectFilter = ({
           onClick={() => setOpen((v) => !v)}
           className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${C.arrow}`}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={`transition-transform ${open ? "rotate-180" : ""}`}
-          >
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
+          <ChevronIcon open={open} />
         </button>
       </div>
 
@@ -970,12 +1119,13 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
   onChange,
   color = "cyan",
 }) => {
+  const { theme } = useUi();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const id = useMemo(() => `ssf-${Math.random().toString(36).slice(2)}`, []);
-  const C = MSF[color];
+  const C = MSF[resolveAccentMsColor(theme, color)];
 
   const recomputePos = () => {
     const el = wrapRef.current;
@@ -1103,15 +1253,7 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
           ].join(" ")}
           aria-label="Open"
         >
-          <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
-            <path
-              d="M6 8L10 12L14 8"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <ChevronIcon open={open} />
         </button>
       </div>
 
@@ -1136,21 +1278,32 @@ const FB = {
   amber: {
     on: "border border-amber-500 text-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)] bg-amber-500/10",
   },
+  cyan: {
+    on: "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10",
+  },
+  fuchsia: {
+    on: "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10",
+  },
   rose: {
     on: "border border-rose-500 text-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.3)] bg-rose-500/10",
   },
 } as const;
 
-const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => (
-  <button
-    onClick={onClick}
-    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-      active ? FB[color].on : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
-    }`}
-  >
-    {label}
-  </button>
-);
+const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => {
+  const { theme } = useUi();
+  const resolvedColor = resolveAccentMsColor(theme, color);
+
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
+        active ? FB[resolvedColor].on : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+      }`}
+    >
+      {label}
+    </button>
+  );
+};
 
 // ЗАМІНИТИ існуюче оголошення SignalCardProps + компонент SignalCard
 // на наступний блок:
@@ -1187,6 +1340,8 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   pinColor = null,
 }) => {
+  const { theme } = useUi();
+  const sonarAccent = getSonarAccent(theme);
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
 
@@ -1203,11 +1358,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const absM = metric == null ? null : Math.abs(metric);
 
-  const isGold =
-    zapMode !== "off" &&
-    posActive &&
-    absM != null &&
-    absM <= Math.max(0, Number(zapGoldAbs ?? 0));
+  const isGold = isSignalGoldActive(s, zapMode, zapGoldAbs);
 
   const isSilver =
     zapMode !== "off" &&
@@ -1226,8 +1377,8 @@ const SignalCard: React.FC<SignalCardProps> = ({
     "bg-zinc-200/5 border-zinc-200/30 shadow-[0_0_18px_-10px_rgba(255,255,255,0.18)]";
 
   const activeClasses = isShort
-    ? "bg-rose-500/10 border-rose-500/50 shadow-[0_0_15px_-5px_rgba(244,63,94,0.3)]"
-    : "bg-emerald-500/10 border-emerald-500/50 shadow-[0_0_15px_-5px_rgba(16,185,129,0.3)]";
+    ? "bg-rose-950/28 border-rose-900/45 shadow-[0_0_12px_-6px_rgba(244,63,94,0.18)]"
+    : "bg-emerald-950/28 border-emerald-900/45 shadow-[0_0_12px_-6px_rgba(16,185,129,0.18)]";
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
@@ -1241,10 +1392,10 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
-  const pxColor = isShort ? "text-rose-400" : "text-emerald-400";
+  const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : "text-emerald-400";
 
   const tickerColor = isActive
-    ? isShort ? "text-rose-300" : "text-emerald-300"
+    ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : "text-emerald-300"
     : "text-zinc-300 group-hover:text-zinc-100";
 
   const pinClass =
@@ -1308,6 +1459,105 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
 const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
 const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
+
+type WindowRateCell = {
+  rate: number | null;
+  total: number | null;
+};
+
+type WindowRatingRow = {
+  windowKey: string;
+  any: WindowRateCell;
+  hard: WindowRateCell;
+  soft: WindowRateCell;
+};
+
+const WINDOW_RATING_LABELS: Record<string, string> = {
+  glob: "GLOBAL",
+  global: "GLOBAL",
+  all: "ALL",
+  any: "ANY",
+  "5m": "5M",
+  "10m": "10M",
+  "15m": "15M",
+  "20m": "20M",
+  "30m": "30M",
+  "45m": "45M",
+  "60m": "60M",
+  "90m": "90M",
+  "120m": "120M",
+  open: "OPEN",
+  intra: "INTRA",
+  post: "POST",
+  print: "PRINT",
+  ark: "ARK",
+  blue: "BLUE",
+};
+
+const toWindowRateCell = (value: any): WindowRateCell => {
+  const obj = safeObj(value);
+  if (!obj) return { rate: null, total: null };
+  return {
+    rate: toNum(obj.rate ?? obj.Rate ?? obj.rating ?? obj.Rating),
+    total: toNum(obj.total ?? obj.Total ?? obj.count ?? obj.Count),
+  };
+};
+
+const pickWindowRatingsSource = (d: any) => {
+  return (
+    safeObj(d?.ratings) ??
+    safeObj(d?.Ratings) ??
+    safeObj(d?.best?.ratings) ??
+    safeObj(d?.best?.Ratings) ??
+    safeObj(d?.Best?.ratings) ??
+    safeObj(d?.Best?.Ratings) ??
+    safeObj(getBestParams(d)?.ratings) ??
+    safeObj(getBestParams(d)?.Ratings) ??
+    safeObj(getBestParams(d)?.windows) ??
+    safeObj(getBestParams(d)?.Windows) ??
+    null
+  );
+};
+
+const getWindowRatings = (d: any): WindowRatingRow[] => {
+  const source = pickWindowRatingsSource(d);
+  if (!source) return [];
+
+  const rows: WindowRatingRow[] = [];
+
+  for (const [windowKeyRaw, value] of Object.entries(source)) {
+    const windowKey = String(windowKeyRaw);
+    const bucket = safeObj(value);
+    if (!bucket) continue;
+
+    const anyCell = toWindowRateCell(bucket.any ?? bucket.Any ?? bucket.all ?? bucket.All);
+    const hardCell = toWindowRateCell(bucket.hard ?? bucket.Hard);
+    const softCell = toWindowRateCell(bucket.soft ?? bucket.Soft);
+
+    if (
+      anyCell.rate == null &&
+      anyCell.total == null &&
+      hardCell.rate == null &&
+      hardCell.total == null &&
+      softCell.rate == null &&
+      softCell.total == null
+    ) {
+      continue;
+    }
+
+    rows.push({ windowKey, any: anyCell, hard: hardCell, soft: softCell });
+  }
+
+  const order = ["glob", "global", "all", "5m", "10m", "15m", "20m", "30m", "45m", "60m", "90m", "120m", "open", "intra", "post", "print", "ark", "blue"];
+  return rows.sort((a, b) => {
+    const ia = order.indexOf(a.windowKey.toLowerCase());
+    const ib = order.indexOf(b.windowKey.toLowerCase());
+    const ra = ia === -1 ? 999 : ia;
+    const rb = ib === -1 ? 999 : ib;
+    if (ra !== rb) return ra - rb;
+    return a.windowKey.localeCompare(b.windowKey);
+  });
+};
 
 type ListMode = "off" | "ignore" | "apply" | "pin";
 type ActiveMode = "off" | "onlyActive" | "onlyInactive";
@@ -1420,10 +1670,20 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     return null; // unknown => ignore
   };
 
+  const etfPositionSign = (s: any): number => {
+    const d = String(s?.direction ?? getMeta(s)?.direction ?? s?.side ?? getMeta(s)?.side ?? "")
+      .trim()
+      .toLowerCase();
+    if (d === "long" || d === "up" || d === "buy" || d === "l") return 1;
+    if (d === "short" || d === "down" || d === "sell" || d === "s") return -1;
+    return 0;
+  };
+
   // Deduplicate positions inside each bench group, because the feed can contain many signal rows
   // for the same ticker (different buckets/classes). PositionBp represents the *position*.
-  // We keep the row with the largest PositionBp for each (bench, ticker).
-  const byBenchTicker = new Map<string, any>(); // key = bench::ticker
+  // We keep the row with the largest PositionBp for each (bench, ticker, side).
+  const byBenchTicker = new Map<string, any>(); // key = bench::ticker::bucket
+  const currentByBench = new Map<string, number>();
 
   for (const s of arr ?? []) {
     const bench = getBenchmarkKey(s);
@@ -1433,7 +1693,15 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     if (!tk) continue;
 
     // Ignore the ETF row itself in the hedge need calculation.
-    if (tk === bench) continue;
+    if (isEtfRow(s, bench)) {
+      const posRaw = numPositionBp(s);
+      const pos = posRaw == null ? null : Math.abs(posRaw);
+      const sign = etfPositionSign(s);
+      if (pos != null && pos > 0 && sign !== 0) {
+        currentByBench.set(bench, (currentByBench.get(bench) ?? 0) + sign * pos);
+      }
+      continue;
+    }
 
     const bucket = dirBucket(s);
     if (!bucket) continue; // unknown direction => ignore
@@ -1441,10 +1709,10 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     const pos = numPositionBp(s);
     if (pos == null || pos === 0) continue; // ACTIVE only
 
-    const key = `${bench}::${tk}`;
+    const key = `${bench}::${tk}::${bucket}`;
     const prev = byBenchTicker.get(key);
-    const prevPos = prev ? (numPositionBp(prev) ?? 0) : 0;
-    if (!prev || pos > prevPos) byBenchTicker.set(key, s);
+    const prevPos = prev ? Math.abs(numPositionBp(prev) ?? 0) : 0;
+    if (!prev || Math.abs(pos) > prevPos) byBenchTicker.set(key, s);
   }
 
   // Aggregate buy/sell per bench
@@ -1473,9 +1741,17 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     needByBench.set(bench, v.buySum - v.sellSum);
   }
 
-  const applyPairMutualExclusion = (aBench: string, bBench: string, bPerA: number) => {
+  const calcPairCapacity = (aBench: string, bBench: string, bPerA: number) => {
+    const aNeed = needByBench.get(aBench) ?? 0;
+    const bNeed = needByBench.get(bBench) ?? 0;
+    if (!Number.isFinite(bPerA) || bPerA <= 0) return 0;
+    if (aNeed === 0 || bNeed === 0 || Math.sign(aNeed) === Math.sign(bNeed)) return 0;
+    return Math.min(Math.abs(aNeed), Math.abs(bNeed) / bPerA);
+  };
+
+  const applyPairMutualExclusion = (aBench: string, bBench: string, bPerA: number): MutualExclusionInfo => {
     if (!Number.isFinite(bPerA) || bPerA <= 0) {
-      exclusions.push({
+      return {
         key: `${aBench}/${bBench}`,
         aBench,
         bBench,
@@ -1486,15 +1762,14 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
         favorTicker: null,
         favorDir: "none",
         favorSum: 0,
-      });
-      return;
+      };
     }
 
     let aNeed = needByBench.get(aBench) ?? 0;
     let bNeed = needByBench.get(bBench) ?? 0;
 
     if (aNeed === 0 || bNeed === 0 || Math.sign(aNeed) === Math.sign(bNeed)) {
-      exclusions.push({
+      return {
         key: `${aBench}/${bBench}`,
         aBench,
         bBench,
@@ -1505,8 +1780,7 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
         favorTicker: null,
         favorDir: "none",
         favorSum: 0,
-      });
-      return;
+      };
     }
 
     const aBuy = aNeed > 0;
@@ -1514,7 +1788,7 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
     const bCapInA = Math.abs(bNeed) / bPerA;
     const x = Math.min(aCapInA, bCapInA);
     if (!(x > 0)) {
-      exclusions.push({
+      return {
         key: `${aBench}/${bBench}`,
         aBench,
         bBench,
@@ -1525,8 +1799,7 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
         favorTicker: null,
         favorDir: "none",
         favorSum: 0,
-      });
-      return;
+      };
     }
 
     if (aBuy) {
@@ -1567,7 +1840,7 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
       }
     }
 
-    exclusions.push({
+    return {
       key: `${aBench}/${bBench}`,
       aBench,
       bBench,
@@ -1578,20 +1851,45 @@ const computeHedgeByBench = (arr: ArbitrageSignal[]) => {
       favorTicker,
       favorDir,
       favorSum,
-    });
+    };
   };
 
   // Cross-cancel only for QQQ/SPY/IWM per user-defined ratios:
   // QQQ/SPY = 1.44, QQQ/IWM = 0.79.
-  applyPairMutualExclusion("QQQ", "SPY", 1.44);
-  applyPairMutualExclusion("QQQ", "IWM", 0.79);
+  const pairConfigs = [
+    { aBench: "QQQ", bBench: "SPY", ratio: 1.44 },
+    { aBench: "QQQ", bBench: "IWM", ratio: 0.79 },
+  ];
+  const remaining = [...pairConfigs];
 
-  for (const [bench, v] of sums.entries()) {
+  while (remaining.length > 0) {
+    let bestIdx = -1;
+    let bestCap = 0;
+    for (let i = 0; i < remaining.length; i++) {
+      const p = remaining[i];
+      const cap = calcPairCapacity(p.aBench, p.bBench, p.ratio);
+      if (cap > bestCap) {
+        bestCap = cap;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1 || bestCap <= 0) break;
+    const chosen = remaining.splice(bestIdx, 1)[0];
+    exclusions.push(applyPairMutualExclusion(chosen.aBench, chosen.bBench, chosen.ratio));
+  }
+
+  for (const p of remaining) {
+    exclusions.push(applyPairMutualExclusion(p.aBench, p.bBench, p.ratio));
+  }
+
+  const benches = new Set<string>([...sums.keys(), ...currentByBench.keys(), ...needByBench.keys()]);
+  for (const bench of benches) {
     const need = needByBench.get(bench) ?? 0;
     map.set(bench, {
       benchmark: bench,
       targetBp: need,
-      currentBp: 0,
+      currentBp: currentByBench.get(bench) ?? 0,
       needBp: need,
       buyBp: need > 0 ? need : 0,
       sellBp: need < 0 ? Math.abs(need) : 0,
@@ -1620,6 +1918,8 @@ function HedgeHeaderMinimal({
   bench: string;
   info: { targetBp: number; currentBp: number; needBp: number; buyBp: number; sellBp: number } | null;
 }) {
+  const { theme } = useUi();
+  const accentTextClass = getSonarAccent(theme).text;
   const need = info ? { left: fmtBp0(info.sellBp), right: fmtBp0(info.buyBp) } : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
@@ -1642,7 +1942,7 @@ function HedgeHeaderMinimal({
           </span>
         </div>
         <div className="text-right">
-          <span className="text-[22px] font-mono tabular-nums text-emerald-400 leading-none">
+          <span className={`text-[22px] font-mono tabular-nums leading-none ${accentTextClass}`}>
             {need.right}
           </span>
         </div>
@@ -1670,9 +1970,18 @@ function HedgeHeaderMinimal({
    COMPONENT
 ========================= */
 export default function ArbitrageSonar() {
-  // kept for future theme usage; not required right now
-  useUi();
+  const { theme } = useUi();
   const isDark = true;
+  const sonarAccent = getSonarAccent(theme);
+  const accentSelectionClass = sonarAccent.selection;
+  const accentDotClass = sonarAccent.dot;
+  const accentBadgeClass = sonarAccent.badge;
+  const accentButtonClass = sonarAccent.button;
+  const accentOutlineButtonClass = sonarAccent.outlineButton;
+  const accentPanelClass = sonarAccent.panel;
+  const accentChipClass = sonarAccent.chip;
+  const accentLineClass = sonarAccent.line;
+  const accentTextClass = sonarAccent.text;
 
   /* ===== defaults requested: global / all / any ===== */
   const [cls, setCls] = useState<ArbClass>("global");
@@ -1795,6 +2104,7 @@ export default function ArbitrageSonar() {
   const [imbExch925Max, setImbExch925Max] = useState("");
   const [imbExch1555Min, setImbExch1555Min] = useState("");
   const [imbExch1555Max, setImbExch1555Max] = useState("");
+  const [rangeModes, setRangeModes] = useState<RangeFilterModes>(() => createDefaultRangeModes());
 
   /* ===== Boolean filters (Red Group - Exclude) ===== */
   const [excludeDividend, setExcludeDividend] = useState(false);
@@ -1859,6 +2169,13 @@ export default function ArbitrageSonar() {
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
   const [activeData, setActiveData] = useState<any>(null);
+
+  const toggleRangeMode = useCallback((key: RangeBoundKey) => {
+    setRangeModes((prev) => ({
+      ...prev,
+      [key]: prev[key] === "off" ? "on" : "off",
+    }));
+  }, []);
 
   /* =========================
      Multi-select options
@@ -2166,6 +2483,17 @@ export default function ArbitrageSonar() {
         if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled);
         if (Array.isArray(s?.selSectors)) setSelSectors(new Set(s.selSectors.filter(Boolean)));
 
+        if (s?.rangeModes && typeof s.rangeModes === "object") {
+          setRangeModes((prev) => {
+            const next = { ...prev };
+            for (const key of RANGE_BOUND_KEYS) {
+              const value = s.rangeModes[key];
+              if (value === "on" || value === "off") next[key] = value;
+            }
+            return next;
+          });
+        }
+
         // bounds (strings)
         for (const key of [
           'adv20Min','adv20Max','adv20NFMin','adv20NFMax','adv90Min','adv90Max','adv90NFMin','adv90NFMax',
@@ -2274,6 +2602,7 @@ export default function ArbitrageSonar() {
           countryEnabled, selCountries: Array.from(selCountries),
           exchangeEnabled, selExchanges: Array.from(selExchanges),
           sectorEnabled, selSectors: Array.from(selSectors),
+          rangeModes,
 
           // bounds
           adv20Min, adv20Max,
@@ -2317,6 +2646,7 @@ export default function ArbitrageSonar() {
     countryEnabled, selCountries,
     exchangeEnabled, selExchanges,
     sectorEnabled, selSectors,
+    rangeModes,
     adv20Min, adv20Max,
     adv20NFMin, adv20NFMax,
     adv90Min, adv90Max,
@@ -2350,37 +2680,39 @@ export default function ArbitrageSonar() {
      Snapshot (single source of truth for fetching/filtering)
   ========================= */
   const bounds = useMemo(() => {
-    const mm = (minS: string, maxS: string) => ({ min: toNum(minS), max: toNum(maxS) });
+    const mm = (key: RangeBoundKey, minS: string, maxS: string) =>
+      rangeModes[key] === "off" ? { min: null, max: null } : { min: toNum(minS), max: toNum(maxS) };
     return {
-      ADV20: mm(adv20Min, adv20Max),
-      ADV20NF: mm(adv20NFMin, adv20NFMax),
-      ADV90: mm(adv90Min, adv90Max),
-      ADV90NF: mm(adv90NFMin, adv90NFMax),
-      AvPreMhv: mm(avPreMhvMin, avPreMhvMax),
-      RoundLot: mm(roundLotMin, roundLotMax),
-      VWAP: mm(vwapMin, vwapMax),
-      Spread: mm(spreadMin, spreadMax),
-      LstPrcL: mm(lstPrcLMin, lstPrcLMax),
-      LstCls: mm(lstClsMin, lstClsMax),
-      YCls: mm(yClsMin, yClsMax),
-      TCls: mm(tClsMin, tClsMax),
-      ClsToClsPct: mm(clsToClsPctMin, clsToClsPctMax),
-      Lo: mm(loMin, loMax),
-      LstClsNewsCnt: mm(lstClsNewsCntMin, lstClsNewsCntMax),
-      MarketCapM: mm(marketCapMMin, marketCapMMax),
-      PreMhVolNF: mm(preMhVolNFMin, preMhVolNFMax),
-      VolNFfromLstCls: mm(volNFfromLstClsMin, volNFfromLstClsMax),
-      AvPostMhVol90NF: mm(avPostMhVol90NFMin, avPostMhVol90NFMax),
-      VolRel: mm(volRelMin, volRelMax),
-      PreMhBidLstPrcPct: mm(preMhBidLstPrcPctMin, preMhBidLstPrcPctMax),
-      PreMhLoLstPrcPct: mm(preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
-      PreMhHiLstClsPct: mm(preMhHiLstClsPctMin, preMhHiLstClsPctMax),
-      PreMhLoLstClsPct: mm(preMhLoLstClsPctMin, preMhLoLstClsPctMax),
-      LstPrcLstClsPct: mm(lstPrcLstClsPctMin, lstPrcLstClsPctMax),
-      ImbExch925: mm(imbExch925Min, imbExch925Max),
-      ImbExch1555: mm(imbExch1555Min, imbExch1555Max),
+      ADV20: mm("ADV20", adv20Min, adv20Max),
+      ADV20NF: mm("ADV20NF", adv20NFMin, adv20NFMax),
+      ADV90: mm("ADV90", adv90Min, adv90Max),
+      ADV90NF: mm("ADV90NF", adv90NFMin, adv90NFMax),
+      AvPreMhv: mm("AvPreMhv", avPreMhvMin, avPreMhvMax),
+      RoundLot: mm("RoundLot", roundLotMin, roundLotMax),
+      VWAP: mm("VWAP", vwapMin, vwapMax),
+      Spread: mm("Spread", spreadMin, spreadMax),
+      LstPrcL: mm("LstPrcL", lstPrcLMin, lstPrcLMax),
+      LstCls: mm("LstCls", lstClsMin, lstClsMax),
+      YCls: mm("YCls", yClsMin, yClsMax),
+      TCls: mm("TCls", tClsMin, tClsMax),
+      ClsToClsPct: mm("ClsToClsPct", clsToClsPctMin, clsToClsPctMax),
+      Lo: mm("Lo", loMin, loMax),
+      LstClsNewsCnt: mm("LstClsNewsCnt", lstClsNewsCntMin, lstClsNewsCntMax),
+      MarketCapM: mm("MarketCapM", marketCapMMin, marketCapMMax),
+      PreMhVolNF: mm("PreMhVolNF", preMhVolNFMin, preMhVolNFMax),
+      VolNFfromLstCls: mm("VolNFfromLstCls", volNFfromLstClsMin, volNFfromLstClsMax),
+      AvPostMhVol90NF: mm("AvPostMhVol90NF", avPostMhVol90NFMin, avPostMhVol90NFMax),
+      VolRel: mm("VolRel", volRelMin, volRelMax),
+      PreMhBidLstPrcPct: mm("PreMhBidLstPrcPct", preMhBidLstPrcPctMin, preMhBidLstPrcPctMax),
+      PreMhLoLstPrcPct: mm("PreMhLoLstPrcPct", preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
+      PreMhHiLstClsPct: mm("PreMhHiLstClsPct", preMhHiLstClsPctMin, preMhHiLstClsPctMax),
+      PreMhLoLstClsPct: mm("PreMhLoLstClsPct", preMhLoLstClsPctMin, preMhLoLstClsPctMax),
+      LstPrcLstClsPct: mm("LstPrcLstClsPct", lstPrcLstClsPctMin, lstPrcLstClsPctMax),
+      ImbExch925: mm("ImbExch925", imbExch925Min, imbExch925Max),
+      ImbExch1555: mm("ImbExch1555", imbExch1555Min, imbExch1555Max),
     };
   }, [
+    rangeModes,
     adv20Min, adv20Max,
     adv20NFMin, adv20NFMax,
     adv90Min, adv90Max,
@@ -2638,7 +2970,6 @@ export default function ArbitrageSonar() {
   ========================= */
 
   const reqIdRef = useRef(0);
-
   const fetchSignals = useCallback(async () => {
     const f = filtersRef.current;
     const myId = ++reqIdRef.current;
@@ -3068,52 +3399,59 @@ export default function ArbitrageSonar() {
   const activeMarketCapM2 =
     getNumAny(activeData, ["marketCapM", "MarketCapM"]) ??
     (getNumAny(activeData, ["marketCap", "MarketCap"]) != null ? getNumAny(activeData, ["marketCap", "MarketCap"]) : null);
+  const activeTickerNorm = normalizeTicker(activeTicker || "");
+  const activeInIgnoreList = activeTickerNorm ? ignoreSet.has(activeTickerNorm) : false;
+  const activeInApplyList = activeTickerNorm ? applySet.has(activeTickerNorm) : false;
+  const activePinColor = activeTickerNorm ? pinMap[activeTickerNorm] ?? null : null;
+  const activeGoldTickers = useMemo(() => {
+    if (zapMode === "off") return [];
+    const byKey = new Map<string, { ticker: string; direction: "up" | "down"; benchmark: string; metricAbs: number | null }>();
+    for (const s of allItems ?? []) {
+      if (!isSignalGoldActive(s, zapMode, zapGoldAbs)) continue;
+      const dir = s.direction;
+      if (dir !== "up" && dir !== "down") continue;
+      const tk = normalizeTicker(s.ticker);
+      if (!tk) continue;
+      const metricAbs = getSignalMetricAbs(s, zapMode);
+      if (metricAbs == null || metricAbs > Math.max(0, Number(zapGoldAbs ?? 0))) continue;
+      const key = `${tk}|${dir}`;
+      const nextEntry = {
+        ticker: tk,
+        direction: dir,
+        benchmark: String(s.benchmark ?? "UNKNOWN").toUpperCase(),
+        metricAbs,
+      };
+      const prev = byKey.get(key);
+      if (!prev || (nextEntry.metricAbs ?? Number.POSITIVE_INFINITY) < (prev.metricAbs ?? Number.POSITIVE_INFINITY)) {
+        byKey.set(key, nextEntry);
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      const ma = a.metricAbs ?? Number.POSITIVE_INFINITY;
+      const mb = b.metricAbs ?? Number.POSITIVE_INFINITY;
+      if (ma !== mb) return ma - mb;
+      return a.ticker.localeCompare(b.ticker);
+    });
+  }, [allItems, zapMode, zapGoldAbs]);
 
   const bestRating = toNum(bestObj?.rating);
   const bestTotalAny = toNum(bestObj?.total);
   const bestTotalHard = toNum(bestObj?.hard);
   const bestTotalSoft = toNum(bestObj?.soft);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
+  const activeWindowRatings = useMemo(() => getWindowRatings(activeData), [activeData]);
   const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
 
   return (
-      <div className="relative min-h-screen w-full bg-black/0 text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-white p-4 overflow-x-hidden">
-
-      {/* Ambient Background */}
-      <div className="fixed inset-0 pointer-events-none z-0 bg-transparent">
-        {/* base subtle noise everywhere (optional, very low) */}
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.015]" />
-
-        {/* BOTTOM GREEN GRADIENT (soft, radial) */}
-        <div
-          className="absolute inset-x-0 bottom-0 h-[55vh]"
-          style={{
-            backgroundImage:
-              "radial-gradient(70% 55% at 50% 100%, rgba(16,185,129,0.22) 0%, rgba(16,185,129,0.10) 28%, rgba(16,185,129,0.05) 45%, rgba(0,0,0,0) 70%)",
-            WebkitMaskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
-            maskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
-          }}
-        />
-
-        {/* BOTTOM GRAIN (stronger only at bottom, blended) */}
-        <div
-          className="absolute inset-x-0 bottom-0 h-[55vh] mix-blend-screen"
-          style={{
-            backgroundImage: "url('https://grainy-gradients.vercel.app/noise.svg')",
-            opacity: 0.09,
-            WebkitMaskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
-            maskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
-          }}
-        />
-      </div>
+      <div className={`relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden`}>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-6">
         {/* ========================= HEADER ========================= */}
         <header className="bg-[#0a0a0a]/60 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-3">
-              <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${loading ? "bg-emerald-500 animate-pulse" : "bg-emerald-500"}`} />
+              <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${accentDotClass} ${loading ? "animate-pulse" : ""}`} />
               <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
                 ARBITRAGE SONAR
               </h1>
@@ -3123,7 +3461,7 @@ export default function ArbitrageSonar() {
                 <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{modeLabel}</span>
                 <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{typeLabel}</span>
                 {listMode !== "off" && (
-                  <span className="px-2 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-[10px] font-mono text-emerald-400 uppercase">
+                  <span className={`px-2 py-1 rounded-full border text-[10px] font-mono uppercase ${accentBadgeClass}`}>
                     LIST: {listMode}
                   </span>
                 )}
@@ -3166,7 +3504,7 @@ export default function ArbitrageSonar() {
               {/* SONAR (current) */}
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]"
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${accentButtonClass}`}
                 title="SONAR (current)"
               >
                 SONAR
@@ -3181,7 +3519,7 @@ export default function ArbitrageSonar() {
                 className={[
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   activeMode === "onlyActive"
-                    ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
+                    ? `${accentButtonClass} border`
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5",
                 ].join(" ")}
                 title="Show only ACTIVE positions (PositionBp != 0)"
@@ -3288,7 +3626,7 @@ export default function ArbitrageSonar() {
                     onClick={setModeApply}
                     className={[
                       "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "apply" ? "text-emerald-300" : "text-zinc-300",
+                      listMode === "apply" ? "text-emerald-200" : "text-zinc-300",
                     ].join(" ")}
                     title="LIST MODE: APPLY"
                   >
@@ -3327,7 +3665,7 @@ export default function ArbitrageSonar() {
                   className={[
                     "flex items-stretch overflow-hidden rounded-lg border transition-all",
                     listMode === "pin"
-                      ? "border-cyan-500/25 bg-cyan-500/10"
+                      ? "border-violet-500/25 bg-violet-500/10"
                       : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                 >
@@ -3337,7 +3675,7 @@ export default function ArbitrageSonar() {
                     onClick={setModePin}
                     className={[
                       "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "pin" ? "text-cyan-200" : "text-zinc-300",
+                      listMode === "pin" ? "text-violet-200" : "text-zinc-300",
                     ].join(" ")}
                     title="LIST MODE: PIN"
                   >
@@ -3376,10 +3714,24 @@ export default function ArbitrageSonar() {
               <button
                 type="button"
                 onClick={fetchSignals}
-                className="w-9 h-9 flex items-center justify-center rounded-lg border border-emerald-500/50 bg-[#0a0a0a]/40 text-emerald-500 hover:bg-emerald-500/10 transition-all active:scale-95 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
+                className={`w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95 ${accentOutlineButtonClass}`}
                 title="Refresh"
               >
-                <span className={`text-lg leading-none ${loading ? "animate-spin" : ""}`}>↻</span>
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  className={loading ? "animate-spin" : ""}
+                >
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <polyline points="21 3 21 9 15 9" />
+                </svg>
               </button>
             </div>
 
@@ -3437,7 +3789,7 @@ export default function ArbitrageSonar() {
                     f.set(n);
                   }}
                   placeholder={f.ph}
-                  className="w-14 bg-transparent text-right text-xs font-mono text-emerald-200 placeholder-zinc-700 focus:outline-none"
+                className={`w-14 bg-transparent text-right text-xs font-mono ${accentTextClass} placeholder-zinc-700 focus:outline-none`}
                 />
               </div>
             ))}
@@ -3488,34 +3840,34 @@ export default function ArbitrageSonar() {
         {/* ========================= THRESHOLDS GRID ========================= */}
         {!filtersCollapsed && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-            <MinMax label="ADV20" min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV20NF" min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90" min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90NF" min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhv" min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="RoundLot" min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VWAP" min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Spread" min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcL" min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
-            <MinMax label="LstCls" min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="YCls" min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="TCls" min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ClsToCls%" min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Lo" min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstClsNewsCnt" min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="MarketCapM" min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhVolNF" min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolNFfromLstCls" min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPostMhVol90NF" min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolRel" min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstPrc%" min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstPrc%" min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstCls%" min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstCls%" min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcLstCls%" min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch9:25" min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch15:55" min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
           </div>
         )}
 
@@ -3842,17 +4194,17 @@ export default function ArbitrageSonar() {
             {showApply && (
               <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
-                  <span className="text-sm font-bold text-emerald-400 tracking-tight">APPLY ONLY LIST</span>
+                  <span className={`text-sm font-bold tracking-tight ${accentTextClass}`}>APPLY ONLY LIST</span>
                   <span className="text-[10px] font-mono text-zinc-500">Show only these when LIST MODE = APPLY</span>
                 </div>
                 <textarea
                   value={applyDraft}
                   onChange={(e) => setApplyDraft(e.target.value)}
                   placeholder="AAPL, MSFT..."
-                  className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-emerald-500/30 resize-none"
+                  className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none resize-none"
                 />
                 <div className="flex gap-2 flex-wrap">
-                  <button onClick={onAddApply} className="px-4 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30">
+                  <button onClick={onAddApply} className={`px-4 py-1.5 rounded-lg border text-xs font-bold ${accentButtonClass}`}>
                     ADD
                   </button>
                   <button onClick={() => setApplyDraft("")} className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white">
@@ -3889,9 +4241,9 @@ export default function ArbitrageSonar() {
             )}
 
             {showPin && (
-              <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
+                <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
-                  <span className="text-sm font-bold text-cyan-300 tracking-tight">PIN LIST</span>
+                  <span className={`text-sm font-bold tracking-tight ${accentTextClass}`}>PIN LIST</span>
                   <span className="text-[10px] font-mono text-zinc-500">Show only these when LIST MODE = PIN</span>
                 </div>
 
@@ -3899,7 +4251,7 @@ export default function ArbitrageSonar() {
                   value={pinDraft}
                   onChange={(e) => setPinDraft(e.target.value)}
                   placeholder="AAPL, MSFT..."
-                  className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none focus:border-cyan-500/30 resize-none"
+                  className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none resize-none"
                 />
 
                 <div className="flex items-center gap-2 flex-wrap">
@@ -3923,7 +4275,7 @@ export default function ArbitrageSonar() {
 
                   <button
                     onClick={() => { addPins(parseTickersFromFreeText(pinDraft), pinColor); setPinDraft(""); setShowPin(true); if (listMode === "off") setListMode("pin"); }}
-                    className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 text-xs font-bold hover:bg-cyan-500/30"
+                    className={`px-4 py-1.5 rounded-lg border text-xs font-bold ${accentButtonClass}`}
                   >
                     ADD
                   </button>
@@ -3970,52 +4322,114 @@ export default function ArbitrageSonar() {
 
         {/* ========================= ACTIVE PANEL ========================= */}
         {activePanelVisible && (
-          <div className="bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/[0.08] border-l-4 border-l-emerald-500 rounded-2xl shadow-[0_0_40px_-10px_rgba(16,185,129,0.05)] overflow-hidden animate-in fade-in zoom-in-95 duration-300">
-            <div className="flex justify-between items-center px-4 py-3 border-b border-white/5 bg-white/[0.02]">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-3">
+          <div className={`relative overflow-hidden border border-white/10 rounded-2xl bg-black/40 animate-in fade-in zoom-in-95 duration-300 ${accentPanelClass}`}>
+            <div className="relative flex flex-col gap-3 px-4 py-3 border-b border-white/10 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-mono text-emerald-400 font-bold uppercase tracking-widest shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                      ACTIVE SIGNAL
+                    <span className={`px-2 py-1 border text-[10px] font-mono font-bold uppercase tracking-[0.18em] ${accentChipClass}`}>
+                      Active Signal
                     </span>
-                    <div className="h-0.5 w-6 bg-emerald-500/50 rounded-full" />
+                    <div className={`h-px w-4 ${accentLineClass}`} />
                   </div>
-                  <span className="text-2xl font-bold text-white tracking-tight">{activeTicker ?? "-"}</span>
+                  <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">{activeTicker ?? "-"}</span>
 
-                  <div className="flex gap-2 hidden sm:flex">
-                    <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      BENCH: <span className="text-white ml-1">{activeBench !== "-" ? activeBench : "-"}</span>
-                    </span>
-                    <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      BETA: <span className="text-white ml-1">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span>
-                    </span>
-                    <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      SIG: <span className="text-white ml-1">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span>
-                    </span>
-                    <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      RATE: <span className="text-emerald-400 ml-1">{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span>
-                    </span>
-                    <span className="px-2 py-1 rounded-full border border-white/10 bg-black/40 text-[10px] font-mono text-zinc-400">
-                      N: <span className="text-white ml-1">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span>
-                    </span>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
+                    <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
+                    <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
+                    <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
+                    <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
+                    <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
                   </div>
                 </div>
 
-                {activeLoading && <div className="text-[10px] font-mono text-zinc-500 animate-pulse">loading data stream...</div>}
-                {activeErr && <div className="text-xs text-rose-400 font-mono bg-rose-500/10 px-2 py-1 rounded">{activeErr}</div>}
+                {activeLoading && <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500 animate-pulse">loading data stream...</div>}
+                {activeErr && <div className="w-fit text-[11px] text-rose-300 font-mono bg-rose-500/10 px-2 py-1 border border-rose-500/20">{activeErr}</div>}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 self-start">
+                <button
+                  type="button"
+                  disabled={!activeTickerNorm}
+                  onClick={() => {
+                    if (!activeTickerNorm) return;
+                    if (activeInIgnoreList) removeFromSet(setIgnoreSet, IGNORE_LS_KEY, activeTickerNorm);
+                    else {
+                      addToSet(setIgnoreSet, IGNORE_LS_KEY, [activeTickerNorm]);
+                      if (listMode === "off") setListMode("ignore");
+                    }
+                  }}
+                  className={[
+                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    !activeTickerNorm
+                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
+                      : activeInIgnoreList
+                        ? "border-rose-500/35 bg-rose-500/12 text-rose-300"
+                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
+                  ].join(" ")}
+                  title={activeInIgnoreList ? "Remove ticker from Ignore List" : "Add ticker to Ignore List"}
+                >
+                  IGN
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!activeTickerNorm}
+                  onClick={() => {
+                    if (!activeTickerNorm) return;
+                    if (activeInApplyList) removeFromSet(setApplySet, APPLY_LS_KEY, activeTickerNorm);
+                    else {
+                      addToSet(setApplySet, APPLY_LS_KEY, [activeTickerNorm]);
+                      if (listMode === "off") setListMode("apply");
+                    }
+                  }}
+                  className={[
+                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    !activeTickerNorm
+                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
+                      : activeInApplyList
+                        ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
+                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
+                  ].join(" ")}
+                  title={activeInApplyList ? "Remove ticker from Apply Only List" : "Add ticker to Apply Only List"}
+                >
+                  APP
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!activeTickerNorm}
+                  onClick={() => {
+                    if (!activeTickerNorm) return;
+                    if (activePinColor) removePin(activeTickerNorm);
+                    else {
+                      addPins([activeTickerNorm], pinColor);
+                      if (listMode === "off") setListMode("pin");
+                    }
+                  }}
+                  className={[
+                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    !activeTickerNorm
+                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
+                      : activePinColor
+                        ? "border-violet-500/35 bg-violet-500/12 text-violet-200"
+                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
+                  ].join(" ")}
+                  title={activePinColor ? "Remove ticker from Pin List" : "Add ticker to Pin List"}
+                >
+                  PIN
+                </button>
+
                 <button
                   onClick={() => setActivePanelMode((m) => (m === "mini" ? "expanded" : "mini"))}
-                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors"
+                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-300 hover:bg-white/[0.05] transition-colors"
                 >
                   {activePanelMode === "mini" ? "EXPAND" : "MINI"}
                 </button>
 
                 <button
                   onClick={() => setActivePanelCollapsed(!activePanelCollapsed)}
-                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
+                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono text-zinc-300 hover:bg-white/[0.05] transition-colors group"
                   title={activePanelCollapsed ? "Show Panel" : "Collapse Panel"}
                 >
                   {activePanelCollapsed ? (
@@ -4045,7 +4459,7 @@ export default function ArbitrageSonar() {
             </div>
 
             {!activePanelCollapsed && (
-              <div className="p-4 space-y-4">
+              <div className="relative p-4 space-y-4">
                 {(() => {
                   const s = activeData;
                   const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
@@ -4060,33 +4474,33 @@ export default function ArbitrageSonar() {
                     : null;
 
                   const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
-                    <div className="flex flex-col gap-1 p-3 rounded-xl border border-white/5 bg-white/[0.02]">
-                      <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">{label}</span>
-                      <span className={`text-xs font-mono tabular-nums font-medium truncate ${colorClass}`}>{value ?? "-"}</span>
+                    <div className="border border-white/0 rounded-xl bg-black/40 px-3 py-2">
+                      <span className="block text-[10px] uppercase tracking-[0.14em] text-zinc-600 font-mono">{label}</span>
+                      <span className={`mt-1 block text-[12px] font-mono tabular-nums truncate ${colorClass}`}>{value ?? "-"}</span>
                     </div>
                   );
 
                   return (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
                         {renderCell("Company", s ? getCompany(s) : "-")}
                         {renderCell("Country", s ? getCountry(s) : "-")}
-                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-300" : "text-zinc-500")}
+                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
                         {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
                         {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
                         {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
-                        {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
-                        {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-cyan-300" : "text-zinc-500")}
+                        {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
+                        {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
                         {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : activeSector2) : "-")}
                         {renderCell("Exchange", s ? (getExchange(s) !== "-" ? getExchange(s) : activeExchange2) : "-")}
                         {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
                         {renderCell("Spread", s ? (numSpread(s) == null ? "-" : fmtNum(numSpread(s)!, 4)) : "-")}
                         {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
                         {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
-                        {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? "text-emerald-400" : "text-rose-400") : "text-zinc-500")}
+                        {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
                         {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "-", s ? "text-rose-300" : "text-zinc-500")}
                       </div>
                     </div>
@@ -4095,14 +4509,74 @@ export default function ArbitrageSonar() {
 
                 {/* expanded (залишаєш свій existing expanded JSX як є) */}
                 {activePanelMode === "expanded" && (
-                  <div className="space-y-4 pt-4 border-t border-white/5 animate-in fade-in slide-in-from-top-4 duration-300">
+                  <div className="space-y-4 pt-4 border-t border-white/10 animate-in fade-in slide-in-from-top-4 duration-300">
+
                     {/* встав свій expanded-блок сюди */}
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
-                      <div className="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Pricing & Liquidity</span>
+                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
+                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Ratings</span>
+                        <span className="text-[10px] font-mono text-zinc-600">best object</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-white/10">
+                        {[
+                          { k: "Rate", v: bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`, c: accentTextClass },
+                          { k: "Total Any", v: fmtMaybeInt(bestTotalAny) },
+                          { k: "Total Hard", v: fmtMaybeInt(bestTotalHard) },
+                          { k: "Total Soft", v: fmtMaybeInt(bestTotalSoft) },
+                          { k: "Beta", v: activeBeta == null ? "-" : fmtNum(activeBeta, 2) },
+                          { k: "Sigma", v: activeSigma == null ? "-" : fmtNum(activeSigma, 2) },
+                        ].map((item) => (
+                                  <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
+                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
+                            <span className={`text-[12px] font-mono tabular-nums ${item.c ?? "text-zinc-200"}`}>{item.v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {activeWindowRatings.length > 0 && (
+                      <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                        <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
+                          <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Window Ratings</span>
+                          <span className="text-[10px] font-mono text-zinc-600">{activeWindowRatings.length} windows</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-px bg-white/10">
+                          {activeWindowRatings.map((row) => (
+                            <div key={row.windowKey} className="bg-black/40 px-3 py-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-[0.14em]">
+                                  {WINDOW_RATING_LABELS[row.windowKey.toLowerCase()] ?? row.windowKey.toUpperCase()}
+                                </span>
+                              </div>
+                              <div className="mt-2 grid grid-cols-3 gap-2">
+                                {[
+                                  { label: "ANY", cell: row.any, accent: accentTextClass },
+                                  { label: "HARD", cell: row.hard, accent: "text-zinc-200" },
+                                  { label: "SOFT", cell: row.soft, accent: "text-zinc-200" },
+                                ].map((item) => (
+                                  <div key={item.label} className="border border-white/10 px-2 py-1.5">
+                                    <span className="block text-[10px] text-zinc-600 font-mono uppercase">{item.label}</span>
+                                    <span className={`mt-1 block text-[12px] font-mono tabular-nums ${item.accent}`}>
+                                      {item.cell.rate == null ? "-" : `${Math.round(item.cell.rate * 100)}%`}
+                                    </span>
+                                    <span className="block text-[10px] text-zinc-500 font-mono">
+                                      N {item.cell.total == null ? "-" : fmtMaybeInt(item.cell.total)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
+                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Pricing & Liquidity</span>
                         <span className="text-[10px] font-mono text-zinc-600">parsed from root/meta</span>
                       </div>
-                      <div className="p-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-px bg-white/10">
                         {[
                           { k: "LstCls", v: activeData ? (numLastClose(activeData) == null ? "-" : fmtNum(numLastClose(activeData)!, 2)) : "-" },
                           { k: "VWAP", v: activeData ? (numVWAP(activeData) == null ? "-" : fmtNum(numVWAP(activeData)!, 2)) : "-" },
@@ -4116,20 +4590,20 @@ export default function ArbitrageSonar() {
                             v: activeData ? (numLstClsNewsCnt(activeData) == null ? "-" : fmtMaybeInt(numLstClsNewsCnt(activeData))) : "-",
                           },
                         ].map((item) => (
-                          <div key={item.k} className="flex flex-col gap-1 p-2 border border-white/5 rounded bg-black/20">
-                            <span className="text-[10px] text-zinc-500 font-mono uppercase">{item.k}</span>
-                            <span className="text-xs text-zinc-300 font-mono tabular-nums">{item.v}</span>
+                          <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
+                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
+                            <span className="text-[12px] text-zinc-200 font-mono tabular-nums">{item.v}</span>
                           </div>
                         ))}
                       </div>
                     </div>
 
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
-                      <div className="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Extended Tape Fields</span>
+                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
+                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Extended Tape Fields</span>
                         <span className="text-[10px] font-mono text-zinc-600">new analytics columns</span>
                       </div>
-                      <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-white/10">
                         {[
                           { k: "VolRel", v: activeData ? fmtNum(numVolRel(activeData), 2) : "-" },
                           { k: "PreMhHiLstPrc%", v: activeData ? fmtPct(numPreMhBidLstPrcPct(activeData), 2) : "-" },
@@ -4141,18 +4615,18 @@ export default function ArbitrageSonar() {
                           { k: "ImbExch15:55", v: activeData ? fmtMaybeInt(numImbExch1555(activeData)) : "-" },
                           { k: "AvPostMhVol90NF", v: activeData ? fmtMaybeInt(numAvPostMhVol90NF(activeData)) : "-" },
                         ].map((item) => (
-                          <div key={item.k} className="flex flex-col gap-1 p-2 border border-white/5 rounded bg-black/20">
-                            <span className="text-[10px] text-zinc-500 font-mono uppercase">{item.k}</span>
-                            <span className="text-xs text-zinc-300 font-mono tabular-nums">{item.v}</span>
+                          <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
+                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
+                            <span className="text-[12px] text-zinc-200 font-mono tabular-nums">{item.v}</span>
                           </div>
                         ))}
                       </div>
                     </div>
 
                                         {/* Flags */}
-                    <div className="border border-white/5 rounded-xl bg-white/[0.01] overflow-hidden">
-                      <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]">
-                        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Flags</span>
+                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                      <div className="px-3 py-2 border-b border-white/10">
+                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Flags</span>
                       </div>
                       <div className="p-3 flex gap-2 flex-wrap">
                         {[
@@ -4165,10 +4639,10 @@ export default function ArbitrageSonar() {
                         ].map((f) => (
                           <span
                             key={f.l}
-                            className={`px-3 py-1 rounded-full border text-[10px] font-mono font-bold uppercase ${
+                            className={`px-2.5 py-1 border text-[10px] font-mono font-bold uppercase tracking-[0.12em] ${
                               f.v
-                                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-                                : "bg-white/5 border-white/10 text-zinc-600"
+                                ? accentChipClass
+                                : "bg-black/30 border-white/10 text-zinc-600"
                             }`}
                           >
                             {f.l}
@@ -4179,6 +4653,43 @@ export default function ArbitrageSonar() {
                   </div>
                 )}
               </div>
+            )}
+          </div>
+        )}
+
+        {activePanelVisible && (
+          <div
+            className={[
+              "rounded-2xl bg-black/40 px-4 py-3",
+              activeGoldTickers.length > 0
+                ? "border border-amber-500/20 bg-amber-500/[0.03]"
+                : sonarAccent.panelSoft,
+            ].join(" ")}
+          >
+            {activeGoldTickers.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {activeGoldTickers.map((entry) => {
+                  const isCurrent = activeTickerNorm === entry.ticker;
+                  return (
+                    <button
+                      key={`${entry.ticker}|${entry.direction}`}
+                      type="button"
+                      onClick={() => setActiveTicker(entry.ticker)}
+                    className={[
+                      "group inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-left font-mono transition-all duration-200",
+                      "border-amber-500/35 bg-amber-500/12 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.16)]",
+                      "animate-pulse hover:bg-white/[0.08]",
+                      isCurrent ? "ring-1 ring-white/30" : "",
+                    ].join(" ")}
+                      title="Set as active ticker"
+                    >
+                      <span className="text-[12px] font-semibold tracking-[0.08em]">{entry.ticker}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="h-5" />
             )}
           </div>
         )}
@@ -4204,19 +4715,19 @@ export default function ArbitrageSonar() {
               if (!activePairs.length) return null;
 
               return (
-                <div className="px-3 py-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.03]">
+                <div className={`px-3 py-2 rounded-lg border ${sonarAccent.panelSoft}`}>
                   <div className="flex items-center gap-3">
-                    <div className="h-px flex-1 bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-amber-300">
+                    <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
+                    <span className={`text-[10px] font-mono uppercase tracking-widest ${accentTextClass}`}>
                       QQQ/SPY/IWM Mutual Exclusion
                     </span>
-                    <div className="h-px flex-1 bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
+                    <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
                   </div>
                   <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
                     {activePairs.map((p) => {
                       const dirArrow = p.favorDir === "buy" ? "^" : p.favorDir === "sell" ? "v" : "-";
                       const dirClass =
-                        p.favorDir === "buy" ? "text-emerald-400" : p.favorDir === "sell" ? "text-rose-400" : "text-zinc-400";
+                        p.favorDir === "buy" ? accentTextClass : p.favorDir === "sell" ? "text-rose-400" : "text-zinc-400";
                       const tickerLabel = p.favorTicker ?? "-";
 
                       return (
@@ -4242,7 +4753,7 @@ export default function ArbitrageSonar() {
               return (
                 <div
                   key={bench.benchmark}
-                  className="bg-[#0a0a0a]/55 backdrop-blur-md border border-white/[0.06] rounded-2xl shadow-lg overflow-hidden flex flex-col min-w-0"
+                  className="border border-white/[0.06] rounded-2xl overflow-hidden flex flex-col min-w-0"
                 >
                   {/* Minimal hedge panel (top) */}
                   <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
@@ -4260,15 +4771,15 @@ export default function ArbitrageSonar() {
                       const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
 
                       return (
-                        <div key={g.id} className="border border-white/5 bg-white/[0.01] rounded-xl overflow-hidden">
-                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-                            <div className="w-5 h-5 rounded flex items-center justify-center bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px]">
+                        <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
+                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
+                            <div className="w-5 h-5 rounded flex items-center justify-center bg-rose-950/45 border border-rose-900/40 text-rose-500/75 text-[10px]">
                               v
                             </div>
                             <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
                               {betaLabels[g.betaKey]}
                             </div>
-                            <div className="w-5 h-5 rounded flex items-center justify-center bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px]">
+                            <div className="w-5 h-5 rounded flex items-center justify-center bg-emerald-950/45 border border-emerald-900/40 text-emerald-500/75 text-[10px]">
                               ^
                             </div>
                           </div>

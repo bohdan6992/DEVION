@@ -40,24 +40,109 @@ const LangIcon = () => (
 
 // --- BRAND ICON (Custom SVG) ---
 const BrandLogo = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    {/* Outer Shape (Tech Box) */}
-    <path 
-      d="M19 3H5C3.89543 3 3 3.89543 3 5V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V5C21 3.89543 20.1046 3 19 3Z" 
-      className="fill-white/[0.1]" 
-      stroke="currentColor" 
-      strokeWidth="1.5"
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path
+      d="M12 3.5L18.25 6.05V10.95C18.25 15.2 15.82 18.56 12 20.4C8.18 18.56 5.75 15.2 5.75 10.95V6.05L12 3.5Z"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
     />
-    {/* Abstract Bolt / Signal Path */}
-    <path 
-      d="M13 7L11.8 10.6H15L11 17L12.2 13.4H9L13 7Z" 
-      className="fill-emerald-500"
-      stroke="none"
+    <path
+      d="M8.55 7.35H15.15L17.1 9.1"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      opacity="0.55"
+    />
+    <path
+      d="M9.2 10.15L12 8L14.8 10.15L14 14.25H10L9.2 10.15Z"
+      fill="currentColor"
+      opacity="0.92"
+    />
+    <path
+      d="M8.95 16.2H15.05"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      opacity="0.88"
+    />
+    <path
+      d="M12 3.75V20.1"
+      stroke="currentColor"
+      strokeWidth="1.05"
+      strokeLinecap="round"
+      opacity="0.22"
+    />
+    <path
+      d="M6.55 11.35H17.45"
+      stroke="currentColor"
+      strokeWidth="0.95"
+      strokeLinecap="round"
+      opacity="0.14"
     />
   </svg>
 );
 
 type Item = { key: string; label: string; disabled?: boolean };
+
+const getThemeDropdownAccent = (key: string, isDark: boolean) => {
+  const themeKey = (key || "").toLowerCase();
+  if (!isDark) {
+    return {
+      selectedItem: "bg-amber-100/80 text-amber-700 font-bold",
+      dot: "bg-amber-500 shadow-none",
+      buttonText: "text-slate-800",
+      buttonBorder: "border-slate-300",
+    };
+  }
+
+  switch (themeKey) {
+    case "aurora":
+    case "asher":
+      return {
+        selectedItem: "bg-amber-500/10 text-amber-300 font-bold",
+        dot: "bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.55)]",
+        buttonText: "text-amber-200",
+        buttonBorder: "border-amber-500/20",
+      };
+    case "matrix":
+      return {
+        selectedItem: "bg-emerald-500/10 text-emerald-300 font-bold",
+        dot: "bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.55)]",
+        buttonText: "text-emerald-200",
+        buttonBorder: "border-emerald-500/20",
+      };
+    case "neon":
+      return {
+        selectedItem: "bg-fuchsia-500/10 text-fuchsia-300 font-bold",
+        dot: "bg-fuchsia-400 shadow-[0_0_8px_rgba(217,70,239,0.55)]",
+        buttonText: "text-fuchsia-200",
+        buttonBorder: "border-fuchsia-500/20",
+      };
+    case "space":
+      return {
+        selectedItem: "bg-sky-500/10 text-sky-300 font-bold",
+        dot: "bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.55)]",
+        buttonText: "text-sky-200",
+        buttonBorder: "border-sky-500/20",
+      };
+    case "light":
+      return {
+        selectedItem: "bg-amber-500/10 text-amber-200 font-bold",
+        dot: "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.4)]",
+        buttonText: "text-amber-100",
+        buttonBorder: "border-amber-400/18",
+      };
+    default:
+      return {
+        selectedItem: "bg-zinc-500/10 text-zinc-200 font-bold",
+        dot: "bg-zinc-300 shadow-[0_0_8px_rgba(255,255,255,0.22)]",
+        buttonText: "text-zinc-100",
+        buttonBorder: "border-white/12",
+      };
+  }
+};
 
 /* --- DROPDOWN (Deep Space Style) --- */
 function Dropdown({
@@ -66,16 +151,19 @@ function Dropdown({
   items,
   icon,
   isDark,
+  accentMode = "default",
 }: {
   value: string;
   onChange: (v: string) => void;
   items: Item[];
   icon?: React.ReactNode;
   isDark: boolean;
+  accentMode?: "default" | "theme";
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const activeItem = items.find((i) => i.key === value);
+  const activeAccent = accentMode === "theme" ? getThemeDropdownAccent(value, isDark) : null;
 
   useEffect(() => {
     const clickOut = (e: MouseEvent) => {
@@ -97,10 +185,10 @@ function Dropdown({
           ${
             open
               ? isDark
-                ? "bg-white/[0.08] border-white/20 text-white shadow-[0_0_15px_-5px_rgba(255,255,255,0.1)]"
+                ? `${activeAccent?.buttonBorder ?? "border-white/20"} ${activeAccent?.buttonText ?? "text-white"} bg-white/[0.08] shadow-[0_0_15px_-5px_rgba(255,255,255,0.1)]`
                 : "bg-white/85 border-slate-300 text-slate-800 shadow-[0_10px_24px_-14px_rgba(15,23,42,0.24)]"
               : isDark
-                ? "bg-white/[0.02] border-white/[0.06] text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                ? `${activeAccent?.buttonBorder ?? "border-white/[0.06]"} ${activeAccent?.buttonText ?? "text-zinc-400"} bg-white/[0.02] hover:bg-white/[0.05] hover:text-zinc-200`
                 : "bg-white/55 border-slate-300/70 text-slate-500 hover:bg-white/75 hover:text-slate-700"
           }
         `}
@@ -115,11 +203,11 @@ function Dropdown({
       {/* Menu */}
       <div
         className={`
-          absolute top-[calc(100%+6px)] right-0 min-w-[140px]
+          absolute top-[calc(100%+6px)] left-0 w-full
           ${isDark ? "bg-[#0a0a0a]/90 border-white/[0.08]" : "bg-white/95 border-slate-300/80"}
           backdrop-blur-xl
           rounded-xl p-1.5 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)]
-          transition-all duration-200 origin-top-right
+          transition-all duration-200 origin-top
           ${open ? "opacity-100 translate-y-0 scale-100 pointer-events-auto" : "opacity-0 -translate-y-2 scale-95 pointer-events-none"}
         `}
       >
@@ -137,7 +225,9 @@ function Dropdown({
               ${
                 i.key === value
                   ? isDark
-                    ? "bg-emerald-500/10 text-emerald-400 font-bold"
+                    ? accentMode === "theme"
+                      ? getThemeDropdownAccent(i.key, true).selectedItem
+                      : "bg-emerald-500/10 text-emerald-400 font-bold"
                     : "bg-amber-100/80 text-amber-700 font-bold"
                   : isDark
                     ? "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
@@ -147,7 +237,7 @@ function Dropdown({
           >
             <span>{i.label}</span>
             {i.key === value && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_#10b981]" />
+              <span className={`w-1.5 h-1.5 rounded-full ${accentMode === "theme" ? getThemeDropdownAccent(i.key, isDark).dot : "bg-emerald-500 shadow-[0_0_5px_#10b981]"}`} />
             )}
           </button>
         ))}
@@ -159,6 +249,49 @@ function Dropdown({
 export default function TopBar() {
   const router = typeof window !== 'undefined' ? (window as any).next?.router || { pathname: '/' } : { pathname: '/' };
   const { theme, setTheme, lang, setLang, isDark } = useUi();
+  const brandAccent = getThemeDropdownAccent(theme, isDark);
+
+  const navAccent = (() => {
+    switch ((theme || "").toLowerCase()) {
+      case "aurora":
+      case "asher":
+        return {
+          activeText: "text-amber-300 drop-shadow-[0_0_8px_rgba(245,158,11,0.28)]",
+          activeBg: "bg-amber-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.55)]",
+        };
+      case "matrix":
+        return {
+          activeText: "text-emerald-300 drop-shadow-[0_0_8px_rgba(16,185,129,0.32)]",
+          activeBg: "bg-emerald-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.6)]",
+        };
+      case "neon":
+        return {
+          activeText: "text-fuchsia-300 drop-shadow-[0_0_8px_rgba(217,70,239,0.35)]",
+          activeBg: "bg-fuchsia-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.6)]",
+        };
+      case "space":
+        return {
+          activeText: "text-sky-300 drop-shadow-[0_0_8px_rgba(56,189,248,0.3)]",
+          activeBg: "bg-sky-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.55)]",
+        };
+      case "light":
+        return {
+          activeText: "text-amber-700",
+          activeBg: "bg-amber-100/80 opacity-100 border border-transparent",
+          activeLine: "bg-amber-500 shadow-none",
+        };
+      default:
+        return {
+          activeText: "text-zinc-200",
+          activeBg: "bg-white/[0.06] opacity-100 border border-transparent",
+          activeLine: "bg-zinc-200 shadow-[0_0_10px_rgba(255,255,255,0.18)]",
+        };
+    }
+  })();
 
   const nav = [
     { href: "/signals", label: "Strategies" },
@@ -187,27 +320,21 @@ export default function TopBar() {
           <Link href="/" className="flex items-center gap-3 group">
             
             {/* ICON CONTAINER */}
-            <div className={`relative w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-300 group-hover:border-emerald-500/30 group-hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)] ${
+            <div className={`relative w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-300 ${
               isDark
                 ? "bg-gradient-to-br from-white/[0.08] to-white/[0.01] border border-white/[0.08]"
                 : "bg-gradient-to-br from-white/90 to-amber-50/80 border border-slate-300/70"
             }`}>
               <div className={`relative z-10 opacity-90 group-hover:opacity-100 transition-opacity ${
-                isDark ? "text-white" : "text-slate-700"
+                isDark ? brandAccent.buttonText : "text-slate-700"
               }`}>
                  <BrandLogo />
               </div>
-              {/* Inner Glow */}
-              <div className="absolute inset-0 rounded-xl bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity blur-md" />
-            </div>
-            
-            {/* TEXT */}
-            <div className="flex flex-col justify-center h-10">
-              <span className={`font-sans font-bold text-2xl leading-none tracking-tight transition-colors ${
-                isDark ? "text-white group-hover:text-emerald-50" : "text-slate-800 group-hover:text-slate-900"
-              }`}>
-                Devi<span className="text-emerald-500">ON</span>
-              </span>
+              <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity blur-md ${
+                isDark
+                  ? brandAccent.selectedItem.replace("font-bold", "")
+                  : "bg-amber-200/40"
+              }`} />
             </div>
           </Link>
 
@@ -231,7 +358,7 @@ export default function TopBar() {
                       absolute inset-0 transition-opacity duration-300 rounded-lg
                       ${active 
                         ? isDark
-                          ? "bg-white/[0.06] opacity-100 border border-white/[0.04]"
+                          ? navAccent.activeBg
                           : "bg-white/75 opacity-100 border border-slate-300/70"
                         : isDark
                           ? "bg-white/[0.0] opacity-0 group-hover:bg-white/[0.02] group-hover:opacity-100"
@@ -242,7 +369,7 @@ export default function TopBar() {
                   
                   {/* Active Glow Indicator (Bottom) */}
                   {active && (
-                     <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1/3 h-[2px] bg-emerald-500 shadow-[0_0_10px_#10b981] rounded-t-full" />
+                     <div className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-1/3 h-[2px] rounded-t-full ${isDark ? navAccent.activeLine : "bg-amber-500 shadow-none"}`} />
                   )}
 
                   {/* Text Label */}
@@ -251,7 +378,7 @@ export default function TopBar() {
                       relative z-10 text-xs font-mono uppercase tracking-[0.15em] font-bold
                       ${active 
                         ? isDark
-                          ? "text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                          ? navAccent.activeText
                           : "text-amber-700"
                         : isDark
                           ? "text-zinc-500 group-hover:text-zinc-200"
@@ -281,6 +408,7 @@ export default function TopBar() {
                 { key: "space", label: "Space" },
               ]}
               isDark={isDark}
+              accentMode="theme"
               icon={<ThemeIcon />}
             />
             
