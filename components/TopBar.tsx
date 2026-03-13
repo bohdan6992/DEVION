@@ -42,44 +42,64 @@ const LangIcon = () => (
 const BrandLogo = () => (
   <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path
-      d="M12 3.5L18.25 6.05V10.95C18.25 15.2 15.82 18.56 12 20.4C8.18 18.56 5.75 15.2 5.75 10.95V6.05L12 3.5Z"
+      d="M12 2.9L18.4 5.45V11.05C18.4 15.72 15.66 19.06 12 20.75C8.34 19.06 5.6 15.72 5.6 11.05V5.45L12 2.9Z"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.65"
       strokeLinejoin="round"
     />
     <path
-      d="M8.55 7.35H15.15L17.1 9.1"
+      d="M8.2 8.15C8.2 6.27 9.83 4.95 12 4.95C14.17 4.95 15.8 6.27 15.8 8.15V8.55H8.2V8.15Z"
+      fill="currentColor"
+      opacity="0.14"
+    />
+    <path
+      d="M8.35 8.6H15.65"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      opacity="0.9"
+    />
+    <path
+      d="M9.1 10.15H14.9"
       stroke="currentColor"
       strokeWidth="1.35"
       strokeLinecap="round"
-      strokeLinejoin="round"
-      opacity="0.55"
+      opacity="0.82"
     />
     <path
-      d="M9.2 10.15L12 8L14.8 10.15L14 14.25H10L9.2 10.15Z"
-      fill="currentColor"
-      opacity="0.92"
-    />
-    <path
-      d="M8.95 16.2H15.05"
+      d="M10.2 8.6V14.65"
       stroke="currentColor"
-      strokeWidth="1.45"
+      strokeWidth="1.15"
+      strokeLinecap="round"
+      opacity="0.78"
+    />
+    <path
+      d="M13.8 8.6V14.65"
+      stroke="currentColor"
+      strokeWidth="1.15"
+      strokeLinecap="round"
+      opacity="0.78"
+    />
+    <path
+      d="M10.2 14.8H13.8"
+      stroke="currentColor"
+      strokeWidth="1.35"
       strokeLinecap="round"
       opacity="0.88"
     />
     <path
-      d="M12 3.75V20.1"
+      d="M12 10.2V17.35"
       stroke="currentColor"
-      strokeWidth="1.05"
+      strokeWidth="1.35"
       strokeLinecap="round"
-      opacity="0.22"
+      opacity="0.92"
     />
     <path
-      d="M6.55 11.35H17.45"
+      d="M8.55 17.2C9.5 15.95 10.68 15.25 12 15.25C13.32 15.25 14.5 15.95 15.45 17.2"
       stroke="currentColor"
-      strokeWidth="0.95"
+      strokeWidth="1.25"
       strokeLinecap="round"
-      opacity="0.14"
+      opacity="0.78"
     />
   </svg>
 );

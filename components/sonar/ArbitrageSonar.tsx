@@ -464,6 +464,22 @@ const isActiveByPositionBp = (s: any) => {
   return f === true;
 };
 
+const getRenderableDirection = (s: any): "up" | "down" | "none" => {
+  const normalized = String(s?.direction ?? "").trim().toLowerCase();
+  if (normalized === "up" || normalized === "down") return normalized;
+
+  const raw = String(s?.side ?? s?.Side ?? s?.dir ?? s?.Dir ?? getMeta(s)?.direction ?? getMeta(s)?.Direction ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "short" || raw === "down" || raw === "sell" || raw === "s") return "down";
+  if (raw === "long" || raw === "up" || raw === "buy" || raw === "l") return "up";
+
+  if (s?.shortCandidate && !s?.longCandidate) return "down";
+  if (s?.longCandidate && !s?.shortCandidate) return "up";
+
+  return "none";
+};
+
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
   zapMode: "zap" | "sigma" | "off"
@@ -2836,19 +2852,23 @@ export default function ArbitrageSonar() {
     for (const s of arr ?? []) {
       const tk = normalizeTicker(s?.ticker || "");
       if (!tk) continue;
+      const posActive = isActiveByPositionBp(s);
+
+      // ACTIVE tab should surface the same active position set used by hedge,
+      // so active rows bypass list mode and secondary client-side filters here.
+      if (f.activeMode === "onlyActive") {
+        if (!posActive) continue;
+        out.push(s);
+        continue;
+      }
 
       // list mode first (cheap)
       if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
       if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
       if (f.listMode === "pin" && !f.pinMap[tk]) continue;
 
-
-      // ACTIVE tri-state (PositionBp != 0)
-      if (f.activeMode === "onlyActive") {
-        if (!isActiveByPositionBp(s)) continue;
-      }
       if (f.activeMode === "onlyInactive") {
-        if (isActiveByPositionBp(s)) continue;
+        if (posActive) continue;
       }
 
 
@@ -2939,7 +2959,6 @@ export default function ArbitrageSonar() {
 
       // ZAP/SigmaZAP (mutually exclusive)
       if (f.zapMode !== "off") {
-        const posActive = isActiveByPositionBp(s);
         const dir = s.direction;
         const isShort = dir === "down";
         const isLong = dir === "up";
@@ -3290,7 +3309,7 @@ export default function ArbitrageSonar() {
     };
 
     for (const s of items || []) {
-      const dir = s.direction;
+      const dir = getRenderableDirection(s);
       if (dir !== "down" && dir !== "up") continue;
 
       const tk = String(s.ticker ?? "").toUpperCase();
@@ -4640,7 +4659,7 @@ export default function ArbitrageSonar() {
                         {[
                           { l: "PTP", v: (activeData as any)?._isPTP },
                           { l: "SSR", v: (activeData as any)?._isSSR },
-                          { l: "ACTIVE", v: (activeData as any)?._isActive },
+                          { l: "ACTIVE", v: isActiveByPositionBp(activeData) },
                           { l: "ETF", v: boolIsETF(activeData) },
                           { l: "DIV", v: hasValue(pickAny(activeData, ["dividend", "Dividend", "hasDividend", "HasDividend"])) },
                           { l: "REPORT", v: hasValue(pickAny(activeData, ["report", "Report"])) },
