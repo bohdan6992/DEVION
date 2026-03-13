@@ -40,7 +40,7 @@ const LangIcon = () => (
 
 // --- BRAND ICON (Custom SVG) ---
 const BrandLogo = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path
       d="M12 3.5L18.25 6.05V10.95C18.25 15.2 15.82 18.56 12 20.4C8.18 18.56 5.75 15.2 5.75 10.95V6.05L12 3.5Z"
       stroke="currentColor"
@@ -318,23 +318,10 @@ export default function TopBar() {
           
           {/* 1. BRAND */}
           <Link href="/" className="flex items-center gap-3 group">
-            
-            {/* ICON CONTAINER */}
-            <div className={`relative w-10 h-10 flex items-center justify-center rounded-xl transition-all duration-300 ${
-              isDark
-                ? "bg-gradient-to-br from-white/[0.08] to-white/[0.01] border border-white/[0.08]"
-                : "bg-gradient-to-br from-white/90 to-amber-50/80 border border-slate-300/70"
+            <div className={`opacity-95 group-hover:opacity-100 transition-opacity ${
+              isDark ? brandAccent.buttonText : "text-slate-700"
             }`}>
-              <div className={`relative z-10 opacity-90 group-hover:opacity-100 transition-opacity ${
-                isDark ? brandAccent.buttonText : "text-slate-700"
-              }`}>
-                 <BrandLogo />
-              </div>
-              <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity blur-md ${
-                isDark
-                  ? brandAccent.selectedItem.replace("font-bold", "")
-                  : "bg-amber-200/40"
-              }`} />
+              <BrandLogo />
             </div>
           </Link>
 

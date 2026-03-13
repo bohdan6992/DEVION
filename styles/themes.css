@@ -107,47 +107,39 @@
 /* ---------------- NEON (Cyber Pulse â€” Ð¤Ñ–Ð¾Ð»ÐµÑ‚Ð¾Ð²Ð¸Ð¹ Ð’Ð¸Ð±ÑƒÑ…) ---------------- */
 /* ÐÐ³Ñ€ÐµÑÐ¸Ð²Ð½Ð¸Ð¹ Ð½ÐµÐ¾Ð½Ð¾Ð²Ð¸Ð¹ ÐºÐ¾ÑÐ¼Ð¾Ñ Ð· ÑƒÐ»ÑŒÑ‚Ñ€Ð°Ñ„Ñ–Ð¾Ð»ÐµÑ‚Ð¾Ð²Ð¸Ð¼ ÑÑÐ¹Ð²Ð¾Ð¼ Ð·Ð½Ð¸Ð·Ñƒ */
 :root[data-theme="neon"] {
-  --bg: #04091a; 
+  --bg: #000000;
   --fg: #f5f3ff;
-  --muted: #94a3b8;
-  --color-primary: #d946ef; /* Magenta/Fuchsia */
+  --muted: rgba(255, 255, 255, 0.78);
+  --color-primary: #ffffff;
   
   --bg-image:
-    radial-gradient(1px 1px at 15% 25%, #fff, transparent),
-    radial-gradient(1px 1px at 85% 35%, #c084fc, transparent),
-    radial-gradient(1.5px 1.5px at 50% 40%, #fff, transparent),
-    radial-gradient(1px 1px at 30% 70%, #a78bfa, transparent),
-    linear-gradient(
-      to bottom,
-      #04091a 0%,
-      #060d22 58%,
-      rgba(99, 102, 241, 0.16) 82%,
-      rgba(139, 92, 246, 0.26) 100%
-    );
+    radial-gradient(620px 620px at 18% 22%, rgba(255, 0, 150, 0.24), transparent 72%),
+    radial-gradient(760px 760px at 84% 68%, rgba(180, 0, 100, 0.2), transparent 74%),
+    linear-gradient(180deg, #000000 0%, #000000 100%);
 
   --card-bg: rgba(255, 255, 255, 0.02);
-  --card-border: rgba(217, 70, 239, 0.15);
+  --card-border: rgba(255, 255, 255, 0.2);
   --shadow: 0 25px 80px rgba(0, 0, 0, 0.9);
-  --chart-grid: rgba(217, 70, 239, 0.05);
-  --chart-tooltip-bg: rgba(5, 0, 15, 0.95);
+  --chart-grid: rgba(255, 255, 255, 0.14);
+  --chart-tooltip-bg: rgba(0, 0, 0, 0.92);
   --dash-page-glow:
-    radial-gradient(circle at 16% 16%, rgba(217, 70, 239, 0.25), transparent 34%),
-    radial-gradient(circle at 86% 10%, rgba(34, 211, 238, 0.18), transparent 32%),
-    radial-gradient(circle at 52% 88%, rgba(139, 92, 246, 0.2), transparent 34%);
-  --dash-grid-line: rgba(217, 70, 239, 0.12);
-  --dash-scan-line: rgba(217, 70, 239, 0.08);
-  --dash-panel-bg: linear-gradient(135deg, rgba(20, 5, 35, 0.86), rgba(10, 2, 22, 0.92));
-  --dash-panel-border: rgba(217, 70, 239, 0.28);
-  --dash-panel-shadow: 0 24px 85px -36px rgba(217, 70, 239, 0.45), inset 0 1px 0 rgba(34, 211, 238, 0.2);
-  --dash-topline: rgba(232, 121, 249, 0.7);
-  --dash-text-main: #f5d0fe;
-  --dash-text-muted: rgba(216, 180, 254, 0.76);
-  --dash-chip-bg: rgba(217, 70, 239, 0.14);
-  --dash-chip-border: rgba(232, 121, 249, 0.36);
-  --dash-accent: #e879f9;
-  --dash-accent-soft: rgba(217, 70, 239, 0.18);
-  --dash-accent-border: rgba(232, 121, 249, 0.42);
-  --dash-accent-shadow: rgba(217, 70, 239, 0.42);
+    radial-gradient(circle at 16% 16%, rgba(255, 255, 255, 0.1), transparent 34%),
+    radial-gradient(circle at 86% 10%, rgba(255, 140, 205, 0.12), transparent 32%),
+    radial-gradient(circle at 52% 88%, rgba(255, 110, 190, 0.12), transparent 34%);
+  --dash-grid-line: rgba(255, 255, 255, 0.14);
+  --dash-scan-line: rgba(255, 255, 255, 0.08);
+  --dash-panel-bg: linear-gradient(135deg, rgba(255, 0, 150, 0.14), rgba(0, 0, 0, 0.52));
+  --dash-panel-border: rgba(255, 255, 255, 0.32);
+  --dash-panel-shadow: 0 24px 85px -36px rgba(255, 77, 148, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  --dash-topline: rgba(255, 255, 255, 0.76);
+  --dash-text-main: #ffffff;
+  --dash-text-muted: rgba(255, 240, 247, 0.82);
+  --dash-chip-bg: rgba(255, 255, 255, 0.12);
+  --dash-chip-border: rgba(255, 255, 255, 0.34);
+  --dash-accent: #ffffff;
+  --dash-accent-soft: rgba(255, 255, 255, 0.18);
+  --dash-accent-border: rgba(255, 255, 255, 0.42);
+  --dash-accent-shadow: rgba(255, 255, 255, 0.24);
 }
 
 /* ---------------- MATRIX (Terminal Grid â€” ÐÐ³Ñ€ÐµÑÐ¸Ð²Ð½Ð¸Ð¹ Ð¢Ñ€ÐµÐ¹Ð´ HUD) ---------------- */

@@ -897,6 +897,7 @@ const getSonarAccent = (theme?: string | null) => {
       chip: "border-amber-500/30 bg-amber-500/10 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.18)]",
       line: "bg-amber-500/50",
       text: "text-amber-400",
+      textSoft: "text-amber-300/80",
       softBorder: "border-amber-500/35 bg-amber-500/12 text-amber-300",
       panelSoft: "border-amber-500/20 bg-amber-500/[0.03]",
     };
@@ -912,6 +913,7 @@ const getSonarAccent = (theme?: string | null) => {
       chip: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300 shadow-[0_0_10px_rgba(217,70,239,0.18)]",
       line: "bg-fuchsia-400/50",
       text: "text-fuchsia-300",
+      textSoft: "text-fuchsia-200/75",
       softBorder: "border-fuchsia-500/35 bg-fuchsia-500/12 text-fuchsia-300",
       panelSoft: "border-fuchsia-500/20 bg-fuchsia-500/[0.03]",
     };
@@ -927,6 +929,7 @@ const getSonarAccent = (theme?: string | null) => {
       chip: "border-sky-500/30 bg-sky-500/10 text-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.18)]",
       line: "bg-sky-400/50",
       text: "text-sky-300",
+      textSoft: "text-sky-200/75",
       softBorder: "border-sky-500/35 bg-sky-500/12 text-sky-300",
       panelSoft: "border-sky-500/20 bg-sky-500/[0.03]",
     };
@@ -941,6 +944,7 @@ const getSonarAccent = (theme?: string | null) => {
     chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]",
     line: "bg-emerald-500/50",
     text: "text-emerald-400",
+    textSoft: "text-emerald-300/80",
     softBorder: "border-emerald-500/35 bg-emerald-500/12 text-emerald-300",
     panelSoft: "border-emerald-500/20 bg-emerald-500/[0.03]",
   };
@@ -1366,6 +1370,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
     absM >= Math.max(0, Number(zapSilverAbs ?? 0));
 
   const isBelowShow =
+    !posActive &&
     zapMode !== "off" &&
     absM != null &&
     absM < Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
@@ -1918,8 +1923,6 @@ function HedgeHeaderMinimal({
   bench: string;
   info: { targetBp: number; currentBp: number; needBp: number; buyBp: number; sellBp: number } | null;
 }) {
-  const { theme } = useUi();
-  const accentTextClass = getSonarAccent(theme).text;
   const need = info ? { left: fmtBp0(info.sellBp), right: fmtBp0(info.buyBp) } : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
@@ -1942,7 +1945,7 @@ function HedgeHeaderMinimal({
           </span>
         </div>
         <div className="text-right">
-          <span className={`text-[22px] font-mono tabular-nums leading-none ${accentTextClass}`}>
+          <span className="text-[22px] font-mono tabular-nums leading-none text-emerald-400">
             {need.right}
           </span>
         </div>
@@ -1982,6 +1985,7 @@ export default function ArbitrageSonar() {
   const accentChipClass = sonarAccent.chip;
   const accentLineClass = sonarAccent.line;
   const accentTextClass = sonarAccent.text;
+  const accentTextSoftClass = sonarAccent.textSoft;
 
   /* ===== defaults requested: global / all / any ===== */
   const [cls, setCls] = useState<ArbClass>("global");
@@ -2935,26 +2939,30 @@ export default function ArbitrageSonar() {
 
       // ZAP/SigmaZAP (mutually exclusive)
       if (f.zapMode !== "off") {
+        const posActive = isActiveByPositionBp(s);
         const dir = s.direction;
         const isShort = dir === "down";
         const isLong = dir === "up";
         if (!isShort && !isLong) continue;
 
-        if (f.zapMode === "zap") {
-          if (isShort) {
-            const v = toNum(s.zapS);
-            if (v == null || v < zapThr) continue;
+        // Start-deviation filter applies only to inactive candidates.
+        if (!posActive) {
+          if (f.zapMode === "zap") {
+            if (isShort) {
+              const v = toNum(s.zapS);
+              if (v == null || v < zapThr) continue;
+            } else {
+              const v = toNum(s.zapL);
+              if (v == null || v > -zapThr) continue;
+            }
           } else {
-            const v = toNum(s.zapL);
-            if (v == null || v > -zapThr) continue;
-          }
-        } else {
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < sigThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -sigThr) continue;
+            if (isShort) {
+              const v = toNum(s.zapSsigma);
+              if (v == null || v < sigThr) continue;
+            } else {
+              const v = toNum(s.zapLsigma);
+              if (v == null || v > -sigThr) continue;
+            }
           }
         }
       }
@@ -3360,7 +3368,7 @@ export default function ArbitrageSonar() {
       }));
   }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
 
-  const hedgeComputed = useMemo(() => computeHedgeByBench(items), [items]);
+  const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
 
@@ -3789,7 +3797,7 @@ export default function ArbitrageSonar() {
                     f.set(n);
                   }}
                   placeholder={f.ph}
-                className={`w-14 bg-transparent text-right text-xs font-mono ${accentTextClass} placeholder-zinc-700 focus:outline-none`}
+                className={`w-14 bg-transparent text-right text-xs font-mono ${accentTextSoftClass} placeholder-zinc-700 focus:outline-none`}
                 />
               </div>
             ))}

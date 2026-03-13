@@ -8,15 +8,28 @@ type Star = { x: number; y: number; size: number; opacity: number; blinkSpeed: n
 type Dust = { x: number; y: number; size: number; opacity: number; color: string };
 type Nebula = { x: number; y: number; r: number; color: string };
 type ShootingStar = { x: number; y: number; speed: number; opacity: number; len: number };
-type NeonLaser = {
+type NeonLine = {
   x: number;
   y: number;
-  length: number;
+  maxLength: number;
+  currentLength: number;
+  angle: number;
   speed: number;
-  vx: number;
-  vy: number;
-  color: string;
-  opacity: number;
+  speedX: number;
+  speedY: number;
+  life: number;
+  growing: boolean;
+  cycleSpeed: number;
+  rotSpeed: number;
+  smokeRadius: number;
+  smokeOpacity: number;
+};
+type NeonConnection = {
+  a: NeonLine;
+  b: NeonLine;
+  life: number;
+  growing: boolean;
+  speed: number;
 };
 type DarkBlob = {
   x: number;
@@ -94,10 +107,10 @@ const AURORA_CLUSTER_PARTICLE_COUNT = 22;
 const AURORA_CLOUD_COUNT = 6;
 const MATRIX_FONT_SIZE = 22;
 const MATRIX_CHARS = "ｦｱｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-const NEON_LASER_COUNT = 46;
-const NEON_CONNECT_DISTANCE = 205;
-const NEON_MOUSE_RADIUS = 200;
-const NEON_COLORS = ["#3cf6ff", "#00f7ff", "#ff48f5", "#ff2f92", "#7dffef"];
+const NEON_LINE_COUNT = 45;
+const NEON_MAX_CONNECTIONS = 100;
+const NEON_CONNECT_DISTANCE = 350;
+const NEON_CONNECTION_ATTEMPTS = 5;
 const TARGET_FRAME_MS = 1000 / 30;
 
 function readMode(): ThemeMode {
@@ -135,7 +148,8 @@ export default function ThemeStarfieldCanvas() {
     let nebulae: Nebula[] = [];
     let shootingStars: ShootingStar[] = [];
 
-    let neonLasers: NeonLaser[] = [];
+    let neonLines: NeonLine[] = [];
+    let neonConnections: NeonConnection[] = [];
 
     let darkBlobs: DarkBlob[] = [];
     let lightBlobs: LightBlob[] = [];
@@ -153,7 +167,6 @@ export default function ThemeStarfieldCanvas() {
     let goldDustClusters: GoldDustCluster[] = [];
     let goldDustClouds: GoldDustCloud[] = [];
     let matrixColumns: MatrixColumn[] = [];
-
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
@@ -248,38 +261,32 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const createNeonScene = () => {
-      neonLasers = Array.from({ length: NEON_LASER_COUNT }, () => {
+      neonLines = Array.from({ length: NEON_LINE_COUNT }, () => {
         const angle = Math.random() * Math.PI * 2;
-        const speed = Math.random() * 1.35 + 0.85;
+        const speed = Math.random() * 0.15 + 0.08;
         return {
           x: Math.random() * width,
           y: Math.random() * height,
-          length: Math.random() * 110 + 36,
+          maxLength: Math.random() * 50 + 30,
+          currentLength: 0,
+          angle,
           speed,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
-          color: NEON_COLORS[Math.floor(Math.random() * NEON_COLORS.length)] || "#0ff",
-          opacity: Math.random() * 0.3 + 0.72,
+          speedX: Math.cos(angle) * speed,
+          speedY: Math.sin(angle) * speed,
+          life: Math.random(),
+          growing: Math.random() > 0.5,
+          cycleSpeed: 0.002 + Math.random() * 0.004,
+          rotSpeed: (Math.random() - 0.5) * 0.008,
+          smokeRadius: Math.random() * 200 + 150,
+          smokeOpacity: Math.random() * 0.15 + 0.1,
         };
       });
+      neonConnections = [];
 
       staticLayerCanvas = createLayerCanvas();
       const layerCtx = getLayerContext(staticLayerCanvas);
       if (layerCtx) {
-        layerCtx.fillStyle = "#000";
-        layerCtx.fillRect(0, 0, width, height);
-        const centerGlow = layerCtx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.9);
-        centerGlow.addColorStop(0, "rgba(40, 10, 70, 0.12)");
-        centerGlow.addColorStop(0.45, "rgba(8, 28, 60, 0.08)");
-        centerGlow.addColorStop(1, "rgba(0, 0, 0, 0.12)");
-        layerCtx.fillStyle = centerGlow;
-        layerCtx.fillRect(0, 0, width, height);
-
-        const sideGlow = layerCtx.createLinearGradient(0, 0, width, height);
-        sideGlow.addColorStop(0, "rgba(0, 255, 255, 0.035)");
-        sideGlow.addColorStop(0.5, "rgba(0, 0, 0, 0)");
-        sideGlow.addColorStop(1, "rgba(255, 0, 180, 0.04)");
-        layerCtx.fillStyle = sideGlow;
+        layerCtx.fillStyle = "#000000";
         layerCtx.fillRect(0, 0, width, height);
       }
     };
@@ -591,82 +598,135 @@ export default function ThemeStarfieldCanvas() {
     const drawNeon = () => {
       if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
       else {
-        ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+        ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, width, height);
       }
 
-      for (const laser of neonLasers) {
-        laser.x += laser.vx;
-        laser.y += laser.vy;
+      for (const line of neonLines) {
+        const smokeAlpha = line.life * line.smokeOpacity;
+        if (smokeAlpha > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          const grad = ctx.createRadialGradient(line.x, line.y, 0, line.x, line.y, line.smokeRadius);
+          grad.addColorStop(0, `rgba(255, 0, 150, ${smokeAlpha})`);
+          grad.addColorStop(0.3, `rgba(180, 0, 100, ${smokeAlpha * 0.3})`);
+          grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(line.x, line.y, line.smokeRadius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
 
-        if (laser.x > width + 100) laser.x = -100;
-        else if (laser.x < -100) laser.x = width + 100;
-        if (laser.y > height + 100) laser.y = -100;
-        else if (laser.y < -100) laser.y = height + 100;
+      for (const line of neonLines) {
+        line.x += line.speedX;
+        line.y += line.speedY;
+        line.angle += line.rotSpeed;
 
-        const dx = mouseX - laser.x;
-        const dy = mouseY - laser.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 0 && dist < NEON_MOUSE_RADIUS) {
-          laser.vx += (dx / dist) * 0.05;
-          laser.vy += (dy / dist) * 0.05;
-          const mag = Math.hypot(laser.vx, laser.vy) || 1;
-          laser.vx = (laser.vx / mag) * laser.speed;
-          laser.vy = (laser.vy / mag) * laser.speed;
+        if (line.growing) {
+          line.life += line.cycleSpeed;
+          if (line.life >= 1) {
+            line.life = 1;
+            line.growing = false;
+          }
+        } else {
+          line.life -= line.cycleSpeed;
+          if (line.life <= 0) {
+            line.life = 0;
+            line.growing = true;
+          }
         }
 
-        const tailX = laser.x - laser.vx * laser.length * 0.1;
-        const tailY = laser.y - laser.vy * laser.length * 0.1;
-        const coreAlpha = Math.min(1, laser.opacity + 0.12);
+        line.currentLength = line.maxLength * line.life;
+
+        if (line.x > width + 100) line.x = -100;
+        else if (line.x < -100) line.x = width + 100;
+        if (line.y > height + 100) line.y = -100;
+        else if (line.y < -100) line.y = height + 100;
+
+        const opacity = line.life * 0.95;
+        if (opacity <= 0) continue;
 
         ctx.save();
-        ctx.beginPath();
-        ctx.strokeStyle = laser.color;
-        ctx.lineWidth = 3.2;
-        ctx.lineCap = "round";
-        ctx.globalAlpha = laser.opacity;
+        ctx.translate(line.x, line.y);
+        ctx.rotate(line.angle);
         ctx.shadowBlur = 20;
-        ctx.shadowColor = laser.color;
-        ctx.moveTo(laser.x, laser.y);
-        ctx.lineTo(tailX, tailY);
-        ctx.stroke();
-
+        ctx.shadowColor = "rgba(255, 50, 200, 0.9)";
+        ctx.strokeStyle = `rgba(255, 255, 255, ${opacity})`;
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
         ctx.beginPath();
-        ctx.strokeStyle = "rgba(255,255,255,0.92)";
-        ctx.lineWidth = 1.05;
-        ctx.globalAlpha = coreAlpha;
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = laser.color;
-        ctx.moveTo(laser.x, laser.y);
-        ctx.lineTo(tailX, tailY);
+        ctx.moveTo(-line.currentLength / 2, 0);
+        ctx.lineTo(line.currentLength / 2, 0);
         ctx.stroke();
         ctx.restore();
       }
 
-      for (let i = 0; i < neonLasers.length; i += 1) {
-        for (let j = i + 1; j < neonLasers.length; j += 1) {
-          const a = neonLasers[i];
-          const b = neonLasers[j];
+      neonConnections = neonConnections.filter((connection) => {
+        return connection.life > 0;
+      });
+
+      if (neonConnections.length < NEON_MAX_CONNECTIONS) {
+        for (let i = 0; i < NEON_CONNECTION_ATTEMPTS; i += 1) {
+          const a = neonLines[Math.floor(Math.random() * neonLines.length)];
+          const b = neonLines[Math.floor(Math.random() * neonLines.length)];
+          if (!a || !b || a === b) continue;
+          if (a.life < 0.2 || b.life < 0.2) continue;
+
           const dx = a.x - b.x;
           const dy = a.y - b.y;
           const distance = Math.hypot(dx, dy);
           if (distance >= NEON_CONNECT_DISTANCE) continue;
 
-          ctx.beginPath();
-          ctx.strokeStyle = a.color;
-          ctx.lineWidth = 0.65;
-          ctx.globalAlpha = (1 - distance / NEON_CONNECT_DISTANCE) * 0.55;
-          ctx.shadowBlur = 8;
-          ctx.shadowColor = a.color;
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
+          const exists = neonConnections.some(
+            (connection) =>
+              (connection.a === a && connection.b === b) || (connection.a === b && connection.b === a)
+          );
+
+          if (!exists) {
+            neonConnections.push({
+              a,
+              b,
+              life: 0.01,
+              growing: true,
+              speed: 0.004 + Math.random() * 0.005,
+            });
+            if (neonConnections.length >= NEON_MAX_CONNECTIONS) break;
+          }
         }
       }
 
-      ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
+      for (const connection of neonConnections) {
+        if (connection.growing) {
+          connection.life += connection.speed;
+          if (connection.life >= 1) {
+            connection.life = 1;
+            connection.growing = false;
+          }
+        } else {
+          connection.life -= connection.speed;
+        }
+
+        if (connection.a.life < 0.1 || connection.b.life < 0.1) {
+          connection.life -= 0.02;
+        }
+
+        const dx = connection.a.x - connection.b.x;
+        const dy = connection.a.y - connection.b.y;
+        const distance = Math.hypot(dx, dy);
+        const distFade = Math.max(0, 1 - distance / NEON_CONNECT_DISTANCE);
+        const finalOpacity = connection.life * distFade * 0.5 * Math.min(connection.a.life, connection.b.life);
+        if (finalOpacity <= 0) continue;
+
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(255, 80, 180, ${finalOpacity})`;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = "round";
+        ctx.moveTo(connection.a.x, connection.a.y);
+        ctx.lineTo(connection.b.x, connection.b.y);
+        ctx.stroke();
+      }
     };
 
     const drawDark = () => {
