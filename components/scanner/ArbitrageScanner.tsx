@@ -23,21 +23,8 @@ function apiUrl(pathAndQuery: string) {
 type TabKey = "active" | "episodes" | "analytics";
 type DateMode = "day" | "last" | "range";
 type PaperListMode = "off" | "ignore" | "apply" | "pin";
-type ZapUiMode = "off" | "zap" | "sigma";
+type ZapUiMode = "off" | "zap" | "sigma" | "delta";
 type SortDir = "asc" | "desc";
-type ActiveSortKey =
-  | "ticker"
-  | "bench"
-  | "side"
-  | "startTime"
-  | "peakTime"
-  | "lastTime"
-  | "startAbs"
-  | "peakAbs"
-  | "lastAbs"
-  | "startClass"
-  | "closeMode"
-  | "minHold";
 type EpisodeSortKey =
   | "ticker"
   | "bench"
@@ -104,6 +91,17 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         buttonBorder: "border-yellow-200/18",
         outlineButton: "border-yellow-200/35 text-yellow-200 hover:bg-yellow-200/10 shadow-[0_0_10px_rgba(254,240,138,0.08)]",
       };
+    case "inferno":
+      return {
+        selection: "selection:bg-orange-300/35",
+        dot: "bg-orange-300",
+        activeButton: "border border-orange-300/80 text-orange-100 shadow-[0_0_16px_rgba(249,115,22,0.26)] bg-red-500/12",
+        activeText: "text-orange-100",
+        activeBorder: "border-orange-300/35 bg-red-500/[0.08]",
+        activeSoft: "bg-red-500/14 text-orange-100 border-orange-300/35 shadow-[0_0_14px_-3px_rgba(249,115,22,0.22)]",
+        buttonBorder: "border-orange-300/26",
+        outlineButton: "border-orange-300/55 text-orange-100 hover:bg-red-500/14 shadow-[0_0_14px_rgba(249,115,22,0.14)]",
+      };
     case "asher":
       return {
         selection: "selection:bg-zinc-200/25",
@@ -153,6 +151,7 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
 
 function getScannerHeaderButtonActiveClass(theme?: string | null): string {
   if (theme === "sparkle") return "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10";
+  if (theme === "inferno") return "border border-orange-300/80 text-orange-100 shadow-[0_0_14px_rgba(249,115,22,0.26)] bg-red-500/14";
   if (theme === "asher") return "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10";
   if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
@@ -186,6 +185,8 @@ type PaperArbActiveRow = {
   closeMode?: PaperArbCloseMode;
   minHoldCandles?: number;
   startClass?: string | null;
+  printMedianPos?: number | null;
+  printMedianNeg?: number | null;
 };
 
 type PaperArbClosedDto = {
@@ -260,6 +261,8 @@ type PaperArbClosedDto = {
   lstPrcLstClsPct?: number | null;
   imbExch925?: number | null;
   imbExch1555?: number | null;
+  printMedianPos?: number | null;
+  printMedianNeg?: number | null;
 };
 
 // Big request: Analytics + EpisodesSearch
@@ -269,6 +272,7 @@ type PaperArbAnalyticsRequest = {
 
   metric?: PaperArbMetric;
   startAbs?: number;
+  usePrintMedianDelta?: boolean;
   startAbsMax?: number | null;
   endAbs?: number;
   session?: PaperArbSession;
@@ -790,10 +794,6 @@ function minuteIdxToClockLabel(x: number | null | undefined): string {
   const mm = ((((totalMin % 1440) + 1440) % 1440) % 60).toString().padStart(2, "0");
   return `${hh}:${mm}`;
 }
-function minuteIdxWithClock(x: number | null | undefined): string {
-  if (x === null || x === undefined || !Number.isFinite(x)) return "-";
-  return `${minuteIdxToClockLabel(x)} (${intn(x)})`;
-}
 function clampInt(x: any, def = 0) {
   const v = Number(x);
   if (!Number.isFinite(v)) return def;
@@ -870,6 +870,29 @@ function normalizeSide(
   if (low.includes("long")) return { label: "Long", isLong: true };
   if (low.includes("short")) return { label: "Short", isLong: false };
   return { label: s.length ? s : "-", isLong: null };
+}
+
+function passesDeltaZapGate(args: {
+  side: TapeArbSide;
+  metricAbs: number | null | undefined;
+  deltaAbs: number | null | undefined;
+  printMedianPos?: number | null;
+  printMedianNeg?: number | null;
+}) {
+  const { side, metricAbs, deltaAbs, printMedianPos, printMedianNeg } = args;
+  if (metricAbs == null || !Number.isFinite(metricAbs)) return false;
+  if (deltaAbs == null || !Number.isFinite(deltaAbs)) return false;
+  const sideInfo = normalizeSide(side);
+  const FALLBACK_PRINT_MEDIAN = 0.1;
+  if (sideInfo.isLong === true) {
+    const threshold = Math.abs(printMedianNeg ?? FALLBACK_PRINT_MEDIAN) + Math.max(0, deltaAbs);
+    return Math.abs(metricAbs) >= threshold;
+  }
+  if (sideInfo.isLong === false) {
+    const threshold = Math.abs(printMedianPos ?? FALLBACK_PRINT_MEDIAN) + Math.max(0, deltaAbs);
+    return Math.abs(metricAbs) >= threshold;
+  }
+  return false;
 }
 
 function toYmd(d: string) {
@@ -5233,10 +5256,6 @@ export default function ArbitrageScanner() {
   const [showIgnore, setShowIgnore] = useState(false);
   const [showApply, setShowApply] = useState(false);
   const [showPin, setShowPin] = useState(false);
-  const [activeSort, setActiveSort] = useState<{ key: ActiveSortKey; dir: SortDir }>({
-    key: "lastAbs",
-    dir: "desc",
-  });
   const [episodesSort, setEpisodesSort] = useState<{ key: EpisodeSortKey; dir: SortDir }>({
     key: "total",
     dir: "desc",
@@ -5493,6 +5512,7 @@ export default function ArbitrageScanner() {
     return [
       `metric=${metric}`,
       `startAbs=${startAbs}`,
+      `deltaPrint=${zapUiMode === "delta" ? "on" : "off"}`,
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
@@ -5504,20 +5524,20 @@ export default function ArbitrageScanner() {
       `priceMode=LastPrint`,
       `pnlMode=${pnlMode}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, zapUiMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|LastPrint`;
+    const s = `${metric}|${startAbs}|${zapUiMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|LastPrint`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, zapUiMode]);
 
   const forceEpisodesSearch = useMemo(() => {
     const has = (v: string) => String(v ?? "").trim().length > 0;
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && startAbsMaxNum >= startAbs;
+    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs);
     return (
       has(minAdv20) || has(maxAdv20) ||
       has(minAdv20NF) || has(maxAdv20NF) ||
@@ -5576,7 +5596,7 @@ export default function ArbitrageScanner() {
     minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
     minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
     minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-    startAbsMax, startAbs,
+    startAbsMax, startAbs, zapUiMode,
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
@@ -5599,12 +5619,12 @@ export default function ArbitrageScanner() {
 
     if (!(startAbs > 0)) e.push("startAbs must be > 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    if (endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    if (zapUiMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
     return e;
-  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles]);
+  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapUiMode]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -5728,7 +5748,7 @@ export default function ArbitrageScanner() {
 
         if (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics") setTab(s.tab);
         if (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL") setRuleBand(s.ruleBand);
-        if (s.zapUiMode === "off" || s.zapUiMode === "zap" || s.zapUiMode === "sigma") setZapUiMode(s.zapUiMode);
+        if (s.zapUiMode === "off" || s.zapUiMode === "zap" || s.zapUiMode === "sigma" || s.zapUiMode === "delta") setZapUiMode(s.zapUiMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -6108,6 +6128,7 @@ export default function ArbitrageScanner() {
       dateNy: d,
       metric,
       startAbs,
+      usePrintMedianDelta: zapUiMode === "delta" ? true : undefined,
       startAbsMax: optNumOrNull(startAbsMax),
       endAbs,
       session,
@@ -6190,7 +6211,7 @@ export default function ArbitrageScanner() {
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && startAbsMaxNum >= startAbs ? startAbsMaxNum : null;
+    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
     const applyTickers = splitListUpper(tickersText);
     const pinTickers = splitListUpper(benchTickersText);
     const reqTickers =
@@ -6210,6 +6231,7 @@ export default function ArbitrageScanner() {
 
       metric,
       startAbs,
+      usePrintMedianDelta: zapUiMode === "delta" ? true : undefined,
       startAbsMax: startAbsMaxEff,
       endAbs,
       session,
@@ -7142,9 +7164,16 @@ export default function ArbitrageScanner() {
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
+      if (zapUiMode === "delta" && !passesDeltaZapGate({
+        side: r.side,
+        metricAbs: r.start?.metricAbs,
+        deltaAbs: startAbs,
+        printMedianPos: r.printMedianPos,
+        printMedianNeg: r.printMedianNeg,
+      })) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
@@ -7156,47 +7185,22 @@ export default function ArbitrageScanner() {
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
+      if (zapUiMode === "delta" && !passesDeltaZapGate({
+        side: r.side,
+        metricAbs: r.startMetricAbs,
+        deltaAbs: startAbs,
+        printMedianPos: r.printMedianPos,
+        printMedianNeg: r.printMedianNeg,
+      })) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
     return String(a).localeCompare(String(b));
   };
   const dirMul = (dir: SortDir) => (dir === "asc" ? 1 : -1);
-
-  const activeSortValue = (r: PaperArbActiveRow, key: ActiveSortKey): string | number => {
-    const startAbsV = r.start?.metricAbs ?? (r.start?.metric != null ? Math.abs(r.start.metric) : null);
-    const peakAbsV = r.peak?.metricAbs ?? (r.peak?.metric != null ? Math.abs(r.peak.metric) : null);
-    const lastAbsV = r.last?.metricAbs ?? (r.last?.metric != null ? Math.abs(r.last.metric) : null);
-    switch (key) {
-      case "ticker":
-        return String(r.ticker ?? "");
-      case "bench":
-        return String(r.benchTicker ?? "");
-      case "side":
-        return normalizeSide(r.side).label;
-      case "startTime":
-        return r.start?.minuteIdx ?? -1;
-      case "peakTime":
-        return r.peak?.minuteIdx ?? -1;
-      case "lastTime":
-        return r.last?.minuteIdx ?? -1;
-      case "startAbs":
-        return startAbsV ?? -1;
-      case "peakAbs":
-        return peakAbsV ?? -1;
-      case "lastAbs":
-        return lastAbsV ?? -1;
-      case "startClass":
-        return String(r.startClass ?? "");
-      case "closeMode":
-        return String(r.closeMode ?? closeMode);
-      case "minHold":
-        return r.minHoldCandles ?? minHoldCandles;
-    }
-  };
 
   const episodeSortValue = (r: PaperArbClosedDto, key: EpisodeSortKey): string | number => {
     switch (key) {
@@ -7233,10 +7237,139 @@ export default function ArbitrageScanner() {
     }
   };
 
-  const activeSorted = useMemo(() => {
-    const mul = dirMul(activeSort.dir);
-    return [...filteredActive].sort((a, b) => cmpVal(activeSortValue(a, activeSort.key), activeSortValue(b, activeSort.key)) * mul);
-  }, [filteredActive, activeSort, closeMode, minHoldCandles]);
+  const activeRealtimeRows = useMemo<PaperArbClosedDto[]>(() => {
+    return filteredActive.map((row) => {
+      const startAbs =
+        row.start?.metricAbs ?? (row.start?.metric != null ? Math.abs(row.start.metric) : null);
+      const peakAbs =
+        row.peak?.metricAbs ?? (row.peak?.metric != null ? Math.abs(row.peak.metric) : null);
+      const lastAbs =
+        row.last?.metricAbs ?? (row.last?.metric != null ? Math.abs(row.last.metric) : null);
+      const currentDelta =
+        startAbs != null && lastAbs != null && Number.isFinite(startAbs) && Number.isFinite(lastAbs)
+          ? lastAbs - startAbs
+          : 0;
+
+      return {
+        ticker: row.ticker,
+        benchTicker: row.benchTicker,
+        side: row.side,
+        dateNy,
+        date: dateNy,
+        day: dateNy,
+        tradeDate: dateNy,
+        tradeDateNy: dateNy,
+        sessionDate: dateNy,
+        sessionDateNy: dateNy,
+        startMinuteIdx: row.start?.minuteIdx ?? 0,
+        peakMinuteIdx: row.peak?.minuteIdx ?? row.start?.minuteIdx ?? 0,
+        endMinuteIdx: row.last?.minuteIdx ?? row.peak?.minuteIdx ?? row.start?.minuteIdx ?? 0,
+        startMetric: row.start?.metric ?? null,
+        startMetricAbs: startAbs,
+        peakMetric: row.peak?.metric ?? null,
+        peakMetricAbs: peakAbs,
+        endMetric: row.last?.metric ?? null,
+        endMetricAbs: lastAbs,
+        closeMode: row.closeMode ?? closeMode,
+        minHoldCandles: row.minHoldCandles ?? minHoldCandles,
+        rawPnlUsd: currentDelta,
+        benchPnlUsd: 0,
+        hedgedPnlUsd: currentDelta,
+        totalPnlUsd: currentDelta,
+      };
+    });
+  }, [filteredActive, dateNy, closeMode, minHoldCandles]);
+
+  const activeRealtimeSorted = useMemo(() => {
+    const mul = dirMul(analyticsSort.dir);
+    return [...activeRealtimeRows].sort((a, b) => cmpVal(episodeSortValue(a, analyticsSort.key), episodeSortValue(b, analyticsSort.key)) * mul);
+  }, [activeRealtimeRows, analyticsSort, closeMode, minHoldCandles]);
+
+  const activeAnalyticsSummary = useMemo(() => {
+    const pnl = activeRealtimeRows.map((r) => r.totalPnlUsd ?? 0);
+    const trades = pnl.length;
+    const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
+    const wins = pnl.filter((x) => x > 0).length;
+    const losses = pnl.filter((x) => x < 0).length;
+    const winRate = trades > 0 ? wins / trades : 0;
+    const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
+    const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
+
+    const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
+    const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
+    const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const avgWin = wins > 0 ? sumWin / wins : 0;
+    const avgLoss = losses > 0 ? -(sumLossAbs / losses) : 0;
+    const expectancyUsd = (winRate * avgWin) - ((1 - winRate) * avgLoss);
+
+    let equity = 0;
+    let peak = 0;
+    let maxDrawdownUsd = 0;
+    const equityCurve: PaperArbEquityPointDto[] = [];
+
+    if (equityCurveMode === "Daily") {
+      const dailyTotals = new Map<string, number>();
+      for (const row of activeRealtimeRows) {
+        const key = getEpisodeDateKey(row, dateNy);
+        if (!key) continue;
+        dailyTotals.set(key, (dailyTotals.get(key) ?? 0) + (row.totalPnlUsd ?? 0));
+      }
+
+      for (const key of [...dailyTotals.keys()].sort((a, b) => a.localeCompare(b))) {
+        const p = dailyTotals.get(key) ?? 0;
+        equity += p;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdownUsd) maxDrawdownUsd = dd;
+        equityCurve.push({ key, equity, pnl: p });
+      }
+    } else {
+      const tradeRows = activeRealtimeRows
+        .map((row, index) => ({
+          row,
+          index,
+          dateKey: getEpisodeDateKey(row, dateNy),
+          minute: Number.isFinite(row.endMinuteIdx) ? row.endMinuteIdx : null,
+        }))
+        .sort((a, b) => {
+          const da = a.dateKey ?? "";
+          const db = b.dateKey ?? "";
+          if (da !== db) return da.localeCompare(db);
+          const ma = a.minute ?? Number.MAX_SAFE_INTEGER;
+          const mb = b.minute ?? Number.MAX_SAFE_INTEGER;
+          if (ma !== mb) return ma - mb;
+          return a.index - b.index;
+        });
+
+      for (const item of tradeRows) {
+        const p = item.row.totalPnlUsd ?? 0;
+        equity += p;
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > maxDrawdownUsd) maxDrawdownUsd = dd;
+        const key = item.dateKey
+          ? `${item.dateKey}${item.minute != null ? ` ${item.minute}` : ""}`
+          : `${item.index + 1}`;
+        equityCurve.push({ key, equity, pnl: p });
+      }
+    }
+
+    return {
+      trades,
+      totalPnlUsd,
+      winRate,
+      profitFactor,
+      avgPnlUsd,
+      avgWinUsd: avgWin,
+      avgLossUsd: avgLoss,
+      maxWinUsd,
+      maxLossUsd,
+      expectancyUsd,
+      maxDrawdownUsd,
+      equityCurve,
+    };
+  }, [activeRealtimeRows, equityCurveMode, dateNy]);
 
   const episodesSorted = useMemo(() => {
     const mul = dirMul(episodesSort.dir);
@@ -7501,13 +7634,15 @@ export default function ArbitrageScanner() {
     const wins = pnl.filter((x) => x > 0).length;
     const losses = pnl.filter((x) => x < 0).length;
     const winRate = trades > 0 ? wins / trades : 0;
+    const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
+    const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
 
     const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
     const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
     const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
     const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     const avgWin = wins > 0 ? sumWin / wins : 0;
-    const avgLoss = losses > 0 ? sumLossAbs / losses : 0;
+    const avgLoss = losses > 0 ? -(sumLossAbs / losses) : 0;
     const expectancyUsd = (winRate * avgWin) - ((1 - winRate) * avgLoss);
 
     let equity = 0;
@@ -7573,6 +7708,10 @@ export default function ArbitrageScanner() {
       winRate: analytics?.winRate ?? winRate,
       profitFactor: analytics?.profitFactor ?? profitFactor,
       avgPnlUsd: analytics?.avgPnlUsd ?? avgPnlUsd,
+      avgWinUsd: analytics?.avgWinUsd ?? avgWin,
+      avgLossUsd: analytics?.avgLossUsd != null ? -Math.abs(analytics.avgLossUsd) : avgLoss,
+      maxWinUsd: analytics?.maxWinUsd ?? maxWinUsd,
+      maxLossUsd: analytics?.maxLossUsd != null ? Math.min(analytics.maxLossUsd, 0) : maxLossUsd,
       expectancyUsd: analytics?.expectancyUsd ?? expectancyUsd,
       maxDrawdownUsd: analytics?.maxDrawdownUsd ?? maxDrawdownUsd,
       equityCurve: serverEquityCurve && serverEquityCurve.length > 0 ? serverEquityCurve : equityCurve,
@@ -7702,12 +7841,12 @@ export default function ArbitrageScanner() {
   };
 
   useEffect(() => {
-    setZapUiMode(metric === "ZapPct" ? "zap" : "sigma");
+    setZapUiMode((prev) => {
+      if (prev === "delta" && metric === "SigmaZap") return "delta";
+      return metric === "ZapPct" ? "zap" : "sigma";
+    });
   }, [metric]);
 
-  const toggleActiveSort = (key: ActiveSortKey) => {
-    setActiveSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
-  };
   const toggleEpisodesSort = (key: EpisodeSortKey) => {
     setEpisodesSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
   };
@@ -8829,8 +8968,13 @@ export default function ArbitrageScanner() {
               <button
                 type="button"
                 onClick={() => {
-                  setZapUiMode("zap");
-                  setMetric("ZapPct");
+                  if (zapUiMode === "zap") {
+                    setZapUiMode("off");
+                    setMetric("SigmaZap");
+                  } else {
+                    setZapUiMode("zap");
+                    setMetric("ZapPct");
+                  }
                 }}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
@@ -8845,8 +8989,12 @@ export default function ArbitrageScanner() {
               <button
                 type="button"
                 onClick={() => {
-                  setZapUiMode("sigma");
-                  setMetric("SigmaZap");
+                  if (zapUiMode === "sigma") {
+                    setZapUiMode("off");
+                  } else {
+                    setZapUiMode("sigma");
+                    setMetric("SigmaZap");
+                  }
                 }}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
@@ -8856,6 +9004,27 @@ export default function ArbitrageScanner() {
                 )}
               >
                 <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (zapUiMode === "delta") {
+                    setZapUiMode("off");
+                  } else {
+                    setZapUiMode("delta");
+                    setMetric("SigmaZap");
+                  }
+                }}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
+                  zapUiMode === "delta"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                )}
+                title="Require start sigma to be above direction-specific print median plus the first input delta"
+              >
+                <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
               </button>
 
               <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
@@ -8959,26 +9128,6 @@ export default function ArbitrageScanner() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setZapUiMode("off");
-                  setMetric("SigmaZap");
-                  setStartAbs(0.1);
-                  setStartAbsMax("");
-                  setMinHoldCandles(0);
-                  setEndAbs(0.05);
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-mono font-bold uppercase leading-none transition-all border active:scale-[0.98]",
-                  zapUiMode === "off"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
-                )}
-              >
-                OFF
-              </button>
-
             </div>
           </div>
         </GlassCard>
@@ -8999,98 +9148,298 @@ export default function ArbitrageScanner() {
         {/* CONTENT */}
         {tab === "active" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">DATE (NY)</div>
-                <div className="text-sm font-mono mt-1">{dateNy}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">SESSION</div>
-                <div className="text-sm font-mono mt-1">{session}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">ROWS</div>
-                <div className="text-sm font-mono mt-1">{intn(activeSorted.length)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">MODE</div>
-                <div className="text-sm font-mono mt-1">
-                  {metric} | {closeMode} | {pnlMode}
-                </div>
-              </GlassCard>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+              <SummaryMetricCard
+                label="TOTAL PNL"
+                value={num(activeAnalyticsSummary.totalPnlUsd, 2)}
+                className="xl:row-span-2 xl:min-h-[124px]"
+                valueClassName={
+                  clsx(
+                    "text-4xl md:text-6xl font-bold",
+                    activeAnalyticsSummary.totalPnlUsd > 0
+                      ? "text-emerald-300"
+                      : activeAnalyticsSummary.totalPnlUsd < 0
+                        ? "text-rose-300"
+                        : "text-zinc-200"
+                  )
+                }
+              />
+              <SummaryMetricCard
+                label="TRADES"
+                value={intn(activeAnalyticsSummary.trades)}
+                inline
+              />
+              <SummaryMetricCard
+                label="WIN RATE"
+                value={`${num(activeAnalyticsSummary.winRate * 100, 1)}%`}
+                inline
+              />
+              <SummaryMetricCard
+                label="AVG TRADE"
+                value={num(activeAnalyticsSummary.avgPnlUsd, 2)}
+                inline
+                valueClassName={
+                  activeAnalyticsSummary.avgPnlUsd > 0
+                    ? "text-emerald-300"
+                    : activeAnalyticsSummary.avgPnlUsd < 0
+                      ? "text-rose-300"
+                      : "text-zinc-200"
+                }
+              />
+              <SummaryMetricCard
+                label="MAX WIN"
+                value={num(activeAnalyticsSummary.maxWinUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN"
+                value={num(activeAnalyticsSummary.avgWinUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="PROFIT FACTOR"
+                value={num(activeAnalyticsSummary.profitFactor, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="EXPECTANCY"
+                value={num(activeAnalyticsSummary.expectancyUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX DRAWDOWN"
+                value={num(activeAnalyticsSummary.maxDrawdownUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX LOSS"
+                value={num(activeAnalyticsSummary.maxLossUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS"
+                value={num(activeAnalyticsSummary.avgLossUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+              />
             </div>
 
+            {activeRealtimeSorted.length > 0 ? (
+              <>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {(activeAnalyticsSummary.equityCurve?.length ?? 0) > 0 && (
+                    <div className="p-0">
+                      <EquityChart
+                        points={activeAnalyticsSummary.equityCurve}
+                        title={`EQUITY CURVE | ${equityCurveMode}`}
+                        meta={`points ${intn(activeAnalyticsSummary.equityCurve?.length ?? 0)}`}
+                      />
+                    </div>
+                  )}
+
+                  <div className="p-0">
+                    <StartsEndsByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="START VS CURRENT BY TIME | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                  <div className="p-0">
+                    <StartsByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="START EVENTS BY TIME (OK/BAD) | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakStrengthByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="PEAK STRENGTH BY TIME | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakReversionTwoThirdsChart
+                      rows={activeRealtimeSorted}
+                      title="PEAK REVERSION ≥ 2/3 | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
+                No active realtime rows yet. Run scanner for live open events to render charts.
+              </div>
+            )}
+
             <div className="space-y-2">
-              <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">
-                ACTIVE EPISODES | rows {activeSorted.length}
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
+                  ACTIVE TRADES | rows {activeRealtimeSorted.length}
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">live open events</div>
               </div>
 
-              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-                <table className="min-w-[1200px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
+              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
+                <table className="min-w-[1720px] w-full text-xs font-mono">
+                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("ticker")}>Ticker{sortMark(activeSort.key === "ticker", activeSort.dir)}</button></th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("bench")}>Bench{sortMark(activeSort.key === "bench", activeSort.dir)}</button></th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("side")}>Side{sortMark(activeSort.key === "side", activeSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("startTime")}>StartTime{sortMark(activeSort.key === "startTime", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("peakTime")}>PeakTime{sortMark(activeSort.key === "peakTime", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("lastTime")}>LastTime{sortMark(activeSort.key === "lastTime", activeSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("startAbs")}>StartAbs{sortMark(activeSort.key === "startAbs", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("peakAbs")}>PeakAbs{sortMark(activeSort.key === "peakAbs", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("lastAbs")}>LastAbs{sortMark(activeSort.key === "lastAbs", activeSort.dir)}</button></th>
-
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("startClass")}>StartClass{sortMark(activeSort.key === "startClass", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("closeMode")}>CloseMode{sortMark(activeSort.key === "closeMode", activeSort.dir)}</button></th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]"><button type="button" onClick={() => toggleActiveSort("minHold")}>MinHold{sortMark(activeSort.key === "minHold", activeSort.dir)}</button></th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Time
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Abs
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Legs
+                      </th>
+                    </tr>
+                    <tr className="text-zinc-400">
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>CurrentTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>StartAbs{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>PeakAbs{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>CurrentAbs{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {activeSorted.map((r) => {
-                      const startAbsV =
-                        r.start?.metricAbs ?? (r.start?.metric != null ? Math.abs(r.start.metric) : null);
-                      const peakAbsV =
-                        r.peak?.metricAbs ?? (r.peak?.metric != null ? Math.abs(r.peak.metric) : null);
-                      const lastAbsV =
-                        r.last?.metricAbs ?? (r.last?.metric != null ? Math.abs(r.last.metric) : null);
-
+                    {activeRealtimeSorted.map((r, i) => {
+                      const pnl = r.totalPnlUsd ?? 0;
                       return (
-                        <tr key={r.ticker} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
+                        <tr
+                          key={`${r.ticker}|active|${i}`}
+                          className={clsx(
+                            "border-t border-white/5 transition-colors",
+                            i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                            "hover:bg-white/[0.03]"
+                          )}
+                        >
                           <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
                           <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
                           <td className="p-2.5">
                             <SideBadge side={r.side} />
                           </td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxWithClock(r.start?.minuteIdx)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxWithClock(r.peak?.minuteIdx)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxWithClock(r.last?.minuteIdx)}</td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
+                              pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-zinc-200"
+                            )}
+                          >
+                            {num(r.totalPnlUsd ?? null, 2)}
+                          </td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(startAbsV as any, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(peakAbsV as any, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(lastAbsV as any, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
+                            {minuteIdxToClockLabel(r.startMinuteIdx)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">
+                            {minuteIdxToClockLabel(r.peakMinuteIdx)}
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
+                            )}
+                          >
+                            {minuteIdxToClockLabel(r.endMinuteIdx)}
+                          </td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.startClass ?? "-"}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.closeMode ?? closeMode}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.minHoldCandles ?? minHoldCandles)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetricAbs ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetricAbs ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetricAbs ?? null, 3)}</td>
+
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums border-l border-white/10",
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.rawPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.rawPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.rawPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.benchPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.benchPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.benchPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.hedgedPnlUsd ?? 0) > 0
+                                  ? "bg-emerald-500/12"
+                                  : (r.hedgedPnlUsd ?? 0) < 0
+                                    ? "bg-rose-500/12"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.hedgedPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
                         </tr>
                       );
                     })}
-                    {!activeSorted.length && (
+                    {!activeRealtimeSorted.length && (
                       <tr>
-                        <td colSpan={12} className="p-6 text-center text-zinc-500">
-                          No active episodes for this variant/day. Try lowering StartAbs or using Session=GLOB.
+                        <td colSpan={13} className="p-8 text-center text-zinc-500">
+                          No active open trades yet. Run Scanner for live rows.
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
-              </div>
-
-              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
-                <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
               </div>
             </div>
           </div>
@@ -9098,11 +9447,11 @@ export default function ArbitrageScanner() {
 
         {tab === "episodes" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
                 label="TOTAL PNL"
                 value={num(analyticsSummary.totalPnlUsd, 2)}
-                className="md:row-span-2 md:min-h-[124px]"
+                className="xl:row-span-2 xl:min-h-[124px]"
                 valueClassName={
                   clsx(
                     "text-4xl md:text-6xl font-bold",
@@ -9137,6 +9486,18 @@ export default function ArbitrageScanner() {
                 }
               />
               <SummaryMetricCard
+                label="MAX WIN"
+                value={num(analyticsSummary.maxWinUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN"
+                value={num(analyticsSummary.avgWinUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
                 label="PROFIT FACTOR"
                 value={num(analyticsSummary.profitFactor, 2)}
                 inline
@@ -9150,6 +9511,18 @@ export default function ArbitrageScanner() {
                 label="MAX DRAWDOWN"
                 value={num(analyticsSummary.maxDrawdownUsd, 2)}
                 inline
+              />
+              <SummaryMetricCard
+                label="MAX LOSS"
+                value={num(analyticsSummary.maxLossUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS"
+                value={num(analyticsSummary.avgLossUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
               />
             </div>
 
@@ -10712,11 +11085,11 @@ export default function ArbitrageScanner() {
 
         {tab === "analytics" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
                 label="TOTAL PNL"
                 value={num(analyticsSummary.totalPnlUsd, 2)}
-                className="md:row-span-2 md:min-h-[124px]"
+                className="xl:row-span-2 xl:min-h-[124px]"
                 valueClassName={
                   clsx(
                     "text-4xl md:text-6xl font-bold",
@@ -10751,6 +11124,18 @@ export default function ArbitrageScanner() {
                 }
               />
               <SummaryMetricCard
+                label="MAX WIN"
+                value={num(analyticsSummary.maxWinUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN"
+                value={num(analyticsSummary.avgWinUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
                 label="PROFIT FACTOR"
                 value={num(analyticsSummary.profitFactor, 2)}
                 inline
@@ -10764,6 +11149,18 @@ export default function ArbitrageScanner() {
                 label="MAX DRAWDOWN"
                 value={num(analyticsSummary.maxDrawdownUsd, 2)}
                 inline
+              />
+              <SummaryMetricCard
+                label="MAX LOSS"
+                value={num(analyticsSummary.maxLossUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS"
+                value={num(analyticsSummary.avgLossUsd, 2)}
+                inline
+                valueClassName={analyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
               />
             </div>
 

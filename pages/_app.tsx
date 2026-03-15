@@ -12,7 +12,7 @@ import "@/styles/globals.css";
 import { useAutoScale } from "@/hooks/useAutoScale";
 import UiProvider from "@/components/UiProvider";
 import TopBarMaybe from "@/components/TopBar";
-import ThemeStarfieldCanvas from "@/components/theme/ThemeStarfieldCanvas";
+import AppThemeBackground from "@/components/theme/AppThemeBackground";
 
 // Added: Sifter
 import { SifterProvider } from "@/components/sifter/SifterProvider";
@@ -113,7 +113,7 @@ export default function MyApp({
 
       {!mounted ? null : (
         <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
-          <ThemeStarfieldCanvas />
+          <AppThemeBackground />
           <SifterProvider>
             <div style={{ position: "relative", zIndex: 1 }}>
               <SafeTopBar />

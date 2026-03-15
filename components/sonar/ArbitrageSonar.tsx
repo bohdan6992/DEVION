@@ -514,7 +514,7 @@ const getRenderableDirection = (s: any): "up" | "down" | "none" => {
 
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "off"
+  zapMode: "zap" | "sigma" | "delta" | "off"
 ): number | null => {
   if (zapMode === "off") return null;
   const dir = s.direction;
@@ -530,9 +530,21 @@ const getSignalMetricAbs = (
   return raw == null ? null : Math.abs(raw);
 };
 
+const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
+  const best = getBestParams(s);
+  const printMedian = safeObj(best?.dev_print_last5_median ?? best?.DevPrintLast5Median);
+  if (s.direction === "down") {
+    return toNum(best?.printMedianPos ?? best?.PrintMedianPos) ?? toNum(printMedian?.pos ?? printMedian?.Pos);
+  }
+  if (s.direction === "up") {
+    return toNum(best?.printMedianNeg ?? best?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
+  }
+  return null;
+};
+
 const isSignalGoldActive = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "off",
+  zapMode: "zap" | "sigma" | "delta" | "off",
   zapGoldAbs: number
 ): boolean => {
   const absM = getSignalMetricAbs(s, zapMode);
@@ -894,6 +906,7 @@ type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
 const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "sparkle") return "amber";
   if (theme === "asher") return "zinc";
+  if (theme === "inferno") return "amber";
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
@@ -964,6 +977,22 @@ const MSF = {
 } as const;
 
 const getSonarAccent = (theme?: string | null) => {
+  if (theme === "inferno") {
+    return {
+      selection: "selection:bg-orange-300/35",
+      dot: "bg-orange-300",
+      badge: "border-orange-300/24 bg-red-500/14 text-orange-100",
+      button: "bg-red-500/14 text-orange-100 border-orange-300/26 shadow-[0_0_14px_-3px_rgba(249,115,22,0.22)]",
+      outlineButton: "border-orange-300/52 text-orange-100 hover:bg-red-500/14 shadow-[0_0_12px_rgba(249,115,22,0.12)]",
+      panel: "border-l-orange-300 shadow-[0_0_40px_-10px_rgba(249,115,22,0.08)]",
+      chip: "border-orange-300/32 bg-red-500/14 text-orange-100 shadow-[0_0_12px_rgba(249,115,22,0.2)]",
+      line: "bg-orange-300/60",
+      text: "text-orange-100",
+      textSoft: "text-orange-100/82",
+      softBorder: "border-orange-300/38 bg-red-500/16 text-orange-100",
+      panelSoft: "border-orange-300/22 bg-red-500/[0.05]",
+    };
+  }
   const primary = getSonarPrimaryMsColor(theme);
   if (primary === "amber") {
     return {
@@ -1428,7 +1457,7 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  zapMode: "zap" | "sigma" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "off";
   zapShowAbs: number;    // NEW
   zapSilverAbs: number;  // NEW
   zapGoldAbs: number;    // NEW (only ACTIVE)
@@ -1465,7 +1494,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const metric =
     zapMode === "zap" ? z :
-    zapMode === "sigma" ? zs :
+    zapMode === "sigma" || zapMode === "delta" ? zs :
     null;
 
   const absM = metric == null ? null : Math.abs(metric);
@@ -1477,11 +1506,16 @@ const SignalCard: React.FC<SignalCardProps> = ({
     absM != null &&
     absM >= Math.max(0, Number(zapSilverAbs ?? 0));
 
+  const deltaBase = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+  const minShowAbs = zapMode === "delta"
+    ? deltaBase + Math.max(0.05, Number(zapShowAbs ?? 0))
+    : Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
+
   const isBelowShow =
     !posActive &&
     zapMode !== "off" &&
     absM != null &&
-    absM < Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
+    absM < minShowAbs;
 
   const goldClasses =
     "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
@@ -2147,7 +2181,7 @@ export default function ArbitrageSonar() {
 
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "off">("zap");
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "off">("zap");
 
   // 3 inputs:
   // 1) filter/display threshold (single, depends on zapMode)
@@ -2580,7 +2614,7 @@ export default function ArbitrageSonar() {
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
         // zap/sort
-        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "off") setZapMode(s.zapMode);
+        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "off") setZapMode(s.zapMode);
         if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
         if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
         if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
@@ -3152,6 +3186,16 @@ export default function ArbitrageSonar() {
               const v = toNum(s.zapL);
               if (v == null || v > -zapThr) continue;
             }
+          } else if (f.zapMode === "delta") {
+            const base = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+            const deltaThr = base + Math.max(0.05, Number(f.zapShowAbs ?? 0));
+            if (isShort) {
+              const v = toNum(s.zapSsigma);
+              if (v == null || v < deltaThr) continue;
+            } else {
+              const v = toNum(s.zapLsigma);
+              if (v == null || v > -deltaThr) continue;
+            }
           } else {
             if (isShort) {
               const v = toNum(s.zapSsigma);
@@ -3596,6 +3640,13 @@ export default function ArbitrageSonar() {
   const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "-")).toUpperCase();
   const bestObj = activeData?.best ?? activeData?.Best ?? null;
   const bestParams = getBestParams(activeData);
+  const activePrintMedian = safeObj(bestParams?.dev_print_last5_median ?? bestParams?.DevPrintLast5Median);
+  const activeMdPrintPos =
+    toNum(bestObj?.printMedianPos ?? bestObj?.PrintMedianPos) ??
+    toNum(activePrintMedian?.pos ?? activePrintMedian?.Pos);
+  const activeMdPrintNeg =
+    toNum(bestObj?.printMedianNeg ?? bestObj?.PrintMedianNeg) ??
+    toNum(activePrintMedian?.neg ?? activePrintMedian?.Neg);
 
   const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
   const activeSigma = toNum(bestObj?.sigma ?? bestObj?.Sigma) ?? getNumAny(activeData, ["sig", "Sig", "sigma", "Sigma"]);
@@ -4292,7 +4343,7 @@ export default function ArbitrageSonar() {
             {/* mode toggles */}
             <button
               type="button"
-              onClick={() => setZapMode("zap")}
+              onClick={() => setZapMode((m) => (m === "zap" ? "off" : "zap"))}
               className={[
                 SONAR_FILTER_INNER_PILL,
                 zapMode === "zap"
@@ -4305,7 +4356,7 @@ export default function ArbitrageSonar() {
 
             <button
               type="button"
-              onClick={() => setZapMode("sigma")}
+              onClick={() => setZapMode((m) => (m === "sigma" ? "off" : "sigma"))}
               className={[
                 `${SONAR_FILTER_INNER_PILL} gap-1`,
                 zapMode === "sigma"
@@ -4316,27 +4367,41 @@ export default function ArbitrageSonar() {
               <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
             </button>
 
+            <button
+              type="button"
+              onClick={() => setZapMode((m) => (m === "delta" ? "off" : "delta"))}
+              className={[
+                `${SONAR_FILTER_INNER_PILL} gap-1`,
+                zapMode === "delta"
+                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+              ].join(" ")}
+              title="Use sigma threshold above direction-specific median print plus the first input delta"
+            >
+              <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+            </button>
+
             {/* 1) show/filter threshold (single) */}
             <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
               <input
                 type="number"
-                step={zapMode === "sigma" ? 0.05 : 0.1}
-                min={zapMode === "sigma" ? 0.05 : 0.3}
+                step={zapMode === "zap" ? 0.1 : 0.05}
+                min={zapMode === "zap" ? 0.3 : 0.05}
                 value={zapShowAbs}
                 disabled={zapMode === "off"}
                 onChange={(e) => {
-                  const v = clampFloat(e.target.value, zapMode === "sigma" ? 0.05 : 0.3);
+                  const v = clampFloat(e.target.value, zapMode === "zap" ? 0.3 : 0.05);
                   setZapShowAbs(v);
                 }}
                 className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title="Threshold for filtering (ZAP or SIGZAP depending on mode)"
+                title={zapMode === "delta" ? "Additional delta above direction-specific median print" : "Threshold for filtering (ZAP or SIGZAP depending on mode)"}
               />
               <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
                   type="button"
                   disabled={zapMode === "off"}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "sigma" ? 0.05 : 0.3, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v + (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                   aria-label="Increase zap threshold"
                 >
@@ -4346,7 +4411,7 @@ export default function ArbitrageSonar() {
                   type="button"
                   disabled={zapMode === "off"}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "sigma" ? 0.05 : 0.3, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v - (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                   aria-label="Decrease zap threshold"
                 >
@@ -4427,19 +4492,6 @@ export default function ArbitrageSonar() {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setZapMode("off")}
-              className={[
-                SONAR_FILTER_INNER_PILL,
-                zapMode === "off"
-                  ? "bg-zinc-500 text-white border-transparent shadow-[0_0_16px_rgba(161,161,170,0.28)]"
-                  : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
-              ].join(" ")}
-              title="Disable ZAP filters"
-            >
-              OFF
-            </button>
           </div>
 
         </div>
@@ -4642,6 +4694,8 @@ export default function ArbitrageSonar() {
                     <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
                     <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
                     <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
+                    <span>MD Print Pos: <span className="text-zinc-200">{activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2)}</span></span>
+                    <span>MD Print Neg: <span className="text-zinc-200">{activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2)}</span></span>
                     <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
                     <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
                     <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
@@ -4856,6 +4910,8 @@ export default function ArbitrageSonar() {
                           { k: "Total Soft", v: fmtMaybeInt(bestTotalSoft) },
                           { k: "Beta", v: activeBeta == null ? "-" : fmtNum(activeBeta, 2) },
                           { k: "Sigma", v: activeSigma == null ? "-" : fmtNum(activeSigma, 2) },
+                          { k: "MD Print Pos", v: activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2) },
+                          { k: "MD Print Neg", v: activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2) },
                         ].map((item) => (
                                   <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
                             <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>

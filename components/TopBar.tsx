@@ -133,6 +133,13 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         buttonText: "text-yellow-200",
         buttonBorder: "border-yellow-200/20",
       };
+    case "inferno":
+      return {
+        selectedItem: "bg-red-500/14 text-orange-100 font-bold",
+        dot: "bg-orange-300 shadow-[0_0_8px_rgba(249,115,22,0.6)]",
+        buttonText: "text-orange-100",
+        buttonBorder: "border-orange-300/24",
+      };
     case "asher":
       return {
         selectedItem: "bg-zinc-200/10 text-zinc-200 font-bold",
@@ -428,6 +435,7 @@ export default function TopBar() {
               items={[
                 { key: "light", label: "Light" },
                 { key: "sparkle", label: "SPARKLE" },
+                { key: "inferno", label: "INFERNO" },
                 { key: "asher", label: "ASHER" },
                 { key: "matrix", label: "Matrix" },
                 { key: "neon", label: "Neon" },
