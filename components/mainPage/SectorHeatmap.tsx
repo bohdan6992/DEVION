@@ -7,7 +7,7 @@ import { RefreshCw, ChevronDown } from "lucide-react";
 /* ===================== LOGIC: THEME ===================== */
 const DARK_THEMES = new Set([
   "dark", "neon", "matrix", "solaris", "cyberpunk",
-  "oceanic", "sakura", "asher", "inferno", "aurora",
+  "oceanic", "sakura", "asher", "inferno", "sparkle",
   "desert", "midnight", "forest", "candy", "monochrome", "space",
 ]);
 

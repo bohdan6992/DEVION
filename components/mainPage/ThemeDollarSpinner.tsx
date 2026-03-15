@@ -87,16 +87,17 @@ export default function ThemeDollarSpinner() {
   const isNeon = theme === "neon";
   const isDark = theme === "dark";
   const isSpace = theme === "space";
-  const isAurora = theme === "aurora";
+  const isSparkle = theme === "sparkle";
+  const isAsher = theme === "asher";
   const modelPath = isNeon
     ? FLAMINGO_PATH
     : isLight
       ? STAR_PATH
     : isSpace
       ? MOON_PATH
-      : isAurora
+      : isSparkle
         ? BITCOIN_PATH
-        : isDark
+        : isDark || isAsher
           ? ROBOT_PATH
           : DOLLAR_PATH;
   const mainStroke = isNeon
@@ -105,7 +106,7 @@ export default function ThemeDollarSpinner() {
       ? "#facc15"
     : isSpace
       ? "var(--dash-accent)"
-      : isAurora
+      : isSparkle || isAsher
         ? "var(--dash-accent)"
       : isDark
         ? "rgba(209,250,229,0.92)"
@@ -116,7 +117,7 @@ export default function ThemeDollarSpinner() {
       ? "rgba(250, 204, 21, 0.44)"
     : isSpace
       ? "var(--dash-accent-shadow)"
-      : isAurora
+      : isSparkle || isAsher
         ? "var(--dash-accent-shadow)"
       : isDark
         ? "rgba(209, 250, 229, 0.42)"
@@ -137,7 +138,7 @@ export default function ThemeDollarSpinner() {
     }, [depthCount, depthStep, isDark]);
 
   return (
-    <section className={`dollar-3d-shell rounded-2xl h-full w-full p-0 ${isLight ? "light-model" : ""} ${isNeon ? "neon-model" : ""} ${isSpace ? "space-model" : ""} ${isAurora ? "aurora-model" : ""} ${isDark ? "dark-model" : ""}`}>
+    <section className={`dollar-3d-shell rounded-2xl h-full w-full p-0 ${isLight ? "light-model" : ""} ${isNeon ? "neon-model" : ""} ${isSpace ? "space-model" : ""} ${isSparkle ? "sparkle-model" : ""} ${isAsher ? "asher-model" : ""} ${isDark ? "dark-model" : ""}`}>
       <div className="dollar-3d-stage">
         <div className="dollar-3d-rotor">
           <div className="wire-cube" aria-hidden="true">
@@ -252,9 +253,14 @@ export default function ThemeDollarSpinner() {
           box-shadow: 0 0 18px rgba(250, 204, 21, 0.2);
         }
 
-        .dollar-3d-shell.aurora-model .wire-cube-thin .cube-face {
+        .dollar-3d-shell.sparkle-model .wire-cube-thin .cube-face {
           border-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
           box-shadow: 0 0 18px color-mix(in oklab, var(--dash-accent-shadow) 52%, transparent);
+        }
+
+        .dollar-3d-shell.asher-model .wire-cube-thin .cube-face {
+          border-color: rgba(212, 212, 216, 0.26);
+          box-shadow: 0 0 18px rgba(212, 212, 216, 0.12);
         }
 
         .dollar-3d-shell.dark-model .wire-cube-thin .cube-face {
@@ -294,11 +300,18 @@ export default function ThemeDollarSpinner() {
             inset 0 0 0 1px rgba(253, 224, 71, 0.24);
         }
 
-        .dollar-3d-shell.aurora-model .cube-face {
+        .dollar-3d-shell.sparkle-model .cube-face {
           border-color: color-mix(in oklab, var(--dash-accent-border) 86%, transparent);
           box-shadow:
             0 0 24px color-mix(in oklab, var(--dash-accent-shadow) 58%, transparent),
             inset 0 0 0 1px color-mix(in oklab, var(--dash-accent-border) 52%, transparent);
+        }
+
+        .dollar-3d-shell.asher-model .cube-face {
+          border-color: rgba(212, 212, 216, 0.34);
+          box-shadow:
+            0 0 24px rgba(212, 212, 216, 0.14),
+            inset 0 0 0 1px rgba(228, 228, 231, 0.1);
         }
 
         .dollar-3d-shell.dark-model .cube-face {
@@ -348,8 +361,12 @@ export default function ThemeDollarSpinner() {
           border-top-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
         }
 
-        .dollar-3d-shell.aurora-model .cube-face::before {
+        .dollar-3d-shell.sparkle-model .cube-face::before {
           border-top-color: color-mix(in oklab, var(--dash-accent-border) 66%, transparent);
+        }
+
+        .dollar-3d-shell.asher-model .cube-face::before {
+          border-top-color: rgba(228, 228, 231, 0.14);
         }
 
         .dollar-3d-shell.dark-model .cube-face::before {
@@ -360,8 +377,12 @@ export default function ThemeDollarSpinner() {
           border-left-color: color-mix(in oklab, var(--dash-accent-border) 60%, transparent);
         }
 
-        .dollar-3d-shell.aurora-model .cube-face::after {
+        .dollar-3d-shell.sparkle-model .cube-face::after {
           border-left-color: color-mix(in oklab, var(--dash-accent-border) 56%, transparent);
+        }
+
+        .dollar-3d-shell.asher-model .cube-face::after {
+          border-left-color: rgba(212, 212, 216, 0.12);
         }
 
         .dollar-3d-shell.dark-model .cube-face::after {
@@ -381,17 +402,30 @@ export default function ThemeDollarSpinner() {
           animation: moonGlow 4.2s ease-in-out infinite;
         }
 
-        .dollar-3d-shell.aurora-model .dollar-3d-rotor {
+        .dollar-3d-shell.sparkle-model .dollar-3d-rotor {
           animation: rotateBitcoin 17s cubic-bezier(0.42, 0, 0.2, 1) infinite;
         }
 
-        .dollar-3d-shell.aurora-model .rotor-counter {
+        .dollar-3d-shell.sparkle-model .rotor-counter {
           animation: rotateBitcoinCounter 13.8s linear infinite;
           opacity: 0.48;
         }
 
-        .dollar-3d-shell.aurora-model .dollar-slice {
+        .dollar-3d-shell.sparkle-model .dollar-slice {
           animation: bitcoinPulse 3.2s ease-in-out infinite;
+        }
+
+        .dollar-3d-shell.asher-model .dollar-3d-rotor {
+          animation: rotateRobot 18s cubic-bezier(0.42, 0, 0.2, 1) infinite;
+        }
+
+        .dollar-3d-shell.asher-model .rotor-counter {
+          animation: rotateRobotCounter 14.5s linear infinite;
+          opacity: 0.58;
+        }
+
+        .dollar-3d-shell.asher-model .dollar-slice {
+          animation: robotPulse 3.6s ease-in-out infinite;
         }
 
         .dollar-3d-shell.dark-model .dollar-3d-rotor {

@@ -6,7 +6,7 @@ import Cookies from "js-cookie";
 export type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
-  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
+  | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
 
 export type LangKey = "UA" | "EN" | "UK";
 
@@ -30,6 +30,21 @@ export function useUi() {
 // Список світлих тем (всі інші будуть вважатися темними)
 const LIGHT_THEMES = new Set<ThemeKey>(["light", "pastel"]);
 
+function normalizeThemeKey(theme?: string | null): ThemeKey {
+  const value = (theme || "").toLowerCase().trim();
+  if (value === "sparkle" || value === "aurora") return "sparkle";
+  if (
+    value === "light" || value === "dark" || value === "neon" || value === "pastel" ||
+    value === "solaris" || value === "cyberpunk" || value === "oceanic" || value === "sakura" ||
+    value === "matrix" || value === "asher" || value === "inferno" || value === "desert" ||
+    value === "midnight" || value === "forest" || value === "candy" || value === "monochrome" ||
+    value === "space"
+  ) {
+    return value as ThemeKey;
+  }
+  return "light";
+}
+
 export default function UiProvider({
   children,
   initialTheme = "light",
@@ -48,7 +63,7 @@ export default function UiProvider({
 
   useEffect(() => {
     setMounted(true);
-    const t = Cookies.get("tt-theme") as ThemeKey | undefined;
+    const t = normalizeThemeKey(Cookies.get("tt-theme"));
     if (t && t !== theme) setTheme(t);
     const l = Cookies.get("tt-lang") as LangKey | undefined;
     if (l && l !== lang) setLang(l);

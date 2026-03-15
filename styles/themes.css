@@ -42,33 +42,33 @@
   --muted: #6b7280;
   --bg-image:
     radial-gradient(1200px 700px at 10% -14%, rgba(255, 255, 255, 0.55), transparent 60%),
-    radial-gradient(1100px 640px at 86% -8%, rgba(250, 204, 21, 0.3), transparent 60%),
-    radial-gradient(900px 520px at 22% 82%, rgba(251, 191, 36, 0.18), transparent 66%),
+    radial-gradient(1100px 640px at 86% -8%, rgba(196, 181, 253, 0.26), transparent 60%),
+    radial-gradient(900px 520px at 22% 82%, rgba(221, 214, 254, 0.22), transparent 66%),
     linear-gradient(180deg, #f2f3ee 0%, #ebece4 56%, #e4e6df 100%);
   
   --card-bg: rgba(255, 255, 255, 0.84);
   --card-border: rgba(156, 163, 175, 0.34);
-  --color-primary: #d4a017;
+  --color-primary: #8b5cf6;
   --chart-grid: rgba(55, 65, 81, 0.1);
   --chart-tooltip-bg: rgba(255, 255, 255, 0.94);
   --shadow: 0 16px 40px rgba(31, 41, 55, 0.1), 0 8px 24px rgba(31, 41, 55, 0.08);
   --dash-page-glow:
     radial-gradient(920px 620px at 10% 6%, rgba(255, 255, 255, 0.42), transparent 62%),
-    radial-gradient(860px 560px at 88% 4%, rgba(250, 204, 21, 0.16), transparent 58%);
+    radial-gradient(860px 560px at 88% 4%, rgba(196, 181, 253, 0.18), transparent 58%);
   --dash-grid-line: rgba(107, 114, 128, 0.14);
   --dash-scan-line: rgba(107, 114, 128, 0.08);
   --dash-panel-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(249, 250, 251, 0.9));
   --dash-panel-border: rgba(156, 163, 175, 0.38);
   --dash-panel-shadow: 0 16px 36px -26px rgba(31, 41, 55, 0.2), 0 10px 24px -22px rgba(31, 41, 55, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.95);
-  --dash-topline: rgba(212, 160, 23, 0.56);
+  --dash-topline: rgba(139, 92, 246, 0.42);
   --dash-text-main: #1f2937;
   --dash-text-muted: rgba(75, 85, 99, 0.92);
   --dash-chip-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.94), rgba(243, 244, 246, 0.94));
-  --dash-chip-border: rgba(212, 160, 23, 0.38);
-  --dash-accent: #d4a017;
-  --dash-accent-soft: rgba(212, 160, 23, 0.14);
-  --dash-accent-border: rgba(212, 160, 23, 0.4);
-  --dash-accent-shadow: rgba(212, 160, 23, 0.36);
+  --dash-chip-border: rgba(139, 92, 246, 0.28);
+  --dash-accent: #8b5cf6;
+  --dash-accent-soft: rgba(139, 92, 246, 0.14);
+  --dash-accent-border: rgba(139, 92, 246, 0.28);
+  --dash-accent-shadow: rgba(139, 92, 246, 0.24);
 }
 
 /* ---------------- DARK (The Emerald Void â€” Ð¢Ð²Ð¾Ñ ÐÐ±ÑÐ¾Ð»ÑŽÑ‚Ð½Ð° Ð¢ÑŒÐ¼Ð°) ---------------- */
@@ -181,26 +181,48 @@
   --dash-accent-shadow: rgba(16, 185, 129, 0.5);
 }
 
-/* ---------------- AURORA (Arctic Flux) ---------------- */
-:root[data-theme="aurora"] {
+/* ---------------- SPARKLE (Soft Lemon) ---------------- */
+:root[data-theme="sparkle"] {
   --dash-page-glow:
-    radial-gradient(circle at 14% 16%, rgba(34, 211, 238, 0.24), transparent 34%),
-    radial-gradient(circle at 84% 12%, rgba(129, 140, 248, 0.2), transparent 30%),
-    radial-gradient(circle at 52% 88%, rgba(16, 185, 129, 0.18), transparent 30%);
-  --dash-grid-line: rgba(56, 189, 248, 0.12);
-  --dash-scan-line: rgba(34, 211, 238, 0.08);
-  --dash-panel-bg: linear-gradient(135deg, rgba(8, 22, 36, 0.88), rgba(5, 14, 24, 0.94));
-  --dash-panel-border: rgba(56, 189, 248, 0.25);
-  --dash-panel-shadow: 0 24px 86px -40px rgba(34, 211, 238, 0.38), inset 0 1px 0 rgba(129, 140, 248, 0.2);
-  --dash-topline: rgba(125, 211, 252, 0.68);
-  --dash-text-main: #e0f2fe;
-  --dash-text-muted: rgba(186, 230, 253, 0.74);
-  --dash-chip-bg: rgba(56, 189, 248, 0.14);
-  --dash-chip-border: rgba(125, 211, 252, 0.35);
-  --dash-accent: #38bdf8;
-  --dash-accent-soft: rgba(56, 189, 248, 0.2);
-  --dash-accent-border: rgba(125, 211, 252, 0.45);
-  --dash-accent-shadow: rgba(56, 189, 248, 0.4);
+    radial-gradient(circle at 12% 14%, rgba(254, 240, 138, 0.24), transparent 34%),
+    radial-gradient(circle at 84% 12%, rgba(255, 250, 214, 0.18), transparent 30%),
+    radial-gradient(circle at 52% 88%, rgba(250, 204, 21, 0.14), transparent 30%);
+  --dash-grid-line: rgba(254, 240, 138, 0.1);
+  --dash-scan-line: rgba(254, 240, 138, 0.08);
+  --dash-panel-bg: linear-gradient(135deg, rgba(28, 23, 10, 0.92), rgba(15, 13, 8, 0.97));
+  --dash-panel-border: rgba(254, 240, 138, 0.24);
+  --dash-panel-shadow: 0 24px 86px -40px rgba(254, 240, 138, 0.22), inset 0 1px 0 rgba(255, 250, 214, 0.16);
+  --dash-topline: rgba(254, 240, 138, 0.56);
+  --dash-text-main: #fef9c3;
+  --dash-text-muted: rgba(254, 249, 195, 0.7);
+  --dash-chip-bg: rgba(254, 240, 138, 0.12);
+  --dash-chip-border: rgba(254, 240, 138, 0.28);
+  --dash-accent: #fde68a;
+  --dash-accent-soft: rgba(254, 240, 138, 0.2);
+  --dash-accent-border: rgba(254, 240, 138, 0.36);
+  --dash-accent-shadow: rgba(254, 240, 138, 0.28);
+}
+
+/* ---------------- ASHER (Graphite Mist) ---------------- */
+:root[data-theme="asher"] {
+  --dash-page-glow:
+    radial-gradient(circle at 14% 16%, rgba(212, 212, 216, 0.12), transparent 34%),
+    radial-gradient(circle at 84% 12%, rgba(161, 161, 170, 0.1), transparent 30%),
+    radial-gradient(circle at 52% 88%, rgba(113, 113, 122, 0.08), transparent 30%);
+  --dash-grid-line: rgba(212, 212, 216, 0.08);
+  --dash-scan-line: rgba(212, 212, 216, 0.05);
+  --dash-panel-bg: linear-gradient(135deg, rgba(18, 18, 20, 0.9), rgba(10, 10, 11, 0.96));
+  --dash-panel-border: rgba(161, 161, 170, 0.2);
+  --dash-panel-shadow: 0 24px 86px -40px rgba(161, 161, 170, 0.16), inset 0 1px 0 rgba(228, 228, 231, 0.08);
+  --dash-topline: rgba(212, 212, 216, 0.38);
+  --dash-text-main: #e4e4e7;
+  --dash-text-muted: rgba(212, 212, 216, 0.66);
+  --dash-chip-bg: rgba(212, 212, 216, 0.08);
+  --dash-chip-border: rgba(161, 161, 170, 0.2);
+  --dash-accent: #d4d4d8;
+  --dash-accent-soft: rgba(212, 212, 216, 0.14);
+  --dash-accent-border: rgba(212, 212, 216, 0.28);
+  --dash-accent-shadow: rgba(212, 212, 216, 0.18);
 }
 
 /* ---------------- MIDNIGHT (Obsidian Gold) ---------------- */
@@ -662,9 +684,14 @@ html[data-theme] {
   box-shadow: 0 35px 100px rgba(0, 0, 0, 0.95), 0 0 22px rgba(16, 185, 129, 0.22);
 }
 
-:root[data-theme="aurora"] .tt-card:hover {
-  border-color: rgba(125, 211, 252, 0.42);
-  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 20px rgba(56, 189, 248, 0.22);
+:root[data-theme="sparkle"] .tt-card:hover {
+  border-color: rgba(254, 240, 138, 0.34);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 20px rgba(254, 240, 138, 0.14);
+}
+
+:root[data-theme="asher"] .tt-card:hover {
+  border-color: rgba(212, 212, 216, 0.28);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 18px rgba(212, 212, 216, 0.1);
 }
 
 :root[data-theme="midnight"] .tt-card:hover {

@@ -2,33 +2,27 @@
 
 import React, { useEffect, useRef } from "react";
 
-type ThemeMode = "space" | "neon" | "dark" | "light" | "aurora" | "matrix" | null;
+type ThemeMode = "space" | "neon" | "dark" | "light" | "sparkle" | "asher" | "matrix" | null;
 
 type Star = { x: number; y: number; size: number; opacity: number; blinkSpeed: number; color: string };
 type Dust = { x: number; y: number; size: number; opacity: number; color: string };
 type Nebula = { x: number; y: number; r: number; color: string };
 type ShootingStar = { x: number; y: number; speed: number; opacity: number; len: number };
-type NeonLine = {
+type FallingStar = { x: number; y: number; vx: number; vy: number; opacity: number; len: number };
+type PulsingSpaceStar = { x: number; y: number; size: number; phase: number; speed: number };
+type NeonHex = {
   x: number;
   y: number;
-  maxLength: number;
-  currentLength: number;
-  angle: number;
-  speed: number;
-  speedX: number;
-  speedY: number;
-  life: number;
-  growing: boolean;
-  cycleSpeed: number;
-  rotSpeed: number;
-  smokeRadius: number;
-  smokeOpacity: number;
+  baseOpacity: number;
+  currentOpacity: number;
+  targetOpacity: number;
+  color: string;
 };
-type NeonConnection = {
-  a: NeonLine;
-  b: NeonLine;
-  life: number;
-  growing: boolean;
+type NeonPulse = {
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
   speed: number;
 };
 type DarkBlob = {
@@ -44,12 +38,18 @@ type DarkBlob = {
 type LightBlob = {
   x: number;
   y: number;
-  baseRadius: number;
   radius: number;
   color: string;
   vx: number;
   vy: number;
-  phase: number;
+  opacity: number;
+};
+type LightDustParticle = {
+  x: number;
+  y: number;
+  size: number;
+  speed: number;
+  opacity: number;
 };
 type GoldDustParticleKind = "background" | "normal" | "foreground";
 type GoldDustParticle = {
@@ -98,6 +98,32 @@ type MatrixColumn = {
   speed: number;
   brightness: number;
 };
+type AsherSmokeParticle = {
+  x: number;
+  y: number;
+  size: number;
+  vx: number;
+  vy: number;
+  opacity: number;
+  maxOpacity: number;
+  life: number;
+  maxLife: number;
+  angle: number;
+  spin: number;
+  stretch: number;
+};
+type AsherAshFlake = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  vx: number;
+  vy: number;
+  opacity: number;
+  angle: number;
+  spin: number;
+  wobble: number;
+};
 
 const AURORA_BACKGROUND_COUNT = 700;
 const AURORA_PARTICLE_COUNT = 300;
@@ -107,21 +133,32 @@ const AURORA_CLUSTER_PARTICLE_COUNT = 22;
 const AURORA_CLOUD_COUNT = 6;
 const MATRIX_FONT_SIZE = 22;
 const MATRIX_CHARS = "ｦｱｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-const NEON_LINE_COUNT = 45;
-const NEON_MAX_CONNECTIONS = 100;
-const NEON_CONNECT_DISTANCE = 350;
-const NEON_CONNECTION_ATTEMPTS = 5;
 const TARGET_FRAME_MS = 1000 / 30;
 
 function readMode(): ThemeMode {
   const theme = (document.documentElement.getAttribute("data-theme") || "").toLowerCase();
   if (theme === "space") return "space";
-  if (theme === "neon") return "neon";
-  if (theme === "dark") return "dark";
-  if (theme === "light") return "light";
-  if (theme === "aurora") return "aurora";
+  if (theme === "neon" || theme === "cyberpunk") return "neon";
+  if (theme === "light" || theme === "pastel") return "light";
+  if (theme === "sparkle") return "sparkle";
+  if (theme === "asher") return "asher";
   if (theme === "matrix") return "matrix";
-  return null;
+  if (
+    theme === "dark" ||
+    theme === "asher" ||
+    theme === "solaris" ||
+    theme === "oceanic" ||
+    theme === "sakura" ||
+    theme === "inferno" ||
+    theme === "desert" ||
+    theme === "midnight" ||
+    theme === "forest" ||
+    theme === "candy" ||
+    theme === "monochrome"
+  ) {
+    return "dark";
+  }
+  return "dark";
 }
 
 export default function ThemeStarfieldCanvas() {
@@ -147,30 +184,35 @@ export default function ThemeStarfieldCanvas() {
     let milkyWayParticles: Dust[] = [];
     let nebulae: Nebula[] = [];
     let shootingStars: ShootingStar[] = [];
+    let pulsingSpaceStars: PulsingSpaceStar[] = [];
+    let fallingStars: FallingStar[] = [];
 
-    let neonLines: NeonLine[] = [];
-    let neonConnections: NeonConnection[] = [];
+    let neonLines: NeonHex[] = [];
+    let neonConnections: NeonPulse[] = [];
 
     let darkBlobs: DarkBlob[] = [];
     let lightBlobs: LightBlob[] = [];
-    let auroraTime = 0;
-    let auroraSpeed = 0.05;
-    let auroraTargetSpeed = 0.05;
+    let lightDustParticles: LightDustParticle[] = [];
+    let sparkleTime = 0;
+    let sparkleSpeed = 0.05;
+    let sparkleTargetSpeed = 0.05;
     let mouseX = width * 0.5;
     let mouseY = height * 0.5;
     let noiseCanvas: HTMLCanvasElement | null = null;
     let staticLayerCanvas: HTMLCanvasElement | null = null;
-    let auroraCloudSprite: HTMLCanvasElement | null = null;
+    let sparkleCloudSprite: HTMLCanvasElement | null = null;
     let goldDustBackground: GoldDustParticle[] = [];
     let goldDustParticles: GoldDustParticle[] = [];
     let goldDustForeground: GoldDustParticle[] = [];
     let goldDustClusters: GoldDustCluster[] = [];
     let goldDustClouds: GoldDustCloud[] = [];
+    let asherSmokeParticles: AsherSmokeParticle[] = [];
+    let asherAshFlakes: AsherAshFlake[] = [];
     let matrixColumns: MatrixColumn[] = [];
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, mode === "dark" || mode === "light" ? 1 : 1.1);
+      dpr = Math.min(window.devicePixelRatio || 1, mode === "dark" || mode === "light" || mode === "asher" ? 1 : 1.1);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
@@ -191,46 +233,45 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const createSpaceScene = () => {
-      nebulae = [
-        { x: width * 0.2, y: height * 0.3, r: width * 0.5, color: "rgba(40, 20, 80, 0.15)" },
-        { x: width * 0.8, y: height * 0.7, r: width * 0.4, color: "rgba(20, 40, 60, 0.12)" },
-        { x: width * 0.5, y: height * 0.5, r: width * 0.6, color: "rgba(60, 30, 20, 0.08)" },
-      ];
-
+      nebulae = [];
       milkyWayParticles = [];
-      const particleCount = Math.floor(Math.max(width, height) * 0.65);
-      const angle = -Math.PI / 4;
-      const dustColors = ["#ffffff", "#ffd1d1", "#d1e0ff", "#fff4d1"];
+      pulsingSpaceStars = [];
+      fallingStars = [];
 
-      for (let i = 0; i < particleCount; i += 1) {
-        const pos = (Math.random() - 0.5) * Math.max(width, height) * 1.8;
-        const drift = (Math.random() - 0.5) * 250;
-        const x = width / 2 + pos * Math.cos(angle) - drift * Math.sin(angle);
-        const y = height / 2 + pos * Math.sin(angle) + drift * Math.cos(angle);
-        milkyWayParticles.push({
-          x,
-          y,
-          size: Math.random() * 1.2,
-          opacity: Math.random() * 0.2,
-          color: dustColors[Math.floor(Math.random() * dustColors.length)] || "#ffffff",
+      const staticStars: Star[] = [];
+      for (let i = 0; i < 1200; i += 1) {
+        staticStars.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          size: Math.random() * 0.8 + 0.1,
+          opacity: Math.random() * 0.5 + 0.1,
+          blinkSpeed: 0,
+          color: "#ffffff",
+        });
+      }
+      starLayers = [staticStars];
+
+      for (let i = 0; i < 25; i += 1) {
+        pulsingSpaceStars.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          size: Math.random() * 1.2 + 0.5,
+          phase: Math.random() * Math.PI * 2,
+          speed: Math.random() * 0.03 + 0.01,
         });
       }
 
-      starLayers = [];
-      for (let layer = 0; layer < 2; layer += 1) {
-        const layerStars: Star[] = [];
-        const count = 110 - layer * 20;
-        for (let i = 0; i < count; i += 1) {
-          layerStars.push({
-            x: Math.random() * width,
-            y: Math.random() * height,
-            size: (Math.random() * 0.5 + 0.15) * (layer + 1),
-            opacity: Math.random() * 0.7 + 0.2,
-            blinkSpeed: 0.0005 + Math.random() * 0.0015,
-            color: "#ffffff",
-          });
-        }
-        starLayers.push(layerStars);
+      const count = 5000;
+      for (let i = 0; i < count; i += 1) {
+        const pos = (Math.random() - 0.5) * 2200;
+        const spread = (Math.random() - 0.5) * 350 * Math.exp(-(pos * pos) / 1200000);
+        milkyWayParticles.push({
+          x: pos,
+          y: spread,
+          size: Math.random() * 0.6 + 0.05,
+          opacity: Math.random() * 0.4 + 0.05,
+          color: Math.random() > 0.85 ? "#ffe0b0" : "#d0e0ff",
+        });
       }
 
       shootingStars = [];
@@ -238,55 +279,101 @@ export default function ThemeStarfieldCanvas() {
       staticLayerCanvas = createLayerCanvas();
       const layerCtx = getLayerContext(staticLayerCanvas);
       if (layerCtx) {
-        layerCtx.fillStyle = "#010103";
+        layerCtx.fillStyle = "#010206";
         layerCtx.fillRect(0, 0, width, height);
 
-        for (const n of nebulae) {
-          const g = layerCtx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r);
-          g.addColorStop(0, n.color);
-          g.addColorStop(1, "transparent");
-          layerCtx.fillStyle = g;
-          layerCtx.fillRect(0, 0, width, height);
-        }
+        const ambientGrad = layerCtx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.9);
+        ambientGrad.addColorStop(0, "rgba(18, 34, 92, 0.14)");
+        ambientGrad.addColorStop(0.45, "rgba(8, 14, 38, 0.08)");
+        ambientGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.fillStyle = ambientGrad;
+        layerCtx.fillRect(0, 0, width, height);
 
         for (const p of milkyWayParticles) {
+          layerCtx.save();
+          layerCtx.translate(width / 2, height / 2);
+          layerCtx.rotate(-Math.PI / 8);
           layerCtx.fillStyle = p.color;
           layerCtx.globalAlpha = p.opacity;
           layerCtx.beginPath();
           layerCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
           layerCtx.fill();
+          layerCtx.restore();
         }
-        layerCtx.globalAlpha = 1;
+
+        layerCtx.save();
+        layerCtx.globalCompositeOperation = "screen";
+        layerCtx.translate(width / 2, height / 2);
+        layerCtx.rotate(-Math.PI / 8);
+
+        const nebulaGrad = layerCtx.createRadialGradient(0, 0, 0, 0, 0, width * 0.8);
+        nebulaGrad.addColorStop(0, "rgba(15, 30, 90, 0.35)");
+        nebulaGrad.addColorStop(0.3, "rgba(10, 15, 40, 0.15)");
+        nebulaGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.save();
+        layerCtx.scale(4, 1);
+        layerCtx.fillStyle = nebulaGrad;
+        layerCtx.beginPath();
+        layerCtx.arc(0, 0, width * 0.2, 0, Math.PI * 2);
+        layerCtx.fill();
+        layerCtx.restore();
+
+        const coreGrad = layerCtx.createRadialGradient(0, 0, 0, 0, 0, 250);
+        coreGrad.addColorStop(0, "rgba(255, 210, 160, 0.12)");
+        coreGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        layerCtx.fillStyle = coreGrad;
+        layerCtx.beginPath();
+        layerCtx.arc(0, 0, 250, 0, Math.PI * 2);
+        layerCtx.fill();
+        layerCtx.restore();
       }
     };
 
     const createNeonScene = () => {
-      neonLines = Array.from({ length: NEON_LINE_COUNT }, () => {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = Math.random() * 0.15 + 0.08;
-        return {
+      const hexSize = 35;
+      const hexWidth = hexSize * Math.sqrt(3);
+      const hexHeight = hexSize * 2;
+      const rows = Math.ceil(height / (hexHeight * 0.75)) + 1;
+      const cols = Math.ceil(width / hexWidth) + 1;
+
+      neonLines = [];
+      for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < cols; col += 1) {
+          let x = col * hexWidth;
+          const y = row * hexHeight * 0.75;
+          if (row % 2 === 1) x += hexWidth / 2;
+          neonLines.push({
+            x,
+            y,
+            baseOpacity: Math.random() * 0.04 + 0.02,
+            currentOpacity: 0,
+            targetOpacity: 0,
+            color: Math.random() > 0.5 ? "0, 255, 255" : "180, 0, 255",
+          });
+        }
+      }
+
+      neonConnections = [
+        {
           x: Math.random() * width,
           y: Math.random() * height,
-          maxLength: Math.random() * 50 + 30,
-          currentLength: 0,
-          angle,
-          speed,
-          speedX: Math.cos(angle) * speed,
-          speedY: Math.sin(angle) * speed,
-          life: Math.random(),
-          growing: Math.random() > 0.5,
-          cycleSpeed: 0.002 + Math.random() * 0.004,
-          rotSpeed: (Math.random() - 0.5) * 0.008,
-          smokeRadius: Math.random() * 200 + 150,
-          smokeOpacity: Math.random() * 0.15 + 0.1,
-        };
-      });
-      neonConnections = [];
+          radius: 0,
+          maxRadius: Math.random() * 500 + 300,
+          speed: Math.random() * 0.8 + 0.4,
+        },
+        {
+          x: Math.random() * width,
+          y: Math.random() * height,
+          radius: 0,
+          maxRadius: Math.random() * 500 + 300,
+          speed: Math.random() * 0.8 + 0.4,
+        },
+      ];
 
       staticLayerCanvas = createLayerCanvas();
       const layerCtx = getLayerContext(staticLayerCanvas);
       if (layerCtx) {
-        layerCtx.fillStyle = "#000000";
+        layerCtx.fillStyle = "#05010a";
         layerCtx.fillRect(0, 0, width, height);
       }
     };
@@ -313,7 +400,7 @@ export default function ThemeStarfieldCanvas() {
 
     const createDarkScene = () => {
       staticLayerCanvas = null;
-      auroraCloudSprite = null;
+      sparkleCloudSprite = null;
       darkBlobs = [];
       const colors = [
         "rgba(40, 50, 110, 0.4)",
@@ -339,35 +426,45 @@ export default function ThemeStarfieldCanvas() {
 
     const createLightScene = () => {
       staticLayerCanvas = null;
-      auroraCloudSprite = null;
+      sparkleCloudSprite = null;
       lightBlobs = [];
+      lightDustParticles = [];
       const colors = [
-        "rgba(255, 173, 173, 0.5)",
-        "rgba(255, 214, 165, 0.5)",
-        "rgba(255, 255, 186, 0.6)",
-        "rgba(202, 255, 191, 0.5)",
-        "rgba(155, 246, 255, 0.5)",
-        "rgba(160, 196, 255, 0.5)",
-        "rgba(189, 178, 255, 0.5)",
+        "180, 150, 255",
+        "210, 180, 255",
+        "255, 160, 220",
+        "140, 120, 240",
+        "255, 200, 255",
       ];
 
-      for (const color of colors) {
-        const r = Math.random() * 300 + 400;
+      for (let i = 0; i < 10; i += 1) {
+        const color = colors[Math.floor(Math.random() * colors.length)] || "210, 180, 255";
+        const r = Math.random() * 500 + 300;
         lightBlobs.push({
           x: Math.random() * width,
           y: Math.random() * height,
-          baseRadius: r,
           radius: r,
           color,
-          vx: (Math.random() - 0.5) * 0.35,
-          vy: (Math.random() - 0.5) * 0.35,
-          phase: Math.random() * Math.PI * 2,
+          vx: (Math.random() - 0.5) * 0.5,
+          vy: (Math.random() - 0.5) * 0.4,
+          opacity: Math.random() * 0.4 + 0.3,
         });
       }
+
+      for (let i = 0; i < 70; i += 1) {
+        lightDustParticles.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          size: Math.random() * 2.5 + 1,
+          speed: Math.random() * 0.3 + 0.1,
+          opacity: Math.random() * 0.6 + 0.3,
+        });
+      }
+
       createNoise();
     };
 
-    const createAuroraScene = () => {
+    const createSparkleScene = () => {
       const makeParticle = (kind: GoldDustParticleKind): GoldDustParticle => {
         if (kind === "background") {
           return {
@@ -450,9 +547,9 @@ export default function ThemeStarfieldCanvas() {
         alpha: Math.random() * 0.07 + 0.03,
       });
 
-      auroraTime = 0;
-      auroraSpeed = 0.05;
-      auroraTargetSpeed = 0.05;
+      sparkleTime = 0;
+      sparkleSpeed = 0.05;
+      sparkleTargetSpeed = 0.05;
       goldDustBackground = Array.from({ length: AURORA_BACKGROUND_COUNT }, () => makeParticle("background"));
       goldDustParticles = Array.from({ length: AURORA_PARTICLE_COUNT }, () => makeParticle("normal"));
       goldDustForeground = Array.from({ length: AURORA_FOREGROUND_COUNT }, () => makeParticle("foreground"));
@@ -471,20 +568,20 @@ export default function ThemeStarfieldCanvas() {
         layerCtx.fillRect(0, 0, width, height);
 
         const bloom = layerCtx.createRadialGradient(width / 2, height / 2, width * 0.04, width / 2, height / 2, width * 0.6);
-        bloom.addColorStop(0, "rgba(255, 220, 150, 0.14)");
-        bloom.addColorStop(0.35, "rgba(212, 175, 55, 0.08)");
+        bloom.addColorStop(0, "rgba(255, 244, 196, 0.14)");
+        bloom.addColorStop(0.35, "rgba(254, 240, 138, 0.08)");
         bloom.addColorStop(1, "rgba(0, 0, 0, 0)");
         layerCtx.fillStyle = bloom;
         layerCtx.fillRect(0, 0, width, height);
       }
 
-      auroraCloudSprite = document.createElement("canvas");
-      auroraCloudSprite.width = 256;
-      auroraCloudSprite.height = 256;
-      const cloudCtx = auroraCloudSprite.getContext("2d");
+      sparkleCloudSprite = document.createElement("canvas");
+      sparkleCloudSprite.width = 256;
+      sparkleCloudSprite.height = 256;
+      const cloudCtx = sparkleCloudSprite.getContext("2d");
       if (cloudCtx) {
-        const bright = "255, 245, 200";
-        const gold = "212, 175, 55";
+        const bright = "255, 250, 214";
+        const gold = "254, 240, 138";
         const cloudGrad = cloudCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
         cloudGrad.addColorStop(0, `rgba(${bright}, 1)`);
         cloudGrad.addColorStop(0.45, `rgba(${gold}, 0.65)`);
@@ -492,6 +589,40 @@ export default function ThemeStarfieldCanvas() {
         cloudCtx.fillStyle = cloudGrad;
         cloudCtx.fillRect(0, 0, 256, 256);
       }
+    };
+
+    const createAsherScene = () => {
+      staticLayerCanvas = null;
+      sparkleCloudSprite = null;
+      darkBlobs = [];
+      lightBlobs = [];
+      asherSmokeParticles = Array.from({ length: 46 }, () => ({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        size: Math.random() * 550 + 450,
+        vx: (Math.random() - 0.5) * 0.1,
+        vy: (Math.random() - 0.5) * 0.07,
+        opacity: 0,
+        maxOpacity: Math.random() * 0.08 + 0.04,
+        life: Math.random(),
+        maxLife: Math.random() * 0.0003 + 0.0001,
+        angle: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 0.0002,
+        stretch: Math.random() * 2.5 + 2.0,
+      }));
+      asherAshFlakes = Array.from({ length: 40 }, () => ({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        w: Math.random() * 4 + 2,
+        h: Math.random() * 2 + 1,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.4) * 0.2,
+        opacity: Math.random() * 0.3 + 0.1,
+        angle: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 0.02,
+        wobble: Math.random() * Math.PI * 2,
+      }));
+      createNoise();
     };
 
     const createMatrixScene = () => {
@@ -538,7 +669,8 @@ export default function ThemeStarfieldCanvas() {
       if (mode === "neon") createNeonScene();
       if (mode === "dark") createDarkScene();
       if (mode === "light") createLightScene();
-      if (mode === "aurora") createAuroraScene();
+      if (mode === "sparkle") createSparkleScene();
+      if (mode === "asher") createAsherScene();
       if (mode === "matrix") createMatrixScene();
       running = true;
     };
@@ -546,14 +678,12 @@ export default function ThemeStarfieldCanvas() {
     const drawSpace = () => {
       if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
       else {
-        ctx.fillStyle = "#010103";
+        ctx.fillStyle = "#010206";
         ctx.fillRect(0, 0, width, height);
       }
 
       for (const layer of starLayers) {
         for (const star of layer) {
-          star.opacity += star.blinkSpeed;
-          if (star.opacity > 0.9 || star.opacity < 0.2) star.blinkSpeed *= -1;
           ctx.fillStyle = star.color;
           ctx.globalAlpha = star.opacity;
           ctx.beginPath();
@@ -563,170 +693,117 @@ export default function ThemeStarfieldCanvas() {
       }
       ctx.globalAlpha = 1;
 
-      if (Math.random() < 0.0012 && shootingStars.length < 1) {
-        shootingStars.push({
+      for (const star of pulsingSpaceStars) {
+        const opacity = 0.3 + Math.abs(Math.sin(Date.now() * 0.001 * star.speed * 60 + star.phase)) * 0.6;
+        ctx.globalAlpha = opacity;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      if (Math.random() > 0.99) {
+        fallingStars.push({
           x: Math.random() * width,
-          y: Math.random() * (height / 2),
-          speed: 12,
+          y: Math.random() * height * 0.5,
+          vx: Math.random() * 15 + 10,
+          vy: Math.random() * 5 + 2,
           opacity: 1,
-          len: 200,
+          len: Math.random() * 80 + 40,
         });
       }
 
-      for (let i = shootingStars.length - 1; i >= 0; i -= 1) {
-        const s = shootingStars[i];
+      for (let i = fallingStars.length - 1; i >= 0; i -= 1) {
+        const s = fallingStars[i];
         ctx.save();
         ctx.globalAlpha = s.opacity;
-        const g = ctx.createLinearGradient(s.x, s.y, s.x + s.len, s.y + s.len * 0.3);
+        const g = ctx.createLinearGradient(s.x, s.y, s.x - s.vx * 2, s.y - s.vy * 2);
         g.addColorStop(0, "rgba(255, 255, 255, 1)");
         g.addColorStop(1, "rgba(255, 255, 255, 0)");
         ctx.strokeStyle = g;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(s.x, s.y);
-        ctx.lineTo(s.x + s.len, s.y + s.len * 0.3);
+        ctx.lineTo(s.x - s.vx * 2, s.y - s.vy * 2);
         ctx.stroke();
         ctx.restore();
 
-        s.x += s.speed;
-        s.y += s.speed * 0.3;
-        s.opacity -= 0.015;
-        if (s.opacity <= 0) shootingStars.splice(i, 1);
+        s.x += s.vx;
+        s.y += s.vy;
+        s.opacity -= 0.02;
+        if (s.opacity <= 0) fallingStars.splice(i, 1);
       }
+
+      const vignette = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width);
+      vignette.addColorStop(0, "rgba(0,0,0,0)");
+      vignette.addColorStop(0.8, "rgba(0,0,0,0.3)");
+      vignette.addColorStop(1, "rgba(0,0,0,0.8)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, width, height);
     };
 
     const drawNeon = () => {
       if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
       else {
-        ctx.fillStyle = "#000000";
+        ctx.fillStyle = "#05010a";
         ctx.fillRect(0, 0, width, height);
       }
 
-      for (const line of neonLines) {
-        const smokeAlpha = line.life * line.smokeOpacity;
-        if (smokeAlpha > 0) {
+      for (const pulse of neonConnections) {
+        pulse.radius += pulse.speed;
+        if (pulse.radius > pulse.maxRadius) {
+          pulse.x = Math.random() * width;
+          pulse.y = Math.random() * height;
+          pulse.radius = 0;
+          pulse.maxRadius = Math.random() * 500 + 300;
+          pulse.speed = Math.random() * 0.8 + 0.4;
+        }
+      }
+
+      const hexSize = 35;
+      for (const hex of neonLines) {
+        let affected = false;
+        for (const pulse of neonConnections) {
+          const dx = hex.x - pulse.x;
+          const dy = hex.y - pulse.y;
+          const dist = Math.hypot(dx, dy);
+          if (Math.abs(dist - pulse.radius) < 80) {
+            hex.targetOpacity = 0.5;
+            affected = true;
+            break;
+          }
+        }
+        if (!affected) hex.targetOpacity = hex.baseOpacity;
+        hex.currentOpacity += (hex.targetOpacity - hex.currentOpacity) * 0.03;
+
+        ctx.beginPath();
+        for (let i = 0; i < 6; i += 1) {
+          const angle = (Math.PI / 3) * i + Math.PI / 6;
+          const px = hex.x + hexSize * Math.cos(angle);
+          const py = hex.y + hexSize * Math.sin(angle);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(${hex.color}, ${hex.currentOpacity})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        if (hex.currentOpacity > 0.2) {
           ctx.save();
-          ctx.globalCompositeOperation = "screen";
-          const grad = ctx.createRadialGradient(line.x, line.y, 0, line.x, line.y, line.smokeRadius);
-          grad.addColorStop(0, `rgba(255, 0, 150, ${smokeAlpha})`);
-          grad.addColorStop(0.3, `rgba(180, 0, 100, ${smokeAlpha * 0.3})`);
-          grad.addColorStop(1, "rgba(0, 0, 0, 0)");
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(line.x, line.y, line.smokeRadius, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.shadowBlur = 15;
+          ctx.shadowColor = `rgba(${hex.color}, ${hex.currentOpacity})`;
+          ctx.stroke();
           ctx.restore();
         }
       }
 
-      for (const line of neonLines) {
-        line.x += line.speedX;
-        line.y += line.speedY;
-        line.angle += line.rotSpeed;
-
-        if (line.growing) {
-          line.life += line.cycleSpeed;
-          if (line.life >= 1) {
-            line.life = 1;
-            line.growing = false;
-          }
-        } else {
-          line.life -= line.cycleSpeed;
-          if (line.life <= 0) {
-            line.life = 0;
-            line.growing = true;
-          }
-        }
-
-        line.currentLength = line.maxLength * line.life;
-
-        if (line.x > width + 100) line.x = -100;
-        else if (line.x < -100) line.x = width + 100;
-        if (line.y > height + 100) line.y = -100;
-        else if (line.y < -100) line.y = height + 100;
-
-        const opacity = line.life * 0.95;
-        if (opacity <= 0) continue;
-
-        ctx.save();
-        ctx.translate(line.x, line.y);
-        ctx.rotate(line.angle);
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = "rgba(255, 50, 200, 0.9)";
-        ctx.strokeStyle = `rgba(255, 255, 255, ${opacity})`;
-        ctx.lineWidth = 4;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(-line.currentLength / 2, 0);
-        ctx.lineTo(line.currentLength / 2, 0);
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      neonConnections = neonConnections.filter((connection) => {
-        return connection.life > 0;
-      });
-
-      if (neonConnections.length < NEON_MAX_CONNECTIONS) {
-        for (let i = 0; i < NEON_CONNECTION_ATTEMPTS; i += 1) {
-          const a = neonLines[Math.floor(Math.random() * neonLines.length)];
-          const b = neonLines[Math.floor(Math.random() * neonLines.length)];
-          if (!a || !b || a === b) continue;
-          if (a.life < 0.2 || b.life < 0.2) continue;
-
-          const dx = a.x - b.x;
-          const dy = a.y - b.y;
-          const distance = Math.hypot(dx, dy);
-          if (distance >= NEON_CONNECT_DISTANCE) continue;
-
-          const exists = neonConnections.some(
-            (connection) =>
-              (connection.a === a && connection.b === b) || (connection.a === b && connection.b === a)
-          );
-
-          if (!exists) {
-            neonConnections.push({
-              a,
-              b,
-              life: 0.01,
-              growing: true,
-              speed: 0.004 + Math.random() * 0.005,
-            });
-            if (neonConnections.length >= NEON_MAX_CONNECTIONS) break;
-          }
-        }
-      }
-
-      for (const connection of neonConnections) {
-        if (connection.growing) {
-          connection.life += connection.speed;
-          if (connection.life >= 1) {
-            connection.life = 1;
-            connection.growing = false;
-          }
-        } else {
-          connection.life -= connection.speed;
-        }
-
-        if (connection.a.life < 0.1 || connection.b.life < 0.1) {
-          connection.life -= 0.02;
-        }
-
-        const dx = connection.a.x - connection.b.x;
-        const dy = connection.a.y - connection.b.y;
-        const distance = Math.hypot(dx, dy);
-        const distFade = Math.max(0, 1 - distance / NEON_CONNECT_DISTANCE);
-        const finalOpacity = connection.life * distFade * 0.5 * Math.min(connection.a.life, connection.b.life);
-        if (finalOpacity <= 0) continue;
-
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(255, 80, 180, ${finalOpacity})`;
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = "round";
-        ctx.moveTo(connection.a.x, connection.a.y);
-        ctx.lineTo(connection.b.x, connection.b.y);
-        ctx.stroke();
-      }
+      const grad = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width);
+      grad.addColorStop(0, "rgba(40, 0, 80, 0.08)");
+      grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
     };
 
     const drawDark = () => {
@@ -780,30 +857,22 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const drawLight = () => {
-      const t = Date.now() * 0.001;
-      ctx.fillStyle = "#f8f9fa";
+      ctx.fillStyle = "#f0e8ff";
       ctx.fillRect(0, 0, width, height);
 
+      ctx.globalCompositeOperation = "multiply";
       for (const b of lightBlobs) {
         b.x += b.vx;
         b.y += b.vy;
-        b.phase += 0.004;
-        b.radius = b.baseRadius + Math.sin(b.phase + t) * 100;
 
-        if (b.x < -width * 0.2 || b.x > width * 1.2) b.vx *= -1;
-        if (b.y < -height * 0.2 || b.y > height * 1.2) b.vy *= -1;
-
-        const dx = mouseX - b.x;
-        const dy = mouseY - b.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 1000) {
-          b.x -= dx * 0.0004;
-          b.y -= dy * 0.0004;
-        }
+        if (b.x < -b.radius) b.x = width + b.radius;
+        if (b.x > width + b.radius) b.x = -b.radius;
+        if (b.y < -b.radius) b.y = height + b.radius;
+        if (b.y > height + b.radius) b.y = -b.radius;
 
         const grad = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.radius);
-        grad.addColorStop(0, b.color);
-        grad.addColorStop(0.6, b.color.replace(", 0.6)", ", 0.2)").replace(", 0.5)", ", 0.15)"));
+        grad.addColorStop(0, `rgba(${b.color}, ${b.opacity})`);
+        grad.addColorStop(0.5, `rgba(${b.color}, ${b.opacity * 0.4})`);
         grad.addColorStop(1, "transparent");
         ctx.fillStyle = grad;
         ctx.beginPath();
@@ -811,32 +880,29 @@ export default function ThemeStarfieldCanvas() {
         ctx.fill();
       }
 
-      const vignette = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.5,
-        Math.min(width, height) * 0.1,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.7
-      );
-      vignette.addColorStop(0, "rgba(255,255,255,0)");
-      vignette.addColorStop(1, "rgba(255,255,255,0.5)");
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, width, height);
+      ctx.globalCompositeOperation = "source-over";
+      for (const p of lightDustParticles) {
+        p.y -= p.speed;
+        if (p.y < -10) p.y = height + 10;
+        ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       if (noiseCanvas) {
-        ctx.globalAlpha = 0.07;
+        ctx.globalAlpha = 0.03;
         ctx.drawImage(noiseCanvas, 0, 0, width, height);
         ctx.globalAlpha = 1;
       }
     };
 
-    const drawAurora = () => {
-      auroraTime = Date.now() * 0.1;
-      auroraSpeed += (auroraTargetSpeed - auroraSpeed) * 0.08;
+    const drawSparkle = () => {
+      sparkleTime = Date.now() * 0.1;
+      sparkleSpeed += (sparkleTargetSpeed - sparkleSpeed) * 0.08;
 
-      const gold = "212, 175, 55";
-      const bright = "255, 245, 200";
+      const gold = "254, 240, 138";
+      const bright = "255, 250, 214";
       const margin = 300;
 
       const drawParticle = (
@@ -848,7 +914,7 @@ export default function ThemeStarfieldCanvas() {
         const distToCenter = Math.abs(x - width / 2) / (width / 2);
         const lightFactor = Math.max(0, 1 - distToCenter * 1.5);
         const currentAlpha =
-          particle.alpha * (0.7 + Math.sin(auroraTime * particle.flicker + particle.flickerOffset) * 0.3);
+          particle.alpha * (0.7 + Math.sin(sparkleTime * particle.flicker + particle.flickerOffset) * 0.3);
         const finalAlpha = currentAlpha * (0.2 + lightFactor * alphaMod);
         const glowStrength = particle.size >= 2.2 ? (lightFactor > 0.4 ? 4.8 : 2.8) : 0;
 
@@ -870,8 +936,8 @@ export default function ThemeStarfieldCanvas() {
       };
 
       const updateParticle = (particle: GoldDustParticle) => {
-        particle.x += particle.speedX * (0.8 + auroraSpeed * 4);
-        particle.y += particle.speedY * (0.8 + auroraSpeed * 4);
+        particle.x += particle.speedX * (0.8 + sparkleSpeed * 4);
+        particle.y += particle.speedY * (0.8 + sparkleSpeed * 4);
         if (particle.y > height + margin) particle.y = -margin;
         if (particle.y < -margin) particle.y = height + margin;
         if (particle.x > width + margin) particle.x = -margin;
@@ -879,15 +945,15 @@ export default function ThemeStarfieldCanvas() {
       };
 
       const updateCluster = (cluster: GoldDustCluster) => {
-        cluster.x += cluster.speedX * (0.8 + auroraSpeed * 4);
-        cluster.y += cluster.speedY * (0.8 + auroraSpeed * 4);
+        cluster.x += cluster.speedX * (0.8 + sparkleSpeed * 4);
+        cluster.y += cluster.speedY * (0.8 + sparkleSpeed * 4);
 
         if (cluster.y > height + margin) cluster.y = -margin;
         if (cluster.y < -margin) cluster.y = height + margin;
         if (cluster.x > width + margin) cluster.x = -margin;
         if (cluster.x < -margin) cluster.x = width + margin;
 
-        const clusterDrift = 0.7 + auroraSpeed * 2.5;
+        const clusterDrift = 0.7 + sparkleSpeed * 2.5;
         for (const particle of cluster.particles) {
           particle.relX += particle.speedX * clusterDrift;
           particle.relY += particle.speedY * clusterDrift;
@@ -897,8 +963,8 @@ export default function ThemeStarfieldCanvas() {
       };
 
       const updateCloud = (cloud: GoldDustCloud) => {
-        cloud.x += cloud.speedX * (0.8 + auroraSpeed * 2.5);
-        cloud.y += cloud.speedY * (0.8 + auroraSpeed * 2.5);
+        cloud.x += cloud.speedX * (0.8 + sparkleSpeed * 2.5);
+        cloud.y += cloud.speedY * (0.8 + sparkleSpeed * 2.5);
         if (cloud.y > height + margin) cloud.y = -margin;
         if (cloud.y < -margin) cloud.y = height + margin;
         if (cloud.x > width + margin) cloud.x = -margin;
@@ -915,11 +981,11 @@ export default function ThemeStarfieldCanvas() {
       ctx.shadowColor = "transparent";
       for (const cloud of goldDustClouds) {
         updateCloud(cloud);
-        if (auroraCloudSprite) {
+        if (sparkleCloudSprite) {
           ctx.save();
           ctx.globalAlpha = Math.min(cloud.alpha * 1.8, 0.22);
           ctx.drawImage(
-            auroraCloudSprite,
+            sparkleCloudSprite,
             cloud.x - cloud.radiusX,
             cloud.y - cloud.radiusY,
             cloud.radiusX * 2,
@@ -955,29 +1021,231 @@ export default function ThemeStarfieldCanvas() {
       ctx.shadowColor = "transparent";
     };
 
-    const drawMatrix = () => {
-      if (staticLayerCanvas) ctx.drawImage(staticLayerCanvas, 0, 0, width, height);
-      else {
-        ctx.fillStyle = "rgba(0, 2, 0, 0.12)";
-        ctx.fillRect(0, 0, width, height);
+    const drawAsher = () => {
+      const baseColor = { r: 165, g: 170, b: 180 };
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "#030305";
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalCompositeOperation = "screen";
+
+      for (const particle of asherSmokeParticles) {
+        particle.vx += Math.sin(particle.life * 10) * 0.001;
+        particle.vy += Math.cos(particle.life * 10) * 0.001;
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.angle += particle.spin;
+        particle.life += particle.maxLife;
+        particle.opacity = Math.sin(particle.life * Math.PI) * particle.maxOpacity;
+
+        if (particle.life >= 1) {
+          particle.x = Math.random() * width;
+          particle.y = Math.random() * height;
+          particle.size = Math.random() * 550 + 450;
+          particle.vx = (Math.random() - 0.5) * 0.1;
+          particle.vy = (Math.random() - 0.5) * 0.07;
+          particle.opacity = 0;
+          particle.maxOpacity = Math.random() * 0.08 + 0.04;
+          particle.life = 0;
+          particle.maxLife = Math.random() * 0.0003 + 0.0001;
+          particle.angle = Math.random() * Math.PI * 2;
+          particle.spin = (Math.random() - 0.5) * 0.0002;
+          particle.stretch = Math.random() * 2.5 + 2.0;
+        }
+
+        if (particle.x < -particle.size * 2) particle.x = width + particle.size * 2;
+        if (particle.x > width + particle.size * 2) particle.x = -particle.size * 2;
+        if (particle.y < -particle.size * 2) particle.y = height + particle.size * 2;
+        if (particle.y > height + particle.size * 2) particle.y = -particle.size * 2;
+        if (particle.opacity <= 0) continue;
+
+        ctx.save();
+        ctx.filter = "blur(45px)";
+        ctx.translate(particle.x, particle.y);
+        ctx.rotate(particle.angle);
+        ctx.scale(particle.stretch, 1);
+        const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, particle.size);
+        grad.addColorStop(0, `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${particle.opacity})`);
+        grad.addColorStop(0.5, `rgba(40, 40, 50, ${particle.opacity * 0.4})`);
+        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, particle.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       }
 
-      ctx.font = `700 ${MATRIX_FONT_SIZE}px monospace`;
-      ctx.shadowBlur = 0;
+      for (const flake of asherAshFlakes) {
+        flake.wobble += 0.01;
+        flake.angle += flake.spin;
+        flake.x += flake.vx + Math.sin(flake.wobble) * 0.2;
+        flake.y += flake.vy + Math.cos(flake.wobble) * 0.15;
 
-      for (const col of matrixColumns) {
-        const text = MATRIX_CHARS[Math.floor(Math.random() * MATRIX_CHARS.length)] || "0";
-        const greenIntensity = Math.floor(col.brightness * 150 + 50);
-        ctx.fillStyle = `rgb(0, ${greenIntensity}, 0)`;
-        ctx.fillText(text, col.x, col.y);
+        if (flake.x < -50) flake.x = width + 50;
+        if (flake.x > width + 50) flake.x = -50;
+        if (flake.y < -50) flake.y = height + 50;
+        if (flake.y > height + 50) flake.y = -50;
 
-        col.y += col.speed * MATRIX_FONT_SIZE * 0.5;
-        if (col.y > height + MATRIX_FONT_SIZE * 5) {
-          col.y = -MATRIX_FONT_SIZE;
-          col.speed = Math.random() * 0.2 + 0.3;
-          col.brightness = Math.random() * 0.5 + 0.3;
+        ctx.save();
+        ctx.filter = "blur(1px)";
+        ctx.translate(flake.x, flake.y);
+        ctx.rotate(flake.angle);
+        ctx.fillStyle = `rgba(180, 185, 195, ${flake.opacity})`;
+        ctx.fillRect(-flake.w / 2, -flake.h / 2, flake.w, flake.h);
+        ctx.restore();
+      }
+
+      ctx.globalCompositeOperation = "source-over";
+
+      if (noiseCanvas) {
+        ctx.globalAlpha = 0.03;
+        ctx.drawImage(noiseCanvas, 0, 0, width, height);
+        ctx.globalAlpha = 1;
+      }
+    };
+
+    const drawMatrix = () => {
+      const t = Date.now() * 0.001;
+      const green = "133, 187, 101";
+
+      ctx.fillStyle = "#0d120d";
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.strokeStyle = "rgba(133, 187, 101, 0.05)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x < width; x += 40) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+      }
+      for (let y = 0; y < height; y += 40) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+      }
+      ctx.stroke();
+
+      const watermarkOpacity = 0.03 + Math.sin(t * 1.2) * 0.02;
+      ctx.save();
+      ctx.fillStyle = `rgba(${green}, ${watermarkOpacity})`;
+      ctx.textAlign = "center";
+      ctx.font = "bold 300px serif";
+      ctx.fillText("100", width * 0.75, height * 0.5 + 100);
+      ctx.font = "bold 40px serif";
+      ctx.fillText("IN GOD WE TRUST", width * 0.5, height * 0.2);
+      ctx.restore();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(133, 187, 101, 0.1)";
+      for (let i = 0; i <= 200; i += 1) {
+        const angle = (i / 200) * Math.PI * 2;
+        const radius = 150 + Math.sin(angle * 12 + t * 0.8) * 10;
+        const px = width * 0.5 + Math.cos(angle) * radius;
+        const py = height * 0.5 + Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      const pyramidX = width * 0.25;
+      const pyramidY = height * 0.5 + 50;
+      const pyramidSize = 200;
+      const levels = 13;
+      const levelH = pyramidSize / levels;
+
+      ctx.save();
+      ctx.translate(pyramidX, pyramidY);
+      const glow = Math.sin(t * 3) * 20 + 40;
+      ctx.shadowBlur = glow;
+      ctx.shadowColor = "rgba(133, 187, 101, 0.6)";
+      ctx.strokeStyle = "rgba(133, 187, 101, 0.4)";
+      ctx.lineWidth = 2;
+
+      for (let i = 1; i < levels; i += 1) {
+        const w = (pyramidSize * (i + 1)) / levels;
+        const prevW = (pyramidSize * i) / levels;
+        ctx.beginPath();
+        ctx.moveTo(-w / 2, i * levelH);
+        ctx.lineTo(w / 2, i * levelH);
+        ctx.lineTo(prevW / 2, (i - 1) * levelH);
+        ctx.lineTo(-prevW / 2, (i - 1) * levelH);
+        ctx.closePath();
+        ctx.stroke();
+
+        for (let j = 0; j < i; j += 1) {
+          const step = w / i;
+          ctx.beginPath();
+          ctx.moveTo(-w / 2 + step * j, i * levelH);
+          ctx.lineTo(-w / 2 + step * j, (i - 1) * levelH);
+          ctx.stroke();
         }
       }
+
+      ctx.translate(0, -pyramidSize / levels - 10);
+      ctx.beginPath();
+      ctx.moveTo(-25, 20);
+      ctx.lineTo(25, 20);
+      ctx.lineTo(0, -20);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = "#85bb65";
+      ctx.beginPath();
+      ctx.ellipse(0, 5, 12, 7, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 5, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(133, 187, 101, 0.8)";
+      ctx.fill();
+
+      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angle) * 15, Math.sin(angle) * 15 + 5);
+        ctx.lineTo(Math.cos(angle) * 30, Math.sin(angle) * 30 + 5);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(133, 187, 101, 0.3)";
+      ctx.font = "bold 24px serif";
+      ctx.fillText("FEDERAL RESERVE NOTE", width / 2, 60);
+
+      ctx.font = "bold 120px serif";
+      ctx.fillStyle = "rgba(133, 187, 101, 0.12)";
+      ctx.fillText("100", 120, 140);
+      ctx.fillText("100", width - 120, height - 80);
+
+      ctx.font = "10px serif";
+      ctx.fillStyle = "rgba(110, 140, 110, 0.4)";
+      const microText = "THE UNITED STATES OF AMERICA 100 ANN UIT COEPTIS 100 ";
+      const offset = (t * 30) % 400;
+      for (let y = 100; y < height; y += 200) {
+        for (let x = -offset; x < width + 400; x += 400) {
+          ctx.fillText(microText, x, y);
+        }
+      }
+      ctx.restore();
+
+      const ribbonX = width * 0.6;
+      ctx.fillStyle = "rgba(0, 70, 180, 0.15)";
+      ctx.fillRect(ribbonX, 0, 50, height);
+      for (let i = 0; i < 8; i += 1) {
+        const y = (i * 150 + t * 72) % (height + 150) - 75;
+        ctx.fillStyle = `rgba(120, 200, 255, ${0.3 + Math.sin(t * 2.4) * 0.1})`;
+        ctx.font = "bold 20px serif";
+        ctx.textAlign = "center";
+        ctx.fillText("100", ribbonX + 25, y);
+      }
+
+      const vignette = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width);
+      vignette.addColorStop(0, "rgba(0,0,0,0)");
+      vignette.addColorStop(1, "rgba(0,0,0,0.6)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, width, height);
     };
 
     const animate = (time: number) => {
@@ -993,7 +1261,8 @@ export default function ThemeStarfieldCanvas() {
       if (mode === "neon") drawNeon();
       if (mode === "dark") drawDark();
       if (mode === "light") drawLight();
-      if (mode === "aurora") drawAurora();
+      if (mode === "sparkle") drawSparkle();
+      if (mode === "asher") drawAsher();
       if (mode === "matrix") drawMatrix();
       animationId = window.requestAnimationFrame(animate);
     };
@@ -1005,7 +1274,8 @@ export default function ThemeStarfieldCanvas() {
       if (mode === "neon") createNeonScene();
       if (mode === "dark") createDarkScene();
       if (mode === "light") createLightScene();
-      if (mode === "aurora") createAuroraScene();
+      if (mode === "sparkle") createSparkleScene();
+      if (mode === "asher") createAsherScene();
       if (mode === "matrix") createMatrixScene();
     };
 
@@ -1015,11 +1285,11 @@ export default function ThemeStarfieldCanvas() {
     };
 
     const handleMouseDown = () => {
-      auroraTargetSpeed = 0.15;
+      sparkleTargetSpeed = 0.15;
     };
 
     const handleMouseUp = () => {
-      auroraTargetSpeed = 0.05;
+      sparkleTargetSpeed = 0.05;
     };
 
     const handleVisibilityChange = () => {

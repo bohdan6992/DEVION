@@ -53,7 +53,18 @@ export type ArbitrageFilterConfigV1 = {
     | "LstClsNewsCnt"
     | "MarketCapM"
     | "PreMhVolNF"
-    | "VolNFfromLstCls",
+    | "VolNFfromLstCls"
+    | "AvPostMhVol90NF"
+    | "AvPreMhVol90NF"
+    | "AvPreMhValue20NF"
+    | "AvPreMhValue90NF"
+    | "AvgDailyValue20"
+    | "AvgDailyValue90"
+    | "Volatility20"
+    | "Volatility90"
+    | "PreMhMDV20NF"
+    | "PreMhMDV90NF"
+    | "VolRel",
     MinMax
   >>;
 

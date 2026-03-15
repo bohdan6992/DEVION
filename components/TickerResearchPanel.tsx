@@ -8,7 +8,7 @@ import { Search, BarChart2, Info, FileText, Activity, ArrowRight, X } from "luci
 /* ===================== LOGIC: THEME & UTILS ===================== */
 const DARK_THEMES = new Set([
   "dark", "neon", "matrix", "solaris", "cyberpunk",
-  "oceanic", "sakura", "asher", "inferno", "aurora",
+  "oceanic", "sakura", "asher", "inferno", "sparkle",
   "desert", "midnight", "forest", "candy", "monochrome", "space",
 ]);
 

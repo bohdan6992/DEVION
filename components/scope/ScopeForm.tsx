@@ -1,6 +1,19 @@
 import React, { useMemo, useState } from "react";
 import { ExitMode } from "@/lib/scopeApi";
 
+const SCOPE_FILTER_COLUMN_EXAMPLE = [
+  "AvPreMhVol90NF",
+  "AvPreMhValue20NF",
+  "AvPreMhValue90NF",
+  "AvgDailyValue20",
+  "AvgDailyValue90",
+  "Volatility20",
+  "Volatility90",
+  "PreMhVolNF",
+  "PreMhMDV20NF",
+  "PreMhMDV90NF",
+].join(", ");
+
 export type ScopeFormValue = {
   dateFromNy: number;
   dateToNy: number;
@@ -255,8 +268,9 @@ export default function ScopeForm({
           value={d.includeColumns}
           onChange={(e) => setD((s) => ({ ...s, includeColumns: e.target.value }))}
           className="mt-2 w-full bg-transparent outline-none text-zinc-200 font-mono text-sm"
-          placeholder="move_1000"
+          placeholder={`move_1000, ${SCOPE_FILTER_COLUMN_EXAMPLE}`}
         />
+        <div className="mt-1 text-[11px] text-zinc-500 font-mono">Example: {SCOPE_FILTER_COLUMN_EXAMPLE}</div>
       </Field>
 
       <div className="md:col-span-6 flex items-center justify-end">

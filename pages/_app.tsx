@@ -23,7 +23,7 @@ const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
-  | "aurora" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
+  | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
 type LangKey = "UA" | "EN" | "UK";
 
 type MyAppProps = AppProps & {
@@ -57,7 +57,7 @@ export default function MyApp({
     const root = document.documentElement;
     const darkThemes = new Set([
       "dark", "neon", "cyberpunk", "solaris", "sakura", "oceanic",
-      "matrix", "asher", "inferno", "aurora", "desert", "midnight", "space",
+      "matrix", "asher", "inferno", "sparkle", "desert", "midnight", "space",
       "forest", "candy", "monochrome",
     ]);
     const apply = () => {
@@ -87,9 +87,10 @@ export default function MyApp({
             var cookieTheme = m ? decodeURIComponent(m[1]) : "";
             var lsTheme = ""; try { lsTheme = localStorage.getItem("tt-theme") || ""; } catch {}
             var theme = cookieTheme || lsTheme || ${JSON.stringify(initialTheme)};
+            if(theme === "aurora") theme = "sparkle";
             var darkSet = new Set([
               "dark","neon","cyberpunk","solaris","sakura","oceanic",
-              "matrix","asher","inferno","aurora","desert","midnight","space",
+              "matrix","asher","inferno","sparkle","desert","midnight","space",
               "forest","candy","monochrome"
             ]);
             var root = document.documentElement;
@@ -135,7 +136,8 @@ MyApp.getInitialProps = async (appCtx: AppContext) => {
   const appProps = await App.getInitialProps(appCtx);
   const cookieStr = appCtx.ctx.req?.headers?.cookie ?? "";
   const parsed = cookieStr ? parseCookie(cookieStr) : {};
-  const initialTheme = (parsed["tt-theme"] as ThemeKey) || "light";
+  const rawTheme = parsed["tt-theme"] || "";
+  const initialTheme = ((rawTheme === "aurora" ? "sparkle" : rawTheme) as ThemeKey) || "light";
   const initialLang = (parsed["tt-lang"] as LangKey) || "UA";
   return { ...appProps, initialTheme, initialLang };
 };

@@ -108,23 +108,37 @@ type Item = { key: string; label: string; disabled?: boolean };
 
 const getThemeDropdownAccent = (key: string, isDark: boolean) => {
   const themeKey = (key || "").toLowerCase();
+  if (themeKey === "light") {
+    return {
+      selectedItem: isDark ? "bg-violet-500/10 text-violet-300 font-bold" : "bg-violet-100/90 text-violet-700 font-bold",
+      dot: isDark ? "bg-violet-300 shadow-[0_0_8px_rgba(196,181,253,0.45)]" : "bg-violet-500 shadow-none",
+      buttonText: isDark ? "text-violet-200" : "text-violet-700",
+      buttonBorder: isDark ? "border-violet-400/20" : "border-violet-300/60",
+    };
+  }
   if (!isDark) {
     return {
-      selectedItem: "bg-amber-100/80 text-amber-700 font-bold",
-      dot: "bg-amber-500 shadow-none",
+      selectedItem: "bg-slate-100/90 text-slate-700 font-bold",
+      dot: "bg-slate-500 shadow-none",
       buttonText: "text-slate-800",
       buttonBorder: "border-slate-300",
     };
   }
 
   switch (themeKey) {
-    case "aurora":
+    case "sparkle":
+      return {
+        selectedItem: "bg-yellow-200/10 text-yellow-200 font-bold",
+        dot: "bg-yellow-200 shadow-[0_0_8px_rgba(254,240,138,0.45)]",
+        buttonText: "text-yellow-200",
+        buttonBorder: "border-yellow-200/20",
+      };
     case "asher":
       return {
-        selectedItem: "bg-amber-500/10 text-amber-300 font-bold",
-        dot: "bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.55)]",
-        buttonText: "text-amber-200",
-        buttonBorder: "border-amber-500/20",
+        selectedItem: "bg-zinc-200/10 text-zinc-200 font-bold",
+        dot: "bg-zinc-300 shadow-[0_0_8px_rgba(212,212,216,0.35)]",
+        buttonText: "text-zinc-200",
+        buttonBorder: "border-zinc-400/20",
       };
     case "matrix":
       return {
@@ -273,12 +287,17 @@ export default function TopBar() {
 
   const navAccent = (() => {
     switch ((theme || "").toLowerCase()) {
-      case "aurora":
+      case "sparkle":
+        return {
+          activeText: "text-yellow-200 drop-shadow-[0_0_8px_rgba(254,240,138,0.22)]",
+          activeBg: "bg-yellow-200/10 opacity-100 border border-transparent",
+          activeLine: "bg-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.45)]",
+        };
       case "asher":
         return {
-          activeText: "text-amber-300 drop-shadow-[0_0_8px_rgba(245,158,11,0.28)]",
-          activeBg: "bg-amber-500/10 opacity-100 border border-transparent",
-          activeLine: "bg-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.55)]",
+          activeText: "text-zinc-200 drop-shadow-[0_0_8px_rgba(212,212,216,0.18)]",
+          activeBg: "bg-zinc-200/10 opacity-100 border border-transparent",
+          activeLine: "bg-zinc-300 shadow-[0_0_10px_rgba(212,212,216,0.3)]",
         };
       case "matrix":
         return {
@@ -300,9 +319,9 @@ export default function TopBar() {
         };
       case "light":
         return {
-          activeText: "text-amber-700",
-          activeBg: "bg-amber-100/80 opacity-100 border border-transparent",
-          activeLine: "bg-amber-500 shadow-none",
+          activeText: "text-violet-700",
+          activeBg: "bg-violet-100/90 opacity-100 border border-violet-200/50",
+          activeLine: "bg-violet-500 shadow-none",
         };
       default:
         return {
@@ -408,7 +427,8 @@ export default function TopBar() {
               onChange={(v: any) => setTheme(v)}
               items={[
                 { key: "light", label: "Light" },
-                { key: "aurora", label: "ASHER" },
+                { key: "sparkle", label: "SPARKLE" },
+                { key: "asher", label: "ASHER" },
                 { key: "matrix", label: "Matrix" },
                 { key: "neon", label: "Neon" },
                 { key: "dark", label: "Dark" },

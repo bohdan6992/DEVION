@@ -23,6 +23,17 @@ const KEYS: Array<{ key: string; label: string; step?: number }> = [
   { key: "MarketCapM", label: "MarketCapM", step: 1 },
   { key: "PreMhVolNF", label: "PreMhVolNF", step: 1 },
   { key: "VolNFfromLstCls", label: "VolNFfromLstCls", step: 1 },
+  { key: "AvPostMhVol90NF", label: "AvPostMhVol90NF", step: 1 },
+  { key: "AvPreMhVol90NF", label: "AvPreMhVol90NF", step: 1 },
+  { key: "AvPreMhValue20NF", label: "AvPreMhValue20NF", step: 1 },
+  { key: "AvPreMhValue90NF", label: "AvPreMhValue90NF", step: 1 },
+  { key: "AvgDailyValue20", label: "AvgDailyValue20", step: 1 },
+  { key: "AvgDailyValue90", label: "AvgDailyValue90", step: 1 },
+  { key: "Volatility20", label: "Volatility20", step: 0.001 },
+  { key: "Volatility90", label: "Volatility90", step: 0.001 },
+  { key: "PreMhMDV20NF", label: "PreMhMDV20NF", step: 1 },
+  { key: "PreMhMDV90NF", label: "PreMhMDV90NF", step: 1 },
+  { key: "VolRel", label: "VolRel", step: 0.001 },
 ];
 
 export default function BoundsPanel({

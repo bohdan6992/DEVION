@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import clsx from "clsx";
 
 
 import { useUi } from "@/components/UiProvider";
@@ -398,7 +399,7 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 ========================= */
 const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
 const numLastClose = (s: any) =>
-  getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "close", "Close"]);
+  getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
 
 const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv"]);
 const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
@@ -418,6 +419,15 @@ const numClsToClsPct = (s: any) =>
 const numLo = (s: any) => getNumAny(s, ["lo", "Lo", "low", "Low"]);
 const numLstClsNewsCnt = (s: any) => getNumAny(s, ["LstClsNewsCnt", "lstClsNewsCnt", "lstClsNewsCount", "LstClsNewsCount"]);
 const numVolRel = (s: any) => getNumAny(s, ["VolRel", "volRel", "vol_rel"]);
+const AV_PRE_MH_VOL_90_NF_KEYS = ["AvPreMhVol90NF", "avPreMhVol90NF", "avpremhvol90nf", "av_pre_mh_vol_90_nf"];
+const AV_PRE_MH_VALUE_20_NF_KEYS = ["AvPreMhValue20NF", "avPreMhValue20NF", "avpremhvalue20nf", "av_pre_mh_value_20_nf"];
+const AV_PRE_MH_VALUE_90_NF_KEYS = ["AvPreMhValue90NF", "avPreMhValue90NF", "avpremhvalue90nf", "av_pre_mh_value_90_nf"];
+const AVG_DAILY_VALUE_20_KEYS = ["AvgDailyValue20", "avgDailyValue20", "avgdailyvalue20", "avg_daily_value_20"];
+const AVG_DAILY_VALUE_90_KEYS = ["AvgDailyValue90", "avgDailyValue90", "avgdailyvalue90", "avg_daily_value_90"];
+const VOLATILITY_20_KEYS = ["Volatility20", "volatility20", "volatility_20", "Volatility20%", "volatility20%", "Volatility20Pct", "volatility20Pct", "volatility20pct"];
+const VOLATILITY_90_KEYS = ["Volatility90", "volatility90", "volatility_90", "Volatility90%", "volatility90%", "Volatility90Pct", "volatility90Pct", "volatility90pct"];
+const PRE_MH_MDV_20_NF_KEYS = ["PreMhMDV20NF", "preMhMDV20NF", "premhmdv20nf", "pre_mh_mdv_20_nf", "PreMktMDV20NF", "preMktMDV20NF"];
+const PRE_MH_MDV_90_NF_KEYS = ["PreMhMDV90NF", "preMhMDV90NF", "premhmdv90nf", "pre_mh_mdv_90_nf", "PreMktMDV90NF", "preMktMDV90NF"];
 const numPreMhBidLstPrcPct = (s: any) =>
   getNumAny(s, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
 const numPreMhLoLstPrcPct = (s: any) =>
@@ -430,8 +440,30 @@ const numLstPrcLstClsPct = (s: any) =>
   getNumAny(s, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "lstPrcLstClsPct"]);
 const numImbExch925 = (s: any) => getNumAny(s, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
 const numImbExch1555 = (s: any) => getNumAny(s, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
+const numLstPrcLstClsPctSafe = (s: any) =>
+  getNumAny(s, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsÃŽâ€%", "LstPrcLstClsPct", "LstPrcLstClsDeltaPct", "lstPrcLstClsPct"]);
 const numAvPostMhVol90NF = (s: any) =>
   getNumAny(s, ["AvPostMhVol90NF", "avPostMhVol90NF"]);
+const deriveValueFromPrice = (volumeLike: number | null, priceLike: number | null) =>
+  volumeLike != null && priceLike != null ? volumeLike * priceLike : null;
+const numAvPreMhVol90NF = (s: any) =>
+  getNumAny(s, AV_PRE_MH_VOL_90_NF_KEYS) ?? numAvPreMh(s);
+const numAvPreMhValue20NF = (s: any) =>
+  getNumAny(s, AV_PRE_MH_VALUE_20_NF_KEYS);
+const numAvPreMhValue90NF = (s: any) =>
+  getNumAny(s, AV_PRE_MH_VALUE_90_NF_KEYS) ?? deriveValueFromPrice(numAvPreMhVol90NF(s), numLastClose(s));
+const numAvgDailyValue20 = (s: any) =>
+  getNumAny(s, AVG_DAILY_VALUE_20_KEYS) ?? deriveValueFromPrice(numADV20NF(s), numLastClose(s));
+const numAvgDailyValue90 = (s: any) =>
+  getNumAny(s, AVG_DAILY_VALUE_90_KEYS) ?? deriveValueFromPrice(numADV90NF(s), numLastClose(s));
+const numVolatility20 = (s: any) =>
+  getNumAny(s, VOLATILITY_20_KEYS);
+const numVolatility90 = (s: any) =>
+  getNumAny(s, VOLATILITY_90_KEYS);
+const numPreMhMDV20NF = (s: any) =>
+  getNumAny(s, PRE_MH_MDV_20_NF_KEYS);
+const numPreMhMDV90NF = (s: any) =>
+  getNumAny(s, PRE_MH_MDV_90_NF_KEYS);
 
 const numVolNFfromLstCls = (s: any) => {
   const vol = numPreMktVolNF(s);
@@ -674,13 +706,22 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
   const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
 
   const canonical = { ...raw, meta };
-  const volRel = getNumAny(canonical, ["VolRel", "volRel", "vol_rel"]);
-  const avPostMhVol90NF = getNumAny(canonical, ["AvPostMhVol90NF", "avPostMhVol90NF"]);
+  const volRel = numVolRel(canonical);
+  const avPostMhVol90NF = numAvPostMhVol90NF(canonical);
+  const avPreMhVol90NF = numAvPreMhVol90NF(canonical);
+  const avPreMhValue20NF = numAvPreMhValue20NF(canonical);
+  const avPreMhValue90NF = numAvPreMhValue90NF(canonical);
+  const avgDailyValue20 = numAvgDailyValue20(canonical);
+  const avgDailyValue90 = numAvgDailyValue90(canonical);
+  const volatility20 = numVolatility20(canonical);
+  const volatility90 = numVolatility90(canonical);
+  const preMhMDV20NF = numPreMhMDV20NF(canonical);
+  const preMhMDV90NF = numPreMhMDV90NF(canonical);
   const preMhBidLstPrcPct = getNumAny(canonical, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
   const preMhLoLstPrcPct = getNumAny(canonical, ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcÎ”%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"]);
   const preMhHiLstClsPct = getNumAny(canonical, ["PreMhHiLstClsΔ%", "PreMhHiLstClsÎ”%", "PreMhHiLstClsPct", "preMhHiLstClsPct"]);
   const preMhLoLstClsPct = getNumAny(canonical, ["PreMhLoLstClsΔ%", "PreMhLoLstClsÎ”%", "PreMhLoLstClsPct", "preMhLoLstClsPct"]);
-  const lstPrcLstClsPct = getNumAny(canonical, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "lstPrcLstClsPct"]);
+  const lstPrcLstClsPct = getNumAny(canonical, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "LstPrcLstClsDeltaPct", "lstPrcLstClsPct"]);
   const imbExch925 = getNumAny(canonical, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
   const imbExch1555 = getNumAny(canonical, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
 
@@ -715,6 +756,15 @@ function normalizeSignal(raw: any): ArbitrageSignal | null {
     sector,
     VolRel: volRel,
     AvPostMhVol90NF: avPostMhVol90NF,
+    AvPreMhVol90NF: avPreMhVol90NF,
+    AvPreMhValue20NF: avPreMhValue20NF,
+    AvPreMhValue90NF: avPreMhValue90NF,
+    AvgDailyValue20: avgDailyValue20,
+    AvgDailyValue90: avgDailyValue90,
+    Volatility20: volatility20,
+    Volatility90: volatility90,
+    PreMhMDV20NF: preMhMDV20NF,
+    PreMhMDV90NF: preMhMDV90NF,
     PreMhBidLstPrcPct: preMhBidLstPrcPct,
     PreMhLoLstPrcPct: preMhLoLstPrcPct,
     PreMhHiLstClsPct: preMhHiLstClsPct,
@@ -756,7 +806,9 @@ type MinMaxProps = {
 const RANGE_BOUND_KEYS = [
   "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "Spread", "LstPrcL",
   "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
-  "VolNFfromLstCls", "AvPostMhVol90NF", "VolRel", "PreMhBidLstPrcPct", "PreMhLoLstPrcPct",
+  "VolNFfromLstCls", "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
+  "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90", "PreMhMDV20NF", "PreMhMDV90NF",
+  "VolRel", "PreMhBidLstPrcPct", "PreMhLoLstPrcPct",
   "PreMhHiLstClsPct", "PreMhLoLstClsPct", "LstPrcLstClsPct", "ImbExch925", "ImbExch1555",
 ] as const;
 type RangeBoundKey = typeof RANGE_BOUND_KEYS[number];
@@ -837,10 +889,12 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 /* =========================
    UI Helper Components
 ========================= */
-type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia";
+type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
 
 const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
-  if (theme === "aurora" || theme === "asher") return "amber";
+  if (theme === "sparkle") return "amber";
+  if (theme === "asher") return "zinc";
+  if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
   return "emerald";
@@ -852,29 +906,38 @@ const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor):
 
 const MSF = {
   amber: {
-    activeItem: "bg-amber-500/20 text-white",
+    activeItem: "bg-yellow-300/20 text-yellow-100",
+    inactiveItem: "text-yellow-200/80 hover:bg-yellow-200/10 hover:text-yellow-100",
+    chipActive: "bg-yellow-300 text-[#221400] border-transparent shadow-[0_0_16px_rgba(253,224,71,0.38)]",
+    chipInactive: "text-yellow-200 border-yellow-200/0 hover:bg-yellow-200/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-yellow-200/30",
+    boxChecked: "bg-yellow-300 border-transparent",
+  },
+  zinc: {
+    activeItem: "bg-zinc-200/16 text-white",
     inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-amber-500 text-black border-transparent",
-    chipInactive: "text-amber-500 border-transparent hover:bg-amber-500/10",
-    arrow: "text-amber-500 hover:text-amber-400 hover:bg-amber-500/10",
-    divider: "bg-amber-500/20",
-    boxChecked: "bg-amber-500 border-transparent",
+    chipActive: "bg-zinc-200 text-[#111111] border-transparent shadow-[0_0_16px_rgba(212,212,216,0.24)]",
+    chipInactive: "text-zinc-200 border-zinc-200/0 hover:bg-zinc-200/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-zinc-200/20",
+    boxChecked: "bg-zinc-200 border-transparent",
   },
   emerald: {
     activeItem: "bg-emerald-500/20 text-white",
     inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-emerald-500 text-black border-transparent",
-    chipInactive: "text-emerald-500 border-transparent hover:bg-emerald-500/10",
-    arrow: "text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10",
+    chipActive: "bg-emerald-500 text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]",
+    chipInactive: "text-emerald-500 border-emerald-500/0 hover:bg-emerald-500/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
     divider: "bg-emerald-500/20",
     boxChecked: "bg-emerald-500 border-transparent",
   },
   rose: {
     activeItem: "bg-rose-500/20 text-white",
     inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-rose-500 text-black border-transparent",
-    chipInactive: "text-rose-500 border-transparent hover:bg-rose-500/10",
-    arrow: "text-rose-500 hover:text-rose-400 hover:bg-rose-500/10",
+    chipActive: "bg-rose-500 text-white border-transparent shadow-[0_0_16px_rgba(244,63,94,0.42)]",
+    chipInactive: "text-rose-500 border-rose-500/0 hover:bg-rose-500/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
     divider: "bg-rose-500/20",
     boxChecked: "bg-rose-500 border-transparent",
   },
@@ -882,18 +945,18 @@ const MSF = {
   cyan: {
     activeItem: "bg-sky-500/15 text-white",
     inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-sky-400 text-black border-transparent",
-    chipInactive: "text-sky-300 border-transparent hover:bg-sky-400/10",
-    arrow: "text-sky-300 hover:text-sky-200 hover:bg-sky-400/10",
+    chipActive: "bg-sky-400 text-white border-transparent shadow-[0_0_16px_rgba(56,189,248,0.34)]",
+    chipInactive: "text-sky-300 border-sky-400/0 hover:bg-sky-400/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
     divider: "bg-sky-400/20",
     boxChecked: "bg-sky-400 border-transparent",
   },
   fuchsia: {
     activeItem: "bg-fuchsia-500/15 text-white",
     inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-fuchsia-400 text-black border-transparent",
-    chipInactive: "text-fuchsia-300 border-transparent hover:bg-fuchsia-400/10",
-    arrow: "text-fuchsia-300 hover:text-fuchsia-200 hover:bg-fuchsia-400/10",
+    chipActive: "bg-fuchsia-400 text-white border-transparent shadow-[0_0_16px_rgba(232,121,249,0.34)]",
+    chipInactive: "text-fuchsia-300 border-fuchsia-400/0 hover:bg-fuchsia-400/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
     divider: "bg-fuchsia-400/20",
     boxChecked: "bg-fuchsia-400 border-transparent",
   },
@@ -904,18 +967,34 @@ const getSonarAccent = (theme?: string | null) => {
   const primary = getSonarPrimaryMsColor(theme);
   if (primary === "amber") {
     return {
-      selection: "selection:bg-amber-500/30",
-      dot: "bg-amber-500",
-      badge: "border-amber-500/20 bg-amber-500/10 text-amber-300",
-      button: "bg-amber-500/10 text-amber-300 border-amber-500/20 shadow-[0_0_10px_-3px_rgba(245,158,11,0.2)]",
-      outlineButton: "border-amber-500/50 text-amber-500 hover:bg-amber-500/10 shadow-[0_0_10px_rgba(245,158,11,0.1)]",
-      panel: "border-l-amber-500 shadow-[0_0_40px_-10px_rgba(245,158,11,0.06)]",
-      chip: "border-amber-500/30 bg-amber-500/10 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.18)]",
-      line: "bg-amber-500/50",
-      text: "text-amber-400",
-      textSoft: "text-amber-300/80",
-      softBorder: "border-amber-500/35 bg-amber-500/12 text-amber-300",
-      panelSoft: "border-amber-500/20 bg-amber-500/[0.03]",
+      selection: "selection:bg-yellow-200/30",
+      dot: "bg-yellow-200",
+      badge: "border-yellow-200/20 bg-yellow-200/10 text-yellow-200",
+      button: "bg-yellow-200/10 text-yellow-200 border-yellow-200/20 shadow-[0_0_10px_-3px_rgba(254,240,138,0.16)]",
+      outlineButton: "border-yellow-200/45 text-yellow-200 hover:bg-yellow-200/10 shadow-[0_0_10px_rgba(254,240,138,0.08)]",
+      panel: "border-l-yellow-200 shadow-[0_0_40px_-10px_rgba(254,240,138,0.05)]",
+      chip: "border-yellow-200/30 bg-yellow-200/10 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.14)]",
+      line: "bg-yellow-200/50",
+      text: "text-yellow-200",
+      textSoft: "text-yellow-200/80",
+      softBorder: "border-yellow-200/35 bg-yellow-200/12 text-yellow-200",
+      panelSoft: "border-yellow-200/20 bg-yellow-200/[0.03]",
+    };
+  }
+  if (primary === "zinc") {
+    return {
+      selection: "selection:bg-zinc-200/24",
+      dot: "bg-zinc-300",
+      badge: "border-zinc-300/20 bg-zinc-200/10 text-zinc-200",
+      button: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]",
+      outlineButton: "border-zinc-300/40 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.06)]",
+      panel: "border-l-zinc-300 shadow-[0_0_40px_-10px_rgba(212,212,216,0.05)]",
+      chip: "border-zinc-300/28 bg-zinc-200/10 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.1)]",
+      line: "bg-zinc-300/45",
+      text: "text-zinc-200",
+      textSoft: "text-zinc-300/80",
+      softBorder: "border-zinc-300/30 bg-zinc-200/12 text-zinc-200",
+      panelSoft: "border-zinc-300/18 bg-zinc-200/[0.03]",
     };
   }
   if (primary === "fuchsia") {
@@ -966,16 +1045,23 @@ const getSonarAccent = (theme?: string | null) => {
   };
 };
 
+const SONAR_FILTER_GROUP_BASE =
+  "inline-flex items-center gap-2 rounded-xl border p-1.5";
+const SONAR_FILTER_INNER_PILL =
+  "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all";
+const SONAR_FILTER_INPUT =
+  "h-7 rounded-lg border px-3 py-0 text-[11px] font-mono text-center tabular-nums leading-none transition-all focus:outline-none";
+
 const ChevronIcon = ({ open }: { open: boolean }) => (
   <svg
-    className={`w-3 h-3 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+    className={`h-2.5 w-2.5 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
     viewBox="0 0 20 20"
     fill="none"
   >
     <path
       d="M6 8L10 12L14 8"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.35"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
@@ -1058,7 +1144,7 @@ const MultiSelectFilter = ({
             style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
             className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto custom-scrollbar"
           >
-            <div className="flex flex-col gap-1">
+            <div className="max-h-[340px] overflow-y-auto py-1.5 custom-scrollbar">
               {options.map((opt, i) => (
                 <button
                   key={opt || `na-${i}`}
@@ -1089,24 +1175,21 @@ const MultiSelectFilter = ({
 
   return (
     <>
-      <div className="relative flex items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
+      <div className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
         <button
           type="button"
           onClick={toggleEnabled}
-          className={`px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
+          className={`inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
             enabled ? C.chipActive : C.chipInactive
           }`}
         >
-          {label}
+          <span>{label}</span>
           {selected.size > 0 && (
-            <div className="ml-2 flex items-center gap-1">
-              {Array.from(selected).slice(0, 6).map((v) => (
-                <span key={v} className={`px-2 py-0.5 rounded-full border border-white/10 bg-black/20 text-[10px] font-mono ${getSonarAccent(theme).text}`}>
-                  {v}
-                </span>
-              ))}
-              {selected.size > 6 && <span className="text-[10px] font-mono text-zinc-400">+{selected.size - 6}</span>}
-            </div>
+            <span
+              className={`ml-2 inline-flex min-w-5 items-center justify-center rounded-full border border-yellow-200/35 bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none ${getSonarAccent(theme).text}`}
+            >
+              {selected.size}
+            </span>
           )}
         </button>
 
@@ -1114,8 +1197,11 @@ const MultiSelectFilter = ({
 
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
-          className={`px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full ${C.arrow}`}
+          onClick={() => {
+            onMainClick?.();
+            if (!hideArrow) setOpen((v) => !v);
+          }}
+          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-full ${C.arrow}`}
         >
           <ChevronIcon open={open} />
         </button>
@@ -1127,6 +1213,8 @@ const MultiSelectFilter = ({
 };
 
 type SingleSelectFilterProps = {
+  hideArrow?: boolean;
+  onMainClick?: () => void;
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
@@ -1138,6 +1226,8 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
   options,
   onChange,
   color = "cyan",
+  hideArrow = false,
+  onMainClick,
 }) => {
   const { theme } = useUi();
   const [open, setOpen] = useState(false);
@@ -1197,12 +1287,11 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
             }}
             className={[
               // як на 2 скріні: темне вікно, border, rounded, blur
-              "bg-[#0a0a0a]/85 backdrop-blur-xl",
-              "border border-white/[0.08] rounded-2xl shadow-2xl",
-              "p-2 max-h-64 overflow-y-auto custom-scrollbar",
+              "z-[9999] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0a0a]/90 backdrop-blur-xl",
+              "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] transition-all duration-200 origin-top",
             ].join(" ")}
           >
-            <div className="flex flex-col gap-1">
+            <div className="max-h-[340px] overflow-y-auto py-1.5 custom-scrollbar">
               {options.map((opt) => {
                 const active = opt.value === value;
                 return (
@@ -1214,25 +1303,12 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
                       setOpen(false);
                     }}
                     className={[
-                      "w-full text-left px-3 py-2 rounded-xl text-xs font-mono transition-colors",
-                      "flex items-center justify-between",
-                      active ? C.activeItem : C.inactiveItem,
+                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
+                      active ? getSonarAccent(theme).activeSoft : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
                     ].join(" ")}
                   >
-                    <span>{opt.label}</span>
-                    {active && (
-                      <span
-                        className={[
-                          "px-2 py-0.5 rounded-full text-[10px] font-mono border",
-                          // чіп “selected” як у фільтрах
-                          color === "cyan"
-                            ? "bg-sky-500/15 border-sky-500/25 text-sky-200"
-                            : C.chipActive,
-                        ].join(" ")}
-                      >
-                        selected
-                      </span>
-                    )}
+                    <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                    {active && <span className={["h-1.5 w-1.5 rounded-full", getSonarAccent(theme).dot].join(" ")} />}
                   </button>
                 );
               })}
@@ -1246,35 +1322,44 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
     <>
       <div
         ref={wrapRef}
-        className="relative flex items-center bg-black/20 rounded-full border border-white/5"
+        className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5"
       >
         {/* main button */}
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => {
+            if (onMainClick) {
+              onMainClick();
+              return;
+            }
+            setOpen((v) => !v);
+          }}
           className={[
-            "px-3 py-1.5 text-[10px] font-mono font-bold transition-all rounded-l-full",
+            hideArrow
+              ? "inline-flex h-full items-center justify-center rounded-full px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all"
+              : "inline-flex h-full items-center justify-center rounded-l-full px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
             C.chipInactive, // синій/бірюзовий акцент
           ].join(" ")}
         >
           {currentLabel}
         </button>
 
-        {/* divider */}
-        <div className={`w-px h-4 ${C.divider}`} />
-
-        {/* arrow zone */}
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className={[
-            "px-2 py-1.5 flex items-center justify-center transition-all rounded-r-full",
-            C.arrow,
-          ].join(" ")}
-          aria-label="Open"
-        >
-          <ChevronIcon open={open} />
-        </button>
+        {!hideArrow && (
+          <>
+            <div className={`w-px h-4 ${C.divider}`} />
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              className={[
+                "inline-flex h-full min-w-[28px] items-center justify-center rounded-r-full px-2 transition-all",
+                C.arrow,
+              ].join(" ")}
+              aria-label="Open"
+            >
+              <ChevronIcon open={open} />
+            </button>
+          </>
+        )}
       </div>
 
       {menu}
@@ -1296,7 +1381,10 @@ const FB = {
     on: "border border-emerald-500 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-emerald-500/10",
   },
   amber: {
-    on: "border border-amber-500 text-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)] bg-amber-500/10",
+    on: "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10",
+  },
+  zinc: {
+    on: "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10",
   },
   cyan: {
     on: "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10",
@@ -1316,8 +1404,8 @@ const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, col
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-        active ? FB[resolvedColor].on : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+      className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
+        active ? FB[resolvedColor].on : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
       }`}
     >
       {label}
@@ -1990,6 +2078,7 @@ function HedgeHeaderMinimal({
 ========================= */
 export default function ArbitrageSonar() {
   const { theme } = useUi();
+  const isLightTheme = theme === "light";
   const isDark = true;
   const sonarAccent = getSonarAccent(theme);
   const accentSelectionClass = sonarAccent.selection;
@@ -2032,6 +2121,13 @@ export default function ArbitrageSonar() {
     { label: "limit", val: limit, set: setLimit, ph: "30", step: 5, min: 1, integer: true },
     { label: "offset", val: offset, set: setOffset, ph: "0", step: 1, min: 0, integer: true },
   ];
+
+  const bumpNumField = useCallback((field: NumField, delta: number) => {
+    let next = Number.isFinite(field.val) ? field.val + delta : field.min;
+    if (field.integer) next = Math.trunc(next);
+    next = Math.max(field.min, next);
+    field.set(field.integer ? next : +next.toFixed(4));
+  }, []);
 
   const [tickersFilter, setTickersFilter] = useState("");
   const tickersFilterNorm = useMemo(() => {
@@ -2108,6 +2204,24 @@ export default function ArbitrageSonar() {
   const [volNFfromLstClsMax, setVolNFfromLstClsMax] = useState("");
   const [avPostMhVol90NFMin, setAvPostMhVol90NFMin] = useState("");
   const [avPostMhVol90NFMax, setAvPostMhVol90NFMax] = useState("");
+  const [avPreMhVol90NFMin, setAvPreMhVol90NFMin] = useState("");
+  const [avPreMhVol90NFMax, setAvPreMhVol90NFMax] = useState("");
+  const [avPreMhValue20NFMin, setAvPreMhValue20NFMin] = useState("");
+  const [avPreMhValue20NFMax, setAvPreMhValue20NFMax] = useState("");
+  const [avPreMhValue90NFMin, setAvPreMhValue90NFMin] = useState("");
+  const [avPreMhValue90NFMax, setAvPreMhValue90NFMax] = useState("");
+  const [avgDailyValue20Min, setAvgDailyValue20Min] = useState("");
+  const [avgDailyValue20Max, setAvgDailyValue20Max] = useState("");
+  const [avgDailyValue90Min, setAvgDailyValue90Min] = useState("");
+  const [avgDailyValue90Max, setAvgDailyValue90Max] = useState("");
+  const [volatility20Min, setVolatility20Min] = useState("");
+  const [volatility20Max, setVolatility20Max] = useState("");
+  const [volatility90Min, setVolatility90Min] = useState("");
+  const [volatility90Max, setVolatility90Max] = useState("");
+  const [preMhMDV20NFMin, setPreMhMDV20NFMin] = useState("");
+  const [preMhMDV20NFMax, setPreMhMDV20NFMax] = useState("");
+  const [preMhMDV90NFMin, setPreMhMDV90NFMin] = useState("");
+  const [preMhMDV90NFMax, setPreMhMDV90NFMax] = useState("");
   const [volRelMin, setVolRelMin] = useState("");
   const [volRelMax, setVolRelMax] = useState("");
   const [preMhBidLstPrcPctMin, setPreMhBidLstPrcPctMin] = useState("");
@@ -2185,6 +2299,7 @@ export default function ArbitrageSonar() {
   const [activePanelVisible, setActivePanelVisible] = useState<boolean>(true);
   const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(false);
   const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("expanded");
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
@@ -2242,7 +2357,11 @@ export default function ArbitrageSonar() {
   /* =========================
      Persist Active panel
   ========================= */
-  useEffect(() => {
+  const activePanelHydratedRef = useRef(false);
+  const activePanelRestoringRef = useRef(false);
+
+  useLayoutEffect(() => {
+    activePanelRestoringRef.current = true;
     try {
       const raw = localStorage.getItem(ACTIVE_PANEL_LS_KEY);
       if (!raw) return;
@@ -2258,9 +2377,14 @@ export default function ArbitrageSonar() {
       setActivePanelCollapsed(col);
       setActivePanelMode(mode);
     } catch {}
+
+    activePanelHydratedRef.current = true;
+    queueMicrotask(() => { activePanelRestoringRef.current = false; });
   }, []);
 
   useEffect(() => {
+    if (!activePanelHydratedRef.current) return;
+    if (activePanelRestoringRef.current) return;
     try {
       localStorage.setItem(
         ACTIVE_PANEL_LS_KEY,
@@ -2467,6 +2591,7 @@ export default function ArbitrageSonar() {
         if (typeof s?.offset === "number") setOffset(s.offset);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
+        if (typeof s?.filtersCollapsed === "boolean") setFiltersCollapsed(s.filtersCollapsed);
 
         // toggles
         for (const k of [
@@ -2521,7 +2646,11 @@ export default function ArbitrageSonar() {
           'lstPrcLMin','lstPrcLMax','lstClsMin','lstClsMax','yClsMin','yClsMax','tClsMin','tClsMax',
           'clsToClsPctMin','clsToClsPctMax','loMin','loMax','lstClsNewsCntMin','lstClsNewsCntMax',
           'marketCapMMin','marketCapMMax','preMhVolNFMin','preMhVolNFMax','volNFfromLstClsMin','volNFfromLstClsMax',
-          'avPostMhVol90NFMin','avPostMhVol90NFMax','volRelMin','volRelMax',
+          'avPostMhVol90NFMin','avPostMhVol90NFMax','avPreMhVol90NFMin','avPreMhVol90NFMax',
+          'avPreMhValue20NFMin','avPreMhValue20NFMax','avPreMhValue90NFMin','avPreMhValue90NFMax',
+          'avgDailyValue20Min','avgDailyValue20Max','avgDailyValue90Min','avgDailyValue90Max',
+          'volatility20Min','volatility20Max','volatility90Min','volatility90Max',
+          'preMhMDV20NFMin','preMhMDV20NFMax','preMhMDV90NFMin','preMhMDV90NFMax','volRelMin','volRelMax',
           'preMhBidLstPrcPctMin','preMhBidLstPrcPctMax','preMhLoLstPrcPctMin','preMhLoLstPrcPctMax',
           'preMhHiLstClsPctMin','preMhHiLstClsPctMax','preMhLoLstClsPctMin','preMhLoLstClsPctMax',
           'lstPrcLstClsPctMin','lstPrcLstClsPctMax','imbExch925Min','imbExch925Max','imbExch1555Min','imbExch1555Max',
@@ -2567,6 +2696,24 @@ export default function ArbitrageSonar() {
               case 'volNFfromLstClsMax': setVolNFfromLstClsMax(v); break;
               case 'avPostMhVol90NFMin': setAvPostMhVol90NFMin(v); break;
               case 'avPostMhVol90NFMax': setAvPostMhVol90NFMax(v); break;
+              case 'avPreMhVol90NFMin': setAvPreMhVol90NFMin(v); break;
+              case 'avPreMhVol90NFMax': setAvPreMhVol90NFMax(v); break;
+              case 'avPreMhValue20NFMin': setAvPreMhValue20NFMin(v); break;
+              case 'avPreMhValue20NFMax': setAvPreMhValue20NFMax(v); break;
+              case 'avPreMhValue90NFMin': setAvPreMhValue90NFMin(v); break;
+              case 'avPreMhValue90NFMax': setAvPreMhValue90NFMax(v); break;
+              case 'avgDailyValue20Min': setAvgDailyValue20Min(v); break;
+              case 'avgDailyValue20Max': setAvgDailyValue20Max(v); break;
+              case 'avgDailyValue90Min': setAvgDailyValue90Min(v); break;
+              case 'avgDailyValue90Max': setAvgDailyValue90Max(v); break;
+              case 'volatility20Min': setVolatility20Min(v); break;
+              case 'volatility20Max': setVolatility20Max(v); break;
+              case 'volatility90Min': setVolatility90Min(v); break;
+              case 'volatility90Max': setVolatility90Max(v); break;
+              case 'preMhMDV20NFMin': setPreMhMDV20NFMin(v); break;
+              case 'preMhMDV20NFMax': setPreMhMDV20NFMax(v); break;
+              case 'preMhMDV90NFMin': setPreMhMDV90NFMin(v); break;
+              case 'preMhMDV90NFMax': setPreMhMDV90NFMax(v); break;
               case 'volRelMin': setVolRelMin(v); break;
               case 'volRelMax': setVolRelMax(v); break;
               case 'preMhBidLstPrcPctMin': setPreMhBidLstPrcPctMin(v); break;
@@ -2608,7 +2755,7 @@ export default function ArbitrageSonar() {
           zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
 
           // query params
-          minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst,
+          minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -2658,7 +2805,7 @@ export default function ArbitrageSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
-    minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst,
+    minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
     filterReport, equityType,
@@ -2722,6 +2869,15 @@ export default function ArbitrageSonar() {
       PreMhVolNF: mm("PreMhVolNF", preMhVolNFMin, preMhVolNFMax),
       VolNFfromLstCls: mm("VolNFfromLstCls", volNFfromLstClsMin, volNFfromLstClsMax),
       AvPostMhVol90NF: mm("AvPostMhVol90NF", avPostMhVol90NFMin, avPostMhVol90NFMax),
+      AvPreMhVol90NF: mm("AvPreMhVol90NF", avPreMhVol90NFMin, avPreMhVol90NFMax),
+      AvPreMhValue20NF: mm("AvPreMhValue20NF", avPreMhValue20NFMin, avPreMhValue20NFMax),
+      AvPreMhValue90NF: mm("AvPreMhValue90NF", avPreMhValue90NFMin, avPreMhValue90NFMax),
+      AvgDailyValue20: mm("AvgDailyValue20", avgDailyValue20Min, avgDailyValue20Max),
+      AvgDailyValue90: mm("AvgDailyValue90", avgDailyValue90Min, avgDailyValue90Max),
+      Volatility20: mm("Volatility20", volatility20Min, volatility20Max),
+      Volatility90: mm("Volatility90", volatility90Min, volatility90Max),
+      PreMhMDV20NF: mm("PreMhMDV20NF", preMhMDV20NFMin, preMhMDV20NFMax),
+      PreMhMDV90NF: mm("PreMhMDV90NF", preMhMDV90NFMin, preMhMDV90NFMax),
       VolRel: mm("VolRel", volRelMin, volRelMax),
       PreMhBidLstPrcPct: mm("PreMhBidLstPrcPct", preMhBidLstPrcPctMin, preMhBidLstPrcPctMax),
       PreMhLoLstPrcPct: mm("PreMhLoLstPrcPct", preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
@@ -2752,6 +2908,15 @@ export default function ArbitrageSonar() {
     preMhVolNFMin, preMhVolNFMax,
     volNFfromLstClsMin, volNFfromLstClsMax,
     avPostMhVol90NFMin, avPostMhVol90NFMax,
+    avPreMhVol90NFMin, avPreMhVol90NFMax,
+    avPreMhValue20NFMin, avPreMhValue20NFMax,
+    avPreMhValue90NFMin, avPreMhValue90NFMax,
+    avgDailyValue20Min, avgDailyValue20Max,
+    avgDailyValue90Min, avgDailyValue90Max,
+    volatility20Min, volatility20Max,
+    volatility90Min, volatility90Max,
+    preMhMDV20NFMin, preMhMDV20NFMax,
+    preMhMDV90NFMin, preMhMDV90NFMax,
     volRelMin, volRelMax,
     preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
     preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
@@ -2892,12 +3057,21 @@ export default function ArbitrageSonar() {
       if (!passMinMax(numPreMktVolNF(s), f.bounds.PreMhVolNF.min, f.bounds.PreMhVolNF.max)) continue;
       if (!passMinMax(numVolNFfromLstCls(s), f.bounds.VolNFfromLstCls.min, f.bounds.VolNFfromLstCls.max)) continue;
       if (!passMinMax(numAvPostMhVol90NF(s), f.bounds.AvPostMhVol90NF.min, f.bounds.AvPostMhVol90NF.max)) continue;
+      if (!passMinMax(numAvPreMhVol90NF(s), f.bounds.AvPreMhVol90NF.min, f.bounds.AvPreMhVol90NF.max)) continue;
+      if (!passMinMax(numAvPreMhValue20NF(s), f.bounds.AvPreMhValue20NF.min, f.bounds.AvPreMhValue20NF.max)) continue;
+      if (!passMinMax(numAvPreMhValue90NF(s), f.bounds.AvPreMhValue90NF.min, f.bounds.AvPreMhValue90NF.max)) continue;
+      if (!passMinMax(numAvgDailyValue20(s), f.bounds.AvgDailyValue20.min, f.bounds.AvgDailyValue20.max)) continue;
+      if (!passMinMax(numAvgDailyValue90(s), f.bounds.AvgDailyValue90.min, f.bounds.AvgDailyValue90.max)) continue;
+      if (!passMinMax(numVolatility20(s), f.bounds.Volatility20.min, f.bounds.Volatility20.max)) continue;
+      if (!passMinMax(numVolatility90(s), f.bounds.Volatility90.min, f.bounds.Volatility90.max)) continue;
+      if (!passMinMax(numPreMhMDV20NF(s), f.bounds.PreMhMDV20NF.min, f.bounds.PreMhMDV20NF.max)) continue;
+      if (!passMinMax(numPreMhMDV90NF(s), f.bounds.PreMhMDV90NF.min, f.bounds.PreMhMDV90NF.max)) continue;
       if (!passMinMax(numVolRel(s), f.bounds.VolRel.min, f.bounds.VolRel.max)) continue;
       if (!passMinMax(numPreMhBidLstPrcPct(s), f.bounds.PreMhBidLstPrcPct.min, f.bounds.PreMhBidLstPrcPct.max)) continue;
       if (!passMinMax(numPreMhLoLstPrcPct(s), f.bounds.PreMhLoLstPrcPct.min, f.bounds.PreMhLoLstPrcPct.max)) continue;
       if (!passMinMax(numPreMhHiLstClsPct(s), f.bounds.PreMhHiLstClsPct.min, f.bounds.PreMhHiLstClsPct.max)) continue;
       if (!passMinMax(numPreMhLoLstClsPct(s), f.bounds.PreMhLoLstClsPct.min, f.bounds.PreMhLoLstClsPct.max)) continue;
-      if (!passMinMax(numLstPrcLstClsPct(s), f.bounds.LstPrcLstClsPct.min, f.bounds.LstPrcLstClsPct.max)) continue;
+      if (!passMinMax(numLstPrcLstClsPctSafe(s), f.bounds.LstPrcLstClsPct.min, f.bounds.LstPrcLstClsPct.max)) continue;
       if (!passMinMax(numImbExch925(s), f.bounds.ImbExch925.min, f.bounds.ImbExch925.max)) continue;
       if (!passMinMax(numImbExch1555(s), f.bounds.ImbExch1555.min, f.bounds.ImbExch1555.max)) continue;
 
@@ -3467,11 +3641,10 @@ export default function ArbitrageSonar() {
   const bestTotalSoft = toNum(bestObj?.soft);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
   const activeWindowRatings = useMemo(() => getWindowRatings(activeData), [activeData]);
-  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
 
   return (
-      <div className={`relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden`}>
+      <div className={`sonar-borderless relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden ${isLightTheme ? "sonar-light-theme" : ""}`}>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-6">
         {/* ========================= HEADER ========================= */}
@@ -3522,7 +3695,7 @@ export default function ArbitrageSonar() {
               {/* SCANNER */}
               <Link
                 href="/paper/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 title="Open /paper/arbitrage"
               >
                 SCANNER
@@ -3544,10 +3717,10 @@ export default function ArbitrageSonar() {
                 type="button"
                 onClick={() => setActiveMode("onlyActive")}
                 className={[
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                   activeMode === "onlyActive"
                     ? `${accentButtonClass} border`
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5",
+                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
                 ].join(" ")}
                 title="Show only ACTIVE positions (PositionBp != 0)"
               >
@@ -3558,10 +3731,10 @@ export default function ArbitrageSonar() {
                 type="button"
                 onClick={() => setActiveMode("onlyInactive")}
                 className={[
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                   activeMode === "onlyInactive"
-                    ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5",
+                    ? `${accentButtonClass} border`
+                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
                 ].join(" ")}
                 title="Show only INACTIVE positions (PositionBp == 0)"
               >
@@ -3572,10 +3745,10 @@ export default function ArbitrageSonar() {
                 type="button"
                 onClick={() => setActiveMode("off")}
                 className={[
-                  "h-8 px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border active:scale-[0.98]",
+                  "inline-flex h-7 items-center justify-center px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border active:scale-[0.98]",
                   activeMode === "off"
-                    ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
-                    : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400",
+                    ? `${accentButtonClass} border`
+                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
                 ].join(" ")}
                 title="Show ALL positions"
               >
@@ -3766,8 +3939,8 @@ export default function ArbitrageSonar() {
         </header>
 
         {/* ========================= CONTROLS ========================= */}
-        <div className="flex flex-wrap gap-4 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-4 bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
+          <div className="flex h-7 items-center gap-2">
             {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
               <FilterButton
                 key={c}
@@ -3778,16 +3951,16 @@ export default function ArbitrageSonar() {
             ))}
           </div>
 
-          <div className="w-px h-8 bg-white/5" />
+          <div className="h-7 w-px self-center bg-white/5" />
 
-          <div className="flex gap-2">
+          <div className="flex h-7 items-center gap-2">
             <FilterButton active={mode === "all"} label="ALL" onClick={() => setMode("all")} />
             <FilterButton active={mode === "top"} label="TOP" onClick={() => setMode("top")} />
           </div>
 
-          <div className="w-px h-8 bg-white/5" />
+          <div className="h-7 w-px self-center bg-white/5" />
 
-          <div className="flex gap-2">
+          <div className="flex h-7 items-center gap-2">
             {(["any", "hard", "soft"] as ArbType[]).map((t) => (
               <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
             ))}
@@ -3798,33 +3971,55 @@ export default function ArbitrageSonar() {
           {/* RIGHT GROUP */}
           <div className="flex gap-2 items-center">
             {fields.map((f) => (
-              <div key={f.label} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
-                <span className="text-[10px] font-mono text-zinc-500 uppercase">{f.label}</span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={f.step}
-                  min={f.min}
-                  value={Number.isFinite(f.val) ? f.val : ""}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === "") return;
-                    let n = Number(raw);
-                    if (!Number.isFinite(n)) return;
-                    if (f.integer) n = Math.trunc(n);
-                    n = Math.max(f.min, n);
-                    f.set(n);
-                  }}
-                  placeholder={f.ph}
-                className={`w-14 bg-transparent text-right text-xs font-mono ${accentTextSoftClass} placeholder-zinc-700 focus:outline-none`}
-                />
+              <div key={f.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{f.label}</span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={f.step}
+                    min={f.min}
+                    value={Number.isFinite(f.val) ? f.val : ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === "") return;
+                      let n = Number(raw);
+                      if (!Number.isFinite(n)) return;
+                      if (f.integer) n = Math.trunc(n);
+                      n = Math.max(f.min, n);
+                      f.set(n);
+                    }}
+                    placeholder={f.ph}
+                    className={`center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center ${accentTextSoftClass} placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]`}
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpNumField(f, f.step)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label={`Increase ${f.label}`}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpNumField(f, -f.step)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
+                      aria-label={`Decrease ${f.label}`}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
 
             {/* COLLAPSE BUTTON - MUST BE LAST (after OFFSET) */}
               <button
                 onClick={() => setFiltersCollapsed(!filtersCollapsed)}
-                className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
+                className="flex h-7 w-12 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
                 title={filtersCollapsed ? "Show Filters" : "Collapse Filters"}
               >
                 {filtersCollapsed ? (
@@ -3887,6 +4082,15 @@ export default function ArbitrageSonar() {
             <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
@@ -3900,15 +4104,15 @@ export default function ArbitrageSonar() {
 
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        <div className="flex flex-wrap gap-3 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
-          <span className="text-zinc-500 mr-2 text-sm">
+        <div className="flex flex-wrap items-center gap-4 bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
+          <span className="flex h-[40px] items-center text-zinc-500 text-sm">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
             </svg>
           </span>
 
           {/* RED GROUP */}
-          <div className="flex items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
+          <div className={`${SONAR_FILTER_GROUP_BASE} border-rose-500/20 bg-rose-500/[0.06]`}>
             {[
               { label: "Div", val: excludeDividend, set: setExcludeDividend },
               { label: "News", val: excludeNews, set: setExcludeNews },
@@ -3922,8 +4126,8 @@ export default function ArbitrageSonar() {
                 key={b.label}
                 onClick={() => b.set(!b.val)}
                 title={b.title}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-                  b.val ? "bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.6)]" : "bg-transparent text-rose-500 hover:bg-rose-500/10"
+                className={`${SONAR_FILTER_INNER_PILL} ${
+                  b.val ? "bg-rose-500 text-white border-transparent shadow-[0_0_16px_rgba(244,63,94,0.42)]" : "bg-transparent border-transparent text-rose-500 hover:bg-rose-500/10"
                 }`}
               >
                 {b.label}
@@ -3931,10 +4135,10 @@ export default function ArbitrageSonar() {
             ))}
           </div>
 
-          <div className="w-px h-6 bg-white/5" />
+          <div className="h-7 w-px bg-white/5" />
 
           {/* GREEN GROUP */}
-          <div className="flex items-center gap-2 p-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10">
+          <div className={`${SONAR_FILTER_GROUP_BASE} border-emerald-500/20 bg-emerald-500/[0.06]`}>
             {[
               { label: "USA", val: includeUSA, set: setIncludeUSA },
               { label: "CHINA", val: includeChina, set: setIncludeChina },
@@ -3942,8 +4146,8 @@ export default function ArbitrageSonar() {
               <button
                 key={b.label}
                 onClick={() => b.set(!b.val)}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all ${
-                  b.val ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]" : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
+                className={`${SONAR_FILTER_INNER_PILL} ${
+                  b.val ? "bg-emerald-500 text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]" : "bg-transparent border-transparent text-emerald-500 hover:bg-emerald-500/10"
                 }`}
               >
                 {b.label}
@@ -3951,10 +4155,10 @@ export default function ArbitrageSonar() {
             ))}
           </div>
 
-          <div className="w-px h-6 bg-white/5" />
+          <div className="h-7 w-px bg-white/5" />
 
           {/* YELLOW GROUP */}
-          <div className="flex items-center gap-2 p-2 rounded-xl border border-amber-900/30 bg-amber-900/10">
+          <div className={`${SONAR_FILTER_GROUP_BASE} border-yellow-200/20 bg-yellow-200/[0.06]`}>
             <MultiSelectFilter
               label="Country"
               options={allCountries}
@@ -3987,7 +4191,7 @@ export default function ArbitrageSonar() {
           <div className="flex-1" />          
 
           {/* SORT (blue group; MSF-like control; one toggle button; no "SORT" label) */}
-          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-sky-900/30 bg-sky-900/10">
+          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-sky-500/20 bg-sky-500/[0.06]`}>
             {/* dropdown control styled like MSF (but BLUE) */}
             <SingleSelectFilter
               value={sortKey}
@@ -3995,6 +4199,10 @@ export default function ArbitrageSonar() {
                 const k = v as SortKey;
                 setSortKey(k);
                 if (k === "pin") setSortDir("desc");
+              }}
+              onMainClick={() => {
+                if (sortKey === "pin") return;
+                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
               }}
               color="cyan"
               options={[
@@ -4010,152 +4218,218 @@ export default function ArbitrageSonar() {
             />
 
 
-            {/* one toggle button (asc/desc cycles) */}
-            <button
-              type="button"
-              onClick={() => {
-                if (sortKey === "pin") return;
-                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-              }}
-              className={[
-                "px-3 py-1.5 rounded-lg border text-[11px] font-mono font-bold",
-                "bg-sky-500/10 border-sky-500/25 text-sky-200",
-                "hover:bg-sky-500/15 hover:border-sky-500/35",
-                "shadow-[0_0_12px_-6px_rgba(56,189,248,0.30)]",
-                "transition-all",
-                sortKey === "pin" ? "opacity-60 cursor-default" : "",
-              ].join(" ")}
-              title={sortKey === "pin" ? "PIN sort (dir N/A)" : "Toggle ASC/DESC"}
-            >
-              {sortKey === "pin" ? "PIN" : sortDir === "asc" ? "^" : "v"}
-            </button>
           </div>
 
           {/* CORR (pink group; button + threshold input) */}
-          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-pink-500/30 bg-pink-500/10">
+          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-pink-500/20 bg-pink-500/[0.06]`}>
             <button
               type="button"
               onClick={() => setCorrEnabled((v) => !v)}
               className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                SONAR_FILTER_INNER_PILL,
                 corrEnabled
-                  ? "bg-pink-500/25 border-pink-500/45 text-pink-100 shadow-[0_0_14px_rgba(236,72,153,0.35)]"
+                  ? "bg-pink-500 text-white border-transparent shadow-[0_0_16px_rgba(236,72,153,0.38)]"
                   : "bg-transparent border-transparent text-pink-300/70 hover:bg-pink-500/10 hover:text-pink-200",
               ].join(" ")}
               title="Toggle correlation hide filter"
             >
               CORR
             </button>
-              <input
-                type="number"
-                step={0.05}
-                min={0.5}
-                max={1.0}
-                value={corrAbs}
-                disabled={!corrEnabled}
-                onChange={(e) => {
-                  const raw = parseFloat(e.target.value);
-                  const v = Number.isFinite(raw) ? raw : 0.5;
-                  const clamped = Math.min(1.0, Math.max(0.5, v));
-                  setCorrAbs(clamped);
-                }}
-                className={[
-                  "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                  corrEnabled ? "border-pink-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-                ].join(" ")}
-                title="Threshold in [0.5..1.0] for |corr|"
-              />
+              <div className={clsx("group relative w-[72px]", !corrEnabled && "opacity-60")}>
+                <input
+                  type="number"
+                  step={0.05}
+                  min={0.5}
+                  max={1.0}
+                  value={corrAbs}
+                  disabled={!corrEnabled}
+                  onChange={(e) => {
+                    const raw = parseFloat(e.target.value);
+                    const v = Number.isFinite(raw) ? raw : 0.5;
+                    const clamped = Math.min(1.0, Math.max(0.5, v));
+                    setCorrAbs(clamped);
+                  }}
+                  className={[
+                    "center-spin w-full h-7 rounded-md !pl-2 !pr-5 text-[11px] font-mono text-center tabular-nums leading-none transition-all focus:outline-none",
+                    corrEnabled
+                      ? "bg-black/25 border border-transparent text-pink-100"
+                      : "bg-black/10 border border-white/10 text-zinc-600 cursor-not-allowed",
+                  ].join(" ")}
+                  title="Threshold in [0.5..1.0] for |corr|"
+                />
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={!corrEnabled}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setCorrAbs((v) => Math.min(1.0, Math.max(0.5, +(v + 0.05).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase correlation threshold"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!corrEnabled}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setCorrAbs((v) => Math.min(1.0, Math.max(0.5, +(v - 0.05).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                    aria-label="Decrease correlation threshold"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
           </div>
 
 
           {/* ZAP FILTERS */}
-          <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-violet-500/20 bg-violet-500/[0.06]`}>
             {/* mode toggles */}
             <button
               type="button"
               onClick={() => setZapMode("zap")}
               className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border uppercase",
+                SONAR_FILTER_INNER_PILL,
                 zapMode === "zap"
-                  ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-              ZAP
+              % ZAP
             </button>
 
             <button
               type="button"
               onClick={() => setZapMode("sigma")}
               className={[
-                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-baseline gap-1",
+                `${SONAR_FILTER_INNER_PILL} gap-1`,
                 zapMode === "sigma"
-                  ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                   : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
               ].join(" ")}
             >
-              <span className="text-[12px] leading-[1] relative top-[0.5px]" style={{ textTransform: "none" }}>SIG</span>
-              <span className="uppercase">ZAP</span>
+              <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
             </button>
 
             {/* 1) show/filter threshold (single) */}
-            <input
-              type="number"
-              step={zapMode === "sigma" ? 0.05 : 0.1}
-              min={zapMode === "sigma" ? 0.05 : 0.3}
-              value={zapShowAbs}
-              disabled={zapMode === "off"}
-              onChange={(e) => {
-                const v = clampFloat(
-                  e.target.value,
-                  zapMode === "sigma" ? 0.05 : 0.3
-                );
-                setZapShowAbs(v);
-              }}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode !== "off" ? "border-violet-500/30 text-white" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-              title="Threshold for filtering (ZAP or SIGZAP depending on mode)"
-            />
+            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              <input
+                type="number"
+                step={zapMode === "sigma" ? 0.05 : 0.1}
+                min={zapMode === "sigma" ? 0.05 : 0.3}
+                value={zapShowAbs}
+                disabled={zapMode === "off"}
+                onChange={(e) => {
+                  const v = clampFloat(e.target.value, zapMode === "sigma" ? 0.05 : 0.3);
+                  setZapShowAbs(v);
+                }}
+                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                title="Threshold for filtering (ZAP or SIGZAP depending on mode)"
+              />
+              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "sigma" ? 0.05 : 0.3, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  aria-label="Increase zap threshold"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "sigma" ? 0.05 : 0.3, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                  aria-label="Decrease zap threshold"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
 
             {/* 2) SILVER (too high) */}
-            <input
-              type="number"
-              step={zapMode === "sigma" ? 0.1 : 0.5}
-              min={0}
-              value={zapSilverAbs}
-              disabled={zapMode === "off"}
-              onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode !== "off" ? "border-zinc-200/30 text-zinc-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-              title="SILVER highlight when |metric| >= this (active+inactive)"
-            />
+            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              <input
+                type="number"
+                step={zapMode === "sigma" ? 0.1 : 0.5}
+                min={0}
+                value={zapSilverAbs}
+                disabled={zapMode === "off"}
+                onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
+                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                title="SILVER highlight when |metric| >= this (active+inactive)"
+              />
+              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  aria-label="Increase silver threshold"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                  aria-label="Decrease silver threshold"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
 
             {/* 3) GOLD (only active normalization) */}
-            <input
-              type="number"
-              step={zapMode === "sigma" ? 0.05 : 0.1}
-              min={0}
-              value={zapGoldAbs}
-              disabled={zapMode === "off"}
-              onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
-              className={[
-                "w-[62px] bg-black/20 border rounded-md px-2 py-1 text-[11px] font-mono text-right tabular-nums leading-none focus:outline-none",
-                zapMode !== "off" ? "border-amber-500/30 text-amber-100" : "border-white/10 text-zinc-600 cursor-not-allowed opacity-60",
-              ].join(" ")}
-              title="GOLD highlight when |metric| <= this (ONLY active positions)"
-            />
+            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              <input
+                type="number"
+                step={zapMode === "sigma" ? 0.05 : 0.1}
+                min={0}
+                value={zapGoldAbs}
+                disabled={zapMode === "off"}
+                onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
+                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                title="GOLD highlight when |metric| <= this (ONLY active positions)"
+              />
+              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                  aria-label="Increase gold threshold"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  disabled={zapMode === "off"}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                  aria-label="Decrease gold threshold"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
 
             <button
               type="button"
               onClick={() => setZapMode("off")}
               className={[
-                "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                SONAR_FILTER_INNER_PILL,
                 zapMode === "off"
-                  ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
+                  ? "bg-zinc-500 text-white border-transparent shadow-[0_0_16px_rgba(161,161,170,0.28)]"
                   : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
               ].join(" ")}
               title="Disable ZAP filters"
@@ -4357,11 +4631,11 @@ export default function ArbitrageSonar() {
                     <span className={`px-2 py-1 border text-[10px] font-mono font-bold uppercase tracking-[0.18em] ${accentChipClass}`}>
                       Active Signal
                     </span>
-                    <div className={`h-px w-4 ${accentLineClass}`} />
                   </div>
                   <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">{activeTicker ?? "-"}</span>
 
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
+                    <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
                     <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
                     <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
                     <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
@@ -4509,26 +4783,52 @@ export default function ArbitrageSonar() {
 
                   return (
                     <div className="space-y-3">
-                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
                         {renderCell("Company", s ? getCompany(s) : "-")}
-                        {renderCell("Country", s ? getCountry(s) : "-")}
                         {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
                         {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
                         {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
                         {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
+                        {renderCell("RoundLot", s ? (numRoundLot(s) == null ? "-" : fmtMaybeInt(numRoundLot(s))) : "-")}
+                        {renderCell("VolRel", s ? fmtNum(numVolRel(s), 2) : "-")}
                         {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
                         {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
                         {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : activeSector2) : "-")}
-                        {renderCell("Exchange", s ? (getExchange(s) !== "-" ? getExchange(s) : activeExchange2) : "-")}
                         {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
                         {renderCell("Spread", s ? (numSpread(s) == null ? "-" : fmtNum(numSpread(s)!, 4)) : "-")}
                         {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
                         {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
                         {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
                         {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "-", s ? "text-rose-300" : "text-zinc-500")}
+                        {renderCell("LstCls", s ? (numLastClose(s) == null ? "-" : fmtNum(numLastClose(s)!, 2)) : "-")}
+                        {renderCell("VWAP", s ? (numVWAP(s) == null ? "-" : fmtNum(numVWAP(s)!, 2)) : "-")}
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
+                        {renderCell("Country", s ? getCountry(s) : "-")}
+                        {renderCell("AvPreMhVol90NF", s ? fmtMaybeInt(numAvPreMhVol90NF(s)) : "-")}
+                        {renderCell("AvPreMhValue20NF", s ? fmtMaybeInt(numAvPreMhValue20NF(s)) : "-")}
+                        {renderCell("AvPreMhValue90NF", s ? fmtMaybeInt(numAvPreMhValue90NF(s)) : "-")}
+                        {renderCell("AvgDailyValue20", s ? fmtMaybeInt(numAvgDailyValue20(s)) : "-")}
+                        {renderCell("AvgDailyValue90", s ? fmtMaybeInt(numAvgDailyValue90(s)) : "-")}
+                        {renderCell("Volatility20", s ? fmtPct(numVolatility20(s), 2) : "-")}
+                        {renderCell("Volatility90", s ? fmtPct(numVolatility90(s), 2) : "-")}
+                        {renderCell("LstPrcLstCls%", s ? fmtPct(numLstPrcLstClsPctSafe(s), 2) : "-")}
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
+                        {renderCell("PreMhHiLstPrc%", s ? fmtPct(numPreMhBidLstPrcPct(s), 2) : "-")}
+                        {renderCell("PreMhLoLstPrc%", s ? fmtPct(numPreMhLoLstPrcPct(s), 2) : "-")}
+                        {renderCell("PreMhHiLstCls%", s ? fmtPct(numPreMhHiLstClsPct(s), 2) : "-")}
+                        {renderCell("PreMhLoLstCls%", s ? fmtPct(numPreMhLoLstClsPct(s), 2) : "-")}
+                        {renderCell("ImbExch9:25", s ? fmtMaybeInt(numImbExch925(s)) : "-")}
+                        {renderCell("ImbExch15:55", s ? fmtMaybeInt(numImbExch1555(s)) : "-")}
+                        {renderCell("AvPostMhVol90NF", s ? fmtMaybeInt(numAvPostMhVol90NF(s)) : "-")}
+                        {renderCell("PreMhMDV20NF", s ? fmtMaybeInt(numPreMhMDV20NF(s)) : "-")}
+                        {renderCell("PreMhMDV90NF", s ? fmtMaybeInt(numPreMhMDV90NF(s)) : "-")}
                       </div>
                     </div>
                   );
@@ -4605,9 +4905,6 @@ export default function ArbitrageSonar() {
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-px bg-white/10">
                         {[
-                          { k: "LstCls", v: activeData ? (numLastClose(activeData) == null ? "-" : fmtNum(numLastClose(activeData)!, 2)) : "-" },
-                          { k: "VWAP", v: activeData ? (numVWAP(activeData) == null ? "-" : fmtNum(numVWAP(activeData)!, 2)) : "-" },
-                          { k: "RoundLot", v: activeData ? (numRoundLot(activeData) == null ? "-" : fmtMaybeInt(numRoundLot(activeData))) : "-" },
                           { k: "YCls", v: activeData ? (numYCls(activeData) == null ? "-" : fmtNum(numYCls(activeData)!, 2)) : "-" },
                           { k: "TCls", v: activeData ? (numTCls(activeData) == null ? "-" : fmtNum(numTCls(activeData)!, 2)) : "-" },
                           { k: "ClsToCls%", v: activeData ? fmtPct(numClsToClsPct(activeData), 2) : "-" },
@@ -4616,31 +4913,6 @@ export default function ArbitrageSonar() {
                             k: "LstClsNewsCnt",
                             v: activeData ? (numLstClsNewsCnt(activeData) == null ? "-" : fmtMaybeInt(numLstClsNewsCnt(activeData))) : "-",
                           },
-                        ].map((item) => (
-                          <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
-                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
-                            <span className="text-[12px] text-zinc-200 font-mono tabular-nums">{item.v}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
-                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
-                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Extended Tape Fields</span>
-                        <span className="text-[10px] font-mono text-zinc-600">new analytics columns</span>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-px bg-white/10">
-                        {[
-                          { k: "VolRel", v: activeData ? fmtNum(numVolRel(activeData), 2) : "-" },
-                          { k: "PreMhHiLstPrc%", v: activeData ? fmtPct(numPreMhBidLstPrcPct(activeData), 2) : "-" },
-                          { k: "PreMhLoLstPrc%", v: activeData ? fmtPct(numPreMhLoLstPrcPct(activeData), 2) : "-" },
-                          { k: "PreMhHiLstCls%", v: activeData ? fmtPct(numPreMhHiLstClsPct(activeData), 2) : "-" },
-                          { k: "PreMhLoLstCls%", v: activeData ? fmtPct(numPreMhLoLstClsPct(activeData), 2) : "-" },
-                          { k: "LstPrcLstCls%", v: activeData ? fmtPct(numLstPrcLstClsPct(activeData), 2) : "-" },
-                          { k: "ImbExch9:25", v: activeData ? fmtMaybeInt(numImbExch925(activeData)) : "-" },
-                          { k: "ImbExch15:55", v: activeData ? fmtMaybeInt(numImbExch1555(activeData)) : "-" },
-                          { k: "AvPostMhVol90NF", v: activeData ? fmtMaybeInt(numAvPostMhVol90NF(activeData)) : "-" },
                         ].map((item) => (
                           <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
                             <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
@@ -4874,6 +5146,121 @@ export default function ArbitrageSonar() {
             </div>
           </div>
         )}
+        <style jsx global>{`
+          input.center-spin[type="number"] {
+            -moz-appearance: textfield;
+          }
+          input.center-spin[type="number"]::-webkit-outer-spin-button,
+          input.center-spin[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+          }
+        `}</style>
+        <style>{`
+          .sonar-borderless .border-white\\/5,
+          .sonar-borderless .border-white\\/10,
+          .sonar-borderless .border-white\\/\\[0\\.04\\],
+          .sonar-borderless .border-white\\/\\[0\\.06\\],
+          .sonar-borderless .border-white\\/\\[0\\.08\\],
+          .sonar-borderless .border-white\\/\\[0\\.12\\] {
+            border-color: transparent !important;
+          }
+
+          .sonar-light-theme {
+            color: #111827;
+            color-scheme: light;
+          }
+
+          .sonar-light-theme button,
+          .sonar-light-theme input,
+          .sonar-light-theme select,
+          .sonar-light-theme textarea {
+            color: #111827;
+          }
+
+          .sonar-light-theme .bg-black\\/20,
+          .sonar-light-theme .bg-black\\/30,
+          .sonar-light-theme .bg-black\\/40,
+          .sonar-light-theme .bg-\\[\\#0a0a0a\\]\\/40,
+          .sonar-light-theme .bg-\\[\\#0a0a0a\\]\\/60,
+          .sonar-light-theme .bg-white\\/5,
+          .sonar-light-theme .bg-white\\/10,
+          .sonar-light-theme .bg-white\\/\\[0\\.01\\],
+          .sonar-light-theme .bg-white\\/\\[0\\.03\\],
+          .sonar-light-theme .bg-white\\/\\[0\\.04\\],
+          .sonar-light-theme .bg-emerald-500\\/\\[0\\.05\\],
+          .sonar-light-theme .bg-rose-500\\/\\[0\\.05\\],
+          .sonar-light-theme .bg-yellow-200\\/10,
+          .sonar-light-theme .bg-violet-500\\/10,
+          .sonar-light-theme .bg-fuchsia-500\\/10,
+          .sonar-light-theme .bg-sky-400\\/10 {
+            background-color: rgba(255, 255, 255, 0.38) !important;
+          }
+
+          .sonar-light-theme .border-white\\/5,
+          .sonar-light-theme .border-white\\/10,
+          .sonar-light-theme .border-white\\/\\[0\\.04\\],
+          .sonar-light-theme .border-white\\/\\[0\\.06\\],
+          .sonar-light-theme .border-white\\/\\[0\\.08\\],
+          .sonar-light-theme .border-white\\/\\[0\\.12\\] {
+            border-color: rgba(15, 23, 42, 0.1) !important;
+          }
+
+          .sonar-light-theme .text-white,
+          .sonar-light-theme .text-zinc-100,
+          .sonar-light-theme .text-zinc-200,
+          .sonar-light-theme .text-zinc-300,
+          .sonar-light-theme .text-zinc-400,
+          .sonar-light-theme .text-zinc-500,
+          .sonar-light-theme .text-zinc-600,
+          .sonar-light-theme .text-zinc-700 {
+            color: #111827 !important;
+          }
+
+          .sonar-light-theme .hover\\:text-white:hover,
+          .sonar-light-theme .hover\\:text-zinc-200:hover,
+          .sonar-light-theme .hover\\:text-zinc-300:hover {
+            color: #111827 !important;
+          }
+
+          .sonar-light-theme .text-violet-300,
+          .sonar-light-theme .text-violet-200,
+          .sonar-light-theme .text-fuchsia-300 {
+            color: #4c1d95 !important;
+          }
+
+          .sonar-light-theme .text-emerald-300,
+          .sonar-light-theme .text-emerald-400 {
+            color: #047857 !important;
+          }
+
+          .sonar-light-theme .text-rose-300,
+          .sonar-light-theme .text-rose-400 {
+            color: #be123c !important;
+          }
+
+          .sonar-light-theme .bg-rose-950\\/28,
+          .sonar-light-theme .bg-rose-950\\/45,
+          .sonar-light-theme .bg-emerald-950\\/28,
+          .sonar-light-theme .bg-emerald-950\\/45,
+          .sonar-light-theme .border-rose-900\\/40,
+          .sonar-light-theme .border-rose-900\\/45,
+          .sonar-light-theme .border-emerald-900\\/40,
+          .sonar-light-theme .border-emerald-900\\/45 {
+            background-color: rgba(255, 255, 255, 0.38) !important;
+            border-color: rgba(15, 23, 42, 0.1) !important;
+          }
+
+          .sonar-light-theme input::placeholder,
+          .sonar-light-theme textarea::placeholder {
+            color: rgba(17, 24, 39, 0.42) !important;
+          }
+
+          .sonar-light-theme .from-white.to-white\\/60 {
+            --tw-gradient-from: #111827 var(--tw-gradient-from-position) !important;
+            --tw-gradient-to: rgb(17 24 39 / 0.62) var(--tw-gradient-to-position) !important;
+          }
+        `}</style>
       </div>
     </div>
   );

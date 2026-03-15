@@ -82,17 +82,38 @@ type ScannerAccent = {
 
 function getScannerAccent(theme?: string | null): ScannerAccent {
   switch (theme) {
-    case "aurora":
+    case "light":
+      return {
+        selection: "selection:bg-violet-400/30",
+        dot: "bg-violet-600",
+        activeButton: "border border-violet-400/55 text-violet-900 shadow-[0_0_12px_rgba(139,92,246,0.12)] bg-violet-200/55",
+        activeText: "text-violet-900",
+        activeBorder: "border-violet-400/28 bg-violet-200/30",
+        activeSoft: "bg-violet-200/55 text-violet-900 border-violet-400/30 shadow-[0_0_10px_-3px_rgba(139,92,246,0.12)]",
+        buttonBorder: "border-violet-400/30",
+        outlineButton: "border-violet-300/55 text-violet-900 hover:bg-violet-200/40 shadow-[0_0_10px_rgba(139,92,246,0.06)]",
+      };
+    case "sparkle":
+      return {
+        selection: "selection:bg-yellow-200/35",
+        dot: "bg-yellow-200",
+        activeButton: "border border-yellow-200/70 text-yellow-200 shadow-[0_0_12px_rgba(254,240,138,0.18)] bg-yellow-200/8",
+        activeText: "text-yellow-200",
+        activeBorder: "border-yellow-200/28 bg-yellow-200/[0.05]",
+        activeSoft: "bg-yellow-200/10 text-yellow-200 border-yellow-200/25 shadow-[0_0_10px_-3px_rgba(254,240,138,0.16)]",
+        buttonBorder: "border-yellow-200/18",
+        outlineButton: "border-yellow-200/35 text-yellow-200 hover:bg-yellow-200/10 shadow-[0_0_10px_rgba(254,240,138,0.08)]",
+      };
     case "asher":
       return {
-        selection: "selection:bg-amber-500/30",
-        dot: "bg-amber-500",
-        activeButton: "border border-amber-500 text-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.3)] bg-amber-500/10",
-        activeText: "text-amber-300",
-        activeBorder: "border-amber-500/30 bg-amber-500/[0.05]",
-        activeSoft: "bg-amber-500/10 text-amber-300 border-amber-500/20 shadow-[0_0_10px_-3px_rgba(245,158,11,0.2)]",
-        buttonBorder: "border-amber-500/20",
-        outlineButton: "border-amber-500/50 text-amber-500 hover:bg-amber-500/10 shadow-[0_0_10px_rgba(245,158,11,0.1)]",
+        selection: "selection:bg-zinc-200/25",
+        dot: "bg-zinc-300",
+        activeButton: "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/8",
+        activeText: "text-zinc-200",
+        activeBorder: "border-zinc-300/25 bg-zinc-200/[0.04]",
+        activeSoft: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.1)]",
+        buttonBorder: "border-zinc-300/18",
+        outlineButton: "border-zinc-300/30 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.06)]",
       };
     case "neon":
       return {
@@ -128,6 +149,15 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         outlineButton: "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.1)]",
       };
   }
+}
+
+function getScannerHeaderButtonActiveClass(theme?: string | null): string {
+  if (theme === "sparkle") return "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10";
+  if (theme === "asher") return "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10";
+  if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
+  if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
+  if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
+  return "border border-emerald-500 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-emerald-500/10";
 }
 
 type TapeArbSide = "Long" | "Short" | number | string;
@@ -192,6 +222,8 @@ type PaperArbClosedDto = {
   benchPnlUsd?: number | null;
   hedgedPnlUsd?: number | null;
   totalPnlUsd?: number | null; // depends on pnlMode on server, but server returns it already
+  rating?: number | null;
+  ratingTotal?: number | null;
 
   adv20?: number | null;
   adv20NF?: number | null;
@@ -211,11 +243,21 @@ type PaperArbClosedDto = {
   marketCapM?: number | null;
   preMktVolNF?: number | null;
   avPostMhVol90NF?: number | null;
+  avPreMhVol90NF?: number | null;
+  avPreMhValue20NF?: number | null;
+  avPreMhValue90NF?: number | null;
+  avgDailyValue20?: number | null;
+  avgDailyValue90?: number | null;
+  volatility20?: number | null;
+  volatility90?: number | null;
+  preMhMDV20NF?: number | null;
+  preMhMDV90NF?: number | null;
   volRel?: number | null;
   preMhBidLstPrcPct?: number | null;
   preMhLoLstPrcPct?: number | null;
   preMhHiLstClsPct?: number | null;
   preMhLoLstClsPct?: number | null;
+  lstPrcLstClsPct?: number | null;
   imbExch925?: number | null;
   imbExch1555?: number | null;
 };
@@ -330,6 +372,20 @@ type PaperArbAnalyticsRequest = {
   maxMdnPostMhVol90NF?: number | null;
   minAvPostMhVol90NF?: number | null;
   maxAvPostMhVol90NF?: number | null;
+  minAvPreMhVol90NF?: number | null;
+  maxAvPreMhVol90NF?: number | null;
+  minAvPreMhValue20NF?: number | null;
+  maxAvPreMhValue20NF?: number | null;
+  minAvPreMhValue90NF?: number | null;
+  maxAvPreMhValue90NF?: number | null;
+  minAvgDailyValue20?: number | null;
+  maxAvgDailyValue20?: number | null;
+  minAvgDailyValue90?: number | null;
+  maxAvgDailyValue90?: number | null;
+  minVolatility20?: number | null;
+  maxVolatility20?: number | null;
+  minVolatility90?: number | null;
+  maxVolatility90?: number | null;
   minVolRel?: number | null;
   maxVolRel?: number | null;
   minPreMhBidLstPrcPct?: number | null;
@@ -496,6 +552,19 @@ type OptimizerResultRow = {
   score: number;
 };
 
+type ScopeBatchScenarioRequest = {
+  id: string;
+  parameter: string;
+  variant: string;
+  summary: string;
+  request: PaperArbAnalyticsRequest;
+};
+
+type ScopeBatchResponse = {
+  rows?: OptimizerResultRow[] | null;
+  comboRows?: OptimizerResultRow[] | null;
+};
+
 type OptimizerImpactRow = {
   id: string;
   parameter: string;
@@ -514,6 +583,12 @@ type OptimizerImpactRow = {
 type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score";
 type OptimizerRangeGroupKey = "RATING GATES" | "ZAP THRESHOLDS" | "TAPE FILTERS";
 type OptimizerRangeGroupStatus = { loading: boolean; error: string | null; partial: boolean };
+type ScopeParameterDefinition = {
+  key: string;
+  label: string;
+  group: OptimizerRangeGroupKey;
+  scenarioParameter?: string | null;
+};
 
 type ScopeResearchChartType =
   | "simple_box"
@@ -538,6 +613,8 @@ type ScopeResearchParameterKey =
   | "reversionAbs"
   | "reversionPct"
   | "minHoldCandles"
+  | "rating"
+  | "ratingTotal"
   | "adv20"
   | "adv20NF"
   | "adv90"
@@ -556,11 +633,21 @@ type ScopeResearchParameterKey =
   | "marketCapM"
   | "preMktVolNF"
   | "avPostMhVol90NF"
+  | "avPreMhVol90NF"
+  | "avPreMhValue20NF"
+  | "avPreMhValue90NF"
+  | "avgDailyValue20"
+  | "avgDailyValue90"
+  | "volatility20"
+  | "volatility90"
+  | "preMhMDV20NF"
+  | "preMhMDV90NF"
   | "volRel"
   | "preMhBidLstPrcPct"
   | "preMhLoLstPrcPct"
   | "preMhHiLstClsPct"
   | "preMhLoLstClsPct"
+  | "lstPrcLstClsPct"
   | "volNFfromLstCls"
   | "imbExch925"
   | "imbExch1555";
@@ -810,6 +897,15 @@ type SharedRangeFilterKey =
   | "premhvolnf"
   | "volnffromlstcls"
   | "avpostmhvol90nf"
+  | "avpremhvol90nf"
+  | "avpremhvalue20nf"
+  | "avpremhvalue90nf"
+  | "avgdailyvalue20"
+  | "avgdailyvalue90"
+  | "volatility20"
+  | "volatility90"
+  | "premhmdv20nf"
+  | "premhmdv90nf"
   | "volrel"
   | "premhbidlstprc"
   | "premhlolstprc"
@@ -841,6 +937,15 @@ const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRang
   premhvolnf: "on",
   volnffromlstcls: "on",
   avpostmhvol90nf: "on",
+  avpremhvol90nf: "on",
+  avpremhvalue20nf: "on",
+  avpremhvalue90nf: "on",
+  avgdailyvalue20: "on",
+  avgdailyvalue90: "on",
+  volatility20: "on",
+  volatility90: "on",
+  premhmdv20nf: "on",
+  premhmdv90nf: "on",
   volrel: "on",
   premhbidlstprc: "on",
   premhlolstprc: "on",
@@ -863,6 +968,8 @@ const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchP
   { value: "reversionAbs", label: "Peak-End Abs", format: "number" },
   { value: "reversionPct", label: "Reversion %", format: "percent" },
   { value: "minHoldCandles", label: "Min Hold", format: "minutes" },
+  { value: "rating", label: "Rating", format: "number" },
+  { value: "ratingTotal", label: "Rating Total", format: "number" },
   { value: "adv20", label: "ADV20", format: "number" },
   { value: "adv20NF", label: "ADV20NF", format: "number" },
   { value: "adv90", label: "ADV90", format: "number" },
@@ -882,11 +989,21 @@ const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchP
   { value: "preMktVolNF", label: "PreMhVolNF", format: "number" },
   { value: "volNFfromLstCls", label: "VolNFfromLstCls", format: "number" },
   { value: "avPostMhVol90NF", label: "AvPostMhVol90NF", format: "number" },
+  { value: "avPreMhVol90NF", label: "AvPreMhVol90NF", format: "number" },
+  { value: "avPreMhValue20NF", label: "AvPreMhValue20NF", format: "number" },
+  { value: "avPreMhValue90NF", label: "AvPreMhValue90NF", format: "number" },
+  { value: "avgDailyValue20", label: "AvgDailyValue20", format: "number" },
+  { value: "avgDailyValue90", label: "AvgDailyValue90", format: "number" },
+  { value: "volatility20", label: "Volatility20", format: "percent" },
+  { value: "volatility90", label: "Volatility90", format: "percent" },
+  { value: "preMhMDV20NF", label: "PreMhMDV20NF", format: "number" },
+  { value: "preMhMDV90NF", label: "PreMhMDV90NF", format: "number" },
   { value: "volRel", label: "VolRel", format: "number" },
   { value: "preMhBidLstPrcPct", label: "PreMhBidLstPrc%", format: "percent" },
   { value: "preMhLoLstPrcPct", label: "PreMhLoLstPrc%", format: "percent" },
   { value: "preMhHiLstClsPct", label: "PreMhHiLstCls%", format: "percent" },
   { value: "preMhLoLstClsPct", label: "PreMhLoLstCls%", format: "percent" },
+  { value: "lstPrcLstClsPct", label: "LstPrcLstCls%", format: "percent" },
   { value: "imbExch925", label: "ImbExch925", format: "number" },
   { value: "imbExch1555", label: "ImbExch1555", format: "number" },
 ];
@@ -912,9 +1029,9 @@ const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
   },
   {
     label: "RATING FILTERS",
-    options: [
-      { value: "__rating_filters_unavailable", label: "Requires rating values in episode rows", disabled: true },
-    ],
+    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
+      ["rating", "ratingTotal"].includes(option.value)
+    ).map((option) => ({ value: option.value, label: option.label })),
   },
   {
     label: "TAPE FILTERS",
@@ -939,11 +1056,21 @@ const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
         "preMktVolNF",
         "volNFfromLstCls",
         "avPostMhVol90NF",
+        "avPreMhVol90NF",
+        "avPreMhValue20NF",
+        "avPreMhValue90NF",
+        "avgDailyValue20",
+        "avgDailyValue90",
+        "volatility20",
+        "volatility90",
+        "preMhMDV20NF",
+        "preMhMDV90NF",
         "volRel",
         "preMhBidLstPrcPct",
         "preMhLoLstPrcPct",
         "preMhHiLstClsPct",
         "preMhLoLstClsPct",
+        "lstPrcLstClsPct",
         "imbExch925",
         "imbExch1555",
       ].includes(option.value)
@@ -985,6 +1112,58 @@ const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
   "ZAP THRESHOLDS": "ZAP FILTERS",
   "TAPE FILTERS": "TAPE FILTERS",
 };
+
+const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
+  { key: "minrate", label: "MINRATE", group: "RATING GATES", scenarioParameter: "MINRATE" },
+  { key: "mintotal", label: "MINTOTAL", group: "RATING GATES", scenarioParameter: "MINTOTAL" },
+  { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
+  { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
+  { key: "adv20", label: "ADV20", group: "TAPE FILTERS", scenarioParameter: "ADV20" },
+  { key: "adv20nf", label: "ADV20NF", group: "TAPE FILTERS", scenarioParameter: "ADV20NF" },
+  { key: "adv90", label: "ADV90", group: "TAPE FILTERS", scenarioParameter: "ADV90" },
+  { key: "adv90nf", label: "ADV90NF", group: "TAPE FILTERS", scenarioParameter: "ADV90NF" },
+  { key: "avpremhv", label: "AvPreMhv", group: "TAPE FILTERS", scenarioParameter: "AvPreMhv" },
+  { key: "roundlot", label: "RoundLot", group: "TAPE FILTERS", scenarioParameter: "RoundLot" },
+  { key: "vwap", label: "VWAP", group: "TAPE FILTERS", scenarioParameter: "VWAP" },
+  { key: "spread", label: "Spread", group: "TAPE FILTERS", scenarioParameter: "Spread" },
+  { key: "lstprcl", label: "LstPrcL", group: "TAPE FILTERS", scenarioParameter: "LstPrcL" },
+  { key: "lstcls", label: "LstCls", group: "TAPE FILTERS", scenarioParameter: "LstCls" },
+  { key: "ycls", label: "YCls", group: "TAPE FILTERS", scenarioParameter: "YCls" },
+  { key: "tcls", label: "TCls", group: "TAPE FILTERS", scenarioParameter: "TCls" },
+  { key: "clstocls", label: "ClsToCls%", group: "TAPE FILTERS", scenarioParameter: "ClsToCls%" },
+  { key: "lo", label: "Lo", group: "TAPE FILTERS", scenarioParameter: "Lo" },
+  { key: "lstclsnewscnt", label: "LstClsNewsCnt", group: "TAPE FILTERS", scenarioParameter: "LstClsNewsCnt" },
+  { key: "marketcapm", label: "MarketCapM", group: "TAPE FILTERS", scenarioParameter: "MarketCapM" },
+  { key: "premhvolnf", label: "PreMhVolNF", group: "TAPE FILTERS", scenarioParameter: "PreMhVolNF" },
+  { key: "volnffromlstcls", label: "VolNFfromLstCls", group: "TAPE FILTERS", scenarioParameter: "VolNFfromLstCls" },
+  { key: "avpostmhvol90nf", label: "AvPostMhVol90NF", group: "TAPE FILTERS", scenarioParameter: "AvPostMhVol90NF" },
+  { key: "avpremhvol90nf", label: "AvPreMhVol90NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhVol90NF" },
+  { key: "avpremhvalue20nf", label: "AvPreMhValue20NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhValue20NF" },
+  { key: "avpremhvalue90nf", label: "AvPreMhValue90NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhValue90NF" },
+  { key: "avgdailyvalue20", label: "AvgDailyValue20", group: "TAPE FILTERS", scenarioParameter: "AvgDailyValue20" },
+  { key: "avgdailyvalue90", label: "AvgDailyValue90", group: "TAPE FILTERS", scenarioParameter: "AvgDailyValue90" },
+  { key: "volatility20", label: "Volatility20", group: "TAPE FILTERS", scenarioParameter: "Volatility20" },
+  { key: "volatility90", label: "Volatility90", group: "TAPE FILTERS", scenarioParameter: "Volatility90" },
+  { key: "premhmdv20nf", label: "PreMhMDV20NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV20NF" },
+  { key: "premhmdv90nf", label: "PreMhMDV90NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV90NF" },
+  { key: "volrel", label: "VolRel", group: "TAPE FILTERS", scenarioParameter: "VolRel" },
+  { key: "premhbidlstprc", label: "PreMhHiLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstPrc%" },
+  { key: "premhlolstprc", label: "PreMhLoLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhLoLstPrc%" },
+  { key: "premhhilstcls", label: "PreMhHiLstCls%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstCls%" },
+  { key: "premhlolstcls", label: "PreMhLoLstCls%", group: "TAPE FILTERS", scenarioParameter: "PreMhLoLstCls%" },
+  { key: "lstprclstcls", label: "LstPrcLstCls%", group: "TAPE FILTERS", scenarioParameter: "LstPrcLstCls%" },
+  { key: "imbexch925", label: "ImbExch9:25", group: "TAPE FILTERS", scenarioParameter: "ImbExch9:25" },
+  { key: "imbexch1555", label: "ImbExch15:55", group: "TAPE FILTERS", scenarioParameter: "ImbExch15:55" },
+];
+
+const SCOPE_PARAMETER_BY_KEY = new Map(SCOPE_PARAMETER_DEFINITIONS.map((item) => [item.key, item]));
+
+const SCOPE_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = (["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"] as OptimizerRangeGroupKey[]).map((group) => ({
+  label: OPTIMIZER_GROUP_DISPLAY_LABELS[group],
+  options: SCOPE_PARAMETER_DEFINITIONS
+    .filter((item) => item.group === group)
+    .map((item) => ({ value: item.key, label: item.label })),
+}));
 
 const DEFAULT_SCOPE_RESEARCH_DRAFTS: Record<ScopePanelKey, ScopeResearchDraft> = {
   left: {
@@ -1100,6 +1279,10 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
     }
     case "minHoldCandles":
       return row.minHoldCandles ?? null;
+    case "rating":
+      return row.rating ?? null;
+    case "ratingTotal":
+      return row.ratingTotal ?? null;
     case "adv20":
       return row.adv20 ?? null;
     case "adv20NF":
@@ -1138,6 +1321,24 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
       return row.preMktVolNF != null && row.lstCls != null ? row.preMktVolNF * row.lstCls : null;
     case "avPostMhVol90NF":
       return row.avPostMhVol90NF ?? null;
+    case "avPreMhVol90NF":
+      return row.avPreMhVol90NF ?? null;
+    case "avPreMhValue20NF":
+      return row.avPreMhValue20NF ?? null;
+    case "avPreMhValue90NF":
+      return row.avPreMhValue90NF ?? null;
+    case "avgDailyValue20":
+      return row.avgDailyValue20 ?? null;
+    case "avgDailyValue90":
+      return row.avgDailyValue90 ?? null;
+    case "volatility20":
+      return row.volatility20 ?? null;
+    case "volatility90":
+      return row.volatility90 ?? null;
+    case "preMhMDV20NF":
+      return row.preMhMDV20NF ?? null;
+    case "preMhMDV90NF":
+      return row.preMhMDV90NF ?? null;
     case "volRel":
       return row.volRel ?? null;
     case "preMhBidLstPrcPct":
@@ -1148,6 +1349,8 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
       return row.preMhHiLstClsPct ?? null;
     case "preMhLoLstClsPct":
       return row.preMhLoLstClsPct ?? null;
+    case "lstPrcLstClsPct":
+      return row.lstPrcLstClsPct ?? null;
     case "imbExch925":
       return row.imbExch925 ?? null;
     case "imbExch1555":
@@ -1368,7 +1571,7 @@ function ScopeResearchInsufficientState({
   detail?: string;
 }) {
   return (
-    <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-5 flex items-center justify-center">
+    <div className="w-full h-[520px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-5 flex items-center justify-center">
       <div className="max-w-[420px] text-center">
         <div className="text-[11px] uppercase tracking-[0.18em] font-mono text-zinc-400">{message}</div>
         <div className="mt-2 text-[11px] font-mono text-zinc-500">{detail}</div>
@@ -1820,7 +2023,7 @@ function GlassCard({
   return (
     <div
       className={clsx(
-        "bg-[#0a0a0a]/60 backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80",
+        "scanner-glass-card bg-[#0a0a0a]/50 backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70",
         glow && "border-l-4 border-l-emerald-500 shadow-[0_0_30px_-10px_rgba(16,185,129,0.18)]",
         className
       )}
@@ -1865,10 +2068,57 @@ function GlassInput({
       disabled={disabled}
       style={{ width }}
       className={clsx(
-        "bg-black/20 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all font-mono tabular-nums",
+        "scanner-glass-input bg-black/10 border border-white/5 rounded-md px-2.5 py-1.5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/20 hover:border-white/10 hover:bg-black/20 transition-all duration-200 font-mono tabular-nums",
         className
       )}
     />
+  );
+}
+
+const SCANNER_PANEL_SURFACE =
+  "scanner-panel-surface border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-200 hover:border-white/[0.12] hover:bg-[#101010]/60";
+
+const SCANNER_CONTROL_SURFACE =
+  "scanner-control-surface border border-white/5 bg-black/10 transition-all duration-200 hover:border-white/10 hover:bg-black/20";
+
+const SCANNER_EYE_BUTTON =
+  "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
+
+function SummaryMetricCard({
+  label,
+  value,
+  valueClassName,
+  className,
+  inline = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  valueClassName?: string;
+  className?: string;
+  inline?: boolean;
+}) {
+  return (
+    <GlassCard className={clsx("p-3", className)}>
+      <div
+        className={clsx(
+          inline
+            ? "h-full flex items-center justify-between gap-4"
+            : "h-full flex flex-col",
+        )}
+      >
+        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{label}</div>
+        <div
+          className={clsx(
+            inline
+              ? "flex items-center justify-end text-base md:text-xl font-semibold font-mono text-right"
+              : "flex-1 flex items-center justify-center text-sm font-mono text-center",
+            valueClassName
+          )}
+        >
+          {value}
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -1966,10 +2216,10 @@ function GlassSelect({
           open
             ? compact
               ? clsx(accent.activeText, "border-transparent bg-transparent shadow-none")
-              : clsx(accent.activeText, "bg-white/[0.08] shadow-[0_0_15px_-5px_rgba(255,255,255,0.1)]", accent.buttonBorder ?? "border-white/20")
+              : clsx(accent.activeText, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]", accent.buttonBorder ?? "border-white/20")
             : compact
               ? clsx(accent.activeText, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
-              : clsx(accent.activeText, accent.buttonBorder ?? "border-white/[0.06]", "bg-white/[0.02] hover:bg-white/[0.05] hover:text-zinc-200"),
+              : clsx(accent.activeText, SCANNER_CONTROL_SURFACE),
           className
         )}
       >
@@ -2196,7 +2446,7 @@ function Segmented({
   className?: string;
 }) {
   return (
-    <div className={clsx("inline-flex rounded-xl border border-white/[0.06] bg-[#0a0a0a]/40 p-1", className)}>
+    <div className={clsx("inline-flex rounded-xl p-1", SCANNER_PANEL_SURFACE, className)}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -2209,7 +2459,7 @@ function Segmented({
               "px-3 py-1.5 text-[10px] font-mono font-bold uppercase rounded-lg tracking-wide transition-all border",
               on
                 ? "bg-emerald-500/12 text-emerald-300 border-emerald-500/25 shadow-[0_0_10px_-4px_rgba(16,185,129,0.35)]"
-                : "text-zinc-400 border-transparent hover:text-zinc-200 hover:bg-white/[0.04]"
+                : "text-zinc-400 border-transparent hover:text-zinc-200 hover:bg-black/30"
             )}
           >
             {o.label}
@@ -2249,16 +2499,19 @@ function EquityChart({
   points,
   title,
   meta,
+  fullscreen = false,
 }: {
   points: PaperArbEquityPointDto[];
   title?: string;
   meta?: string;
+  fullscreen?: boolean;
 }) {
-  const w = 1100;
+  const w = fullscreen ? 2800 : 1100;
   const h = 360;
-  const padX = 18;
+  const padLeft = 18;
+  const padRight = 46;
   const padTop = 34;
-  const padBottom = 34;
+  const padBottom = 40;
 
   const parseKey = (key: string): { date: string | null; minuteIdx: number | null } => {
     const m = String(key ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:\s+(\d+))?$/);
@@ -2343,11 +2596,11 @@ function EquityChart({
   })();
 
   const toX = (i: number) => {
-    if (chartPoints.length <= 1) return padX;
+    if (chartPoints.length <= 1) return padLeft;
     const t0 = chartPoints[0]._tp;
     const t1 = chartPoints[chartPoints.length - 1]._tp;
     const spanT = Math.max(1, t1 - t0);
-    return padX + ((chartPoints[i]._tp - t0) / spanT) * (w - padX * 2);
+    return padLeft + ((chartPoints[i]._tp - t0) / spanT) * (w - padLeft - padRight);
   };
   const toY = (v: number) => padTop + (1 - (v - minY) / span) * (h - padTop - padBottom);
 
@@ -2420,7 +2673,7 @@ function EquityChart({
   const zeroY = zeroInRange ? toY(0) : null;
 
   return (
-    <div className="relative w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -2450,18 +2703,18 @@ function EquityChart({
           </filter>
         </defs>
 
-        <rect x={padX} y={padTop} width={w - padX * 2} height={h - padTop - padBottom} fill="url(#eq-bg)" />
+        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={h - padTop - padBottom} fill="url(#eq-bg)" />
 
         {yTicks.map((t) => (
           <g key={`y-${t.y.toFixed(2)}`}>
-            <line x1={padX} x2={w - padX} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.08)" strokeDasharray="2 4" />
-            <text x={w - padX - 4} y={t.y - 4} fontSize="10" textAnchor="end" className="fill-zinc-500 font-mono">
+            <line x1={padLeft} x2={w - padRight} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.08)" strokeDasharray="2 4" />
+            <text x={w - 8} y={t.y - 4} fontSize="14" textAnchor="end" className="fill-zinc-400 font-mono">
               {num(t.val, 2)}
             </text>
           </g>
         ))}
 
-        {zeroY != null && <line x1={padX} x2={w - padX} y1={zeroY} y2={zeroY} stroke="rgba(244,63,94,0.25)" strokeDasharray="4 3" />}
+        {zeroY != null && <line x1={padLeft} x2={w - padRight} y1={zeroY} y2={zeroY} stroke="rgba(244,63,94,0.25)" strokeDasharray="4 3" />}
 
         <path d={areaD} fill="url(#eq-fill)" />
         <path d={lineD} fill="none" stroke="url(#eq-stroke)" strokeWidth="2.8" filter="url(#eq-glow)" />
@@ -2482,12 +2735,12 @@ function EquityChart({
           min {num(chartPoints[troughIdx]?.equity ?? null, 2)}
         </text>
 
-        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
         {xTicks.map((t) => (
           <g key={`x-${t.idx}`}>
             <line x1={t.x} x2={t.x} y1={padTop} y2={h - padBottom} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
             <line x1={t.x} x2={t.x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.25)" />
-            <text x={t.x} y={h - 10} fontSize="10" textAnchor="middle" className="fill-zinc-500 font-mono">
+            <text x={t.x} y={h - 8} fontSize="14" textAnchor="middle" className="fill-zinc-400 font-mono">
               {t.label}
             </text>
           </g>
@@ -2515,7 +2768,7 @@ function OptimizerBarChart({
   const items = maxRows != null ? rows.slice(0, maxRows) : rows;
   if (!items.length) {
     return (
-      <div className="w-full h-[300px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[300px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No optimizer results yet.
       </div>
     );
@@ -2526,7 +2779,7 @@ function OptimizerBarChart({
   const barClass = color === "sky" ? "bg-sky-400/80" : "bg-emerald-400/80";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-[#06070c]/90 p-4">
+    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
         <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
@@ -2581,7 +2834,7 @@ function OptimizerDualMetricChart({
 }) {
   if (!rows.length) {
     return (
-      <div className="w-full h-[300px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[300px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No optimizer results yet.
       </div>
     );
@@ -2595,7 +2848,7 @@ function OptimizerDualMetricChart({
     key === "trades" ? intn(value) : key === "winRate" ? `${num(value * 100, 1)}%` : num(value, 2);
 
   return (
-    <div className="rounded-xl border border-white/10 bg-[#06070c]/90 p-4">
+    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
         <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
@@ -2685,6 +2938,8 @@ function OptimizerParameterRangeCard({
   minTradesFilter: number;
   bucketCount: number;
 }) {
+  const { theme } = useUi();
+  const accent = getScannerAccent(theme);
   const sortBucketsByMetric = (items: PaperArbOptimizerRangeBucketDto[]) =>
     [...items].sort((a, b) => {
       const aMetric = rankMetric === "winRate" ? a.winRate : rankMetric === "totalPnlUsd" ? a.totalPnlUsd : rankMetric === "score" ? a.score : a.avgPnlUsd;
@@ -2716,36 +2971,36 @@ function OptimizerParameterRangeCard({
     () => sortBucketsByMetric((parameter.upperTailBuckets ?? []).filter((bucket) => bucket.trades >= minTradesFilter))[0] ?? null,
     [parameter.upperTailBuckets, minTradesFilter, rankMetric]
   );
+  const summaryCards = [
+    { label: "BEST RANGE", item: bestBucket },
+    ...(parameter.lowerTailBuckets?.length ? [{ label: "BEST <= X", item: bestLowerTail }] : []),
+    ...(parameter.upperTailBuckets?.length ? [{ label: "BEST >= X", item: bestUpperTail }] : []),
+  ];
 
   return (
-    <GlassCard className="p-0 overflow-hidden border border-white/[0.08] bg-[linear-gradient(180deg,rgba(7,9,16,0.96),rgba(4,5,9,0.98))] shadow-[0_20px_60px_-36px_rgba(0,0,0,0.9)]">
-      <div className="border-b border-white/[0.06] bg-[linear-gradient(135deg,rgba(16,185,129,0.08),rgba(56,189,248,0.04))] px-3 py-2.5">
+    <GlassCard className="p-0 overflow-hidden border border-white/[0.08] bg-[linear-gradient(180deg,rgba(11,10,8,0.96),rgba(8,8,7,0.98))] shadow-[0_22px_60px_-38px_rgba(0,0,0,0.92)]">
+      <div className="border-b border-white/[0.06] bg-[linear-gradient(180deg,rgba(18,16,11,0.92),rgba(11,12,12,0.84))] px-3 py-2.5">
         <div className="flex items-start justify-between gap-2.5">
           <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <div className="text-[10px] uppercase tracking-[0.24em] font-mono text-zinc-500">{parameter.group}</div>
-              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-emerald-300">
-                {parameter.label}
-              </span>
-            </div>
-            <div className="text-[10px] font-mono text-zinc-300 mt-1.5">
+            <div className={clsx("text-[12px] uppercase tracking-[0.20em] font-mono", accent.activeText)}>{parameter.label}</div>
+            <div className="text-[10px] font-mono text-zinc-200 mt-1.5">
               {num(parameter.observedMin, 2)} .. {num(parameter.observedMax, 2)} | n {intn(parameter.valueCount)} | b {intn(bucketCount)}
             </div>
           </div>
           <div className="grid grid-cols-3 gap-1.5 text-right">
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
               <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Trades</div>
-              <div className="text-[11px] font-mono text-zinc-200 mt-0.5">{intn(parameter.baseTrades)}</div>
+              <div className="text-[11px] font-mono text-zinc-100 mt-0.5">{intn(parameter.baseTrades)}</div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
               <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">PnL</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+              <div className={clsx("text-[11px] font-mono mt-0.5", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-100")}>
                 {num(baseTotalPnl, 2)}
               </div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1">
+            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
               <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Avg</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-200")}>
+              <div className={clsx("text-[11px] font-mono mt-0.5", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-100")}>
                 {num(baseAvgPnl, 2)}
               </div>
             </div>
@@ -2754,30 +3009,31 @@ function OptimizerParameterRangeCard({
       </div>
 
       <div className="p-3">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5 mb-3">
-        {[
-          { label: "BEST RANGE", item: bestBucket },
-          { label: "BEST <= X", item: bestLowerTail },
-          { label: "BEST >= X", item: bestUpperTail },
-        ].map((entry) => (
-          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-2.5">
+      <div className={clsx("grid gap-1.5 mb-3", summaryCards.length >= 3 ? "grid-cols-1 md:grid-cols-3" : summaryCards.length === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
+        {summaryCards.map((entry) => (
+          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.06] bg-[linear-gradient(180deg,rgba(14,13,11,0.72),rgba(9,9,10,0.9))] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
             <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500 mb-1">{entry.label}</div>
-            <div className="text-[11px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
-            <div className="text-[10px] font-mono mt-1.5">
-              <span className={clsx(entry.item && entry.item.avgPnlUsd > 0 ? "text-emerald-300" : entry.item && entry.item.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-400")}>
-                avg {num(entry.item?.avgPnlUsd, 2)}
-              </span>
-              {" | "}
-              <span className="text-zinc-400">trades {intn(entry.item?.trades)}</span>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-[11px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
+                <div className="text-[10px] font-mono mt-1.5">
+                  <span className={clsx(entry.item && entry.item.avgPnlUsd > 0 ? "text-emerald-300" : entry.item && entry.item.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-400")}>
+                    avg {num(entry.item?.avgPnlUsd, 2)}
+                  </span>
+                  {" | "}
+                  <span className="text-zinc-400">pnl {num(entry.item?.totalPnlUsd, 2)}</span>
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-[10px] font-mono text-zinc-400">trades {intn(entry.item?.trades)}</div>
+                <div className="text-[10px] font-mono text-zinc-500 mt-1">hit {num((entry.item?.winRate ?? 0) * 100, 1)}%</div>
+              </div>
             </div>
-            <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
-              pnl {num(entry.item?.totalPnlUsd, 2)} | hit {num((entry.item?.winRate ?? 0) * 100, 1)}%
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-white/[0.04] text-zinc-400")}>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-black/20 text-zinc-400")}>
                 dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
               </span>
-              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-white/[0.04] text-zinc-400")}>
+              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-black/20 text-zinc-400")}>
                 dPnL {num((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl, 2)}
               </span>
             </div>
@@ -2790,7 +3046,7 @@ function OptimizerParameterRangeCard({
           <div
             key={`heat-${bucket.bucketId}`}
             className={clsx(
-              "h-7 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono",
+              "h-7 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono bg-black/20",
               bucket.avgPnlUsd > 0
                 ? "bg-emerald-500/20 text-emerald-300"
                 : bucket.avgPnlUsd < 0
@@ -2805,7 +3061,7 @@ function OptimizerParameterRangeCard({
         ))}
       </div>
 
-      <div className="space-y-1.5 mb-3 rounded-xl border border-white/[0.06] bg-black/20 p-2.5">
+      <div className="space-y-1.5 mb-3 rounded-xl border border-white/[0.06] bg-[linear-gradient(180deg,rgba(12,12,12,0.9),rgba(9,9,9,0.95))] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <div className="flex items-center justify-between">
           <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Range Strength</div>
           <div className="text-[9px] font-mono text-zinc-600">score</div>
@@ -2817,7 +3073,7 @@ function OptimizerParameterRangeCard({
               <div className="text-[10px] font-mono text-zinc-400 truncate" title={bucket.label}>
                 {bucket.label}
               </div>
-              <div className="h-[18px] rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+              <div className="h-[18px] rounded bg-black/20 border border-white/[0.06] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                 <div
                   className={clsx(
                     "h-full",
@@ -2834,9 +3090,9 @@ function OptimizerParameterRangeCard({
         })}
       </div>
 
-      <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
+      <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(12,12,12,0.96),rgba(8,8,8,0.98))] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
         <table className="min-w-[760px] w-full text-[11px] font-mono">
-          <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
+          <thead className="sticky top-0 z-10 bg-[#111111]/95 text-zinc-400 border-b border-white/[0.08]">
             <tr>
               <th className="text-left px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Range</th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">N</th>
@@ -2889,17 +3145,20 @@ function StartsByTimeChart({
   rows,
   title,
   meta,
+  fullscreen = false,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
+  fullscreen?: boolean;
 }) {
-  const w = 1100;
+  const w = fullscreen ? 2800 : 1100;
   const h = 320;
-  const padX = 22;
+  const padLeft = 22;
+  const padRight = 40;
   const padTop = 40;
   const footerH = 40;
-  const padBottom = 46;
+  const padBottom = 56;
 
   const bins = useMemo(() => {
     const m = new Map<number, { ok: number; bad: number }>();
@@ -2917,14 +3176,14 @@ function StartsByTimeChart({
 
   if (!bins.length) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No start events for chart.
       </div>
     );
   }
 
   const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.ok, v.bad)));
-  const plotW = w - padX * 2;
+  const plotW = w - padLeft - padRight;
   const plotH = h - padTop - padBottom;
   const barGap = 2;
   const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
@@ -2938,7 +3197,7 @@ function StartsByTimeChart({
     const out: Array<{ idx: number; x: number }> = [];
     let lastX = -1e9;
     for (const t of uniq) {
-      const x = padX + t.i * (groupW + barGap) + groupW / 2;
+      const x = padLeft + t.i * (groupW + barGap) + groupW / 2;
       const mustKeep = t.i === 0 || t.i === src.length - 1;
       if (!mustKeep && x - lastX < 86) continue;
       out.push({ idx: t.idx, x });
@@ -2956,7 +3215,7 @@ function StartsByTimeChart({
   const bestBad = bins.reduce((best, cur) => (cur[1].bad > best[1].bad ? cur : best), bins[0]);
 
   return (
-    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -2989,9 +3248,9 @@ function StartsByTimeChart({
           const y = padTop + plotH - (t / maxY) * plotH;
           return (
             <g key={`y-${t}`}>
-              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
               {t > 0 && (
-                <text x={w - padX - 4} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
+                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
                   {t}
                 </text>
               )}
@@ -3000,7 +3259,7 @@ function StartsByTimeChart({
         })}
 
         {bins.map(([idx, v], i) => {
-          const xBase = padX + i * (groupW + barGap);
+          const xBase = padLeft + i * (groupW + barGap);
           const hOk = plotH * (v.ok / maxY);
           const hBad = plotH * (v.bad / maxY);
           const yOk = padTop + plotH - hOk;
@@ -3013,19 +3272,19 @@ function StartsByTimeChart({
           );
         })}
 
-        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
 
         {xTickItems.map((t, i) => {
           const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
           return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
               {minuteIdxToClockLabel(t.idx)}
             </text>
           );
         })}
       </svg>
 
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <span className="text-emerald-300/90">ok {intn(totalOk)}</span>
           <span className="text-rose-300/90">bad {intn(totalBad)}</span>
@@ -3047,16 +3306,19 @@ function StartsEndsByTimeChart({
   rows,
   title,
   meta,
+  fullscreen = false,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
+  fullscreen?: boolean;
 }) {
-  const w = 1100;
+  const w = fullscreen ? 2800 : 1100;
   const h = 360;
-  const padX = 22;
+  const padLeft = 22;
+  const padRight = 40;
   const padTop = 56;
-  const padBottom = 34;
+  const padBottom = 40;
 
   const bins = useMemo(() => {
     const m = new Map<number, { starts: number; ends: number }>();
@@ -3082,14 +3344,14 @@ function StartsEndsByTimeChart({
 
   if (!bins.length) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No start/end events for chart.
       </div>
     );
   }
 
   const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.starts, v.ends)));
-  const plotW = w - padX * 2;
+  const plotW = w - padLeft - padRight;
   const plotH = h - padTop - padBottom;
   const barGap = 2;
   const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
@@ -3097,7 +3359,7 @@ function StartsEndsByTimeChart({
   const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
 
   return (
-    <div className="relative w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -3132,8 +3394,8 @@ function StartsEndsByTimeChart({
           const y = padTop + plotH - (t / maxY) * plotH;
           return (
             <g key={`y-${t}`}>
-              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              <text x={w - padX - 4} y={y - 3} textAnchor="end" fontSize="10" className="fill-zinc-500 font-mono">
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              <text x={w - 8} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
                 {t}
               </text>
             </g>
@@ -3141,7 +3403,7 @@ function StartsEndsByTimeChart({
         })}
 
         {bins.map(([idx, v], i) => {
-          const xBase = padX + i * (groupW + barGap);
+          const xBase = padLeft + i * (groupW + barGap);
           const hs = plotH * (v.starts / maxY);
           const he = plotH * (v.ends / maxY);
           const ys = padTop + plotH - hs;
@@ -3154,15 +3416,15 @@ function StartsEndsByTimeChart({
           );
         })}
 
-        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
 
         {bins
           .filter((_, i) => i % Math.ceil(bins.length / 8) === 0 || i === bins.length - 1)
           .map(([idx], i) => {
             const pos = bins.findIndex(([k]) => k === idx);
-            const x = padX + pos * (groupW + barGap) + groupW / 2;
+            const x = padLeft + pos * (groupW + barGap) + groupW / 2;
             return (
-              <text key={`x-${idx}-${i}`} x={x} y={h - 10} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
+              <text key={`x-${idx}-${i}`} x={x} y={h - 8} textAnchor="middle" fontSize="14" className="fill-zinc-300 font-mono">
                 {minuteIdxToClockLabel(idx)}
               </text>
             );
@@ -3176,17 +3438,20 @@ function PeakStrengthByTimeChart({
   rows,
   title,
   meta,
+  fullscreen = false,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
+  fullscreen?: boolean;
 }) {
-  const w = 1100;
+  const w = fullscreen ? 2800 : 1100;
   const h = 320;
-  const padX = 24;
+  const padLeft = 28;
+  const padRight = 46;
   const padTop = 40;
   const footerH = 40;
-  const padBottom = 46;
+  const padBottom = 56;
 
   const bins = useMemo(() => {
     const m = new Map<number, { count: number; sumAbs: number }>();
@@ -3207,20 +3472,20 @@ function PeakStrengthByTimeChart({
 
   if (!bins.length) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No peak events for chart.
       </div>
     );
   }
 
-  const plotW = w - padX * 2;
+  const plotW = w - padLeft - padRight;
   const plotH = h - padTop - padBottom;
   const maxCount = Math.max(1, ...bins.map((b) => b.count));
   const maxAbs = Math.max(0.0001, ...bins.map((b) => b.avgAbs));
   const barGap = 1;
   const barW = Math.max(3, Math.floor(plotW / bins.length) - barGap);
 
-  const toX = (i: number) => padX + i * (barW + barGap) + barW / 2;
+  const toX = (i: number) => padLeft + i * (barW + barGap) + barW / 2;
   const toYCount = (v: number) => padTop + plotH - (v / maxCount) * plotH;
   const toYAbs = (v: number) => padTop + plotH - (v / maxAbs) * plotH;
   const lineD = bins
@@ -3261,7 +3526,7 @@ function PeakStrengthByTimeChart({
   })();
 
   return (
-    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -3301,14 +3566,14 @@ function PeakStrengthByTimeChart({
           const right = num(t * maxAbs, 3);
           return (
             <g key={`grid-${i}`}>
-              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
               {left > 0 && (
-                <text x={padX + 2} y={y - 3} fontSize="14" className="fill-zinc-400 font-mono">
+                <text x={padLeft + 2} y={y - 3} fontSize="16" className="fill-zinc-300 font-mono">
                   {left}
                 </text>
               )}
               {t > 0 && (
-                <text x={w - padX - 2} y={y - 3} textAnchor="end" fontSize="14" className="fill-amber-200/80 font-mono">
+                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-amber-200/80 font-mono">
                   {right}
                 </text>
               )}
@@ -3317,7 +3582,7 @@ function PeakStrengthByTimeChart({
         })}
 
         {bins.map((b, i) => {
-          const x = padX + i * (barW + barGap);
+          const x = padLeft + i * (barW + barGap);
           const hh = plotH * (b.count / maxCount);
           const y = padTop + plotH - hh;
           return <rect key={`b-${b.idx}-${i}`} x={x} y={y} width={barW} height={hh} rx="3" fill="url(#peak-count)" stroke="rgba(196,181,253,0.55)" strokeWidth="0.6" />;
@@ -3328,18 +3593,18 @@ function PeakStrengthByTimeChart({
           <circle key={`p-${b.idx}-${i}`} cx={toX(i)} cy={toYAbs(b.avgAbs)} r="2.5" fill="rgba(252,211,77,0.95)" />
         ))}
 
-        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
         {xTickItems.map((t, i) => {
           const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
           return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
               {minuteIdxToClockLabel(t.idx)}
             </text>
           );
         })}
       </svg>
 
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <span className="text-zinc-500">avg {num(avgPeak, 3)}</span>
           <span className="text-zinc-500">median {num(medPeak, 3)}</span>
@@ -3360,17 +3625,20 @@ function PeakReversionTwoThirdsChart({
   rows,
   title,
   meta,
+  fullscreen = false,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
+  fullscreen?: boolean;
 }) {
-  const w = 1100;
+  const w = fullscreen ? 2800 : 1100;
   const h = 320;
-  const padX = 22;
+  const padLeft = 22;
+  const padRight = 40;
   const padTop = 40;
   const footerH = 40;
-  const padBottom = 46;
+  const padBottom = 56;
 
   const bins = useMemo(() => {
     const m = new Map<number, { yes: number; no: number }>();
@@ -3442,13 +3710,13 @@ function PeakReversionTwoThirdsChart({
 
   if (!bins.length) {
     return (
-      <div className="w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[320px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No peak reversion data.
       </div>
     );
   }
 
-  const plotW = w - padX * 2;
+  const plotW = w - padLeft - padRight;
   const plotH = h - padTop - padBottom;
   const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.yes, v.no)));
   const barGap = 2;
@@ -3466,7 +3734,7 @@ function PeakReversionTwoThirdsChart({
     const out: Array<{ idx: number; x: number }> = [];
     let lastX = -1e9;
     for (const t of uniq) {
-      const x = padX + t.i * (groupW + barGap) + groupW / 2;
+      const x = padLeft + t.i * (groupW + barGap) + groupW / 2;
       const mustKeep = t.i === 0 || t.i === src.length - 1;
       if (!mustKeep && x - lastX < 86) continue;
       out.push({ idx: t.idx, x });
@@ -3476,7 +3744,7 @@ function PeakReversionTwoThirdsChart({
   })();
 
   return (
-    <div className="relative w-full h-[320px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -3514,9 +3782,9 @@ function PeakReversionTwoThirdsChart({
           const val = Math.round(t * maxY);
           return (
             <g key={`y-${i}`}>
-              <line x1={padX} x2={w - padX} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
               {val > 0 && (
-                <text x={w - padX - 4} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
+                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
                   {val}
                 </text>
               )}
@@ -3525,7 +3793,7 @@ function PeakReversionTwoThirdsChart({
         })}
 
         {bins.map(([idx, v], i) => {
-          const xBase = padX + i * (groupW + barGap);
+          const xBase = padLeft + i * (groupW + barGap);
           const hYes = plotH * (v.yes / maxY);
           const hNo = plotH * (v.no / maxY);
           const yYes = padTop + plotH - hYes;
@@ -3538,18 +3806,18 @@ function PeakReversionTwoThirdsChart({
           );
         })}
 
-        <line x1={padX} x2={w - padX} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
+        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
         {xTickItems.map((t, i) => {
           const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
           return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 2} textAnchor={anchor as any} fontSize="16" className="fill-zinc-300 font-mono">
+            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
               {minuteIdxToClockLabel(t.idx)}
             </text>
           );
         })}
       </svg>
 
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#070910]/95 px-3 py-1.5">
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <span className="text-zinc-500">peakAbs avg {num(stats.avgAll, 3)}</span>
           <span className="text-zinc-500">median {num(stats.medAll, 3)}</span>
@@ -3575,6 +3843,7 @@ function ScopeResearchSeriesChart({
   resultKey,
   resultFormat,
   accent = "emerald",
+  fullscreen = false,
 }: {
   rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
   parallelSeries?: Array<{
@@ -3587,23 +3856,24 @@ function ScopeResearchSeriesChart({
   resultKey: ScopeResearchResultKey;
   resultFormat: ScopeResearchValueFormat;
   accent?: "emerald" | "amber";
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = 520;
-  const padLeft = 14;
-  const padRight = 68;
-  const padTop = 72;
-  const padBottom = 118;
+  const w = fullscreen ? 2800 : 1100;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 24;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 62;
+  const padBottom = 96;
   const splitGap = 10;
-  const topH = 286;
+  const topH = h - padTop - padBottom - 72;
   const barsTop = padTop + topH + splitGap;
   const barsH = h - barsTop - padBottom;
 
   if (!rows.length) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[360px]")}>
         No scope data for selected settings.
       </div>
     );
@@ -3635,11 +3905,6 @@ function ScopeResearchSeriesChart({
     .map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${(padTop + (1 - value) * topH).toFixed(2)}`)
     .join(" ");
   const areaD = `${lineD} L ${xAt(rows.length - 1).toFixed(2)} ${(padTop + topH).toFixed(2)} L ${xAt(0).toFixed(2)} ${(padTop + topH).toFixed(2)} Z`;
-  const xTicks = rows.filter((_, index) => {
-    if (rows.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(rows.length / 6));
-    return index === 0 || index === rows.length - 1 || index % step === 0;
-  });
   const accentStops =
     accent === "amber"
       ? {
@@ -3685,7 +3950,7 @@ function ScopeResearchSeriesChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -3807,14 +4072,14 @@ function ScopeResearchSeriesChart({
           );
         })}
         <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {xTicks.map((row) => {
-          const index = rows.findIndex((candidate) => candidate.label === row.label);
+        {rows.map((row, index) => {
           const x = xAt(index);
           const [line1, line2] = scopeResearchLabelLines(row.label);
+          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
           return (
             <g key={`tick-${row.label}`}>
               <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.2)" />
-              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 26} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
                 <tspan x={x} dy="0">{line1}</tspan>
                 {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
               </text>
@@ -3831,23 +4096,25 @@ function ScopeResearchBoxChart({
   title,
   meta,
   resultFormat,
+  fullscreen = false,
 }: {
   rows: ScopeResearchBinRow[];
   title: string;
   meta?: string;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = 520;
-  const padLeft = 14;
-  const padRight = 68;
-  const padTop = 58;
-  const padBottom = 118;
+  const w = fullscreen ? 2800 : 1100;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 24;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 48;
+  const padBottom = 92;
   if (!rows.length) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[360px]")}>
         No box groups for selected settings.
       </div>
     );
@@ -3862,12 +4129,7 @@ function ScopeResearchBoxChart({
   const xAt = (index: number) =>
     rows.length === 1 ? (padLeft + (w - padRight)) / 2 : padLeft + (index / Math.max(1, rows.length - 1)) * (w - padLeft - padRight);
   const yAt = (value: number) => padTop + (1 - (value - minY) / span) * plotH;
-  const boxWidth = Math.max(24, Math.min(46, (w - padLeft - padRight) / Math.max(1, rows.length) - 14));
-  const xTicks = rows.filter((_, index) => {
-    if (rows.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(rows.length / 6));
-    return index === 0 || index === rows.length - 1 || index % step === 0;
-  });
+  const boxWidth = Math.max(28, Math.min(56, (w - padLeft - padRight) / Math.max(1, rows.length) - 10));
 
   const showTooltip = (event: React.MouseEvent<SVGElement>, row: ScopeResearchBinRow) => {
     const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
@@ -3888,7 +4150,7 @@ function ScopeResearchBoxChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -3952,21 +4214,21 @@ function ScopeResearchBoxChart({
               />
               <line x1={x - boxWidth / 2} x2={x + boxWidth / 2} y1={yMedian} y2={yMedian} stroke="rgba(110,231,183,0.95)" strokeWidth="2" />
               <circle cx={x} cy={yAt(row.avg)} r="4.2" fill="rgba(250,204,21,0.92)" onMouseMove={(event) => showTooltip(event, row)} />
-              <text x={x} y={padTop - 10} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
+              <text x={x} y={padTop - 8} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
                 {intn(row.count)}
               </text>
             </g>
           );
         })}
         <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
-        {xTicks.map((row) => {
-          const index = rows.findIndex((candidate) => candidate.label === row.label);
+        {rows.map((row, index) => {
           const x = xAt(index);
           const [line1, line2] = scopeResearchLabelLines(row.label);
+          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
           return (
             <g key={`box-tick-${row.label}`}>
               <line x1={x} x2={x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.2)" />
-              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 26} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
                 <tspan x={x} dy="0">{line1}</tspan>
                 {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
               </text>
@@ -3983,20 +4245,22 @@ function ScopeResearchDistributionChart({
   title,
   meta,
   resultFormat,
+  fullscreen = false,
 }: {
   points: ScopeResearchPoint[];
   title: string;
   meta?: string;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
   const w = 1100;
-  const h = 520;
-  const padLeft = 22;
-  const padRight = 74;
-  const padTop = 72;
-  const padBottom = 96;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 24;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 60;
+  const padBottom = 80;
   const values = points.map((point) => point.result).filter(Number.isFinite);
   const edges = scopeResearchEdges(values, Math.min(24, Math.max(8, Math.round(Math.sqrt(values.length)))));
   const bins =
@@ -4019,7 +4283,7 @@ function ScopeResearchDistributionChart({
 
   if (!bins.length) {
     return (
-      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
         No distribution data for selected settings.
       </div>
     );
@@ -4038,11 +4302,6 @@ function ScopeResearchDistributionChart({
   const xAt = (index: number) => padLeft + ((index + 0.5) / bins.length) * plotW;
   const yCount = (value: number) => padTop + plotH - (value / maxCount) * plotH;
   const meanX = padLeft + ((meanValue - minValue) / (maxValue - minValue || 1)) * plotW;
-  const xTicks = bins.filter((_, index) => {
-    if (bins.length <= 7) return true;
-    const step = Math.max(1, Math.ceil(bins.length / 7));
-    return index === 0 || index === bins.length - 1 || index % step === 0;
-  });
 
   const showTooltip = (
     event: React.MouseEvent<SVGElement>,
@@ -4064,7 +4323,7 @@ function ScopeResearchDistributionChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -4126,14 +4385,14 @@ function ScopeResearchDistributionChart({
         })}
         <line x1={meanX} x2={meanX} y1={padTop} y2={padTop + plotH} stroke="rgba(244,244,245,0.55)" strokeDasharray="5 5" />
         <line x1={padLeft} x2={w - padRight} y1={padTop + plotH} y2={padTop + plotH} stroke="rgba(255,255,255,0.12)" />
-        {xTicks.map((bin) => {
-          const index = bins.findIndex((candidate) => candidate.label === bin.label);
+        {bins.map((bin, index) => {
           const x = xAt(index);
           const [line1, line2] = scopeResearchLabelLines(bin.label);
+          const textAnchor = index === 0 ? "start" : index === bins.length - 1 ? "end" : "middle";
           return (
             <g key={`dist-tick-${bin.label}`}>
               <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 28} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 24} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
                 <tspan x={x} dy="0">{line1}</tspan>
                 {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
               </text>
@@ -4150,26 +4409,28 @@ function ScopeResearchViolinChart({
   title,
   meta,
   resultFormat,
+  fullscreen = false,
 }: {
   rows: ScopeResearchBinRow[];
   title: string;
   meta?: string;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
   const w = 1100;
-  const h = 520;
-  const padLeft = 18;
-  const padRight = 68;
-  const padTop = 72;
-  const padBottom = 112;
-  const barsH = 70;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 24;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 60;
+  const padBottom = 92;
+  const barsH = 60;
   const plotH = h - padTop - padBottom - barsH;
-  const barsTop = padTop + plotH + 18;
+  const barsTop = padTop + plotH + 12;
   if (!rows.length) {
     return (
-      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
         No violin groups for selected settings.
       </div>
     );
@@ -4187,11 +4448,6 @@ function ScopeResearchViolinChart({
   const yAt = (value: number) => padTop + plotH - ((value - minY) / spanY) * plotH;
   const barW = Math.max(18, Math.min(44, plotW / Math.max(1, rows.length) - 10));
   const violinHalfW = Math.max(22, Math.min(54, plotW / Math.max(1, rows.length) * 0.28));
-  const xTicks = rows.filter((_, index) => {
-    if (rows.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(rows.length / 6));
-    return index === 0 || index === rows.length - 1 || index % step === 0;
-  });
 
   const buildViolinPath = (row: ScopeResearchBinRow, centerX: number) => {
     if (row.values.length < 2 || row.min === row.max) {
@@ -4236,7 +4492,7 @@ function ScopeResearchViolinChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -4313,14 +4569,14 @@ function ScopeResearchViolinChart({
           );
         })}
         <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {xTicks.map((row) => {
-          const index = rows.findIndex((candidate) => candidate.label === row.label);
+        {rows.map((row, index) => {
           const x = xAt(index);
           const [line1, line2] = scopeResearchLabelLines(row.label);
+          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
           return (
             <g key={`violin-tick-${row.label}`}>
               <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 34} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 24} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
                 <tspan x={x} dy="0">{line1}</tspan>
                 {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
               </text>
@@ -4339,6 +4595,7 @@ function ScopeResearchScatterByDateChart({
   meta,
   parameterFormat,
   resultFormat,
+  fullscreen = false,
 }: {
   points: ScopeResearchPoint[];
   parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
@@ -4346,18 +4603,19 @@ function ScopeResearchScatterByDateChart({
   meta?: string;
   parameterFormat: ScopeResearchValueFormat;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
   const w = 1100;
-  const h = 520;
-  const padLeft = 24;
-  const padRight = 86;
-  const padTop = 72;
-  const padBottom = 88;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 20;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 60;
+  const padBottom = 72;
   if (!points.length) {
     return (
-      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
         No scatter data for selected settings.
       </div>
     );
@@ -4404,7 +4662,7 @@ function ScopeResearchScatterByDateChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -4492,7 +4750,7 @@ function ScopeResearchScatterByDateChart({
               <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
               <text
                 x={x}
-                y={h - 22}
+                y={h - 16}
                 textAnchor="middle"
                 fontSize="11"
                 className="fill-zinc-500 font-mono"
@@ -4517,24 +4775,26 @@ function ScopeResearchCumsumChart({
   title,
   meta,
   resultFormat,
+  fullscreen = false,
 }: {
   points: ScopeResearchPoint[];
   parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
   title: string;
   meta?: string;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
   const w = 1100;
-  const h = 520;
-  const padLeft = 24;
-  const padRight = 86;
-  const padTop = 72;
-  const padBottom = 88;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 20;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 60;
+  const padBottom = 72;
   if (!points.length) {
     return (
-      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
         No cumulative data for selected settings.
       </div>
     );
@@ -4545,9 +4805,9 @@ function ScopeResearchCumsumChart({
   }
   const series = daily;
   const plotW = w - padLeft - padRight;
-  const topH = h - padTop - padBottom - 78;
-  const barsTop = padTop + topH + 14;
-  const barsH = 64;
+  const topH = h - padTop - padBottom - 68;
+  const barsTop = padTop + topH + 12;
+  const barsH = 56;
   const minY = Math.min(0, ...series.map((point) => point.cumulative));
   const maxY = Math.max(0, ...series.map((point) => point.cumulative));
   const spanY = maxY - minY || 1;
@@ -4594,7 +4854,7 @@ function ScopeResearchCumsumChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -4697,7 +4957,7 @@ function ScopeResearchCumsumChart({
           return (
             <g key={`cumsum-tick-${point.dateKey}-${point.index}`}>
               <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 22} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 16} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
                 {point.dateKey.slice(5)}
               </text>
             </g>
@@ -4714,24 +4974,26 @@ function ScopeResearchTradePerformanceChart({
   title,
   meta,
   resultFormat,
+  fullscreen = false,
 }: {
   points: ScopeResearchPoint[];
   parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
   title: string;
   meta?: string;
   resultFormat: ScopeResearchValueFormat;
+  fullscreen?: boolean;
 }) {
   const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
   const chartId = useId().replace(/:/g, "");
   const w = 1100;
-  const h = 520;
-  const padLeft = 20;
-  const padRight = 86;
-  const padTop = 94;
-  const padBottom = 84;
+  const h = fullscreen ? 820 : 520;
+  const padLeft = fullscreen ? 10 : 20;
+  const padRight = fullscreen ? 54 : 82;
+  const padTop = 88;
+  const padBottom = 72;
   if (!points.length) {
     return (
-      <div className="w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
         No performance data for selected settings.
       </div>
     );
@@ -4752,9 +5014,9 @@ function ScopeResearchTradePerformanceChart({
   const bestDay = [...series].sort((a, b) => b.total - a.total)[0] ?? null;
   const worstDay = [...series].sort((a, b) => a.total - b.total)[0] ?? null;
   const plotW = w - padLeft - padRight;
-  const topH = h - padTop - padBottom - 80;
-  const barsTop = padTop + topH + 16;
-  const barsH = 64;
+  const topH = h - padTop - padBottom - 72;
+  const barsTop = padTop + topH + 12;
+  const barsH = 56;
   const minY = Math.min(0, ...series.map((row) => row.cumulative));
   const maxY = Math.max(0, ...series.map((row) => row.cumulative));
   const spanY = maxY - minY || 1;
@@ -4792,7 +5054,7 @@ function ScopeResearchTradePerformanceChart({
   };
 
   return (
-    <div className="relative w-full h-[520px] rounded-xl border border-white/10 bg-[#06070c]/90 overflow-hidden">
+    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
       {renderScopeChartTooltip(tooltip)}
       <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
         <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
@@ -4816,7 +5078,7 @@ function ScopeResearchTradePerformanceChart({
           <div className="mt-1 text-[14px] font-mono text-rose-300 truncate">{worstDay ? `${worstDay.dateKey.slice(5)}  ${scopeResearchFormatValue(worstDay.total, resultFormat)}` : "-"}</div>
         </div>
       </div>
-      <div className="absolute top-[78px] left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+      <div className="absolute top-[72px] left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
         {parallelDailySeries.map((seriesItem, index) => (
           <span
             key={`performance-chip-${seriesItem.id}`}
@@ -4894,7 +5156,7 @@ function ScopeResearchTradePerformanceChart({
           return (
             <g key={`perf-tick-${point.dateKey}`}>
               <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 22} textAnchor="middle" fontSize="11" className="fill-zinc-500 font-mono">
+              <text x={x} y={h - 16} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
                 {point.dateKey.slice(5)}
               </text>
             </g>
@@ -4921,6 +5183,8 @@ const PAPER_ARB_FILTERS_LS_KEY = "paper.arb.filters.v1";
 export default function ArbitrageScanner() {
   const { theme } = useUi();
   const accent = useMemo(() => getScannerAccent(theme), [theme]);
+  const headerButtonActiveClass = useMemo(() => getScannerHeaderButtonActiveClass(theme), [theme]);
+  const isLightTheme = theme === "light";
   const [tab, setTab] = useState<TabKey>("active");
   const [ruleBand, setRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
   const [zapUiMode, setZapUiMode] = useState<ZapUiMode>("zap");
@@ -5135,6 +5399,20 @@ export default function ArbitrageScanner() {
 
   const [minMdnPostMhVol90NF, setMinMdnPostMhVol90NF] = useState<string>("");
   const [maxMdnPostMhVol90NF, setMaxMdnPostMhVol90NF] = useState<string>("");
+  const [minAvPreMhVol90NF, setMinAvPreMhVol90NF] = useState<string>("");
+  const [maxAvPreMhVol90NF, setMaxAvPreMhVol90NF] = useState<string>("");
+  const [minAvPreMhValue20NF, setMinAvPreMhValue20NF] = useState<string>("");
+  const [maxAvPreMhValue20NF, setMaxAvPreMhValue20NF] = useState<string>("");
+  const [minAvPreMhValue90NF, setMinAvPreMhValue90NF] = useState<string>("");
+  const [maxAvPreMhValue90NF, setMaxAvPreMhValue90NF] = useState<string>("");
+  const [minAvgDailyValue20, setMinAvgDailyValue20] = useState<string>("");
+  const [maxAvgDailyValue20, setMaxAvgDailyValue20] = useState<string>("");
+  const [minAvgDailyValue90, setMinAvgDailyValue90] = useState<string>("");
+  const [maxAvgDailyValue90, setMaxAvgDailyValue90] = useState<string>("");
+  const [minVolatility20, setMinVolatility20] = useState<string>("");
+  const [maxVolatility20, setMaxVolatility20] = useState<string>("");
+  const [minVolatility90, setMinVolatility90] = useState<string>("");
+  const [maxVolatility90, setMaxVolatility90] = useState<string>("");
 
   // imbalance
   const [minImbARCA, setMinImbARCA] = useState<string>("");
@@ -5146,6 +5424,7 @@ export default function ArbitrageScanner() {
   );
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
+  const optimizerBucketReloadRef = useRef<number | null>(null);
   const [scanStartMin, setScanStartMin] = useState<number>(0.05);
   const [scanStartMax, setScanStartMax] = useState<number>(0.2);
   const [scanStartStep, setScanStartStep] = useState<number>(0.01);
@@ -5172,19 +5451,23 @@ export default function ArbitrageScanner() {
     "TAPE FILTERS": { loading: false, error: null, partial: false },
   });
   const [optimizerRangeGroupHidden, setOptimizerRangeGroupHidden] = useState<Record<OptimizerRangeGroupKey, boolean>>({
-    "RATING GATES": false,
-    "ZAP THRESHOLDS": false,
-    "TAPE FILTERS": false,
+    "RATING GATES": true,
+    "ZAP THRESHOLDS": true,
+    "TAPE FILTERS": true,
   });
-  const [optimizerSetParameters, setOptimizerSetParameters] = useState<[string, string, string, string, string]>(["", "", "", "", ""]);
+  const [optimizerStatsHidden, setOptimizerStatsHidden] = useState<boolean>(true);
+  const [scopeSelectedParameterKeys, setScopeSelectedParameterKeys] = useState<string[]>([]);
+  const [scopeParameterGroupExpanded, setScopeParameterGroupExpanded] = useState<Record<string, boolean>>({});
+  const [scopeOverlayParameterKeys, setScopeOverlayParameterKeys] = useState<[string, string]>(["", ""]);
   const [optimizerRangeRankMetric, setOptimizerRangeRankMetric] = useState<OptimizerRangeRankMetric>("avgPnlUsd");
   const [optimizerRangeMinTrades, setOptimizerRangeMinTrades] = useState<number>(25);
   const [optimizerBucketCount, setOptimizerBucketCount] = useState<number>(8);
   const [scopeResearchDrafts, setScopeResearchDrafts] = useState<Record<ScopePanelKey, ScopeResearchDraft>>(DEFAULT_SCOPE_RESEARCH_DRAFTS);
   const [scopeResearchSelections, setScopeResearchSelections] = useState<Record<ScopePanelKey, ScopeResearchSelection | null>>({
-    left: buildScopeResearchSelectionFromDraft(DEFAULT_SCOPE_RESEARCH_DRAFTS.left),
-    right: buildScopeResearchSelectionFromDraft(DEFAULT_SCOPE_RESEARCH_DRAFTS.right),
+    left: null,
+    right: null,
   });
+  const [scopeFullscreenPanel, setScopeFullscreenPanel] = useState<ScopePanelKey | null>(null);
   const [scopeResearchFiltersHidden, setScopeResearchFiltersHidden] = useState<
     Record<ScopePanelKey, { extra: boolean; parallel: boolean }>
   >({
@@ -5255,6 +5538,15 @@ export default function ArbitrageScanner() {
       has(minPreMktVolNF) || has(maxPreMktVolNF) ||
       has(minVolNFfromLstCls) || has(maxVolNFfromLstCls) ||
       has(minAvPostMhVol90NF) || has(maxAvPostMhVol90NF) ||
+      has(minAvPreMhVol90NF) || has(maxAvPreMhVol90NF) ||
+      has(minAvPreMhValue20NF) || has(maxAvPreMhValue20NF) ||
+      has(minAvPreMhValue90NF) || has(maxAvPreMhValue90NF) ||
+      has(minAvgDailyValue20) || has(maxAvgDailyValue20) ||
+      has(minAvgDailyValue90) || has(maxAvgDailyValue90) ||
+      has(minVolatility20) || has(maxVolatility20) ||
+      has(minVolatility90) || has(maxVolatility90) ||
+      has(minPreMhMDV20NF) || has(maxPreMhMDV20NF) ||
+      has(minPreMhMDV90NF) || has(maxPreMhMDV90NF) ||
       has(minVolRel) || has(maxVolRel) ||
       has(minPreMhBidLstPrcPct) || has(maxPreMhBidLstPrcPct) ||
       has(minPreMhLoLstPrcPct) || has(maxPreMhLoLstPrcPct) ||
@@ -5276,7 +5568,11 @@ export default function ArbitrageScanner() {
     minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
     minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt,
     minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls,
-    minAvPostMhVol90NF, maxAvPostMhVol90NF, minVolRel, maxVolRel,
+    minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF,
+    minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF,
+    minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
+    minVolatility20, maxVolatility20, minVolatility90, maxVolatility90,
+    minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel,
     minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
     minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
     minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
@@ -5562,6 +5858,13 @@ export default function ArbitrageScanner() {
         applyStr(s.minPreMhMDV20NF, setMinPreMhMDV20NF); applyStr(s.maxPreMhMDV20NF, setMaxPreMhMDV20NF);
         applyStr(s.minMdnPostMhVol90NF, setMinMdnPostMhVol90NF); applyStr(s.maxMdnPostMhVol90NF, setMaxMdnPostMhVol90NF);
         applyStr(s.minAvPostMhVol90NF, setMinAvPostMhVol90NF); applyStr(s.maxAvPostMhVol90NF, setMaxAvPostMhVol90NF);
+        applyStr(s.minAvPreMhVol90NF, setMinAvPreMhVol90NF); applyStr(s.maxAvPreMhVol90NF, setMaxAvPreMhVol90NF);
+        applyStr(s.minAvPreMhValue20NF, setMinAvPreMhValue20NF); applyStr(s.maxAvPreMhValue20NF, setMaxAvPreMhValue20NF);
+        applyStr(s.minAvPreMhValue90NF, setMinAvPreMhValue90NF); applyStr(s.maxAvPreMhValue90NF, setMaxAvPreMhValue90NF);
+        applyStr(s.minAvgDailyValue20, setMinAvgDailyValue20); applyStr(s.maxAvgDailyValue20, setMaxAvgDailyValue20);
+        applyStr(s.minAvgDailyValue90, setMinAvgDailyValue90); applyStr(s.maxAvgDailyValue90, setMaxAvgDailyValue90);
+        applyStr(s.minVolatility20, setMinVolatility20); applyStr(s.maxVolatility20, setMaxVolatility20);
+        applyStr(s.minVolatility90, setMinVolatility90); applyStr(s.maxVolatility90, setMaxVolatility90);
         applyStr(s.minVolRel, setMinVolRel); applyStr(s.maxVolRel, setMaxVolRel);
         applyStr(s.minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct); applyStr(s.maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct);
         applyStr(s.minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct); applyStr(s.maxPreMhLoLstPrcPct, setMaxPreMhLoLstPrcPct);
@@ -5719,6 +6022,20 @@ export default function ArbitrageScanner() {
       maxMdnPostMhVol90NF,
       minAvPostMhVol90NF,
       maxAvPostMhVol90NF,
+      minAvPreMhVol90NF,
+      maxAvPreMhVol90NF,
+      minAvPreMhValue20NF,
+      maxAvPreMhValue20NF,
+      minAvPreMhValue90NF,
+      maxAvPreMhValue90NF,
+      minAvgDailyValue20,
+      maxAvgDailyValue20,
+      minAvgDailyValue90,
+      maxAvgDailyValue90,
+      minVolatility20,
+      maxVolatility20,
+      minVolatility90,
+      maxVolatility90,
       minVolRel,
       maxVolRel,
       minPreMhBidLstPrcPct,
@@ -5759,7 +6076,12 @@ export default function ArbitrageScanner() {
       includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
       minMdnPostMhVol90NF, maxMdnPostMhVol90NF,
-      minAvPostMhVol90NF, maxAvPostMhVol90NF, minVolRel, maxVolRel,
+      minAvPostMhVol90NF, maxAvPostMhVol90NF,
+      minAvPreMhVol90NF, maxAvPreMhVol90NF,
+      minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF,
+      minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
+      minVolatility20, maxVolatility20, minVolatility90, maxVolatility90,
+      minVolRel, maxVolRel,
       minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
       minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
@@ -5832,6 +6154,20 @@ export default function ArbitrageScanner() {
       maxVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", maxVolNFfromLstCls),
       minAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", minAvPostMhVol90NF),
       maxAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", maxAvPostMhVol90NF),
+      minAvPreMhVol90NF: rangeValueOrNull("avpremhvol90nf", minAvPreMhVol90NF),
+      maxAvPreMhVol90NF: rangeValueOrNull("avpremhvol90nf", maxAvPreMhVol90NF),
+      minAvPreMhValue20NF: rangeValueOrNull("avpremhvalue20nf", minAvPreMhValue20NF),
+      maxAvPreMhValue20NF: rangeValueOrNull("avpremhvalue20nf", maxAvPreMhValue20NF),
+      minAvPreMhValue90NF: rangeValueOrNull("avpremhvalue90nf", minAvPreMhValue90NF),
+      maxAvPreMhValue90NF: rangeValueOrNull("avpremhvalue90nf", maxAvPreMhValue90NF),
+      minAvgDailyValue20: rangeValueOrNull("avgdailyvalue20", minAvgDailyValue20),
+      maxAvgDailyValue20: rangeValueOrNull("avgdailyvalue20", maxAvgDailyValue20),
+      minAvgDailyValue90: rangeValueOrNull("avgdailyvalue90", minAvgDailyValue90),
+      maxAvgDailyValue90: rangeValueOrNull("avgdailyvalue90", maxAvgDailyValue90),
+      minVolatility20: rangeValueOrNull("volatility20", minVolatility20),
+      maxVolatility20: rangeValueOrNull("volatility20", maxVolatility20),
+      minVolatility90: rangeValueOrNull("volatility90", minVolatility90),
+      maxVolatility90: rangeValueOrNull("volatility90", maxVolatility90),
       minVolRel: rangeValueOrNull("volrel", minVolRel),
       maxVolRel: rangeValueOrNull("volrel", maxVolRel),
       minPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", minPreMhBidLstPrcPct),
@@ -5959,12 +6295,6 @@ export default function ArbitrageScanner() {
       minMdnPreMhVol90: optNumOrNull(minMdnPreMhVol90),
       maxMdnPreMhVol90: optNumOrNull(maxMdnPreMhVol90),
 
-      minPreMhMDV90NF: optNumOrNull(minPreMhMDV90NF),
-      maxPreMhMDV90NF: optNumOrNull(maxPreMhMDV90NF),
-
-      minPreMhMDV20NF: optNumOrNull(minPreMhMDV20NF),
-      maxPreMhMDV20NF: optNumOrNull(maxPreMhMDV20NF),
-
       minMdnPostMhVol90NF: optNumOrNull(minMdnPostMhVol90NF),
       maxMdnPostMhVol90NF: optNumOrNull(maxMdnPostMhVol90NF),
 
@@ -5986,6 +6316,24 @@ export default function ArbitrageScanner() {
       maxVolNFfromLstCls: rangeValueOrNull("volnffromlstcls", maxVolNFfromLstCls),
       minAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", minAvPostMhVol90NF),
       maxAvPostMhVol90NF: rangeValueOrNull("avpostmhvol90nf", maxAvPostMhVol90NF),
+      minAvPreMhVol90NF: rangeValueOrNull("avpremhvol90nf", minAvPreMhVol90NF),
+      maxAvPreMhVol90NF: rangeValueOrNull("avpremhvol90nf", maxAvPreMhVol90NF),
+      minAvPreMhValue20NF: rangeValueOrNull("avpremhvalue20nf", minAvPreMhValue20NF),
+      maxAvPreMhValue20NF: rangeValueOrNull("avpremhvalue20nf", maxAvPreMhValue20NF),
+      minAvPreMhValue90NF: rangeValueOrNull("avpremhvalue90nf", minAvPreMhValue90NF),
+      maxAvPreMhValue90NF: rangeValueOrNull("avpremhvalue90nf", maxAvPreMhValue90NF),
+      minAvgDailyValue20: rangeValueOrNull("avgdailyvalue20", minAvgDailyValue20),
+      maxAvgDailyValue20: rangeValueOrNull("avgdailyvalue20", maxAvgDailyValue20),
+      minAvgDailyValue90: rangeValueOrNull("avgdailyvalue90", minAvgDailyValue90),
+      maxAvgDailyValue90: rangeValueOrNull("avgdailyvalue90", maxAvgDailyValue90),
+      minVolatility20: rangeValueOrNull("volatility20", minVolatility20),
+      maxVolatility20: rangeValueOrNull("volatility20", maxVolatility20),
+      minVolatility90: rangeValueOrNull("volatility90", minVolatility90),
+      maxVolatility90: rangeValueOrNull("volatility90", maxVolatility90),
+      minPreMhMDV20NF: rangeValueOrNull("premhmdv20nf", minPreMhMDV20NF),
+      maxPreMhMDV20NF: rangeValueOrNull("premhmdv20nf", maxPreMhMDV20NF),
+      minPreMhMDV90NF: rangeValueOrNull("premhmdv90nf", minPreMhMDV90NF),
+      maxPreMhMDV90NF: rangeValueOrNull("premhmdv90nf", maxPreMhMDV90NF),
       minVolRel: rangeValueOrNull("volrel", minVolRel),
       maxVolRel: rangeValueOrNull("volrel", maxVolRel),
       minPreMhBidLstPrcPct: rangeValueOrNull("premhbidlstprc", minPreMhBidLstPrcPct),
@@ -6259,6 +6607,15 @@ export default function ArbitrageScanner() {
     pushRangeScenarios("premhvolnf", "PreMhVolNF", minPreMktVolNF, maxPreMktVolNF, "minPreMhVolNF", "maxPreMhVolNF", "minPreMktVolNF", "maxPreMktVolNF");
     pushRangeScenarios("volnffromlstcls", "VolNFfromLstCls", minVolNFfromLstCls, maxVolNFfromLstCls, "minVolNFfromLstCls", "maxVolNFfromLstCls");
     pushRangeScenarios("avpostmhvol90nf", "AvPostMhVol90NF", minAvPostMhVol90NF, maxAvPostMhVol90NF, "minAvPostMhVol90NF", "maxAvPostMhVol90NF");
+    pushRangeScenarios("avpremhvol90nf", "AvPreMhVol90NF", minAvPreMhVol90NF, maxAvPreMhVol90NF, "minAvPreMhVol90NF", "maxAvPreMhVol90NF");
+    pushRangeScenarios("avpremhvalue20nf", "AvPreMhValue20NF", minAvPreMhValue20NF, maxAvPreMhValue20NF, "minAvPreMhValue20NF", "maxAvPreMhValue20NF");
+    pushRangeScenarios("avpremhvalue90nf", "AvPreMhValue90NF", minAvPreMhValue90NF, maxAvPreMhValue90NF, "minAvPreMhValue90NF", "maxAvPreMhValue90NF");
+    pushRangeScenarios("avgdailyvalue20", "AvgDailyValue20", minAvgDailyValue20, maxAvgDailyValue20, "minAvgDailyValue20", "maxAvgDailyValue20");
+    pushRangeScenarios("avgdailyvalue90", "AvgDailyValue90", minAvgDailyValue90, maxAvgDailyValue90, "minAvgDailyValue90", "maxAvgDailyValue90");
+    pushRangeScenarios("volatility20", "Volatility20", minVolatility20, maxVolatility20, "minVolatility20", "maxVolatility20");
+    pushRangeScenarios("volatility90", "Volatility90", minVolatility90, maxVolatility90, "minVolatility90", "maxVolatility90");
+    pushRangeScenarios("premhmdv20nf", "PreMhMDV20NF", minPreMhMDV20NF, maxPreMhMDV20NF, "minPreMhMDV20NF", "maxPreMhMDV20NF");
+    pushRangeScenarios("premhmdv90nf", "PreMhMDV90NF", minPreMhMDV90NF, maxPreMhMDV90NF, "minPreMhMDV90NF", "maxPreMhMDV90NF");
     pushRangeScenarios("volrel", "VolRel", minVolRel, maxVolRel, "minVolRel", "maxVolRel");
     pushRangeScenarios("premhbidlstprc", "PreMhHiLstPrc%", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, "minPreMhBidLstPrcPct", "maxPreMhBidLstPrcPct");
     pushRangeScenarios("premhlolstprc", "PreMhLoLstPrc%", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, "minPreMhLoLstPrcPct", "maxPreMhLoLstPrcPct");
@@ -6295,7 +6652,7 @@ export default function ArbitrageScanner() {
     if (startAbsMaxNum != null && startAbsMaxNum > 0) {
       scenarios.push({
         id: "startabsmax",
-        parameter: zapUiMode === "sigma" ? "SIG START MAX" : "ZAP START MAX",
+        parameter: "START MAX",
         variant: "ON",
         summary: `startMax <= ${num(startAbsMaxNum, 2)}`,
         apply: (req) => {
@@ -6306,7 +6663,7 @@ export default function ArbitrageScanner() {
     if (endAbs > 0) {
       scenarios.push({
         id: "endabs",
-        parameter: zapUiMode === "sigma" ? "SIG END" : "ZAP END",
+        parameter: "END",
         variant: "ON",
         summary: `end <= ${num(endAbs, 2)}`,
         apply: (req) => {
@@ -6400,6 +6757,15 @@ export default function ArbitrageScanner() {
     req.minPreMktVolNF = null; req.maxPreMktVolNF = null;
     req.minVolNFfromLstCls = null; req.maxVolNFfromLstCls = null;
     req.minAvPostMhVol90NF = null; req.maxAvPostMhVol90NF = null;
+    req.minAvPreMhVol90NF = null; req.maxAvPreMhVol90NF = null;
+    req.minAvPreMhValue20NF = null; req.maxAvPreMhValue20NF = null;
+    req.minAvPreMhValue90NF = null; req.maxAvPreMhValue90NF = null;
+    req.minAvgDailyValue20 = null; req.maxAvgDailyValue20 = null;
+    req.minAvgDailyValue90 = null; req.maxAvgDailyValue90 = null;
+    req.minVolatility20 = null; req.maxVolatility20 = null;
+    req.minVolatility90 = null; req.maxVolatility90 = null;
+    req.minPreMhMDV20NF = null; req.maxPreMhMDV20NF = null;
+    req.minPreMhMDV90NF = null; req.maxPreMhMDV90NF = null;
     req.minVolRel = null; req.maxVolRel = null;
     req.minPreMhBidLstPrcPct = null; req.maxPreMhBidLstPrcPct = null;
     req.minPreMhLoLstPrcPct = null; req.maxPreMhLoLstPrcPct = null;
@@ -6413,17 +6779,66 @@ export default function ArbitrageScanner() {
   };
 
   async function loadOptimizerRangesByGroup(from: string, to: string) {
+    const effectiveScopeKeys = scopeSelectedParameterKeys.length
+      ? scopeSelectedParameterKeys
+      : SCOPE_PARAMETER_DEFINITIONS.map((item) => item.key);
+    const loadAllScopeKeys = effectiveScopeKeys.length >= SCOPE_PARAMETER_DEFINITIONS.length;
+    const requestedGroups = new Map<OptimizerRangeGroupKey, string[]>();
+    for (const key of effectiveScopeKeys) {
+      const def = SCOPE_PARAMETER_BY_KEY.get(key);
+      if (!def) continue;
+      const list = requestedGroups.get(def.group) ?? [];
+      list.push(def.key);
+      requestedGroups.set(def.group, list);
+    }
+    const chunkKeys = (keys: string[], size: number) => {
+      const chunks: string[][] = [];
+      for (let i = 0; i < keys.length; i += size) chunks.push(keys.slice(i, i + size));
+      return chunks;
+    };
     const tasks: Array<{
       group: OptimizerRangeGroupKey;
       parameterKeys?: string[];
       timeoutMs: number;
       bucketCount?: number;
-    }> = [
-      { group: "TAPE FILTERS", timeoutMs: 60000 },
-      { group: "RATING GATES", timeoutMs: 30000 },
-      { group: "ZAP THRESHOLDS", parameterKeys: ["startabsmax"], timeoutMs: 90000, bucketCount: 5 },
-      { group: "ZAP THRESHOLDS", parameterKeys: ["endabs"], timeoutMs: 90000, bucketCount: 6 },
-    ];
+    }> = [];
+    for (const group of ["TAPE FILTERS", "RATING GATES", "ZAP THRESHOLDS"] as OptimizerRangeGroupKey[]) {
+      if (!loadAllScopeKeys && !requestedGroups.has(group)) continue;
+      const groupKeys = loadAllScopeKeys
+        ? SCOPE_PARAMETER_DEFINITIONS.filter((item) => item.group === group).map((item) => item.key)
+        : requestedGroups.get(group) ?? [];
+
+      if (group === "TAPE FILTERS") {
+        const tapeChunks = chunkKeys(groupKeys, 4);
+        for (const parameterKeys of tapeChunks) {
+          tasks.push({
+            group,
+            parameterKeys,
+            timeoutMs: 120000,
+          });
+        }
+        continue;
+      }
+
+      tasks.push({
+        group,
+        parameterKeys: loadAllScopeKeys ? undefined : groupKeys,
+        timeoutMs: group === "ZAP THRESHOLDS" ? 180000 : 180000,
+        bucketCount: group === "ZAP THRESHOLDS" ? 6 : undefined,
+      });
+    }
+
+    if (!tasks.length) {
+      setOptimizerRanges(null);
+      setOptimizerRangesErr(null);
+      setOptimizerRangesLoading(false);
+      setOptimizerRangeGroupStatus({
+        "RATING GATES": { loading: false, error: null, partial: false },
+        "ZAP THRESHOLDS": { loading: false, error: null, partial: false },
+        "TAPE FILTERS": { loading: false, error: null, partial: false },
+      });
+      return;
+    }
     const groupPending = tasks.reduce<Record<OptimizerRangeGroupKey, number>>(
       (acc, task) => {
         acc[task.group] += 1;
@@ -6453,60 +6868,73 @@ export default function ArbitrageScanner() {
     let anyGroupReady = false;
     const failedGroups: string[] = [];
 
-    for (const task of tasks) {
-      const { group, parameterKeys, timeoutMs, bucketCount } = task;
-      const groupReq = buildPostRequest(from, to);
-      applyOptimizerRatingRule(groupReq);
-      groupReq.optimizerBucketCount = bucketCount ?? Math.max(3, Math.min(16, Math.trunc(optimizerBucketCount)));
-      groupReq.optimizerGroups = [group];
-      groupReq.optimizerParameterKeys = parameterKeys ?? null;
-      try {
-        const resp = await apiPostWithTimeout<PaperArbOptimizerRangesResponse>(
-          "/api/paper/arbitrage/optimizer/ranges",
-          groupReq,
-          timeoutMs
-        );
+    const executeTask = async (task: {
+      group: OptimizerRangeGroupKey;
+      parameterKeys?: string[];
+      timeoutMs: number;
+      bucketCount?: number;
+    }) => {
+        const { group, parameterKeys, timeoutMs, bucketCount } = task;
+        const groupReq = buildPostRequest(from, to);
+        applyOptimizerRatingRule(groupReq);
+        groupReq.optimizerBucketCount = bucketCount ?? Math.max(3, Math.min(16, Math.trunc(optimizerBucketCount)));
+        groupReq.optimizerGroups = [group];
+        groupReq.optimizerParameterKeys = parameterKeys ?? null;
+        try {
+          const resp = await apiPostWithTimeout<PaperArbOptimizerRangesResponse>(
+            "/api/paper/arbitrage/optimizer/ranges",
+            groupReq,
+            timeoutMs
+          );
 
-        setOptimizerRanges((prev) => ({
-          dateFrom: resp?.dateFrom ?? prev?.dateFrom ?? from,
-          dateTo: resp?.dateTo ?? prev?.dateTo ?? to,
-          metric: resp?.metric ?? prev?.metric ?? metric,
-          session: resp?.session ?? prev?.session ?? session,
-          closeMode: resp?.closeMode ?? prev?.closeMode ?? closeMode,
-          pnlMode: resp?.pnlMode ?? prev?.pnlMode ?? pnlMode,
-          bucketCount: resp?.bucketCount ?? prev?.bucketCount ?? optimizerBucketCount,
-          parametersAnalyzed: new Map(
-            [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
-          ).size,
-          parameters: [...new Map(
-            [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
-          ).values()],
-        }));
-        anyGroupReady = true;
-        groupSuccesses[group] += 1;
-        groupPending[group] = Math.max(0, groupPending[group] - 1);
-        setOptimizerRangeGroupStatus((prev) => ({
-          ...prev,
-          [group]: {
-            loading: groupPending[group] > 0,
-            error: groupSuccesses[group] > 0 ? null : groupErrors[group][0] ?? null,
-            partial: groupSuccesses[group] > 0 && groupErrors[group].length > 0,
-          },
-        }));
-      } catch (e: any) {
-        const msg = e?.message ?? String(e);
-        failedGroups.push(`${group}: ${msg}`);
-        groupErrors[group].push(msg);
-        groupPending[group] = Math.max(0, groupPending[group] - 1);
-        setOptimizerRangeGroupStatus((prev) => ({
-          ...prev,
-          [group]: {
-            loading: groupPending[group] > 0,
-            error: groupSuccesses[group] > 0 ? null : groupErrors[group][0] ?? null,
-            partial: groupSuccesses[group] > 0 && groupErrors[group].length > 0,
-          },
-        }));
-      }
+          setOptimizerRanges((prev) => ({
+            dateFrom: resp?.dateFrom ?? prev?.dateFrom ?? from,
+            dateTo: resp?.dateTo ?? prev?.dateTo ?? to,
+            metric: resp?.metric ?? prev?.metric ?? metric,
+            session: resp?.session ?? prev?.session ?? session,
+            closeMode: resp?.closeMode ?? prev?.closeMode ?? closeMode,
+            pnlMode: resp?.pnlMode ?? prev?.pnlMode ?? pnlMode,
+            bucketCount: resp?.bucketCount ?? prev?.bucketCount ?? optimizerBucketCount,
+            parametersAnalyzed: new Map(
+              [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
+            ).size,
+            parameters: [...new Map(
+              [...(prev?.parameters ?? []), ...(resp?.parameters ?? [])].map((parameter) => [parameter.key, parameter])
+            ).values()],
+          }));
+          anyGroupReady = true;
+          groupSuccesses[group] += 1;
+          groupPending[group] = Math.max(0, groupPending[group] - 1);
+          setOptimizerRangeGroupStatus((prev) => ({
+            ...prev,
+            [group]: {
+              loading: groupPending[group] > 0,
+              error: groupSuccesses[group] > 0 ? null : groupErrors[group][0] ?? null,
+              partial: groupSuccesses[group] > 0 && groupErrors[group].length > 0,
+            },
+          }));
+        } catch (e: any) {
+          const msg = e?.message ?? String(e);
+          failedGroups.push(`${group}: ${msg}`);
+          groupErrors[group].push(msg);
+          groupPending[group] = Math.max(0, groupPending[group] - 1);
+          setOptimizerRangeGroupStatus((prev) => ({
+            ...prev,
+            [group]: {
+              loading: groupPending[group] > 0,
+              error: groupSuccesses[group] > 0 ? null : groupErrors[group][0] ?? null,
+              partial: groupSuccesses[group] > 0 && groupErrors[group].length > 0,
+            },
+          }));
+        }
+      };
+
+    const tapeTasks = tasks.filter((task) => task.group === "TAPE FILTERS");
+    const nonTapeTasks = tasks.filter((task) => task.group !== "TAPE FILTERS");
+
+    await Promise.all(nonTapeTasks.map((task) => executeTask(task)));
+    for (const task of tapeTasks) {
+      await executeTask(task);
     }
 
     setOptimizerRangesErr(!anyGroupReady && failedGroups.length ? failedGroups[0] : null);
@@ -6525,48 +6953,49 @@ export default function ArbitrageScanner() {
       setOptimizerErr("No optimizer scenarios configured.");
       return;
     }
+    if (!scopeSelectedParameters.length) {
+      setOptimizerErr("Select at least one parameter in SCOPE.");
+      return;
+    }
 
     setOptimizerLoading(true);
     setOptimizerErr(null);
     setOptimizerComboRows([]);
+    setScopeResearchSelections({
+      left: null,
+      right: null,
+    });
 
-    const out: OptimizerResultRow[] = [];
     try {
-      const evaluateOptimizerRun = async (
+      const buildScopeScenarioRequest = (
         id: string,
         parameter: string,
         variant: string,
         summary: string,
         apply: (req: PaperArbAnalyticsRequest) => void
-      ): Promise<OptimizerResultRow> => {
+      ): ScopeBatchScenarioRequest => {
         const req = buildPostRequest(from, to);
         clearOptimizerFields(req);
         apply(req);
-
-        const rows = await fetchEpisodesSearchRows(req);
-        const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
-        const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
-        const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
-        const trades = rows.length;
-        const winRate = trades > 0 ? wins / trades : 0;
         return {
           id,
           parameter,
           variant,
           summary,
-          trades,
-          wins,
-          losses,
-          winRate,
-          totalPnlUsd: total,
-          avgPnlUsd: trades > 0 ? total / trades : 0,
-          score: trades > 0 ? total / trades : Number.NEGATIVE_INFINITY,
+          request: req,
         };
       };
 
-      const selectedSetParameters = optimizerSetParameters.map((value) => value.trim()).filter(Boolean);
-      const uniqueSelectedSetParameters = Array.from(new Set(selectedSetParameters));
-      const scenariosByParameter = optimizerScenarios.reduce<Map<string, OptimizerScenario[]>>((acc, scenario) => {
+      const scopeScenarioRows = optimizerScenarios.filter((scenario) => {
+        if (scenario.id === "baseline" || scenario.id === "current-stack" || scenario.parameter === "BASE" || scenario.parameter === "STACK") {
+          return true;
+        }
+        return scopeSelectedScenarioParameterLabels.includes(scenario.parameter);
+      });
+
+      const overlayParameters = scopeOverlayParameterKeys.map((value) => value.trim()).filter(Boolean);
+      const uniqueOverlayParameters = Array.from(new Set(overlayParameters));
+      const scenariosByParameter = scopeScenarioRows.reduce<Map<string, OptimizerScenario[]>>((acc, scenario) => {
         if (scenario.id === "baseline" || scenario.id === "current-stack" || scenario.parameter === "BASE" || scenario.parameter === "STACK") return acc;
         const list = acc.get(scenario.parameter) ?? [];
         list.push(scenario);
@@ -6574,85 +7003,90 @@ export default function ArbitrageScanner() {
         return acc;
       }, new Map());
 
-      let exactSetCombos: Array<Array<OptimizerScenario | null>> = [];
-      if (selectedSetParameters.length > 0) {
-        if (selectedSetParameters.length !== 5 || uniqueSelectedSetParameters.length !== 5) {
-          setOptimizerErr("Select exactly 5 unique parameters for BEST SET search.");
+      let overlayCombos: Array<Array<OptimizerScenario | null>> = [];
+      if (overlayParameters.length > 0) {
+        if (overlayParameters.length !== 2 || uniqueOverlayParameters.length !== 2) {
+          setOptimizerErr("Select exactly 2 unique parameters for overlay research.");
           setOptimizerLoading(false);
           return;
         }
 
-        const selectedScenarioGroups = uniqueSelectedSetParameters.map((parameter) => ({
+        const selectedScenarioGroups = uniqueOverlayParameters.map((parameter) => ({
           parameter,
           scenarios: scenariosByParameter.get(parameter) ?? [],
         }));
         const missingParameter = selectedScenarioGroups.find((group) => group.scenarios.length === 0);
         if (missingParameter) {
-          setOptimizerErr(`No optimizer scenarios available for ${missingParameter.parameter}. Enter a value for that parameter first.`);
+          setOptimizerErr(`No SCOPE scenarios available for ${missingParameter.parameter}. Enter a value for that parameter first.`);
           setOptimizerLoading(false);
           return;
         }
 
-        exactSetCombos = [[]];
+        overlayCombos = [[]];
         for (const group of selectedScenarioGroups) {
           const next: Array<Array<OptimizerScenario | null>> = [];
           const scenarioChoices: Array<OptimizerScenario | null> = [null, ...group.scenarios];
-          for (const combo of exactSetCombos) {
+          for (const combo of overlayCombos) {
             for (const scenario of scenarioChoices) next.push([...combo, scenario]);
           }
-          exactSetCombos = next;
+          overlayCombos = next;
         }
       }
 
-      const singleScenarioCount = optimizerScenarios.length;
-      const comboWorkEstimate = exactSetCombos.length;
+      const singleScenarioCount = scopeScenarioRows.length;
+      const comboWorkEstimate = overlayCombos.length;
       setOptimizerProgress({ done: 0, total: singleScenarioCount + comboWorkEstimate });
 
-      for (let i = 0; i < optimizerScenarios.length; i++) {
-        const scenario = optimizerScenarios[i];
-        out.push(await evaluateOptimizerRun(scenario.id, scenario.parameter, scenario.variant, scenario.summary, scenario.apply));
-        setOptimizerProgress({ done: i + 1, total: singleScenarioCount + comboWorkEstimate });
-      }
+      const baseRequest = buildPostRequest(from, to);
+      clearOptimizerFields(baseRequest);
 
-      out.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
-        return b.trades - a.trades;
-      });
-      setOptimizerRows(out);
-
-      const comboRows: OptimizerResultRow[] = [];
-      let comboDone = 0;
-      for (const combo of exactSetCombos) {
+      const rowRequests = scopeScenarioRows.map((scenario) =>
+        buildScopeScenarioRequest(scenario.id, scenario.parameter, scenario.variant, scenario.summary, scenario.apply)
+      );
+      const comboRequests = overlayCombos.map((combo) => {
         const scenarios = combo.filter((scenario): scenario is OptimizerScenario => scenario != null);
         const comboId = combo.map((scenario) => scenario?.id ?? "off").join("|");
-        const parameter = uniqueSelectedSetParameters
+        const parameter = uniqueOverlayParameters
           .map((parameter, index) => `${parameter}:${combo[index] ? combo[index]!.variant : "OFF"}`)
           .join(" | ");
         const summary = combo
-          .map((scenario, index) => `${uniqueSelectedSetParameters[index]} => ${scenario?.summary ?? "OFF"}`)
+          .map((scenario, index) => `${uniqueOverlayParameters[index]} => ${scenario?.summary ?? "OFF"}`)
           .join(" | ");
-        const row = await evaluateOptimizerRun(
+        return buildScopeScenarioRequest(
           `combo:${comboId}`,
           parameter,
-          "SET 5",
+          "PAIR",
           summary,
           (req) => {
             scenarios.forEach((scenario) => scenario.apply(req));
           }
         );
-        comboRows.push(row);
-        comboDone += 1;
-        setOptimizerProgress({ done: singleScenarioCount + comboDone, total: singleScenarioCount + comboWorkEstimate });
-      }
+      });
 
-      comboRows.sort((a, b) => {
+      const resp = await apiPostWithTimeout<ScopeBatchResponse>(
+        "/api/paper/arbitrage/scope/evaluate",
+        {
+          baseRequest,
+          rows: rowRequests,
+          comboRows: comboRequests,
+        },
+        180_000
+      );
+
+      const out = [...(resp?.rows ?? [])].sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
         return b.trades - a.trades;
       });
+      const comboRows = [...(resp?.comboRows ?? [])].sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
+        return b.trades - a.trades;
+      });
+
+      setOptimizerRows(out);
       setOptimizerComboRows(comboRows);
-      setOptimizerProgress({ done: singleScenarioCount + comboDone, total: singleScenarioCount + comboDone });
+      setOptimizerProgress({ done: singleScenarioCount + comboWorkEstimate, total: singleScenarioCount + comboWorkEstimate });
       void loadOptimizerRangesByGroup(from, to);
     } catch (e: any) {
       setOptimizerErr(e?.message ?? String(e));
@@ -6660,6 +7094,29 @@ export default function ArbitrageScanner() {
       setOptimizerLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (optimizerBucketReloadRef.current == null) {
+      optimizerBucketReloadRef.current = optimizerBucketCount;
+      return;
+    }
+    if (optimizerBucketReloadRef.current === optimizerBucketCount) return;
+    optimizerBucketReloadRef.current = optimizerBucketCount;
+    if (!optimizerRows.length && !optimizerComboRows.length && !optimizerRanges?.parameters?.length) return;
+    const from = dateMode === "day" ? dateNy : dateFrom;
+    const to = dateMode === "day" ? dateNy : dateTo;
+    if (!toYmd(from) || !toYmd(to) || from > to) return;
+    void loadOptimizerRangesByGroup(from, to);
+  }, [
+    optimizerBucketCount,
+    optimizerRows.length,
+    optimizerComboRows.length,
+    optimizerRanges?.parameters?.length,
+    dateMode,
+    dateNy,
+    dateFrom,
+    dateTo,
+  ]);
 
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
@@ -6825,6 +7282,7 @@ export default function ArbitrageScanner() {
     { key: "left", label: "LEFT" },
     { key: "right", label: "RIGHT" },
   ];
+  const visibleScopePanels = scopeFullscreenPanel ? scopePanels.filter((panel) => panel.key === scopeFullscreenPanel) : scopePanels;
   const scopeResearchChartType = scopeResearchDrafts.left.chartType;
   const setScopeResearchChartType = (next: ScopeResearchChartType) =>
     setScopeResearchDrafts((prev) => ({ ...prev, left: { ...prev.left, chartType: next } }));
@@ -6857,17 +7315,24 @@ export default function ArbitrageScanner() {
 
   const optimizerBestRow = useMemo(() => optimizerRows[0] ?? null, [optimizerRows]);
   const optimizerBestComboRow = useMemo(() => optimizerComboRows[0] ?? null, [optimizerComboRows]);
-  const optimizerScenarioParameterOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          optimizerScenarios
-            .filter((scenario) => scenario.id !== "baseline" && scenario.id !== "current-stack" && scenario.parameter !== "BASE" && scenario.parameter !== "STACK")
-            .map((scenario) => scenario.parameter)
-        )
-      ).sort((left, right) => left.localeCompare(right)),
-    [optimizerScenarios]
+  const scopeSelectedParameters = useMemo(
+    () => scopeSelectedParameterKeys.map((key) => SCOPE_PARAMETER_BY_KEY.get(key)).filter(Boolean) as ScopeParameterDefinition[],
+    [scopeSelectedParameterKeys]
   );
+  const scopeSelectedScenarioParameterLabels = useMemo(
+    () => scopeSelectedParameters.map((item) => item.scenarioParameter ?? null).filter(Boolean) as string[],
+    [scopeSelectedParameters]
+  );
+  const scopeOverlayScenarioOptions = useMemo(
+    () => Array.from(new Set(scopeSelectedScenarioParameterLabels)).sort((left, right) => left.localeCompare(right)),
+    [scopeSelectedScenarioParameterLabels]
+  );
+  const scopeRequestedRangeGroups = useMemo(() => {
+    if (!scopeSelectedParameters.length || scopeSelectedParameters.length >= SCOPE_PARAMETER_DEFINITIONS.length) {
+      return ["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"] as OptimizerRangeGroupKey[];
+    }
+    return Array.from(new Set(scopeSelectedParameters.map((item) => item.group))) as OptimizerRangeGroupKey[];
+  }, [scopeSelectedParameters]);
   const optimizerBaselineRow = useMemo(
     () => optimizerRows.find((row) => row.id === "baseline" || row.parameter === "BASE") ?? null,
     [optimizerRows]
@@ -7021,6 +7486,13 @@ export default function ArbitrageScanner() {
       })),
     [optimizerBestRangeBuckets]
   );
+  const hasScopeMapsContent =
+    optimizerRangesLoading ||
+    optimizerRangeParametersSorted.length > 0 ||
+    optimizerBestRangeRows.length > 0 ||
+    optimizerImpactRows.length > 0 ||
+    optimizerRangeGroups.length > 0;
+  const hasVisualScopeLoaded = episodesRows.length > 0 || filteredEpisodes.length > 0;
 
   const analyticsSummary = useMemo(() => {
     const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
@@ -7246,11 +7718,11 @@ export default function ArbitrageScanner() {
 
   // ========= UI
   return (
-    <div className={clsx("relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-hidden", accent.selection)}>
+    <div className={clsx("scanner-borderless relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-hidden", accent.selection, isLightTheme && "scanner-light-theme")}>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* Header */}
-        <header className="bg-[#0a0a0a]/60 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
+        <header className="scanner-header-surface bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-3">
               <span className={clsx("w-2.5 h-2.5 rounded-full border border-white/10", accent.dot, loading && "animate-pulse")} />
@@ -7271,7 +7743,7 @@ export default function ArbitrageScanner() {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               <button type="button" disabled className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase border border-transparent text-zinc-600 bg-transparent cursor-not-allowed">
                 MONEY
               </button>
@@ -7284,21 +7756,21 @@ export default function ArbitrageScanner() {
               </button>
               <Link
                 href="/signals/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-violet-300 hover:text-violet-200 hover:bg-violet-500/10"
+                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 title="Open /signals/arbitrage"
               >
                 SONAR
               </Link>
             </div>
 
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               <button
                 type="button"
                 onClick={() => setTab("active")}
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "active"
-                    ? "bg-amber-500/15 text-amber-300 border-amber-500/25 shadow-[0_0_10px_-3px_rgba(245,158,11,0.25)]"
+                    ? accent.activeSoft
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -7310,7 +7782,7 @@ export default function ArbitrageScanner() {
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "episodes"
-                    ? "bg-zinc-500/10 text-zinc-200 border-zinc-500/30 shadow-[0_0_10px_-3px_rgba(255,255,255,0.08)]"
+                    ? accent.activeSoft
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -7322,15 +7794,15 @@ export default function ArbitrageScanner() {
                 className={clsx(
                   "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "analytics"
-                    ? "bg-rose-500/15 border-rose-500/30 text-rose-300 shadow-[0_0_10px_-3px_rgba(244,63,94,0.25)]"
-                    : "border-transparent text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
+                    ? accent.activeSoft
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
                 ANALYTICS
               </button>
             </div>
 
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               <div
                 className={clsx(
                   "flex items-stretch overflow-hidden rounded-lg border transition-all",
@@ -7617,9 +8089,9 @@ export default function ArbitrageScanner() {
           </GlassCard>
         )}
 
-        <div className="flex flex-wrap gap-4 items-center bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
+        <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
-            <div className="flex gap-2">
+            <div className="flex h-7 items-center gap-2">
               {[
                 { key: "GLOBAL", label: "GLOB" },
                 { key: "BLUE", label: "BLUE" },
@@ -7652,10 +8124,10 @@ export default function ArbitrageScanner() {
                     if (nextBand === "POST") setSession("POST");
                   }}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     ruleBand === b.key
-                      ? accent.activeButton
-                      : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+                      ? headerButtonActiveClass
+                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                 >
                   {b.label}
@@ -7663,9 +8135,9 @@ export default function ArbitrageScanner() {
                 ))}
             </div>
 
-            <div className="h-8 w-px bg-white/5" />
+            <div className="h-7 w-px self-center bg-white/5" />
 
-            <div className="flex gap-2">
+            <div className="flex h-7 items-center gap-2">
               {[
                 { key: "ALL", label: "ALL" },
                 { key: "TOP", label: "TOP" },
@@ -7679,10 +8151,10 @@ export default function ArbitrageScanner() {
                     if (next === "ALL") setTopN(1000);
                   }}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     scopeMode === m.key
-                      ? accent.activeButton
-                      : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+                      ? headerButtonActiveClass
+                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                 >
                   {m.label}
@@ -7690,9 +8162,9 @@ export default function ArbitrageScanner() {
               ))}
             </div>
 
-            <div className="h-8 w-px bg-white/5" />
+            <div className="h-7 w-px self-center bg-white/5" />
 
-            <div className="flex gap-2">
+            <div className="flex h-7 items-center gap-2">
               {[
                 { key: "any", label: "ANY" },
                 { key: "hard", label: "HARD" },
@@ -7703,10 +8175,10 @@ export default function ArbitrageScanner() {
                   type="button"
                   onClick={() => setRatingType(rt.key as PaperArbRatingType)}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     ratingType === rt.key
-                      ? accent.activeButton
-                      : "border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 bg-transparent"
+                      ? headerButtonActiveClass
+                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                   title={`RatingType = ${rt.key}`}
                 >
@@ -7717,33 +8189,77 @@ export default function ArbitrageScanner() {
 
             <div className="flex-1" />
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">MINRATE</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                step={0.1}
-                min={0}
-                value={activeRule.minRate}
-                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                className={clsx("w-14 bg-transparent text-right text-xs font-mono placeholder-zinc-700 focus:outline-none", accent.activeText)}
-              />
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={0.1}
+                  min={0}
+                  value={activeRule.minRate}
+                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min rate"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min rate"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">MINTOTAL</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                step={1}
-                min={0}
-                value={activeRule.minTotal}
-                onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                className={clsx("w-14 bg-transparent text-right text-xs font-mono placeholder-zinc-700 focus:outline-none", accent.activeText)}
-              />
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={0}
+                  value={activeRule.minTotal}
+                  onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min total"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min total"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-black/20">
+            <div className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg", SCANNER_CONTROL_SURFACE)}>
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
               <GlassSelect
                 value={session}
@@ -7782,7 +8298,38 @@ export default function ArbitrageScanner() {
               className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
               title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
             >
-              <EyeToggleIcon closed={showSharedMinMax} className={showSharedMinMax ? "group-hover:text-rose-400 transition-colors" : undefined} />
+              {showSharedMinMax ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="group-hover:text-rose-400 transition-colors"
+                >
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              )}
             </button>
         </div>
 
@@ -7840,6 +8387,15 @@ export default function ArbitrageScanner() {
                 clearable
               />
               <MinMaxRow label="AvPostMhVol90NF" filterKey="avpostmhvol90nf" mode={sharedRangeFilterModes.avpostmhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPostMhVol90NF} maxValue={maxAvPostMhVol90NF} setMin={setMinAvPostMhVol90NF} setMax={setMaxAvPostMhVol90NF} card clearable />
+              <MinMaxRow label="AvPreMhVol90NF" filterKey="avpremhvol90nf" mode={sharedRangeFilterModes.avpremhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhVol90NF} maxValue={maxAvPreMhVol90NF} setMin={setMinAvPreMhVol90NF} setMax={setMaxAvPreMhVol90NF} card clearable />
+              <MinMaxRow label="AvPreMhValue20NF" filterKey="avpremhvalue20nf" mode={sharedRangeFilterModes.avpremhvalue20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue20NF} maxValue={maxAvPreMhValue20NF} setMin={setMinAvPreMhValue20NF} setMax={setMaxAvPreMhValue20NF} card clearable />
+              <MinMaxRow label="AvPreMhValue90NF" filterKey="avpremhvalue90nf" mode={sharedRangeFilterModes.avpremhvalue90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue90NF} maxValue={maxAvPreMhValue90NF} setMin={setMinAvPreMhValue90NF} setMax={setMaxAvPreMhValue90NF} card clearable />
+              <MinMaxRow label="AvgDailyValue20" filterKey="avgdailyvalue20" mode={sharedRangeFilterModes.avgdailyvalue20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue20} maxValue={maxAvgDailyValue20} setMin={setMinAvgDailyValue20} setMax={setMaxAvgDailyValue20} card clearable />
+              <MinMaxRow label="AvgDailyValue90" filterKey="avgdailyvalue90" mode={sharedRangeFilterModes.avgdailyvalue90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue90} maxValue={maxAvgDailyValue90} setMin={setMinAvgDailyValue90} setMax={setMaxAvgDailyValue90} card clearable />
+              <MinMaxRow label="Volatility20" filterKey="volatility20" mode={sharedRangeFilterModes.volatility20} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility20} maxValue={maxVolatility20} setMin={setMinVolatility20} setMax={setMaxVolatility20} card clearable />
+              <MinMaxRow label="Volatility90" filterKey="volatility90" mode={sharedRangeFilterModes.volatility90} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility90} maxValue={maxVolatility90} setMin={setMinVolatility90} setMax={setMaxVolatility90} card clearable />
+              <MinMaxRow label="PreMhMDV20NF" filterKey="premhmdv20nf" mode={sharedRangeFilterModes.premhmdv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV20NF} maxValue={maxPreMhMDV20NF} setMin={setMinPreMhMDV20NF} setMax={setMaxPreMhMDV20NF} card clearable />
+              <MinMaxRow label="PreMhMDV90NF" filterKey="premhmdv90nf" mode={sharedRangeFilterModes.premhmdv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV90NF} maxValue={maxPreMhMDV90NF} setMin={setMinPreMhMDV90NF} setMax={setMaxPreMhMDV90NF} card clearable />
               <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable />
               <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable />
               <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable />
@@ -7853,7 +8409,7 @@ export default function ArbitrageScanner() {
 
         <GlassCard className="p-3">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               {[
                 { key: "Active", label: "ACTIVE" },
                 { key: "Passive", label: "PASSIVE" },
@@ -7874,7 +8430,7 @@ export default function ArbitrageScanner() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               {[
                 { key: "Hedged", label: "HEDGED" },
                 { key: "RawOnly", label: "RAWONLY" },
@@ -7895,7 +8451,7 @@ export default function ArbitrageScanner() {
               ))}
             </div>
 
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               {[
                 { key: "Daily", label: "DAILY" },
                 { key: "Trade", label: "TRADE" },
@@ -7916,7 +8472,7 @@ export default function ArbitrageScanner() {
                 ))}
             </div>
 
-            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+            <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SIDE</span>
               <GlassSelect
                 value={sideFilter}
@@ -7927,43 +8483,87 @@ export default function ArbitrageScanner() {
                   { value: "Short", label: "SHORT" },
                 ]}
                 compact
-                className="min-w-[90px] !h-[14px] !py-0 !bg-transparent !border-transparent !focus:border-transparent"
+                className="min-w-[90px] !h-7 !py-0 !px-0 !bg-transparent !border-transparent !focus:border-transparent"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">MINHOLD</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={0}
-                max={180}
-                step={1}
-                value={minHoldCandles}
-                onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
-                className={clsx("w-14 bg-transparent text-right text-xs font-mono placeholder-zinc-700 focus:outline-none", accent.activeText)}
-              />
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
+              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={180}
+                  step={1}
+                  value={minHoldCandles}
+                  onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMinHoldCandles((v) => Math.max(0, Math.min(180, Math.trunc(v + 1))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min hold"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMinHoldCandles((v) => Math.max(0, Math.min(180, Math.trunc(v - 1))))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min hold"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">TRADES</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={0}
-                step={10}
-                value={minTradesPerTicker}
-                onChange={(e) => setMinTradesPerTicker(Math.max(0, clampInt(e.target.value, 0)))}
-                className={clsx("w-14 bg-transparent text-right text-xs font-mono placeholder-zinc-700 focus:outline-none", accent.activeText)}
-              />
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">TRADES</span>
+              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={10}
+                  value={minTradesPerTicker}
+                  onChange={(e) => setMinTradesPerTicker(Math.max(0, clampInt(e.target.value, 0)))}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMinTradesPerTicker((v) => Math.max(0, Math.trunc(v + 10)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase trades"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMinTradesPerTicker((v) => Math.max(0, Math.trunc(v - 10)))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease trades"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="flex-1" />
 
             {tab === "episodes" && (
-              <div className="flex items-center gap-2 px-2 py-1 rounded-lg border border-white/10 bg-white/5">
+              <div className="flex h-7 items-center gap-2 px-2 rounded-lg bg-black/20">
                 <span className="text-[10px] font-mono text-zinc-500 uppercase">EP MODE</span>
-                <div className="flex items-center gap-1 bg-[#0a0a0a]/40 p-1 rounded-lg border border-white/[0.06]">
+                <div className="flex h-7 items-center gap-1 rounded-lg bg-transparent">
                   <button
                     type="button"
                     onClick={() => setEpisodesUseSearch(false)}
@@ -7995,8 +8595,8 @@ export default function ArbitrageScanner() {
               </div>
             )}
 
-            <div className="flex items-center gap-2 px-2 h-10 rounded-lg border border-white/5 bg-black/20">
-              <div className="flex items-center gap-1 bg-[#0a0a0a]/40 p-1 rounded-lg border border-white/[0.06]">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
                 {[
                   { key: "day", label: "DAY" },
                   { key: "last", label: "LAST" },
@@ -8029,7 +8629,7 @@ export default function ArbitrageScanner() {
                       }
                     }}
                     className={clsx(
-                      "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                       dateMode === m.key
                         ? accent.activeSoft
                         : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -8040,69 +8640,79 @@ export default function ArbitrageScanner() {
                 ))}
               </div>
 
-              {dateMode === "day" ? (
-                <GlassSelect
-                  value={dateNy}
-                  onChange={(e) => {
-                    const d = e.target.value;
-                    setDateNy(d);
-                    setDateFrom(d);
-                    setDateTo(d);
-                  }}
-                  options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
-                  className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
-                />
-              ) : dateMode === "last" ? (
-                <GlassSelect
-                  value={rangePreset}
-                  onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
-                  options={[
-                    { value: "3d", label: "3 DAYS" },
-                    { value: "5d", label: "5 DAYS" },
-                    { value: "10d", label: "10 DAYS" },
-                    { value: "15d", label: "15 DAYS" },
-                    { value: "20d", label: "20 DAYS" },
-                    { value: "30d", label: "30 DAYS" },
-                  ]}
-                  className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
-                />
-              ) : (
-                <div className="flex items-center gap-2">
-                  <GlassSelect
-                    value={dateFrom}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setDateFrom(v);
-                      if (toYmd(dateTo) && v > dateTo) setDateTo(v);
-                    }}
-                    options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
-                    className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
-                  />
-                  <GlassSelect
-                    value={dateTo}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setDateTo(v);
-                      if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
-                    }}
-                    options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
-                    className="min-w-[126px] !h-[24px] !py-0 !px-2 !bg-transparent !border-0 !rounded-md !shadow-none !focus:border-0 text-zinc-300"
-                  />
-                </div>
-              )}
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {dateMode === "day" ? (
+                  <div className="flex h-7 items-center rounded-lg px-3">
+                    <GlassSelect
+                      value={dateNy}
+                      onChange={(e) => {
+                        const d = e.target.value;
+                        setDateNy(d);
+                        setDateFrom(d);
+                        setDateTo(d);
+                      }}
+                      options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
+                      className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                    />
+                  </div>
+                ) : dateMode === "last" ? (
+                  <div className="flex h-7 items-center rounded-lg px-3">
+                    <GlassSelect
+                      value={rangePreset}
+                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
+                      options={[
+                        { value: "3d", label: "3 DAYS" },
+                        { value: "5d", label: "5 DAYS" },
+                        { value: "10d", label: "10 DAYS" },
+                        { value: "15d", label: "15 DAYS" },
+                        { value: "20d", label: "20 DAYS" },
+                        { value: "30d", label: "30 DAYS" },
+                      ]}
+                      className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 items-center rounded-lg px-3">
+                      <GlassSelect
+                        value={dateFrom}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setDateFrom(v);
+                          if (toYmd(dateTo) && v > dateTo) setDateTo(v);
+                        }}
+                        options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
+                        className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      />
+                    </div>
+                    <div className="flex h-7 items-center rounded-lg px-3">
+                      <GlassSelect
+                        value={dateTo}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setDateTo(v);
+                          if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
+                        }}
+                        options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                        className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </GlassCard>
 
         <GlassCard className="p-3">
-          <div className="flex flex-wrap gap-4 items-start">
-            <span className="text-zinc-500 mt-2.5 text-sm">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="flex h-[40px] items-center text-zinc-500 text-sm">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
               </svg>
             </span>
 
-            <div className="inline-flex flex-wrap items-center gap-2 p-2 rounded-xl border border-rose-900/30 bg-rose-900/10">
+            <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-900/30 bg-rose-900/10 p-1.5">
               {[
                 {
                   label: "Div",
@@ -8179,7 +8789,7 @@ export default function ArbitrageScanner() {
                   title={b.title}
                   disabled={b.disabled}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all",
+                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
                     b.disabled
                       ? "bg-transparent text-zinc-600 border border-zinc-800 cursor-not-allowed"
                       : b.active
@@ -8192,9 +8802,9 @@ export default function ArbitrageScanner() {
               ))}
             </div>
 
-            <div className="w-px h-6 bg-white/5" />
+            <div className="h-7 w-px bg-white/5" />
 
-            <div className="flex items-center gap-2 p-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10">
+            <div className="inline-flex items-center gap-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10 p-1.5">
               {[
                 { label: "USA", active: includeUSA, onClick: () => setIncludeUSA((v) => !v) },
                 { label: "CHINA", active: includeChina, onClick: () => setIncludeChina((v) => !v) },
@@ -8204,7 +8814,7 @@ export default function ArbitrageScanner() {
                   type="button"
                   onClick={b.onClick}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all",
+                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
                     b.active
                       ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
                       : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
@@ -8215,7 +8825,7 @@ export default function ArbitrageScanner() {
               ))}
             </div>
 
-            <div className="ml-auto flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-violet-500/10">
+            <div className="ml-auto inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-1.5">
               <button
                 type="button"
                 onClick={() => {
@@ -8223,14 +8833,13 @@ export default function ArbitrageScanner() {
                   setMetric("ZapPct");
                 }}
                 className={clsx(
-                  "h-[26px] px-3 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-center gap-1 active:scale-[0.98]",
+                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
                   zapUiMode === "zap"
-                    ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
               >
-                <span className="text-[12px] leading-[1]" style={{ textTransform: "none" }}>%</span>
-                <span className="uppercase">ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
               </button>
 
               <button
@@ -8240,16 +8849,13 @@ export default function ArbitrageScanner() {
                   setMetric("SigmaZap");
                 }}
                 className={clsx(
-                  "h-[26px] px-3 rounded-lg text-[10px] font-mono font-bold transition-all border flex items-center gap-1 active:scale-[0.98]",
+                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
                   zapUiMode === "sigma"
-                    ? "bg-violet-500/20 border-violet-500/40 text-violet-200 shadow-[0_0_12px_rgba(139,92,246,0.25)]"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
               >
-                <span className="text-[12px] leading-[1]" style={{ textTransform: "none" }}>
-                  σ
-                </span>
-                <span className="uppercase">ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
               </button>
 
               <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
@@ -8260,15 +8866,15 @@ export default function ArbitrageScanner() {
                   value={startAbs}
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
-                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase start abs"
                   >
                     ▲
@@ -8278,7 +8884,7 @@ export default function ArbitrageScanner() {
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                     aria-label="Decrease start abs"
                   >
                     ▼
@@ -8294,15 +8900,15 @@ export default function ArbitrageScanner() {
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setStartAbsMax(e.target.value)}
                   placeholder="start max"
-                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
-                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => bumpStartAbsMax(0.1)}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase start max"
                   >
                     ▲
@@ -8312,7 +8918,7 @@ export default function ArbitrageScanner() {
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => bumpStartAbsMax(-0.1)}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                     aria-label="Decrease start max"
                   >
                     ▼
@@ -8327,15 +8933,15 @@ export default function ArbitrageScanner() {
                   value={endAbs}
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
-                  className="center-spin w-full h-[26px] bg-black/20 border border-white/10 rounded-md !pl-2 !pr-6 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
-                <div className="absolute inset-y-0 right-0 w-5 border-l border-white/10 flex flex-col overflow-hidden rounded-r-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase end abs"
                   >
                     ▲
@@ -8345,7 +8951,7 @@ export default function ArbitrageScanner() {
                     disabled={zapUiMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
-                    className="h-1/2 text-[9px] leading-none text-zinc-400 hover:bg-violet-500/20 hover:text-violet-200 active:bg-violet-500/25 transition-colors border-t border-white/10 disabled:opacity-40"
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                     aria-label="Decrease end abs"
                   >
                     ▼
@@ -8364,9 +8970,9 @@ export default function ArbitrageScanner() {
                   setEndAbs(0.05);
                 }}
                 className={clsx(
-                  "h-[26px] px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border active:scale-[0.98]",
+                  "inline-flex h-7 items-center justify-center rounded-lg px-2.5 text-[10px] font-mono font-bold uppercase leading-none transition-all border active:scale-[0.98]",
                   zapUiMode === "off"
-                    ? "bg-zinc-500/10 border-zinc-500/30 text-zinc-200"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
                 )}
               >
@@ -8493,182 +9099,239 @@ export default function ArbitrageScanner() {
         {tab === "episodes" && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">SCENARIOS</div>
-                <div className="text-sm font-mono mt-1">{intn(optimizerScenarios.length)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SINGLE SCORE</div>
-                <div
-                  className={clsx(
-                    "text-sm font-mono mt-1",
-                    (optimizerBestRow?.score ?? 0) > 0
+              <SummaryMetricCard
+                label="TOTAL PNL"
+                value={num(analyticsSummary.totalPnlUsd, 2)}
+                className="md:row-span-2 md:min-h-[124px]"
+                valueClassName={
+                  clsx(
+                    "text-4xl md:text-6xl font-bold",
+                    analyticsSummary.totalPnlUsd > 0
                       ? "text-emerald-300"
-                      : (optimizerBestRow?.score ?? 0) < 0
+                      : analyticsSummary.totalPnlUsd < 0
                         ? "text-rose-300"
                         : "text-zinc-200"
-                  )}
-                >
-                  {optimizerBestRow ? num(optimizerBestRow.score, 2) : "-"}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SINGLE PNL</div>
-                <div className="text-sm font-mono mt-1">
-                  {optimizerBestRow ? num(optimizerBestRow.totalPnlUsd, 2) : "-"}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SINGLE TRADES</div>
-                <div className="text-sm font-mono mt-1">{optimizerBestRow ? intn(optimizerBestRow.trades) : "-"}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SET SCORE</div>
-                <div
-                  className={clsx(
-                    "text-sm font-mono mt-1",
-                    (optimizerBestComboRow?.score ?? 0) > 0
-                      ? "text-emerald-300"
-                      : (optimizerBestComboRow?.score ?? 0) < 0
-                        ? "text-rose-300"
-                        : "text-zinc-200"
-                  )}
-                >
-                  {optimizerBestComboRow ? num(optimizerBestComboRow.score, 2) : "-"}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SET PNL</div>
-                <div className="text-sm font-mono mt-1">
-                  {optimizerBestComboRow ? num(optimizerBestComboRow.totalPnlUsd, 2) : "-"}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST SET</div>
-                <div className="text-sm font-mono mt-1 truncate" title={optimizerBestComboRow?.parameter ?? undefined}>
-                  {optimizerBestComboRow?.parameter ?? "-"}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">RANGE PARAMS</div>
-                <div className="text-sm font-mono mt-1">{intn(optimizerRangeParameters.length)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">BEST RANGE</div>
-                <div className="text-sm font-mono mt-1">
-                  {optimizerBestRangeBuckets[0] ? `${optimizerBestRangeBuckets[0].parameter} | ${optimizerBestRangeBuckets[0].bucket.label}` : "-"}
-                </div>
-              </GlassCard>
+                  )
+                }
+              />
+              <SummaryMetricCard
+                label="TRADES"
+                value={intn(analyticsSummary.trades)}
+                inline
+              />
+              <SummaryMetricCard
+                label="WIN RATE"
+                value={`${num(analyticsSummary.winRate * 100, 1)}%`}
+                inline
+              />
+              <SummaryMetricCard
+                label="AVG TRADE"
+                value={num(analyticsSummary.avgPnlUsd, 2)}
+                inline
+                valueClassName={
+                  analyticsSummary.avgPnlUsd > 0
+                    ? "text-emerald-300"
+                    : analyticsSummary.avgPnlUsd < 0
+                      ? "text-rose-300"
+                      : "text-zinc-200"
+                }
+              />
+              <SummaryMetricCard
+                label="PROFIT FACTOR"
+                value={num(analyticsSummary.profitFactor, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="EXPECTANCY"
+                value={num(analyticsSummary.expectancyUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX DRAWDOWN"
+                value={num(analyticsSummary.maxDrawdownUsd, 2)}
+                inline
+              />
             </div>
 
-            <GlassCard className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  EPISODES OPTIMIZER | single parameter scan + parameter set search
-                </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  {optimizerLoading ? `progress ${optimizerProgress.done}/${optimizerProgress.total}` : `single ${intn(optimizerRows.length)} | sets ${intn(optimizerComboRows.length)}`}
-                </div>
+            <div className="flex items-center justify-end">
+              <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
+                Scope Engine
               </div>
+            </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr_auto] gap-3 items-start mb-3">
-                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Manual Inputs Used As Base</div>
-                  <div className="text-[11px] font-mono text-zinc-300 leading-6">
-                    SESSION {session} | BAND {ruleBand} | {closeMode} | {pnlMode} | {equityCurveMode} | METRIC {metric}
-                    <br />
-                    DATE {dateMode === "day" ? dateNy : `${dateFrom} .. ${dateTo}`} | SIDE {sideFilter || "ANY"} | MINHOLD {intn(minHoldCandles)} | TRADES {intn(minTradesPerTicker)}
-                    <br />
-                    BOOLS red/green groups and your manual toggles stay fixed. Optimizer first scans singles, then tests compact sets from the strongest candidates.
+            <GlassCard className="px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                    <button
+                      type="button"
+                      onClick={() => setScopeSelectedParameterKeys(SCOPE_PARAMETER_DEFINITIONS.map((item) => item.key))}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                        accent.activeSoft
+                      )}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setScopeSelectedParameterKeys([]);
+                        setScopeOverlayParameterKeys(["", ""]);
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    >
+                      Clear
+                    </button>
                   </div>
                 </div>
-                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Score</div>
-                  <div className="text-[11px] font-mono text-zinc-300 leading-6">
-                    Ranking metric = <span className="text-emerald-300">TotalPnL / Trades</span>
-                    <br />
-                    Baseline row = all evaluated numeric filters OFF
-                    <br />
-                    Singles show isolated impact. Best Set runs full exhaustive search only across the 5 parameters you choose below.
+                <div className="min-w-0 flex-1 flex items-center justify-center">
+                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 w-fit max-w-full">
+                    {SCOPE_PARAMETER_SELECT_GROUPS.map((group) => (
+                      <div key={`scope-select-group-${group.label}`} className="min-w-0">
+                        {(() => {
+                          const selectedOptions = group.options.filter((option) => scopeSelectedParameterKeys.includes(option.value));
+                          const isExpanded = Boolean(scopeParameterGroupExpanded[group.label]);
+                          return (
+                            <>
+                        <div className={clsx("flex items-center gap-3", isExpanded && selectedOptions.length > 0 && "mb-2")}>
+                          <div className="shrink-0 text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">{group.label}</div>
+                          <div className={clsx("inline-flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit max-w-full", SCANNER_CONTROL_SURFACE)}>
+                            <GlassSelect
+                              key={`scope-add-${group.label}-${selectedOptions.length}`}
+                              value=""
+                              onChange={(e) => {
+                                const nextValue = e.target.value;
+                                if (!nextValue) return;
+                                setScopeSelectedParameterKeys((prev) => (prev.includes(nextValue) ? prev : [...prev, nextValue]));
+                              }}
+                              options={[
+                                { value: "", label: "Add parameter" },
+                                ...group.options.map((option) => ({
+                                  value: option.value,
+                                  label: option.label,
+                                  disabled: scopeSelectedParameterKeys.includes(option.value),
+                                })),
+                              ]}
+                              compact
+                              className="w-[116px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setScopeParameterGroupExpanded((prev) => ({
+                                ...prev,
+                                [group.label]: !prev[group.label],
+                              }))
+                            }
+                            className={clsx(
+                              "shrink-0 min-w-[22px] text-right text-[10px] font-mono transition-colors",
+                              selectedOptions.length ? "text-zinc-300 hover:text-white" : "text-zinc-600 hover:text-zinc-400"
+                            )}
+                            title={selectedOptions.length ? `${isExpanded ? "Hide" : "Show"} selected filters` : "No selected filters"}
+                          >
+                            {intn(selectedOptions.length)}
+                          </button>
+                        </div>
+                        {isExpanded && selectedOptions.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {selectedOptions.map((option) => (
+                              <button
+                                key={`scope-param-chip-${option.value}`}
+                                type="button"
+                                onClick={() =>
+                                  setScopeSelectedParameterKeys((prev) => prev.filter((value) => value !== option.value))
+                                }
+                                className={clsx(
+                                  "px-2.5 py-1 rounded-full border text-[10px] font-mono uppercase tracking-[0.16em] transition-all shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+                                  accent.activeSoft
+                                )}
+                                title={`Remove ${option.label}`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                        </div>
+                        ) : null}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    ))}
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-3">
+                        <div className="shrink-0 text-[10px] uppercase tracking-widest font-mono text-zinc-500">Pair Overlay</div>
+                        <div className="flex items-center gap-3 min-w-0">
+                            {[0, 1].map((index) => (
+                              <div key={`scope-overlay-${index}`} className="min-w-0 flex items-center gap-2">
+                                <div className="shrink-0 text-[10px] uppercase tracking-widest font-mono text-zinc-500">
+                                  {index === 0 ? "Primary" : "Secondary"}
+                                </div>
+                                <div className={clsx("inline-flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit max-w-full", SCANNER_CONTROL_SURFACE)}>
+                                  <GlassSelect
+                                    value={scopeOverlayParameterKeys[index]}
+                                    onChange={(e) =>
+                                      setScopeOverlayParameterKeys((prev) => {
+                                        const next: [string, string] = [...prev] as [string, string];
+                                        next[index] = e.target.value;
+                                        return next;
+                                      })
+                                    }
+                                    options={[
+                                      { value: "", label: "Select" },
+                                      ...scopeOverlayScenarioOptions.map((parameter) => ({ value: parameter, label: parameter })),
+                                    ]}
+                                    compact
+                                    className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                        <div className="text-[10px] font-mono text-zinc-600">
+                          {intn(optimizerComboRows.length)}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-2 text-[10px] font-mono text-zinc-600 shrink-0 self-center">
                   <button
                     type="button"
                     disabled={optimizerLoading}
                     onClick={runEpisodesOptimizer}
                     className={clsx(
-                      "px-3 py-1.5 rounded-lg border text-[10px] font-mono font-bold uppercase transition-all",
+                      "ml-1 w-9 h-9 flex items-center justify-center rounded-lg active:scale-95",
+                      SCANNER_PANEL_SURFACE,
                       optimizerLoading
-                        ? "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed"
-                        : "border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                        ? "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed hover:bg-[#0a0a0a]/30 hover:border-white/10"
+                        : accent.outlineButton
                     )}
+                    aria-label={optimizerLoading ? "Running scope" : "Run scope"}
+                    title={optimizerLoading ? "Running scope" : "Run scope"}
                   >
-                    {optimizerLoading ? "RUNNING..." : "RUN OPTIMIZER"}
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                      <polyline points="21 3 21 9 15 9" />
+                    </svg>
                   </button>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3 mb-3">
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Best Set Search</div>
-                  <div className="text-[10px] font-mono text-zinc-600">
-                    select exactly 5 parameters | exhaustive configs {intn(optimizerComboRows.length)}
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                  {optimizerSetParameters.map((selectedParameter, index) => (
-                    <div key={`optimizer-set-param-${index}`} className="space-y-1">
-                      <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Param {index + 1}</div>
-                      <GlassSelect
-                        value={selectedParameter}
-                        onChange={(e) =>
-                          setOptimizerSetParameters((prev) => {
-                            const next = [...prev] as [string, string, string, string, string];
-                            next[index] = e.target.value;
-                            return next;
-                          })
-                        }
-                        options={[
-                          { value: "", label: "Select" },
-                          ...optimizerScenarioParameterOptions.map((parameter) => ({ value: parameter, label: parameter })),
-                        ]}
-                        compact
-                        className="w-full"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {optimizerErr && <div className="mt-1 text-xs font-mono text-rose-300">{optimizerErr}</div>}
 
-              {optimizerErr && <div className="text-xs font-mono text-rose-300 mb-2">{optimizerErr}</div>}
-
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                <OptimizerBarChart
-                  rows={optimizerRows}
-                  valueKey="score"
-                  title="SCORE BY SINGLE CONFIGURATION"
-                  meta={`top ${intn(Math.min(12, optimizerRows.length))}`}
-                  maxRows={12}
-                />
-                <OptimizerBarChart
-                  rows={optimizerComboRows}
-                  valueKey="score"
-                  title="BEST PARAMETER SETS"
-                  meta={`sets ${intn(optimizerComboRows.length)}`}
-                  color="sky"
-                  maxRows={12}
-                />
-              </div>
             </GlassCard>
 
+            {optimizerComboRows.length > 0 && (
             <GlassCard className="p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  PARAMETER SET RESULTS
+                  PAIR OVERLAY RESULTS
                 </div>
                 <div className="text-[10px] font-mono text-zinc-600">
-                  top sets {intn(optimizerComboRows.length)} | best {optimizerBestComboRow ? num(optimizerBestComboRow.score, 2) : "-"} score
+                  top pairs {intn(optimizerComboRows.length)} | best {optimizerBestComboRow ? num(optimizerBestComboRow.score, 2) : "-"} score
                 </div>
               </div>
 
@@ -8712,7 +9375,7 @@ export default function ArbitrageScanner() {
                     {!optimizerComboRows.length && (
                       <tr>
                         <td colSpan={10} className="p-6 text-center text-zinc-500">
-                          Run optimizer to see best parameter sets, not only isolated filters.
+                          Pick two SCOPE parameters to see pair overlays, not only isolated filters.
                         </td>
                       </tr>
                     )}
@@ -8720,23 +9383,17 @@ export default function ArbitrageScanner() {
                 </table>
               </div>
             </GlassCard>
+            )}
 
-            <GlassCard className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  PARAMETER RANGE MAPS
-                </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  {optimizerRangesLoading
-                    ? "loading range maps..."
-                    : `params ${intn(optimizerRangeParametersSorted.length)} | best buckets ${intn(optimizerBestRangeRows.length)}`}
-                </div>
-              </div>
-
+            <div className="space-y-3">
               {optimizerRangesErr && <div className="text-xs font-mono text-amber-300 mb-3">range maps: {optimizerRangesErr}</div>}
 
-              <div className="flex flex-wrap gap-2 mb-3">
-                {(Object.entries(optimizerRangeGroupStatus) as Array<[OptimizerRangeGroupKey, OptimizerRangeGroupStatus]>).map(([group, status]) => (
+              {hasScopeMapsContent ? (
+                <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {(Object.entries(optimizerRangeGroupStatus) as Array<[OptimizerRangeGroupKey, OptimizerRangeGroupStatus]>)
+                  .filter(([group]) => scopeRequestedRangeGroups.includes(group))
+                  .map(([group, status]) => (
                   <div
                     key={`group-status-${group}`}
                     className={clsx(
@@ -8755,50 +9412,6 @@ export default function ArbitrageScanner() {
                 ))}
               </div>
 
-              <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-3 mb-4">
-                <div className="grid grid-cols-1 xl:grid-cols-[auto_auto_auto_1fr] gap-3 items-center">
-                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Rank By</div>
-                  <select
-                    value={optimizerRangeRankMetric}
-                    onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
-                    className="bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
-                  >
-                    <option value="avgPnlUsd">Avg/Trade</option>
-                    <option value="totalPnlUsd">TotalPnL</option>
-                    <option value="winRate">WinRate</option>
-                    <option value="score">Score</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Buckets</div>
-                  <input
-                    type="number"
-                    min={3}
-                    max={16}
-                    step={1}
-                    value={optimizerBucketCount}
-                    onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
-                    className="w-16 bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
-                  />
-                </div>
-                <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">Min Trades</div>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={optimizerRangeMinTrades}
-                    onChange={(e) => setOptimizerRangeMinTrades(Math.max(0, Math.trunc(Number(e.target.value) || 0)))}
-                    className="w-20 bg-transparent text-[11px] font-mono text-zinc-200 outline-none"
-                  />
-                </div>
-                <div className="text-[10px] font-mono text-zinc-500">
-                  Best zones and group order use the selected ranking metric, bucket granularity, and ignore buckets below the minimum trades threshold.
-                </div>
-              </div>
-              </div>
-
               {optimizerRangesLoading && !optimizerRangeGroups.length && (
                 <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))] px-4 py-6 mb-4">
                   <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Preparing Range Maps</div>
@@ -8806,71 +9419,338 @@ export default function ArbitrageScanner() {
                     <div className="h-full w-1/2 bg-[linear-gradient(90deg,rgba(16,185,129,0.8),rgba(56,189,248,0.8))] animate-pulse" />
                   </div>
                   <div className="text-[11px] font-mono text-zinc-500 mt-3">
-                    First part is already ready. Range maps continue loading separately in the background.
+                    Selected SCOPE maps continue loading separately in the background.
                   </div>
                 </div>
               )}
 
-              <div className="mb-3">
-                <OptimizerDualMetricChart
-                  rows={optimizerBestRangeRows}
-                  leftKey={optimizerRangeRankMetric === "totalPnlUsd" ? "totalPnlUsd" : optimizerRangeRankMetric === "winRate" ? "winRate" : optimizerRangeRankMetric === "score" ? "score" : "avgPnlUsd"}
-                  rightKey="trades"
-                  title={
-                    optimizerRangeRankMetric === "totalPnlUsd"
-                      ? "BEST RANGE TOTAL PNL"
-                      : optimizerRangeRankMetric === "winRate"
-                        ? "BEST RANGE WIN RATE"
-                        : optimizerRangeRankMetric === "score"
-                          ? "BEST RANGE SCORE"
-                        : "BEST RANGE AVG / TRADE"
-                  }
-                  meta={`params ${intn(optimizerBestRangeRows.length)}`}
-                  leftLabel={
-                    optimizerRangeRankMetric === "totalPnlUsd"
-                      ? "TOTAL PNL"
-                      : optimizerRangeRankMetric === "winRate"
-                        ? "WIN RATE"
-                        : optimizerRangeRankMetric === "score"
-                          ? "SCORE"
-                          : "AVG / TRADE"
-                  }
-                  rightLabel="TRADES"
-                />
+              <div className="mb-4 space-y-3">
+                <div className={clsx("rounded-2xl px-4 py-3", SCANNER_PANEL_SURFACE)}>
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", accent.activeText)}>
+                        STATS
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 xl:ml-auto xl:items-end">
+                      <div className="flex flex-wrap gap-2 xl:justify-end">
+                        <div className="inline-flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 w-fit">
+                          <span className="shrink-0 text-[10px] font-mono text-zinc-500 uppercase">Rank By</span>
+                          <GlassSelect
+                            value={optimizerRangeRankMetric}
+                            onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
+                            options={[
+                              { value: "avgPnlUsd", label: "Avg/Trade" },
+                              { value: "totalPnlUsd", label: "TotalPnL" },
+                              { value: "winRate", label: "WinRate" },
+                              { value: "score", label: "Score" },
+                            ]}
+                            className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
+                          />
+                        </div>
+                        <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
+                          <span className="text-[10px] font-mono text-zinc-500 uppercase">Buckets</span>
+                          <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
+                            <input
+                              type="number"
+                              min={3}
+                              max={16}
+                              step={1}
+                              value={optimizerBucketCount}
+                              onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
+                              className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                            />
+                            <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v + 1)))}
+                                className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                aria-label="Increase buckets"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v - 1)))}
+                                className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                aria-label="Decrease buckets"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
+                          <span className="text-[10px] font-mono text-zinc-500 uppercase">Min Trades</span>
+                          <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={optimizerRangeMinTrades}
+                              onChange={(e) => setOptimizerRangeMinTrades(Math.max(0, Math.trunc(Number(e.target.value) || 0)))}
+                              className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                            />
+                            <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setOptimizerRangeMinTrades((v) => Math.max(0, v + 1))}
+                                className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                aria-label="Increase min trades"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setOptimizerRangeMinTrades((v) => Math.max(0, v - 1))}
+                                className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                aria-label="Decrease min trades"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setOptimizerStatsHidden((prev) => !prev)}
+                      className={clsx("group self-start xl:self-auto", SCANNER_EYE_BUTTON)}
+                      aria-label={optimizerStatsHidden ? "Show stats" : "Hide stats"}
+                      title={optimizerStatsHidden ? "Show section" : "Hide section"}
+                    >
+                      <EyeToggleIcon closed={!optimizerStatsHidden} className={!optimizerStatsHidden ? "group-hover:text-rose-400 transition-colors" : undefined} />
+                    </button>
+                  </div>
+                </div>
+
+                {!optimizerStatsHidden && (
+                  <div className="space-y-3">
+                    <OptimizerDualMetricChart
+                      rows={optimizerBestRangeRows}
+                      leftKey={optimizerRangeRankMetric === "totalPnlUsd" ? "totalPnlUsd" : optimizerRangeRankMetric === "winRate" ? "winRate" : optimizerRangeRankMetric === "score" ? "score" : "avgPnlUsd"}
+                      rightKey="trades"
+                      title={
+                        optimizerRangeRankMetric === "totalPnlUsd"
+                          ? "BEST RANGE TOTAL PNL"
+                          : optimizerRangeRankMetric === "winRate"
+                            ? "BEST RANGE WIN RATE"
+                            : optimizerRangeRankMetric === "score"
+                              ? "BEST RANGE SCORE"
+                              : "BEST RANGE AVG / TRADE"
+                      }
+                      meta={`params ${intn(optimizerBestRangeRows.length)}`}
+                      leftLabel={
+                        optimizerRangeRankMetric === "totalPnlUsd"
+                          ? "TOTAL PNL"
+                          : optimizerRangeRankMetric === "winRate"
+                            ? "WIN RATE"
+                            : optimizerRangeRankMetric === "score"
+                              ? "SCORE"
+                              : "AVG / TRADE"
+                      }
+                      rightLabel="TRADES"
+                    />
+
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
+                        PARAMETER IMPACT VS BASE
+                      </div>
+                      <div className="text-[10px] font-mono text-zinc-600">
+                        scope rows {intn(optimizerImpactRows.length)} | baseline {optimizerBaselineRow ? num(optimizerBaselineRow.score, 2) : "-"} score
+                      </div>
+                    </div>
+
+                  <div className="overflow-auto rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40">
+                    <table className="min-w-[1080px] w-full text-xs font-mono">
+                      <thead className="sticky top-0 z-10 bg-[#0a0a0a]/50 text-zinc-400 border-b border-white/[0.07] backdrop-blur-sm">
+                        <tr>
+                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
+                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Impact</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaScore</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaPnL</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
+                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Avg/Trade</th>
+                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Applied</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {optimizerImpactRows.map((row) => (
+                          <tr key={`impact-${row.id}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
+                            <td className="p-2.5 text-zinc-100 font-semibold">
+                              {row.parameter} <span className="text-zinc-500 font-normal">{row.variant}</span>
+                            </td>
+                            <td className="p-2.5">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={clsx(
+                                    "inline-flex min-w-[64px] justify-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest",
+                                    row.impactLevel === "STRONG"
+                                      ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-300"
+                                      : row.impactLevel === "MEDIUM"
+                                        ? "border-amber-500/35 bg-amber-500/10 text-amber-300"
+                                        : "border-white/10 bg-white/[0.04] text-zinc-300"
+                                  )}
+                                >
+                                  {row.impactLevel}
+                                </span>
+                                <div className="h-2 w-24 rounded-full bg-white/[0.05] overflow-hidden">
+                                  <div
+                                    className={clsx(
+                                      "h-full",
+                                      row.deltaScore >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"
+                                    )}
+                                    style={{ width: `${Math.max(8, row.impactPct * 100)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </td>
+                            <td className={clsx("p-2.5 text-right tabular-nums font-bold", row.deltaScore > 0 ? "text-emerald-300" : row.deltaScore < 0 ? "text-rose-300" : "text-zinc-300")}>
+                              {num(row.deltaScore, 2)}
+                            </td>
+                            <td className={clsx("p-2.5 text-right tabular-nums", row.deltaPnlUsd > 0 ? "text-emerald-300" : row.deltaPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                              {num(row.deltaPnlUsd, 2)}
+                            </td>
+                            <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(row.trades)}</td>
+                            <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(row.winRate * 100, 1)}%</td>
+                            <td className={clsx("p-2.5 text-right tabular-nums", row.totalPnlUsd > 0 ? "text-emerald-300" : row.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                              {num(row.totalPnlUsd, 2)}
+                            </td>
+                            <td className={clsx("p-2.5 text-right tabular-nums", row.avgPnlUsd > 0 ? "text-emerald-300" : row.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                              {num(row.avgPnlUsd, 2)}
+                            </td>
+                            <td className="p-2.5 text-zinc-400">{row.summary}</td>
+                          </tr>
+                        ))}
+                        {!optimizerImpactRows.length && (
+                          <tr>
+                            <td colSpan={9} className="p-6 text-center text-zinc-500">
+                              Run SCOPE to see per-parameter impact versus baseline.
+                            </td>
+                          </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-4">
                 {optimizerRangeGroups.map((group) => (
                   <div key={`group-${group.group}`} className="space-y-3">
-                    <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(255,255,255,0.028),rgba(255,255,255,0.012))] px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[12px] uppercase tracking-[0.24em] text-zinc-300 font-mono">
+                    <div className={clsx("rounded-2xl px-4 py-3", SCANNER_PANEL_SURFACE)}>
+                      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", accent.activeText)}>
                             {OPTIMIZER_GROUP_DISPLAY_LABELS[group.group as OptimizerRangeGroupKey] ?? group.group}
                           </div>
-                          <div className="text-[10px] font-mono text-zinc-500 mt-1">
-                            params {intn(group.parameters.length)} | rank {optimizerRangeRankMetric}
+                        </div>
+                        <div className="flex flex-col gap-2 xl:ml-auto xl:items-end">
+                          <div className="flex flex-wrap gap-2 xl:justify-end">
+                            <div className="inline-flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 w-fit">
+                              <span className="shrink-0 text-[10px] font-mono text-zinc-500 uppercase">Rank By</span>
+                              <GlassSelect
+                                value={optimizerRangeRankMetric}
+                                onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
+                                options={[
+                                  { value: "avgPnlUsd", label: "Avg/Trade" },
+                                  { value: "totalPnlUsd", label: "TotalPnL" },
+                                  { value: "winRate", label: "WinRate" },
+                                  { value: "score", label: "Score" },
+                                ]}
+                                className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
+                              />
+                            </div>
+                            <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
+                              <span className="text-[10px] font-mono text-zinc-500 uppercase">Buckets</span>
+                              <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
+                                <input
+                                  type="number"
+                                  min={3}
+                                  max={16}
+                                  step={1}
+                                  value={optimizerBucketCount}
+                                  onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
+                                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                                />
+                                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v + 1)))}
+                                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    aria-label="Increase buckets"
+                                  >
+                                    ▲
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v - 1)))}
+                                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    aria-label="Decrease buckets"
+                                  >
+                                    ▼
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
+                              <span className="text-[10px] font-mono text-zinc-500 uppercase">Min Trades</span>
+                              <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={optimizerRangeMinTrades}
+                                  onChange={(e) => setOptimizerRangeMinTrades(Math.max(0, Math.trunc(Number(e.target.value) || 0)))}
+                                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                                />
+                                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setOptimizerRangeMinTrades((v) => Math.max(0, v + 1))}
+                                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    aria-label="Increase min trades"
+                                  >
+                                    ▲
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setOptimizerRangeMinTrades((v) => Math.max(0, v - 1))}
+                                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    aria-label="Decrease min trades"
+                                  >
+                                    ▼
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setOptimizerRangeGroupHidden((prev) => ({
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOptimizerRangeGroupHidden((prev) => ({
                               ...prev,
                               [group.group]: !prev[group.group as OptimizerRangeGroupKey],
                             }))
                           }
-                          className={clsx(
-                            "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.16em] transition-colors group",
-                            optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey]
-                              ? "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10"
-                              : "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10"
-                          )}
-                          aria-label={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? `Show ${group.group}` : `Hide ${group.group}`}
-                          title={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "Show group" : "Hide group"}
-                        >
+                            className={clsx("group self-start xl:self-auto", SCANNER_EYE_BUTTON)}
+                            aria-label={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? `Show ${group.group}` : `Hide ${group.group}`}
+                            title={optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "Show group" : "Hide group"}
+                          >
                           <EyeToggleIcon closed={!optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey]} className={!optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "group-hover:text-rose-400 transition-colors" : undefined} />
-                          {optimizerRangeGroupHidden[group.group as OptimizerRangeGroupKey] ? "Hidden" : "Visible"}
                         </button>
                       </div>
                     </div>
@@ -8891,24 +9771,32 @@ export default function ArbitrageScanner() {
                 ))}
                 {!optimizerRangeGroups.length && (
                   <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono">
-                    Run optimizer to see per-parameter profitability ranges.
+                    Run SCOPE to see profitability ranges for your selected parameters.
                   </div>
                 )}
-              </div>
-            </GlassCard>
-
-            <GlassCard className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  SCOPE
                 </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  filtered episodes only
                 </div>
-              </div>
+              ) : null}
+            </div>
 
-              <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4 mb-4">
-                {scopePanels.map((panel) => {
+            <div className="space-y-2">
+              {scopeFullscreenPanel ? <div className="fixed inset-0 z-[140] bg-black/70 backdrop-blur-sm" /> : null}
+              <div
+                className={clsx(
+                  "grid grid-cols-1 gap-4 mb-4",
+                  scopeFullscreenPanel
+                    ? "fixed inset-3 z-[150] h-[calc(100vh-1.5rem)] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#05070c]/98 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.55)]"
+                    : "2xl:grid-cols-2"
+                )}
+              >
+                {scopeFullscreenPanel ? (
+                  <div className="z-20 -mx-4 -mt-4 mb-4 flex items-center justify-between border-b border-white/[0.06] bg-[#05070c]/95 px-4 py-3 backdrop-blur-sm">
+                    <div className="text-[11px] font-mono uppercase tracking-[0.16em] text-zinc-400">
+                      Visual Scope Fullscreen
+                    </div>
+                  </div>
+                ) : null}
+                {visibleScopePanels.map((panel) => {
                   const draft = scopeResearchDrafts[panel.key];
                   const computed = scopeResearchComputedByPanel[panel.key];
                   const bounds = scopeResearchObservedBoundsByPanel[panel.key];
@@ -8916,15 +9804,15 @@ export default function ArbitrageScanner() {
                   return (
                     <div
                       key={`scope-grid-${panel.key}`}
-                      className="min-w-0 rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(255,255,255,0.022),rgba(255,255,255,0.01))] p-3"
+                      className={clsx("min-w-0 rounded-2xl p-3", SCANNER_PANEL_SURFACE, scopeFullscreenPanel && "flex h-[calc(100vh-7rem)] flex-col overflow-hidden")}
                     >
-                      <div className="space-y-3">
+                      <div className={clsx("space-y-3", scopeFullscreenPanel && "flex h-full flex-col")}>
                         <div className="flex flex-wrap items-center gap-3">
-                          <div className="flex items-center gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className={clsx("flex items-center gap-2 px-3 h-8 rounded-lg", SCANNER_PANEL_SURFACE)}>
                             <span className="text-[10px] font-mono text-zinc-500 uppercase">Rows</span>
                             <span className="text-[10px] font-mono text-emerald-300">{intn(computed?.sourceCount ?? 0)}</span>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 bg-[#090b10] p-1 rounded-xl border border-white/[0.06]">
+                          <div className="flex h-7 flex-wrap items-center gap-2 rounded-lg bg-black/20">
                             {([
                               { key: "results_by_bins", label: "bins" },
                               { key: "results_more_less_parameter", label: "more/less" },
@@ -8959,30 +9847,62 @@ export default function ArbitrageScanner() {
                               </button>
                             ))}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setScopeResearchSelections((prev) => ({
-                                ...prev,
-                                [panel.key]: buildScopeResearchSelectionFromDraft(draft),
-                              }))
-                            }
-                            className={clsx(
-                              "ml-auto w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95",
-                              accent.outlineButton
-                            )}
-                            title={`Apply ${panel.label}`}
-                            aria-label={`Apply ${panel.label}`}
-                          >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                              <polyline points="21 3 21 9 15 9" />
-                            </svg>
-                          </button>
+                          <div className="ml-auto flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setScopeFullscreenPanel((prev) => (prev === panel.key ? null : panel.key))}
+                              className={clsx(
+                                "w-9 h-9 flex items-center justify-center rounded-lg transition-all active:scale-95",
+                                SCANNER_PANEL_SURFACE,
+                                accent.outlineButton
+                              )}
+                              title={scopeFullscreenPanel === panel.key ? `Close ${panel.label} fullscreen` : `Open ${panel.label} fullscreen`}
+                              aria-label={scopeFullscreenPanel === panel.key ? `Close ${panel.label} fullscreen` : `Open ${panel.label} fullscreen`}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                {scopeFullscreenPanel === panel.key ? (
+                                  <>
+                                    <polyline points="9 3 3 3 3 9" />
+                                    <polyline points="15 21 21 21 21 15" />
+                                    <line x1="3" y1="3" x2="10" y2="10" />
+                                    <line x1="21" y1="21" x2="14" y2="14" />
+                                  </>
+                                ) : (
+                                  <>
+                                    <polyline points="15 3 21 3 21 9" />
+                                    <polyline points="9 21 3 21 3 15" />
+                                    <line x1="21" y1="3" x2="14" y2="10" />
+                                    <line x1="3" y1="21" x2="10" y2="14" />
+                                  </>
+                                )}
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setScopeResearchSelections((prev) => ({
+                                  ...prev,
+                                  [panel.key]: buildScopeResearchSelectionFromDraft(draft),
+                                }))
+                              }
+                              className={clsx(
+                                "w-9 h-9 flex items-center justify-center rounded-lg transition-all active:scale-95",
+                                SCANNER_PANEL_SURFACE,
+                                accent.outlineButton
+                              )}
+                              title={`Apply ${panel.label}`}
+                              aria-label={`Apply ${panel.label}`}
+                            >
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                                <polyline points="21 3 21 9 15 9" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5">
-                          <div className="flex items-center justify-between gap-3 px-3 h-8 rounded-lg border border-white/5 bg-black/20 min-w-0">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 min-w-0">
                             <div className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Param</div>
                             <GlassSelect
                               value={draft.parameterKey}
@@ -8993,10 +9913,10 @@ export default function ArbitrageScanner() {
                                 }))
                               }
                               options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
-                              className="min-w-0 w-[148px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                              className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
-                          <div className="flex items-center justify-between gap-3 px-3 h-8 rounded-lg border border-white/5 bg-black/20 min-w-0">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 min-w-0">
                             <div className="shrink-0 text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Result</div>
                             <GlassSelect
                               value={draft.resultKey}
@@ -9007,46 +9927,108 @@ export default function ArbitrageScanner() {
                                 }))
                               }
                               options={scopeResearchResultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
-                              className="min-w-0 w-[148px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                              className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Bins</div>
-                            <GlassInput
-                              type="number"
-                              min={3}
-                              max={24}
-                              step={1}
-                              width={72}
-                              value={draft.bucketCount}
-                              onChange={(e) =>
-                                setScopeResearchDrafts((prev) => ({
-                                  ...prev,
-                                  [panel.key]: { ...prev[panel.key], bucketCount: Math.max(3, Math.min(24, Math.trunc(Number(e.target.value) || 8))) },
-                                }))
-                              }
-                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
-                            />
+                            <div className="group relative h-7 w-[72px] overflow-hidden rounded-md">
+                              <input
+                                type="number"
+                                min={3}
+                                max={24}
+                                step={1}
+                                value={draft.bucketCount}
+                                onChange={(e) =>
+                                  setScopeResearchDrafts((prev) => ({
+                                    ...prev,
+                                    [panel.key]: { ...prev[panel.key], bucketCount: Math.max(3, Math.min(24, Math.trunc(Number(e.target.value) || 8))) },
+                                  }))
+                                }
+                                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                              />
+                              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    setScopeResearchDrafts((prev) => ({
+                                      ...prev,
+                                      [panel.key]: { ...prev[panel.key], bucketCount: Math.max(3, Math.min(24, (prev[panel.key].bucketCount ?? 8) + 1)) },
+                                    }))
+                                  }
+                                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                  aria-label="Increase bins"
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    setScopeResearchDrafts((prev) => ({
+                                      ...prev,
+                                      [panel.key]: { ...prev[panel.key], bucketCount: Math.max(3, Math.min(24, (prev[panel.key].bucketCount ?? 8) - 1)) },
+                                    }))
+                                  }
+                                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                  aria-label="Decrease bins"
+                                >
+                                  ▼
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Min N</div>
-                            <GlassInput
-                              type="number"
-                              min={1}
-                              max={5000}
-                              step={1}
-                              width={72}
-                              value={draft.minSamples}
-                              onChange={(e) =>
-                                setScopeResearchDrafts((prev) => ({
-                                  ...prev,
-                                  [panel.key]: { ...prev[panel.key], minSamples: Math.max(1, Math.trunc(Number(e.target.value) || 1)) },
-                                }))
-                              }
-                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
-                            />
+                            <div className="group relative h-7 w-[72px] overflow-hidden rounded-md">
+                              <input
+                                type="number"
+                                min={1}
+                                max={5000}
+                                step={1}
+                                value={draft.minSamples}
+                                onChange={(e) =>
+                                  setScopeResearchDrafts((prev) => ({
+                                    ...prev,
+                                    [panel.key]: { ...prev[panel.key], minSamples: Math.max(1, Math.trunc(Number(e.target.value) || 1)) },
+                                  }))
+                                }
+                                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                              />
+                              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    setScopeResearchDrafts((prev) => ({
+                                      ...prev,
+                                      [panel.key]: { ...prev[panel.key], minSamples: Math.max(1, Math.min(5000, (prev[panel.key].minSamples ?? 1) + 1)) },
+                                    }))
+                                  }
+                                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                  aria-label="Increase min samples"
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    setScopeResearchDrafts((prev) => ({
+                                      ...prev,
+                                      [panel.key]: { ...prev[panel.key], minSamples: Math.max(1, Math.min(5000, (prev[panel.key].minSamples ?? 1) - 1)) },
+                                    }))
+                                  }
+                                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                                  aria-label="Decrease min samples"
+                                >
+                                  ▼
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">From</div>
                             <GlassInput
                               type="number"
@@ -9060,10 +10042,10 @@ export default function ArbitrageScanner() {
                                 }))
                               }
                               placeholder={bounds.min != null ? scopeResearchFormatValue(bounds.min, parameterOption.format) : "min"}
-                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                              className="!h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">To</div>
                             <GlassInput
                               type="number"
@@ -9077,10 +10059,10 @@ export default function ArbitrageScanner() {
                                 }))
                               }
                               placeholder={bounds.max != null ? scopeResearchFormatValue(bounds.max, parameterOption.format) : "max"}
-                              className="!h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
+                              className="!h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Cut</div>
                             <GlassSelect
                               value={draft.thresholdMode}
@@ -9095,12 +10077,12 @@ export default function ArbitrageScanner() {
                                 { value: "less_than", label: "<= x" },
                               ]}
                               className={clsx(
-                                "min-w-[92px] !h-[22px] !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right",
+                                "min-w-[92px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right",
                                 draft.chartType !== "results_more_less_parameter" && "opacity-60"
                               )}
                             />
                           </div>
-                          <div className="flex items-center justify-between gap-2 px-3 h-8 rounded-lg border border-white/5 bg-black/20">
+                          <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Range</div>
                             <div className="text-[10px] font-mono text-zinc-400 text-right truncate">
                               {bounds.min != null && bounds.max != null
@@ -9111,8 +10093,8 @@ export default function ArbitrageScanner() {
                         </div>
 
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-                        <div className="rounded-xl border border-white/[0.07] bg-black/20 p-2.5">
-                          <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-2.5">
+                          <div className={clsx("flex items-center justify-between gap-2", !scopeResearchFiltersHidden[panel.key].extra && draft.extraFilters.length && "mb-2")}>
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Extra Filters</div>
                             <div className="flex items-center gap-2">
                               <button
@@ -9123,12 +10105,7 @@ export default function ArbitrageScanner() {
                                     [panel.key]: { ...prev[panel.key], extra: !prev[panel.key].extra },
                                   }))
                                 }
-                                className={clsx(
-                                  "px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group",
-                                  scopeResearchFiltersHidden[panel.key].extra
-                                    ? ""
-                                    : ""
-                                )}
+                                className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
                                 title={scopeResearchFiltersHidden[panel.key].extra ? "Show extra filter rows" : "Hide extra filter rows"}
                               >
                                 <EyeToggleIcon closed={!scopeResearchFiltersHidden[panel.key].extra} className={!scopeResearchFiltersHidden[panel.key].extra ? "group-hover:text-rose-400 transition-colors" : undefined} />
@@ -9152,7 +10129,7 @@ export default function ArbitrageScanner() {
                                     },
                                   }))
                                 }
-                                className="w-9 h-9 flex items-center justify-center rounded-lg border border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300 transition-all text-[15px] font-mono leading-none"
+                                className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[13px] font-mono text-zinc-300 hover:bg-white/10 transition-colors leading-none"
                                 title="Add extra filter"
                               >
                                 +
@@ -9248,8 +10225,8 @@ export default function ArbitrageScanner() {
                           ) : null}
                         </div>
 
-                        <div className="rounded-xl border border-white/[0.07] bg-black/20 p-2.5">
-                          <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-2.5">
+                          <div className={clsx("flex items-center justify-between gap-2", !scopeResearchFiltersHidden[panel.key].parallel && draft.parallelFilters.length && "mb-2")}>
                             <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-mono">Parallel Filters</div>
                             <div className="flex items-center gap-2">
                               <button
@@ -9260,12 +10237,7 @@ export default function ArbitrageScanner() {
                                     [panel.key]: { ...prev[panel.key], parallel: !prev[panel.key].parallel },
                                   }))
                                 }
-                                className={clsx(
-                                  "px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group",
-                                  scopeResearchFiltersHidden[panel.key].parallel
-                                    ? ""
-                                    : ""
-                                )}
+                                className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
                                 title={scopeResearchFiltersHidden[panel.key].parallel ? "Show parallel filter rows" : "Hide parallel filter rows"}
                               >
                                 <EyeToggleIcon closed={!scopeResearchFiltersHidden[panel.key].parallel} className={!scopeResearchFiltersHidden[panel.key].parallel ? "group-hover:text-rose-400 transition-colors" : undefined} />
@@ -9289,7 +10261,7 @@ export default function ArbitrageScanner() {
                                     },
                                   }))
                                 }
-                                className="w-9 h-9 flex items-center justify-center rounded-lg border border-white/10 bg-[#090b10] text-zinc-500 hover:text-zinc-300 transition-all text-[15px] font-mono leading-none"
+                                className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[13px] font-mono text-zinc-300 hover:bg-white/10 transition-colors leading-none"
                                 title="Add parallel filter"
                               >
                                 +
@@ -9387,20 +10359,20 @@ export default function ArbitrageScanner() {
                         </div>
                       </div>
 
-                      {computed ? (
-                        <div className="mt-3 min-w-0">
+                      {computed && hasVisualScopeLoaded ? (
+                        <div className={clsx("mt-3 min-w-0", scopeFullscreenPanel ? "h-[calc(100vh-26rem)] min-h-[420px] flex-none" : "")}>
                           {computed.selection.chartType === "simple_box" ? (
-                            <ScopeResearchBoxChart rows={computed.bins} title="simple_box" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchBoxChart rows={computed.bins} title="simple_box" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : computed.selection.chartType === "beauty_violin" ? (
-                            <ScopeResearchViolinChart rows={computed.bins} title="beauty_violin" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchViolinChart rows={computed.bins} title="beauty_violin" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : computed.selection.chartType === "distribution" ? (
-                            <ScopeResearchDistributionChart points={computed.points} title="distribution" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchDistributionChart points={computed.points} title="distribution" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : computed.selection.chartType === "scatter_by_date" ? (
-                            <ScopeResearchScatterByDateChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="scatter_by_date" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} parameterFormat={computed.parameter.format} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchScatterByDateChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="scatter_by_date" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} parameterFormat={computed.parameter.format} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : computed.selection.chartType === "cumsum_chart" ? (
-                            <ScopeResearchCumsumChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="cumsum_chart" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchCumsumChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="cumsum_chart" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : computed.selection.chartType === "trade_performance" ? (
-                            <ScopeResearchTradePerformanceChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="trade_performance" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} />
+                            <ScopeResearchTradePerformanceChart points={computed.points} parallelSeries={computed.parallelPointSeries} title="trade_performance" meta={`${computed.parameter.label} vs ${computed.sourceResult.label}`} resultFormat={computed.sourceResult.format} fullscreen={scopeFullscreenPanel === panel.key} />
                           ) : (
                             <ScopeResearchSeriesChart
                               rows={computed.selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins}
@@ -9410,14 +10382,15 @@ export default function ArbitrageScanner() {
                               resultKey={computed.selection.resultKey}
                               resultFormat={computed.result.format}
                               accent={computed.selection.chartType === "results_more_less_parameter" ? "amber" : "emerald"}
+                              fullscreen={scopeFullscreenPanel === panel.key}
                             />
                           )}
                         </div>
-                      ) : (
-                        <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono mt-3">
+                      ) : hasVisualScopeLoaded ? (
+                        <div className={clsx("rounded-xl border border-white/[0.08] bg-[#070707]/95 p-6 text-center text-zinc-500 text-xs font-mono mt-3", scopeFullscreenPanel && "h-[calc(100vh-26rem)] min-h-[420px] flex items-center justify-center")}>
                           Pick a view and press `Apply {panel.label}`.
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })}
@@ -9732,202 +10705,69 @@ export default function ArbitrageScanner() {
                 </div>
               )}
               </div>
-            </GlassCard>
-
-            <GlassCard className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  PARAMETER IMPACT VS BASE
-                </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  scenarios {intn(optimizerImpactRows.length)} | baseline {optimizerBaselineRow ? num(optimizerBaselineRow.score, 2) : "-"} score
-                </div>
-              </div>
-
-              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-                <table className="min-w-[1080px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
-                    <tr>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Impact</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaScore</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaPnL</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Avg/Trade</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Applied</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {optimizerImpactRows.map((row) => (
-                      <tr key={`impact-${row.id}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                        <td className="p-2.5 text-zinc-100 font-semibold">
-                          {row.parameter} <span className="text-zinc-500 font-normal">{row.variant}</span>
-                        </td>
-                        <td className="p-2.5">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={clsx(
-                                "inline-flex min-w-[64px] justify-center rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest",
-                                row.impactLevel === "STRONG"
-                                  ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-300"
-                                  : row.impactLevel === "MEDIUM"
-                                    ? "border-amber-500/35 bg-amber-500/10 text-amber-300"
-                                    : "border-white/10 bg-white/[0.04] text-zinc-300"
-                              )}
-                            >
-                              {row.impactLevel}
-                            </span>
-                            <div className="h-2 w-24 rounded-full bg-white/[0.05] overflow-hidden">
-                              <div
-                                className={clsx(
-                                  "h-full",
-                                  row.deltaScore >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"
-                                )}
-                                style={{ width: `${Math.max(8, row.impactPct * 100)}%` }}
-                              />
-                            </div>
-                          </div>
-                        </td>
-                        <td className={clsx("p-2.5 text-right tabular-nums font-bold", row.deltaScore > 0 ? "text-emerald-300" : row.deltaScore < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(row.deltaScore, 2)}
-                        </td>
-                        <td className={clsx("p-2.5 text-right tabular-nums", row.deltaPnlUsd > 0 ? "text-emerald-300" : row.deltaPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(row.deltaPnlUsd, 2)}
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(row.trades)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(row.winRate * 100, 1)}%</td>
-                        <td className={clsx("p-2.5 text-right tabular-nums", row.totalPnlUsd > 0 ? "text-emerald-300" : row.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(row.totalPnlUsd, 2)}
-                        </td>
-                        <td className={clsx("p-2.5 text-right tabular-nums", row.avgPnlUsd > 0 ? "text-emerald-300" : row.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(row.avgPnlUsd, 2)}
-                        </td>
-                        <td className="p-2.5 text-zinc-400">{row.summary}</td>
-                      </tr>
-                    ))}
-                    {!optimizerImpactRows.length && (
-                      <tr>
-                        <td colSpan={9} className="p-6 text-center text-zinc-500">
-                          Run optimizer to see per-parameter impact versus baseline.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </GlassCard>
-
-            <div className="space-y-2">
-              <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-2">
-                OPTIMIZER RESULTS | rows {optimizerRows.length}
-              </div>
-
-              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-                <table className="min-w-[1180px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
-                    <tr>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">#</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Variant</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Summary</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Score</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">W/L</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">AvgPnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {optimizerRows.map((r, i) => {
-                      return (
-                        <tr key={`${r.id}|${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                          <td className="p-2.5 text-zinc-500">{i + 1}</td>
-                          <td className="p-2.5 text-zinc-100 font-semibold">{r.parameter}</td>
-                          <td className="p-2.5 text-zinc-300">{r.variant}</td>
-                          <td className="p-2.5 text-zinc-400">{r.summary}</td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums font-bold",
-                              r.score > 0 ? "text-emerald-300" : r.score < 0 ? "text-rose-300" : "text-zinc-200"
-                            )}
-                          >
-                            {Number.isFinite(r.score) ? num(r.score, 2) : "-"}
-                          </td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.trades)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.wins)} / {intn(r.losses)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.winRate * 100, 1)}%</td>
-                          <td className={clsx("p-2.5 text-right tabular-nums", r.totalPnlUsd > 0 ? "text-emerald-300" : r.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                            {num(r.totalPnlUsd, 2)}
-                          </td>
-                          <td className={clsx("p-2.5 text-right tabular-nums", r.avgPnlUsd > 0 ? "text-emerald-300" : r.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                            {num(r.avgPnlUsd, 2)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {!optimizerRows.length && (
-                      <tr>
-                        <td colSpan={10} className="p-6 text-center text-zinc-500">
-                          Run optimizer to see parameter impact configurations.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
-                <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
-              </div>
             </div>
+
           </div>
         )}
 
         {tab === "analytics" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">TRADES</div>
-                <div className="text-sm font-mono mt-1">{intn(analyticsSummary.trades)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">TOTAL PNL</div>
-                <div
-                  className={clsx(
-                    "text-sm font-mono mt-1",
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <SummaryMetricCard
+                label="TOTAL PNL"
+                value={num(analyticsSummary.totalPnlUsd, 2)}
+                className="md:row-span-2 md:min-h-[124px]"
+                valueClassName={
+                  clsx(
+                    "text-4xl md:text-6xl font-bold",
                     analyticsSummary.totalPnlUsd > 0
                       ? "text-emerald-300"
                       : analyticsSummary.totalPnlUsd < 0
                         ? "text-rose-300"
                         : "text-zinc-200"
-                  )}
-                >
-                  {num(analyticsSummary.totalPnlUsd, 2)}
-                </div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">WIN RATE</div>
-                <div className="text-sm font-mono mt-1">{`${num(analyticsSummary.winRate * 100, 1)}%`}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">PROFIT FACTOR</div>
-                <div className="text-sm font-mono mt-1">{num(analyticsSummary.profitFactor, 2)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">EXPECTANCY</div>
-                <div className="text-sm font-mono mt-1">{num(analyticsSummary.expectancyUsd, 2)}</div>
-              </GlassCard>
-              <GlassCard className="p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">MAX DRAWDOWN</div>
-                <div className="text-sm font-mono mt-1">{num(analyticsSummary.maxDrawdownUsd, 2)}</div>
-              </GlassCard>
+                  )
+                }
+              />
+              <SummaryMetricCard
+                label="TRADES"
+                value={intn(analyticsSummary.trades)}
+                inline
+              />
+              <SummaryMetricCard
+                label="WIN RATE"
+                value={`${num(analyticsSummary.winRate * 100, 1)}%`}
+                inline
+              />
+              <SummaryMetricCard
+                label="AVG TRADE"
+                value={num(analyticsSummary.avgPnlUsd, 2)}
+                inline
+                valueClassName={
+                  analyticsSummary.avgPnlUsd > 0
+                    ? "text-emerald-300"
+                    : analyticsSummary.avgPnlUsd < 0
+                      ? "text-rose-300"
+                      : "text-zinc-200"
+                }
+              />
+              <SummaryMetricCard
+                label="PROFIT FACTOR"
+                value={num(analyticsSummary.profitFactor, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="EXPECTANCY"
+                value={num(analyticsSummary.expectancyUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX DRAWDOWN"
+                value={num(analyticsSummary.maxDrawdownUsd, 2)}
+                inline
+              />
             </div>
 
-            {analyticsSorted.length > 0 ? (
+            {analytics !== null && (analyticsSorted.length > 0 ? (
               <>
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                   {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
@@ -9977,8 +10817,9 @@ export default function ArbitrageScanner() {
               <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
                 No analytics rows yet. Run analytics for selected date/day range to render charts.
               </div>
-            )}
+            ))}
 
+            {analytics !== null && (
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
@@ -9987,9 +10828,9 @@ export default function ArbitrageScanner() {
                 <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
               </div>
 
-              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
+              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
                 <table className="min-w-[1720px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
+                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
@@ -10142,19 +10983,11 @@ export default function ArbitrageScanner() {
                 </table>
               </div>
 
-              <div className="mt-2 rounded-xl border border-white/[0.06] bg-transparent p-3">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 mb-2">Variant</div>
-                <div className="text-xs font-mono text-zinc-300 break-words">{variantString}</div>
-              </div>
             </div>
+            )}
           </div>
         )}
 
-        {/* Footer helper */}
-        <div className="text-[10px] font-mono text-zinc-600">
-          Tip: any change in Metric/Session/StartAbs/EndAbs/CloseMode/MinHold/PnLMode changes variant and may rebuild cache
-          on backend.
-        </div>
         <style jsx global>{`
           input.center-spin[type="number"] {
             -moz-appearance: textfield;
@@ -10166,6 +10999,214 @@ export default function ArbitrageScanner() {
           }
         `}</style>
       </div>
+      <style>{`
+        .scanner-borderless .scanner-header-surface,
+        .scanner-borderless .scanner-glass-card,
+        .scanner-borderless .scanner-panel-surface,
+        .scanner-borderless .scanner-control-surface,
+        .scanner-borderless .scanner-eye-button {
+          border-color: transparent !important;
+        }
+
+        .scanner-borderless .border-white\\/5,
+        .scanner-borderless .border-white\\/10,
+        .scanner-borderless .border-white\\/\\[0\\.04\\],
+        .scanner-borderless .border-white\\/\\[0\\.06\\],
+        .scanner-borderless .border-white\\/\\[0\\.07\\],
+        .scanner-borderless .border-white\\/\\[0\\.08\\],
+        .scanner-borderless .border-white\\/\\[0\\.12\\] {
+          border-color: transparent !important;
+        }
+
+        .scanner-light-theme {
+          color: #111827;
+          color-scheme: light;
+        }
+
+        .scanner-light-theme .scanner-header-surface,
+        .scanner-light-theme .scanner-glass-card,
+        .scanner-light-theme .scanner-panel-surface,
+        .scanner-light-theme .scanner-eye-button,
+        .scanner-light-theme .scanner-control-surface,
+        .scanner-light-theme .scanner-glass-input {
+          background: rgba(255, 255, 255, 0.28) !important;
+          border-color: rgba(15, 23, 42, 0.1) !important;
+          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05) !important;
+        }
+
+        .scanner-light-theme button,
+        .scanner-light-theme input,
+        .scanner-light-theme select,
+        .scanner-light-theme textarea {
+          color: #111827;
+        }
+
+        .scanner-light-theme .bg-black\\/20,
+        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/40,
+        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/30,
+        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/60,
+        .scanner-light-theme .bg-\\[\\#05070b\\]\\/95,
+        .scanner-light-theme .bg-\\[\\#06070c\\]\\/90,
+        .scanner-light-theme .bg-\\[\\#070707\\]\\/95,
+        .scanner-light-theme .bg-\\[\\#070910\\]\\/95,
+        .scanner-light-theme .bg-\\[\\#090b10\\],
+        .scanner-light-theme .bg-\\[\\#090a0f\\]\\/90,
+        .scanner-light-theme .bg-\\[\\#111111\\]\\/95,
+        .scanner-light-theme .bg-\\[\\#05070b\\]\\/95,
+        .scanner-light-theme .bg-white\\/5,
+        .scanner-light-theme .bg-white\\/10,
+        .scanner-light-theme .bg-white\\/\\[0\\.03\\],
+        .scanner-light-theme .bg-white\\/\\[0\\.04\\] {
+          background-color: rgba(255, 255, 255, 0.38) !important;
+        }
+
+        .scanner-light-theme [class*="bg-[linear-gradient"] {
+          background: rgba(255, 255, 255, 0.38) !important;
+          background-image: none !important;
+        }
+
+        .scanner-light-theme .border-white\\/5,
+        .scanner-light-theme .border-white\\/10,
+        .scanner-light-theme .border-white\\/\\[0\\.04\\],
+        .scanner-light-theme .border-white\\/\\[0\\.06\\],
+        .scanner-light-theme .border-white\\/\\[0\\.08\\],
+        .scanner-light-theme .border-white\\/\\[0\\.12\\] {
+          border-color: rgba(15, 23, 42, 0.1) !important;
+        }
+
+        .scanner-light-theme .scanner-glass-input {
+          color: #111827 !important;
+        }
+
+        .scanner-light-theme .scanner-glass-input::placeholder {
+          color: rgba(17, 24, 39, 0.42) !important;
+        }
+
+        .scanner-light-theme .text-white,
+        .scanner-light-theme .text-zinc-50,
+        .scanner-light-theme .text-zinc-100,
+        .scanner-light-theme .text-zinc-200,
+        .scanner-light-theme .text-zinc-300,
+        .scanner-light-theme .text-zinc-400 {
+          color: #111827 !important;
+        }
+
+        .scanner-light-theme .text-zinc-500,
+        .scanner-light-theme .text-zinc-600,
+        .scanner-light-theme .text-zinc-700 {
+          color: rgba(17, 24, 39, 0.64) !important;
+        }
+
+        .scanner-light-theme svg text,
+        .scanner-light-theme .fill-zinc-200,
+        .scanner-light-theme .fill-zinc-300,
+        .scanner-light-theme .fill-zinc-400,
+        .scanner-light-theme .fill-zinc-500,
+        .scanner-light-theme .fill-zinc-600,
+        .scanner-light-theme .text-\\[9px\\].uppercase.tracking-\\[0\\.18em\\].font-mono.text-zinc-500,
+        .scanner-light-theme .text-\\[10px\\].uppercase.tracking-widest.font-mono.text-zinc-500,
+        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-500,
+        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-600,
+        .scanner-light-theme .text-xs.font-mono.text-zinc-500,
+        .scanner-light-theme .text-zinc-400.font-normal,
+        .scanner-light-theme .text-zinc-500.font-normal {
+          color: #111827 !important;
+          fill: #111827 !important;
+        }
+
+        .scanner-light-theme .hover\\:text-white:hover,
+        .scanner-light-theme .hover\\:text-zinc-200:hover,
+        .scanner-light-theme .hover\\:text-zinc-300:hover,
+        .scanner-light-theme .hover\\:text-violet-200:hover,
+        .scanner-light-theme .hover\\:text-rose-400:hover {
+          color: #111827 !important;
+        }
+
+        .scanner-light-theme .text-violet-300,
+        .scanner-light-theme .text-violet-400,
+        .scanner-light-theme .text-violet-500,
+        .scanner-light-theme .text-violet-600 {
+          color: #4c1d95 !important;
+        }
+
+        .scanner-light-theme .fill-zinc-400,
+        .scanner-light-theme .fill-zinc-500,
+        .scanner-light-theme .fill-zinc-600 {
+          fill: rgba(17, 24, 39, 0.7) !important;
+        }
+
+        .scanner-light-theme svg rect[fill="rgba(8,15,26,0.36)"],
+        .scanner-light-theme svg rect[fill="rgba(8,15,26,0.28)"] {
+          fill: rgba(255, 255, 255, 0.28) !important;
+        }
+
+        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.06)"],
+        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.12)"],
+        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.14)"],
+        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.18)"] {
+          stroke: rgba(15, 23, 42, 0.12) !important;
+        }
+
+        .scanner-light-theme svg text.fill-zinc-500,
+        .scanner-light-theme svg text.fill-zinc-400,
+        .scanner-light-theme svg text.fill-zinc-600 {
+          fill: rgba(17, 24, 39, 0.64) !important;
+        }
+
+        .scanner-light-theme table thead.bg-\\[\\#111111\\]\\/95,
+        .scanner-light-theme table thead.bg-\\[\\#090a0f\\]\\/90,
+        .scanner-light-theme .text-xs.font-mono.text-zinc-500.bg-\\[\\#070707\\]\\/95,
+        .scanner-light-theme .dark-pro-table,
+        .scanner-light-theme [title="dark pro table"] {
+          background: rgba(255, 255, 255, 0.38) !important;
+          color: #111827 !important;
+        }
+
+        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-600 {
+          color: rgba(17, 24, 39, 0.52) !important;
+        }
+
+        .scanner-light-theme table,
+        .scanner-light-theme thead,
+        .scanner-light-theme tbody,
+        .scanner-light-theme tr,
+        .scanner-light-theme th,
+        .scanner-light-theme td {
+          color: #111827;
+        }
+
+        .scanner-light-theme .stroke-white\\/10,
+        .scanner-light-theme .stroke-white\\/\\[0\\.06\\],
+        .scanner-light-theme .stroke-white\\/\\[0\\.08\\] {
+          stroke: rgba(15, 23, 42, 0.14) !important;
+        }
+
+        .scanner-light-theme .text-emerald-300,
+        .scanner-light-theme .text-emerald-400 {
+          color: #047857 !important;
+        }
+
+        .scanner-light-theme .text-rose-300,
+        .scanner-light-theme .text-rose-400 {
+          color: #be123c !important;
+        }
+
+        .scanner-light-theme .bg-violet-300\\/10,
+        .scanner-light-theme .bg-violet-300\\/8,
+        .scanner-light-theme .bg-violet-200\\/10 {
+          background-color: rgba(221, 214, 254, 0.55) !important;
+        }
+
+        .scanner-light-theme .hover\\:bg-black\\/30:hover,
+        .scanner-light-theme .hover\\:bg-black\\/20:hover,
+        .scanner-light-theme .hover\\:bg-white\\/5:hover,
+        .scanner-light-theme .hover\\:bg-white\\/10:hover,
+        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.03\\]:hover,
+        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.04\\]:hover,
+        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.05\\]:hover {
+          background-color: rgba(255, 255, 255, 0.5) !important;
+        }
+      `}</style>
     </div>
   );
 }
