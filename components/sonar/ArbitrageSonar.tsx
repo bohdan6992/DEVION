@@ -1308,7 +1308,7 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
                     }}
                     className={[
                       "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                      active ? getSonarAccent(theme).activeSoft : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
+                      active ? getSonarAccent(theme).textSoft : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
                     ].join(" ")}
                   >
                     <span className="min-w-0 flex-1 truncate">{opt.label}</span>
