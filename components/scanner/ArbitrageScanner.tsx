@@ -471,6 +471,10 @@ type PaperArbAnalyticsResponse = {
   winRate?: number | null;
   profitFactor?: number | null;
   avgPnlUsd?: number | null;
+  avgWinUsd?: number | null;
+  avgLossUsd?: number | null;
+  maxWinUsd?: number | null;
+  maxLossUsd?: number | null;
   expectancyUsd?: number | null;
   maxDrawdownUsd?: number | null;
 
