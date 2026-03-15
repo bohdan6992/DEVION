@@ -1076,6 +1076,8 @@ const MultiSelectFilter = ({
   enabled,
   toggleEnabled,
   color = "amber",
+  hideArrow = false,
+  onMainClick,
 }: {
   label: string;
   options: string[];
@@ -1084,6 +1086,8 @@ const MultiSelectFilter = ({
   enabled: boolean;
   toggleEnabled: () => void;
   color?: MsColor;
+  hideArrow?: boolean;
+  onMainClick?: () => void;
 }) => {
   const { theme } = useUi();
   const [open, setOpen] = useState(false);
