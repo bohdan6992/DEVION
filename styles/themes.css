@@ -75,33 +75,70 @@
 :root[data-theme="dark"] {
   --bg: #0f1012;
   --bg-image:
-    radial-gradient(1200px 560px at 50% -18%, rgba(255,255,255,0.08), transparent 64%),
-    radial-gradient(900px 500px at 18% 10%, rgba(148, 163, 184, 0.08), transparent 68%),
-    radial-gradient(860px 520px at 84% 16%, rgba(161, 161, 170, 0.08), transparent 66%),
-    linear-gradient(180deg, #15171a 0%, #111317 56%, #0b0d10 100%);
+    radial-gradient(1200px 560px at 50% -18%, rgba(255,255,255,0.1), transparent 64%),
+    radial-gradient(900px 500px at 18% 10%, rgba(203, 213, 225, 0.09), transparent 68%),
+    radial-gradient(860px 520px at 84% 16%, rgba(212, 212, 216, 0.08), transparent 66%),
+    linear-gradient(180deg, #14161a 0%, #101216 56%, #090b0f 100%);
 
   --card-bg: rgba(255, 255, 255, 0.015);
-  --card-border: rgba(16, 185, 129, 0.1);
-  --color-primary: #10b981;
+  --card-border: rgba(212, 212, 216, 0.12);
+  --color-primary: #d4d4d8;
   --chart-grid: rgba(255, 255, 255, 0.02);
   --dash-page-glow:
-    radial-gradient(circle at 18% 14%, rgba(148, 163, 184, 0.15), transparent 36%),
-    radial-gradient(circle at 82% 8%, rgba(99, 102, 241, 0.1), transparent 28%);
+    radial-gradient(circle at 18% 14%, rgba(203, 213, 225, 0.16), transparent 36%),
+    radial-gradient(circle at 82% 8%, rgba(161, 161, 170, 0.1), transparent 28%);
   --dash-grid-line: rgba(255, 255, 255, 0.04);
   --dash-scan-line: rgba(255, 255, 255, 0.03);
 
   --dash-panel-bg: linear-gradient(135deg, rgba(12, 13, 17, 0.84), rgba(8, 9, 13, 0.9));
-  --dash-panel-border: rgba(255, 255, 255, 0.1);
-  --dash-panel-shadow: 0 24px 70px -40px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --dash-topline: rgba(203, 213, 225, 0.35);
+  --dash-panel-border: rgba(212, 212, 216, 0.12);
+  --dash-panel-shadow: 0 24px 70px -40px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(228, 228, 231, 0.08);
+  --dash-topline: rgba(228, 228, 231, 0.42);
   --dash-text-main: #f4f4f5;
-  --dash-text-muted: rgba(161, 161, 170, 0.85);
-  --dash-chip-bg: rgba(255, 255, 255, 0.04);
-  --dash-chip-border: rgba(255, 255, 255, 0.14);
-  --dash-accent: #a1a1aa;
-  --dash-accent-soft: rgba(255, 255, 255, 0.08);
-  --dash-accent-border: rgba(212, 212, 216, 0.32);
-  --dash-accent-shadow: rgba(255, 255, 255, 0.18);
+  --dash-text-muted: rgba(212, 212, 216, 0.78);
+  --dash-chip-bg: rgba(228, 228, 231, 0.05);
+  --dash-chip-border: rgba(212, 212, 216, 0.16);
+  --dash-accent: #e4e4e7;
+  --dash-accent-soft: rgba(228, 228, 231, 0.1);
+  --dash-accent-border: rgba(212, 212, 216, 0.34);
+  --dash-accent-shadow: rgba(228, 228, 231, 0.22);
+}
+
+/* ---------------- RAIN (Silver Static) ---------------- */
+:root[data-theme="rain"] {
+  --bg: #0c0d10;
+  --fg: #f5f5f5;
+  --muted: #a1a1aa;
+  --color-primary: #e4e4e7;
+
+  --bg-image:
+    radial-gradient(1280px 620px at 50% -18%, rgba(255,255,255,0.08), transparent 64%),
+    radial-gradient(960px 540px at 18% 12%, rgba(212, 212, 216, 0.08), transparent 68%),
+    radial-gradient(980px 560px at 84% 16%, rgba(161, 161, 170, 0.07), transparent 66%),
+    linear-gradient(180deg, #14161a 0%, #101216 56%, #090b0f 100%);
+
+  --card-bg: rgba(255, 255, 255, 0.015);
+  --card-border: rgba(212, 212, 216, 0.12);
+  --chart-grid: rgba(255, 255, 255, 0.02);
+  --shadow: 0 24px 72px rgba(0, 0, 0, 0.9);
+  --dash-page-glow:
+    radial-gradient(circle at 18% 14%, rgba(212, 212, 216, 0.14), transparent 36%),
+    radial-gradient(circle at 82% 8%, rgba(161, 161, 170, 0.09), transparent 28%);
+  --dash-grid-line: rgba(255, 255, 255, 0.04);
+  --dash-scan-line: rgba(255, 255, 255, 0.03);
+
+  --dash-panel-bg: linear-gradient(135deg, rgba(12, 13, 17, 0.84), rgba(8, 9, 13, 0.92));
+  --dash-panel-border: rgba(212, 212, 216, 0.12);
+  --dash-panel-shadow: 0 24px 70px -40px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(228, 228, 231, 0.08);
+  --dash-topline: rgba(228, 228, 231, 0.42);
+  --dash-text-main: #f4f4f5;
+  --dash-text-muted: rgba(212, 212, 216, 0.78);
+  --dash-chip-bg: rgba(228, 228, 231, 0.05);
+  --dash-chip-border: rgba(212, 212, 216, 0.16);
+  --dash-accent: #e4e4e7;
+  --dash-accent-soft: rgba(228, 228, 231, 0.1);
+  --dash-accent-border: rgba(212, 212, 216, 0.34);
+  --dash-accent-shadow: rgba(228, 228, 231, 0.22);
 }
 
 /* ---------------- NEON (Cyber Pulse â€” Ð¤Ñ–Ð¾Ð»ÐµÑ‚Ð¾Ð²Ð¸Ð¹ Ð’Ð¸Ð±ÑƒÑ…) ---------------- */
@@ -801,4 +838,12 @@ html[data-theme="light"] .dashboard-scope [class*="bg-zinc"] {
 .dashboard-scope .terminal-scroll::-webkit-scrollbar-thumb:hover {
   background: color-mix(in oklab, var(--dash-accent) 72%, transparent);
 }
+
+html.dark [class*="text-emerald-"] { color: #e4e4e7 !important; }
+html.dark [class*="border-emerald-"] { border-color: rgba(212, 212, 216, 0.28) !important; }
+html.dark [class*="bg-emerald-"] { background-color: rgba(228, 228, 231, 0.08) !important; }
+html.dark [class*="ring-emerald-"] { --tw-ring-color: rgba(212, 212, 216, 0.28) !important; }
+html.dark [class*="from-emerald-"] { --tw-gradient-from: rgba(228, 228, 231, 0.16) var(--tw-gradient-from-position) !important; }
+html.dark [class*="via-emerald-"] { --tw-gradient-via: rgba(228, 228, 231, 0.12) var(--tw-gradient-via-position) !important; }
+html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) var(--tw-gradient-to-position) !important; }
 

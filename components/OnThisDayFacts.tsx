@@ -116,10 +116,10 @@ export default function OnThisDayFacts({
       {/* Minimal Internal Header: Just the Date */}
       <div className="flex items-center gap-3 mb-1">
         <div className="relative flex h- w-4">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
-          <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500"></span>
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60" style={{ backgroundColor: "var(--dash-accent)" }}></span>
+          <span className="relative inline-flex rounded-full h-4 w-4" style={{ backgroundColor: "var(--dash-accent)" }}></span>
         </div>
-        <div className="text-lg font-bold font-mono text-emerald-400 uppercase tracking-[0.2em]">
+        <div className="text-lg font-bold font-mono text-white uppercase tracking-[0.2em]">
           {currentDisplayDate || "TODAY"}
         </div>
       </div>
@@ -130,11 +130,11 @@ export default function OnThisDayFacts({
           items.map((f, i) => (
             <div key={i} className="relative pl-6 group">
               {/* Timeline Dot with Glow */}
-              <div className="absolute -left-[6px] top-2.5 h-[10px] w-[10px] rounded-full bg-zinc-700 ring-2 ring-[#030303] group-hover:bg-emerald-400 group-hover:scale-125 group-hover:shadow-[0_0_14px_#34d399] transition-all duration-300 z-10" />
+              <div className="absolute -left-[6px] top-2.5 h-[10px] w-[10px] rounded-full bg-zinc-700 ring-2 ring-[#030303] group-hover:scale-125 transition-all duration-300 z-10" style={{ boxShadow: "none" }} />
 
               {/* Year & Emoji */}
               <div className="flex items-center gap-3 mb-">
-                <span className="text-lg font-bold font-mono text-emerald-400/90 group-hover:text-emerald-300 transition-colors">
+                <span className="text-lg font-bold font-mono text-white transition-colors">
                   {f.year}
                 </span>
                 {f.emoji && (
@@ -145,7 +145,7 @@ export default function OnThisDayFacts({
               </div>
 
               {/* Text Content */}
-              <p className="text-[18px] leading-[1.45] text-zinc-300 font-mono group-hover:text-zinc-100 transition-colors line-clamp-3">
+              <p className="text-[18px] leading-[1.45] text-white font-mono transition-colors line-clamp-3">
                 {f.text}
               </p>
 
@@ -155,7 +155,7 @@ export default function OnThisDayFacts({
                   href={f.source}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-2 mt-4 opacity-0 group-hover:opacity-100 transition-opacity text-base text-zinc-500 hover:text-emerald-300 uppercase tracking-widest font-mono"
+                  className="inline-flex items-center gap-2 mt-4 opacity-0 group-hover:opacity-100 transition-opacity text-base text-zinc-500 uppercase tracking-widest font-mono"
                 >
                   <span>SRC</span>
                   <span className="text-base">↗</span>

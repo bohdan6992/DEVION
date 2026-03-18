@@ -23,7 +23,7 @@ const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
 type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
-  | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space";
+  | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space" | "rain";
 type LangKey = "UA" | "EN" | "UK";
 
 type MyAppProps = AppProps & {
@@ -58,7 +58,7 @@ export default function MyApp({
     const darkThemes = new Set([
       "dark", "neon", "cyberpunk", "solaris", "sakura", "oceanic",
       "matrix", "asher", "inferno", "sparkle", "desert", "midnight", "space",
-      "forest", "candy", "monochrome",
+      "forest", "candy", "monochrome", "rain",
     ]);
     const apply = () => {
       const t = (root.getAttribute("data-theme") || String(initialTheme)) as ThemeKey;
@@ -91,7 +91,7 @@ export default function MyApp({
             var darkSet = new Set([
               "dark","neon","cyberpunk","solaris","sakura","oceanic",
               "matrix","asher","inferno","sparkle","desert","midnight","space",
-              "forest","candy","monochrome"
+              "forest","candy","monochrome","rain"
             ]);
             var root = document.documentElement;
             if(!theme){

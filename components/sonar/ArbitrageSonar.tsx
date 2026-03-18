@@ -7,6 +7,10 @@ import clsx from "clsx";
 
 
 import { useUi } from "@/components/UiProvider";
+import PresetPicker from "@/components/presets/PresetPicker";
+import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
+import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
+import type { PresetDto } from "@/types/presets";
 
 /* =========================
    TYPES
@@ -530,6 +534,8 @@ const getSignalMetricAbs = (
   return raw == null ? null : Math.abs(raw);
 };
 
+const SONAR_ACTIVE_PRESET_ID_LS_KEY = "arb.sonar.shared-preset.active-id";
+
 const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
   const best = getBestParams(s);
   const printMedian = safeObj(best?.dev_print_last5_median ?? best?.DevPrintLast5Median);
@@ -612,23 +618,18 @@ function buildSignalsUrl(args: {
   mode: Mode;
   minRate: number;
   minTotal: number;
-  limit: number;
-  offset: number;
   tickers?: string;
 }) {
-  const { cls, type, mode, minRate, minTotal, limit, offset, tickers } = args;
+  const { cls, type, mode, minRate, minTotal, tickers } = args;
 
   const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
 
   const safeMinRate = Number.isFinite(minRate) ? Math.max(0, minRate) : 0.3;
   const safeMinTotal = Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : 1;
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : 30;
-  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
 
   u.searchParams.set("minRate", String(safeMinRate));
   u.searchParams.set("minTotal", String(safeMinTotal));
-  u.searchParams.set("limit", String(safeLimit));
-  u.searchParams.set("offset", String(safeOffset));
+  u.searchParams.set("limit", "5000");
 
   const t = (tickers ?? "").trim();
   if (t) u.searchParams.set("tickers", t);
@@ -836,11 +837,11 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 
   return (
     <div
-      className={`group flex flex-col gap-1 p-2 rounded-xl border transition-all ${
+      className={`group flex flex-col gap-1 rounded-xl border p-2 transition-all ${
         hasValue
           ? isOff
             ? "border-rose-500/30 bg-rose-500/[0.05]"
-            : "border-emerald-500/30 bg-emerald-500/[0.05]"
+            : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
           : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
       }`}
       onFocusCapture={props.startEditing}
@@ -850,15 +851,15 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
         props.stopEditing();
       }}
     >
-      <div className="flex justify-between items-center">
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono truncate mr-1">{props.label}</span>
+      <div className="flex items-center justify-between">
+        <div className="mr-1 truncate text-[10px] font-mono uppercase tracking-widest text-zinc-500">{props.label}</div>
         <div className="flex items-center gap-2">
           {hasValue && props.filterKey && props.onToggleMode && (
             <button
               type="button"
               onClick={() => props.onToggleMode?.(props.filterKey!)}
               className={`text-[10px] font-mono transition-colors uppercase ${
-                isOff ? "text-rose-300 hover:text-rose-200" : "text-emerald-300 hover:text-white"
+                isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
               }`}
               title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
             >
@@ -872,7 +873,7 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
                 props.setMin("");
                 props.setMax("");
               }}
-              className="text-[10px] text-rose-400 hover:text-rose-300 transition-colors"
+              className="text-[10px] font-mono text-rose-400 hover:text-rose-300 transition-colors"
             >
               CLR
             </button>
@@ -882,13 +883,13 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 
       <div className="flex gap-2">
         <input
-          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 tabular-nums text-center"
+          className="w-full rounded border-0 bg-black/20 px-1.5 py-1 text-center text-[11px] font-mono text-zinc-200 tabular-nums shadow-none outline-none ring-0 transition-all placeholder:text-zinc-600 hover:border-0 focus:border-0 focus:outline-none focus:ring-0"
           value={props.min}
           placeholder={props.minPh ?? "min"}
           onChange={(e) => props.setMin(e.target.value)}
         />
         <input
-          className="w-full bg-black/20 border border-white/5 rounded px-1.5 py-1 text-[11px] font-mono text-zinc-200 tabular-nums text-center"
+          className="w-full rounded border-0 bg-black/20 px-1.5 py-1 text-center text-[11px] font-mono text-zinc-200 tabular-nums shadow-none outline-none ring-0 transition-all placeholder:text-zinc-600 hover:border-0 focus:border-0 focus:outline-none focus:ring-0"
           value={props.max}
           placeholder={props.maxPh ?? "max"}
           onChange={(e) => props.setMax(e.target.value)}
@@ -902,10 +903,12 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
    UI Helper Components
 ========================= */
 type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
+type GlassSelectOption = { value: string; label: string; disabled?: boolean };
 
 const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "sparkle") return "amber";
   if (theme === "asher") return "zinc";
+  if (theme === "rain") return "zinc";
   if (theme === "inferno") return "amber";
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
@@ -1059,18 +1062,18 @@ const getSonarAccent = (theme?: string | null) => {
     };
   }
   return {
-    selection: "selection:bg-emerald-500/30",
-    dot: "bg-emerald-500",
-    badge: "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
-    button: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]",
-    outlineButton: "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.1)]",
-    panel: "border-l-emerald-500 shadow-[0_0_40px_-10px_rgba(16,185,129,0.05)]",
-    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]",
-    line: "bg-emerald-500/50",
-    text: "text-emerald-400",
-    textSoft: "text-emerald-300/80",
-    softBorder: "border-emerald-500/35 bg-emerald-500/12 text-emerald-300",
-    panelSoft: "border-emerald-500/20 bg-emerald-500/[0.03]",
+    selection: "selection:bg-zinc-200/24",
+    dot: "bg-zinc-300",
+    badge: "border-zinc-300/20 bg-zinc-200/10 text-zinc-200",
+    button: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]",
+    outlineButton: "border-zinc-300/50 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.08)]",
+    panel: "border-l-zinc-300 shadow-[0_0_40px_-10px_rgba(212,212,216,0.05)]",
+    chip: "border-zinc-300/30 bg-zinc-200/10 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.1)]",
+    line: "bg-zinc-300/50",
+    text: "text-zinc-200",
+    textSoft: "text-zinc-300/80",
+    softBorder: "border-zinc-300/35 bg-zinc-200/12 text-zinc-200",
+    panelSoft: "border-zinc-300/20 bg-zinc-200/[0.03]",
   };
 };
 
@@ -1175,9 +1178,9 @@ const MultiSelectFilter = ({
           <div
             id={id}
             style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
-            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto custom-scrollbar"
+            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar"
           >
-            <div className="max-h-[340px] overflow-y-auto py-1.5 custom-scrollbar">
+            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
               {options.map((opt, i) => (
                 <button
                   key={opt || `na-${i}`}
@@ -1324,7 +1327,7 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
               "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] transition-all duration-200 origin-top",
             ].join(" ")}
           >
-            <div className="max-h-[340px] overflow-y-auto py-1.5 custom-scrollbar">
+            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
               {options.map((opt) => {
                 const active = opt.value === value;
                 return (
@@ -1399,6 +1402,147 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
     </>
   );
 };
+
+function GlassSelect({
+  value,
+  onChange,
+  options,
+  className,
+  compact = false,
+  panelOffsetX = 0,
+  panelWidth,
+}: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  options: GlassSelectOption[];
+  className?: string;
+  compact?: boolean;
+  panelOffsetX?: number;
+  panelWidth?: number;
+}) {
+  const { theme } = useUi();
+  const accent = getSonarAccent(theme);
+  const [open, setOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const selected = options.find((opt) => opt.value === value) ?? options.find((opt) => !opt.disabled) ?? null;
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePosition = () => {
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const viewportHeight = window.innerHeight || 0;
+      const roomBelow = viewportHeight - rect.bottom;
+      const roomAbove = rect.top;
+      const nextOpenUpward = roomBelow < 360 && roomAbove > roomBelow;
+      setOpenUpward(nextOpenUpward);
+      setPanelStyle({
+        position: "fixed",
+        left: Math.max(12, rect.left + panelOffsetX),
+        width: panelWidth ?? rect.width,
+        top: nextOpenUpward ? undefined : Math.min(viewportHeight - 12, rect.bottom + 6),
+        bottom: nextOpenUpward ? Math.max(12, viewportHeight - rect.top + 6) : undefined,
+      });
+    };
+    updatePosition();
+    const onPointerDown = (event: MouseEvent) => {
+      const targetNode = event.target as Node;
+      if (!rootRef.current?.contains(targetNode) && !panelRef.current?.contains(targetNode)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, panelOffsetX, panelWidth]);
+
+  useEffect(() => {
+    if (!open) return;
+    const active = panelRef.current?.querySelector<HTMLButtonElement>("[data-selected='true']");
+    active?.scrollIntoView({ block: "nearest" });
+  }, [open, value]);
+
+  const emitChange = (nextValue: string) => {
+    onChange({ target: { value: nextValue } } as React.ChangeEvent<HTMLSelectElement>);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className={clsx("relative z-50 font-mono", open && "z-[220] isolate")}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={clsx(
+          compact
+            ? "relative flex w-full items-center gap-1.5 h-[14px] border-0 bg-transparent px-0 py-0 text-xs font-mono font-normal normal-case tracking-normal leading-none shadow-none transition-colors duration-150"
+            : "relative flex w-full items-center gap-2.5 h-9 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-300",
+          compact
+            ? clsx(accent.textSoft, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
+            : clsx(accent.textSoft, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]"),
+          className
+        )}
+      >
+        <span className={clsx("min-w-0 flex-1 truncate text-left", compact && "leading-none")}>{selected?.label ?? value}</span>
+        <span className={clsx("opacity-50 ml-1", compact && "ml-0 flex items-center self-center")}>
+          <ChevronIcon open={open} />
+        </span>
+      </button>
+      {open && typeof document !== "undefined" && panelStyle
+        ? createPortal(
+            <div
+              ref={panelRef}
+              style={panelStyle}
+              className={clsx(
+                "z-[9999] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0a0a]/90 backdrop-blur-xl",
+                "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] transition-all duration-200",
+                openUpward ? "origin-bottom" : "origin-top"
+              )}
+            >
+              <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
+                {options.map((opt) => (
+                  <div key={opt.value} className="px-1.5 py-0.5">
+                    <button
+                      type="button"
+                      data-selected={opt.value === value}
+                      disabled={opt.disabled}
+                      onClick={() => !opt.disabled && emitChange(opt.value)}
+                      className={clsx(
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
+                        opt.disabled
+                          ? "cursor-not-allowed text-zinc-600"
+                          : opt.value === value
+                            ? accent.button
+                            : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                      {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", accent.dot)} />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  );
+}
 
 
 
@@ -1517,6 +1661,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
     absM != null &&
     absM < minShowAbs;
 
+  const mintTextClass = "text-[#6ee7b7]";
   const goldClasses =
     "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
 
@@ -1525,7 +1670,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const activeClasses = isShort
     ? "bg-rose-950/28 border-rose-900/45 shadow-[0_0_12px_-6px_rgba(244,63,94,0.18)]"
-    : "bg-emerald-950/28 border-emerald-900/45 shadow-[0_0_12px_-6px_rgba(16,185,129,0.18)]";
+    : "bg-[#6ee7b7]/10 border-[#6ee7b7]/30 shadow-[0_0_14px_-6px_rgba(110,231,183,0.28)]";
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
@@ -1539,10 +1684,10 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
-  const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : "text-emerald-400";
+  const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : mintTextClass;
 
   const tickerColor = isActive
-    ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : "text-emerald-300"
+    ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass
     : "text-zinc-300 group-hover:text-zinc-100";
 
   const pinClass =
@@ -1587,13 +1732,13 @@ const SignalCard: React.FC<SignalCardProps> = ({
           <span className="text-zinc-400 tabular-nums">{s.sig == null ? "-" : fmtNum(toNum(s.sig), 2)}</span>
         </div>
 
-        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
-            <span className="text-zinc-600">Z</span>
+            <span className="text-zinc-600">%</span>
             <span className="text-zinc-400 tabular-nums">{z == null ? "-" : fmtNum(z, 2)}</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-zinc-600">S</span>
+            <span className="text-zinc-600">σ</span>
             <span className="text-zinc-400 tabular-nums">{zs == null ? "-" : fmtNum(zs, 1)}</span>
           </div>
         </div>
@@ -2065,6 +2210,7 @@ function HedgeHeaderMinimal({
   bench: string;
   info: { targetBp: number; currentBp: number; needBp: number; buyBp: number; sellBp: number } | null;
 }) {
+  const mintTextClass = "text-[#6ee7b7]";
   const need = info ? { left: fmtBp0(info.sellBp), right: fmtBp0(info.buyBp) } : { left: "", right: "" };
   const cur = info ? splitSides(info.currentBp) : { left: "", right: "" };
 
@@ -2087,7 +2233,7 @@ function HedgeHeaderMinimal({
           </span>
         </div>
         <div className="text-right">
-          <span className="text-[22px] font-mono tabular-nums leading-none text-emerald-400">
+          <span className={`text-[22px] font-mono tabular-nums leading-none ${mintTextClass}`}>
             {need.right}
           </span>
         </div>
@@ -2096,12 +2242,12 @@ function HedgeHeaderMinimal({
       {/* CUR (small, subtle) */}
       <div className="mt-1 grid grid-cols-2 gap-6 opacity-70">
         <div className="text-left">
-          <span className="text-[12px] font-mono tabular-nums text-zinc-300 leading-none">
+          <span className="text-[12px] font-mono tabular-nums text-rose-300 leading-none">
             {cur.left}
           </span>
         </div>
         <div className="text-right">
-          <span className="text-[12px] font-mono tabular-nums text-zinc-300 leading-none">
+          <span className={`text-[12px] font-mono tabular-nums leading-none ${mintTextClass}`}>
             {cur.right}
           </span>
         </div>
@@ -2129,6 +2275,12 @@ export default function ArbitrageSonar() {
   const accentLineClass = sonarAccent.line;
   const accentTextClass = sonarAccent.text;
   const accentTextSoftClass = sonarAccent.textSoft;
+  const secondaryGroupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
+  const secondaryButtonBaseClass =
+    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
+  const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
+  const secondaryIconButtonClass =
+    "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
   /* ===== defaults requested: global / all / any ===== */
   const [cls, setCls] = useState<ArbClass>("global");
@@ -2140,8 +2292,6 @@ export default function ArbitrageSonar() {
 
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
-  const [limit, setLimit] = useState<number>(30);
-  const [offset, setOffset] = useState<number>(0);
 
   type NumField = {
     label: string;
@@ -2156,8 +2306,6 @@ export default function ArbitrageSonar() {
   const fields: NumField[] = [
     { label: "minRate", val: minRate, set: setMinRate, ph: "0.3", step: 0.1, min: 0.0 },
     { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1", step: 1, min: 1, integer: true },
-    { label: "limit", val: limit, set: setLimit, ph: "30", step: 5, min: 1, integer: true },
-    { label: "offset", val: offset, set: setOffset, ph: "0", step: 1, min: 0, integer: true },
   ];
 
   const bumpNumField = useCallback((field: NumField, delta: number) => {
@@ -2320,6 +2468,20 @@ export default function ArbitrageSonar() {
   const [pinColor, setPinColor] = useState<PinColor>("orange");
   const [showIgnore, setShowIgnore] = useState(false);
   const [showApply, setShowApply] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [sonarPresets, setSonarPresets] = useState<PresetDto[]>([]);
+  const [sonarPresetId, setSonarPresetId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return localStorage.getItem(SONAR_ACTIVE_PRESET_ID_LS_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [sonarPresetBusy, setSonarPresetBusy] = useState(false);
+  const [sonarPresetSaveMode, setSonarPresetSaveMode] = useState(false);
+  const [sonarPresetDraftName, setSonarPresetDraftName] = useState("");
+  const [sonarPresetStatus, setSonarPresetStatus] = useState("");
   const [ignoreDraft, setIgnoreDraft] = useState("");
   const [applyDraft, setApplyDraft] = useState("");
   const ignoreFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2625,8 +2787,6 @@ export default function ArbitrageSonar() {
         // query params
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
-        if (typeof s?.limit === "number") setLimit(s.limit);
-        if (typeof s?.offset === "number") setOffset(s.offset);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.filtersCollapsed === "boolean") setFiltersCollapsed(s.filtersCollapsed);
@@ -2793,7 +2953,7 @@ export default function ArbitrageSonar() {
           zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
 
           // query params
-          minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+          minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -2829,6 +2989,15 @@ export default function ArbitrageSonar() {
           preMhVolNFMin, preMhVolNFMax,
           volNFfromLstClsMin, volNFfromLstClsMax,
           avPostMhVol90NFMin, avPostMhVol90NFMax,
+          avPreMhVol90NFMin, avPreMhVol90NFMax,
+          avPreMhValue20NFMin, avPreMhValue20NFMax,
+          avPreMhValue90NFMin, avPreMhValue90NFMax,
+          avgDailyValue20Min, avgDailyValue20Max,
+          avgDailyValue90Min, avgDailyValue90Max,
+          volatility20Min, volatility20Max,
+          volatility90Min, volatility90Max,
+          preMhMDV20NFMin, preMhMDV20NFMax,
+          preMhMDV90NFMin, preMhMDV90NFMax,
           volRelMin, volRelMax,
           preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
           preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
@@ -2843,7 +3012,7 @@ export default function ArbitrageSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
-    minRate, minTotal, limit, offset, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+    minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
     filterReport, equityType,
@@ -2871,6 +3040,15 @@ export default function ArbitrageSonar() {
     preMhVolNFMin, preMhVolNFMax,
     volNFfromLstClsMin, volNFfromLstClsMax,
     avPostMhVol90NFMin, avPostMhVol90NFMax,
+    avPreMhVol90NFMin, avPreMhVol90NFMax,
+    avPreMhValue20NFMin, avPreMhValue20NFMax,
+    avPreMhValue90NFMin, avPreMhValue90NFMax,
+    avgDailyValue20Min, avgDailyValue20Max,
+    avgDailyValue90Min, avgDailyValue90Max,
+    volatility20Min, volatility20Max,
+    volatility90Min, volatility90Max,
+    preMhMDV20NFMin, preMhMDV20NFMax,
+    preMhMDV90NFMin, preMhMDV90NFMax,
     volRelMin, volRelMax,
     preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
     preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
@@ -2880,6 +3058,272 @@ export default function ArbitrageSonar() {
     imbExch925Min, imbExch925Max,
     imbExch1555Min, imbExch1555Max,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function loadSonarPresets() {
+      try {
+        const items = listSharedFilterLocalPresets()
+          .filter((x) => {
+            if (x.scope !== "BOTH") return false;
+            try {
+              return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+            } catch {
+              return false;
+            }
+          });
+        if (cancelled) return;
+        setSonarPresets(items);
+        setSonarPresetId((prev) => {
+          const candidate = prev || (() => {
+            try {
+              return localStorage.getItem(SONAR_ACTIVE_PRESET_ID_LS_KEY) ?? "";
+            } catch {
+              return "";
+            }
+          })();
+          if (candidate === "") return "";
+          return items.some((x) => x.id === candidate) ? candidate : "";
+        });
+      } catch {
+        if (!cancelled) setSonarPresets([]);
+      }
+    }
+
+    loadSonarPresets();
+    window.addEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadSonarPresets as EventListener);
+    window.addEventListener("focus", loadSonarPresets);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadSonarPresets as EventListener);
+      window.removeEventListener("focus", loadSonarPresets);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (sonarPresetId) {
+        localStorage.setItem(SONAR_ACTIVE_PRESET_ID_LS_KEY, sonarPresetId);
+      } else {
+        localStorage.removeItem(SONAR_ACTIVE_PRESET_ID_LS_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [sonarPresetId]);
+
+  const buildSonarSharedFilterPresetJson = () => {
+    const current = {
+      rangeModes,
+      adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
+      avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
+      lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
+      clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax,
+      marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax,
+      avPostMhVol90NFMin, avPostMhVol90NFMax, avPreMhVol90NFMin, avPreMhVol90NFMax,
+      avPreMhValue20NFMin, avPreMhValue20NFMax, avPreMhValue90NFMin, avPreMhValue90NFMax,
+      avgDailyValue20Min, avgDailyValue20Max, avgDailyValue90Min, avgDailyValue90Max,
+      volatility20Min, volatility20Max, volatility90Min, volatility90Max,
+      preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax,
+      preMhBidLstPrcPctMin, preMhBidLstPrcPctMax, preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
+      preMhHiLstClsPctMin, preMhHiLstClsPctMax, preMhLoLstClsPctMin, preMhLoLstClsPctMax,
+      lstPrcLstClsPctMin, lstPrcLstClsPctMax, imbExch925Min, imbExch925Max, imbExch1555Min, imbExch1555Max,
+    } as Record<string, any>;
+
+    return JSON.stringify({
+      version: 1,
+      presetType: "shared-filters",
+      filters: Object.fromEntries(
+        SHARED_FILTER_PRESET_FIELDS.map(({ key, sonarMode, sonarMin, sonarMax }) => [
+          key,
+          {
+            mode: current.rangeModes?.[sonarMode] === "off" ? "off" : "on",
+            min: String(current[sonarMin] ?? ""),
+            max: String(current[sonarMax] ?? ""),
+          },
+        ])
+      ),
+    });
+  };
+
+  const sonarSharedFilterSetters = {
+    adv20Min: setAdv20Min,
+    adv20Max: setAdv20Max,
+    adv20NFMin: setAdv20NFMin,
+    adv20NFMax: setAdv20NFMax,
+    adv90Min: setAdv90Min,
+    adv90Max: setAdv90Max,
+    adv90NFMin: setAdv90NFMin,
+    adv90NFMax: setAdv90NFMax,
+    avPreMhvMin: setAvPreMhvMin,
+    avPreMhvMax: setAvPreMhvMax,
+    roundLotMin: setRoundLotMin,
+    roundLotMax: setRoundLotMax,
+    vwapMin: setVwapMin,
+    vwapMax: setVwapMax,
+    spreadMin: setSpreadMin,
+    spreadMax: setSpreadMax,
+    lstPrcLMin: setLstPrcLMin,
+    lstPrcLMax: setLstPrcLMax,
+    lstClsMin: setLstClsMin,
+    lstClsMax: setLstClsMax,
+    yClsMin: setYClsMin,
+    yClsMax: setYClsMax,
+    tClsMin: setTClsMin,
+    tClsMax: setTClsMax,
+    clsToClsPctMin: setClsToClsPctMin,
+    clsToClsPctMax: setClsToClsPctMax,
+    loMin: setLoMin,
+    loMax: setLoMax,
+    lstClsNewsCntMin: setLstClsNewsCntMin,
+    lstClsNewsCntMax: setLstClsNewsCntMax,
+    marketCapMMin: setMarketCapMMin,
+    marketCapMMax: setMarketCapMMax,
+    preMhVolNFMin: setPreMhVolNFMin,
+    preMhVolNFMax: setPreMhVolNFMax,
+    volNFfromLstClsMin: setVolNFfromLstClsMin,
+    volNFfromLstClsMax: setVolNFfromLstClsMax,
+    avPostMhVol90NFMin: setAvPostMhVol90NFMin,
+    avPostMhVol90NFMax: setAvPostMhVol90NFMax,
+    avPreMhVol90NFMin: setAvPreMhVol90NFMin,
+    avPreMhVol90NFMax: setAvPreMhVol90NFMax,
+    avPreMhValue20NFMin: setAvPreMhValue20NFMin,
+    avPreMhValue20NFMax: setAvPreMhValue20NFMax,
+    avPreMhValue90NFMin: setAvPreMhValue90NFMin,
+    avPreMhValue90NFMax: setAvPreMhValue90NFMax,
+    avgDailyValue20Min: setAvgDailyValue20Min,
+    avgDailyValue20Max: setAvgDailyValue20Max,
+    avgDailyValue90Min: setAvgDailyValue90Min,
+    avgDailyValue90Max: setAvgDailyValue90Max,
+    volatility20Min: setVolatility20Min,
+    volatility20Max: setVolatility20Max,
+    volatility90Min: setVolatility90Min,
+    volatility90Max: setVolatility90Max,
+    preMhMDV20NFMin: setPreMhMDV20NFMin,
+    preMhMDV20NFMax: setPreMhMDV20NFMax,
+    preMhMDV90NFMin: setPreMhMDV90NFMin,
+    preMhMDV90NFMax: setPreMhMDV90NFMax,
+    volRelMin: setVolRelMin,
+    volRelMax: setVolRelMax,
+    preMhBidLstPrcPctMin: setPreMhBidLstPrcPctMin,
+    preMhBidLstPrcPctMax: setPreMhBidLstPrcPctMax,
+    preMhLoLstPrcPctMin: setPreMhLoLstPrcPctMin,
+    preMhLoLstPrcPctMax: setPreMhLoLstPrcPctMax,
+    preMhHiLstClsPctMin: setPreMhHiLstClsPctMin,
+    preMhHiLstClsPctMax: setPreMhHiLstClsPctMax,
+    preMhLoLstClsPctMin: setPreMhLoLstClsPctMin,
+    preMhLoLstClsPctMax: setPreMhLoLstClsPctMax,
+    lstPrcLstClsPctMin: setLstPrcLstClsPctMin,
+    lstPrcLstClsPctMax: setLstPrcLstClsPctMax,
+    imbExch925Min: setImbExch925Min,
+    imbExch925Max: setImbExch925Max,
+    imbExch1555Min: setImbExch1555Min,
+    imbExch1555Max: setImbExch1555Max,
+  } as const;
+
+  const applySonarPreset = (preset: PresetDto) => {
+    try {
+      const parsed = JSON.parse(preset.configJson ?? "{}");
+      if (!isSharedFilterPreset(parsed)) return { ok: false, applied: 0, error: "invalid-format" };
+      let base: Record<string, any> = {};
+      try {
+        base = JSON.parse(localStorage.getItem(UI_STATE_LS_KEY) ?? "{}");
+      } catch {
+        base = {};
+      }
+      const next = {
+        ...base,
+        rangeModes: {
+          ...createDefaultRangeModes(),
+          ...(base?.rangeModes && typeof base.rangeModes === "object" ? base.rangeModes : {}),
+        },
+      } as Record<string, any>;
+      let applied = 0;
+
+      for (const { key, sonarMode, sonarMin, sonarMax } of SHARED_FILTER_PRESET_FIELDS) {
+        const filter = parsed.filters?.[key];
+        if (!filter || typeof filter !== "object") continue;
+        next.rangeModes[sonarMode] = filter.mode === "off" ? "off" : "on";
+        const nextMin = typeof filter.min === "string" ? filter.min : String(filter.min ?? "");
+        const nextMax = typeof filter.max === "string" ? filter.max : String(filter.max ?? "");
+        next[sonarMin] = nextMin;
+        next[sonarMax] = nextMax;
+        sonarSharedFilterSetters[sonarMin](nextMin);
+        sonarSharedFilterSetters[sonarMax](nextMax);
+        applied += 1;
+      }
+
+      setRangeModes((prev) => ({ ...prev, ...next.rangeModes }));
+      localStorage.setItem(UI_STATE_LS_KEY, JSON.stringify(next));
+      return { ok: true, applied, error: "" };
+    } catch (error: any) {
+      return {
+        ok: false,
+        applied: 0,
+        error: typeof error?.message === "string" && error.message.trim()
+          ? error.message.trim()
+          : "runtime-error",
+      };
+    }
+  };
+
+  const clearSonarSharedFilters = () => {
+    setSonarPresetId("");
+    const nextRangeModes = createDefaultRangeModes();
+    for (const { sonarMin, sonarMax } of SHARED_FILTER_PRESET_FIELDS) {
+      sonarSharedFilterSetters[sonarMin]("");
+      sonarSharedFilterSetters[sonarMax]("");
+    }
+    setRangeModes(nextRangeModes);
+
+    let base: Record<string, any> = {};
+    try {
+      base = JSON.parse(localStorage.getItem(UI_STATE_LS_KEY) ?? "{}");
+    } catch {
+      base = {};
+    }
+    const next = { ...base, rangeModes: nextRangeModes } as Record<string, any>;
+    for (const { sonarMin, sonarMax } of SHARED_FILTER_PRESET_FIELDS) {
+      next[sonarMin] = "";
+      next[sonarMax] = "";
+    }
+    try {
+      localStorage.setItem(UI_STATE_LS_KEY, JSON.stringify(next));
+      setSonarPresetStatus("Cleared");
+    } catch {
+      setSonarPresetStatus("Clear failed");
+    }
+  };
+
+  const saveCurrentSonarPreset = async (presetName?: string) => {
+    const name = presetName?.trim();
+    if (!name) return;
+
+    setSonarPresetBusy(true);
+    setSonarPresetStatus("");
+    try {
+      saveSharedFilterLocalPreset(name, buildSonarSharedFilterPresetJson());
+      const items = listSharedFilterLocalPresets()
+        .filter((x) => {
+          if (x.scope !== "BOTH") return false;
+          try {
+            return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+          } catch {
+            return false;
+          }
+        });
+      setSonarPresets(items);
+      setSonarPresetId(items[0]?.id ?? "");
+      setSonarPresetDraftName("");
+      setSonarPresetSaveMode(false);
+      setSonarPresetStatus("Saved");
+    } catch {
+      setSonarPresetStatus("Save failed");
+    } finally {
+      setSonarPresetBusy(false);
+    }
+  };
 
   /* =========================
      Snapshot (single source of truth for fetching/filtering)
@@ -2972,8 +3416,6 @@ export default function ArbitrageSonar() {
       mode,
       minRate,
       minTotal,
-      limit,
-      offset,
       tickersFilterNorm,
 
       listMode,
@@ -3015,7 +3457,7 @@ export default function ArbitrageSonar() {
 
     };
   }, [
-    cls, type, mode, minRate, minTotal, limit, offset, tickersFilterNorm,
+    cls, type, mode, minRate, minTotal, tickersFilterNorm,
     listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -3233,8 +3675,6 @@ export default function ArbitrageSonar() {
         mode: f.mode,
         minRate: f.minRate,
         minTotal: f.minTotal,
-        limit: f.limit,
-        offset: f.offset,
         tickers: f.tickersFilterNorm || undefined,
       });
 
@@ -3701,9 +4141,9 @@ export default function ArbitrageSonar() {
   return (
       <div className={`sonar-borderless relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden ${isLightTheme ? "sonar-light-theme" : ""}`}>
 
-      <div className="relative z-10 max-w-[1920px] mx-auto space-y-6">
+      <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* ========================= HEADER ========================= */}
-        <header className="bg-[#0a0a0a]/60 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
+        <header className="bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-3">
               <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${accentDotClass} ${loading ? "animate-pulse" : ""}`} />
@@ -3726,7 +4166,7 @@ export default function ArbitrageSonar() {
             <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
               <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
               <span className="text-zinc-700 mx-1">|</span>
-              <span className="opacity-70">minRate {minRate ?? "-"} | minTotal {minTotal ?? "-"} | limit {limit ?? "-"}</span>
+              <span className="opacity-70">minRate {minRate ?? "-"} | minTotal {minTotal ?? "-"}</span>
             </div>
           </div>
           
@@ -3736,12 +4176,12 @@ export default function ArbitrageSonar() {
           {/* ========================= MODE + ACTIVE FILTER ========================= */}
           <div className="flex items-center gap-3">
             {/* Group 1: MONEY / SCANNER / SONAR */}
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className={secondaryGroupClass}>
               {/* MONEY (inactive for now) */}
               <button
                 type="button"
                 disabled
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase border border-transparent text-zinc-600 bg-transparent cursor-not-allowed"
+                className={`${secondaryButtonBaseClass} border-transparent text-zinc-600 bg-transparent cursor-not-allowed`}
                 title="MONEY (coming soon)"
               >
                 MONEY
@@ -3750,7 +4190,7 @@ export default function ArbitrageSonar() {
               {/* SCANNER */}
               <Link
                 href="/paper/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
                 title="Open /paper/arbitrage"
               >
                 SCANNER
@@ -3759,7 +4199,7 @@ export default function ArbitrageSonar() {
               {/* SONAR (current) */}
               <button
                 type="button"
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border ${accentButtonClass}`}
+                className={`${secondaryButtonBaseClass} ${accentButtonClass}`}
                 title="SONAR (current)"
               >
                 SONAR
@@ -3767,15 +4207,15 @@ export default function ArbitrageSonar() {
             </div>
 
             {/* Group 2: ACTIVE / INACTIVE / ALL */}
-            <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+            <div className={secondaryGroupClass}>
               <button
                 type="button"
                 onClick={() => setActiveMode("onlyActive")}
                 className={[
-                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  secondaryButtonBaseClass,
                   activeMode === "onlyActive"
-                    ? `${accentButtonClass} border`
-                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
+                    ? accentButtonClass
+                    : secondaryButtonInactiveClass,
                 ].join(" ")}
                 title="Show only ACTIVE positions (PositionBp != 0)"
               >
@@ -3786,10 +4226,10 @@ export default function ArbitrageSonar() {
                 type="button"
                 onClick={() => setActiveMode("onlyInactive")}
                 className={[
-                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  secondaryButtonBaseClass,
                   activeMode === "onlyInactive"
-                    ? `${accentButtonClass} border`
-                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
+                    ? accentButtonClass
+                    : secondaryButtonInactiveClass,
                 ].join(" ")}
                 title="Show only INACTIVE positions (PositionBp == 0)"
               >
@@ -3800,10 +4240,10 @@ export default function ArbitrageSonar() {
                 type="button"
                 onClick={() => setActiveMode("off")}
                 className={[
-                  "inline-flex h-7 items-center justify-center px-2.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border active:scale-[0.98]",
+                  secondaryButtonBaseClass,
                   activeMode === "off"
-                    ? `${accentButtonClass} border`
-                    : "border-transparent text-zinc-400 hover:text-white bg-transparent",
+                    ? accentButtonClass
+                    : secondaryButtonInactiveClass,
                 ].join(" ")}
                 title="Show ALL positions"
               >
@@ -3816,24 +4256,22 @@ export default function ArbitrageSonar() {
 
             {/* ========================= LIST MODES + DRAWER TOGGLES (two-click-areas) ========================= */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-[#0a0a0a]/40 p-1 rounded-xl border border-white/[0.04]">
+              <div className={secondaryGroupClass}>
                 {/* ---------- IGNORE pill ---------- */}
                 <div
-                  className={[
+                  className={clsx(
                     "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "ignore"
-                      ? "border-rose-500/25 bg-rose-500/10"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
-                  ].join(" ")}
+                    listMode === "ignore" ? "border-rose-500/30 bg-rose-500/12" : "border-white/10 bg-white/5 hover:bg-white/10"
+                  )}
                 >
                   {/* MODE area */}
                   <button
                     type="button"
                     onClick={setModeIgnore}
-                    className={[
+                    className={clsx(
                       "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "ignore" ? "text-rose-300" : "text-zinc-300",
-                    ].join(" ")}
+                      listMode === "ignore" ? "text-rose-300" : "text-zinc-300"
+                    )}
                     title="LIST MODE: IGNORE"
                   >
                     <span className="tracking-wide">IGN</span>
@@ -3849,10 +4287,10 @@ export default function ArbitrageSonar() {
                       e.stopPropagation();
                       setShowIgnore((v) => !v);
                     }}
-                    className={[
+                    className={clsx(
                       "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showIgnore ? "text-violet-300" : "text-zinc-400 hover:text-white",
-                    ].join(" ")}
+                      showIgnore ? "text-rose-300" : "text-zinc-400 hover:text-white"
+                    )}
                     title={showIgnore ? "Hide IGNORE list" : "Show IGNORE list"}
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showIgnore ? "" : "opacity-80"}>
@@ -3868,21 +4306,19 @@ export default function ArbitrageSonar() {
 
                 {/* ---------- APPLY pill ---------- */}
                 <div
-                  className={[
+                  className={clsx(
                     "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "apply"
-                      ? "border-emerald-500/25 bg-emerald-500/10"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
-                  ].join(" ")}
+                    listMode === "apply" ? "border-[#6ee7b7]/25 bg-[#6ee7b7]/10" : "border-white/10 bg-white/5 hover:bg-white/10"
+                  )}
                 >
                   {/* MODE area */}
                   <button
                     type="button"
                     onClick={setModeApply}
-                    className={[
+                    className={clsx(
                       "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "apply" ? "text-emerald-200" : "text-zinc-300",
-                    ].join(" ")}
+                      listMode === "apply" ? "text-emerald-300" : "text-zinc-300"
+                    )}
                     title="LIST MODE: APPLY"
                   >
                     <span className="tracking-wide">APP</span>
@@ -3898,10 +4334,10 @@ export default function ArbitrageSonar() {
                       e.stopPropagation();
                       setShowApply((v) => !v);
                     }}
-                    className={[
+                    className={clsx(
                       "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showApply ? "text-violet-300" : "text-zinc-400 hover:text-white",
-                    ].join(" ")}
+                      showApply ? "text-[#6ee7b7]" : "text-zinc-400 hover:text-white"
+                    )}
                     title={showApply ? "Hide APPLY list" : "Show APPLY list"}
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showApply ? "" : "opacity-80"}>
@@ -3917,21 +4353,19 @@ export default function ArbitrageSonar() {
 
                 {/* ---------- PIN pill ---------- */}
                 <div
-                  className={[
+                  className={clsx(
                     "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "pin"
-                      ? "border-violet-500/25 bg-violet-500/10"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
-                  ].join(" ")}
+                    listMode === "pin" ? "border-violet-400/30 bg-violet-400/12" : "border-white/10 bg-white/5 hover:bg-white/10"
+                  )}
                 >
                   {/* MODE area */}
                   <button
                     type="button"
                     onClick={setModePin}
-                    className={[
+                    className={clsx(
                       "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "pin" ? "text-violet-200" : "text-zinc-300",
-                    ].join(" ")}
+                      listMode === "pin" ? "text-violet-200" : "text-zinc-300"
+                    )}
                     title="LIST MODE: PIN"
                   >
                     <span className="tracking-wide">PIN</span>
@@ -3947,10 +4381,10 @@ export default function ArbitrageSonar() {
                       e.stopPropagation();
                       setShowPin((v) => !v);
                     }}
-                    className={[
+                    className={clsx(
                       "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showPin ? "text-violet-300" : "text-zinc-400 hover:text-white",
-                    ].join(" ")}
+                      showPin ? "text-violet-300" : "text-zinc-400 hover:text-white"
+                    )}
                     title={showPin ? "Hide PIN list" : "Show PIN list"}
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showPin ? "" : "opacity-80"}>
@@ -3993,8 +4427,26 @@ export default function ArbitrageSonar() {
           </div>
         </header>
 
+        {showPresets && (
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
+            <PresetPicker
+              kind={SHARED_FILTER_PRESET_API_KIND}
+              scope="BOTH"
+              sharedFilterOnly
+              getCurrentConfigJson={buildSonarSharedFilterPresetJson}
+              onApplyPresetJson={(_, preset) => {
+                try {
+                  applySonarPreset(preset);
+                } catch {
+                  // ignore storage/reload errors
+                }
+              }}
+            />
+          </div>
+        )}
+
         {/* ========================= CONTROLS ========================= */}
-        <div className="flex flex-wrap items-center gap-4 bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
             {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
               <FilterButton
@@ -4070,6 +4522,136 @@ export default function ArbitrageSonar() {
                 </div>
               </div>
             ))}
+
+            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
+              {sonarPresetSaveMode ? (
+                <input
+                  type="text"
+                  value={sonarPresetDraftName}
+                  onChange={(e) => setSonarPresetDraftName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (!sonarPresetBusy) void saveCurrentSonarPreset(sonarPresetDraftName);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setSonarPresetSaveMode(false);
+                      setSonarPresetDraftName("");
+                    }
+                  }}
+                  autoFocus
+                  placeholder="NAME..."
+                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
+                />
+              ) : (
+                <GlassSelect
+                  value={sonarPresetId}
+                  onChange={async (e) => {
+                    const nextId = e.target.value;
+                    setSonarPresetId(nextId);
+                    if (!nextId) {
+                      clearSonarSharedFilters();
+                      return;
+                    }
+                    if (sonarPresetBusy || sonarPresetSaveMode) return;
+                    setSonarPresetBusy(true);
+                    setSonarPresetStatus("");
+                    try {
+                      const preset = getSharedFilterLocalPreset(nextId);
+                      if (preset) {
+                        const result = applySonarPreset(preset);
+                        if (result.ok) {
+                          setSonarPresetStatus(`Applied ${result.applied}`);
+                          return;
+                        }
+                        setSonarPresetStatus(`ERR ${result.error || "apply"}`);
+                      }
+                      const fallbackPreset = sonarPresets.find((x) => x.id === nextId);
+                      if (fallbackPreset) {
+                        const result = applySonarPreset(fallbackPreset);
+                        if (result.ok) {
+                          setSonarPresetStatus(`Applied ${result.applied}`);
+                          return;
+                        }
+                        setSonarPresetStatus(`ERR ${result.error || "apply"}`);
+                        return;
+                      }
+                      setSonarPresetStatus("Apply failed");
+                    } catch {
+                      setSonarPresetStatus("Apply failed");
+                    } finally {
+                      setSonarPresetBusy(false);
+                    }
+                  }}
+                  options={[
+                    { value: "", label: "NONE" },
+                    ...sonarPresets.map((preset) => ({
+                      value: preset.id,
+                      label: preset.name.toUpperCase(),
+                    })),
+                  ]}
+                  compact
+                  panelOffsetX={-42}
+                  panelWidth={124}
+                  className="w-[92px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (sonarPresetSaveMode) {
+                    if (!sonarPresetBusy) void saveCurrentSonarPreset(sonarPresetDraftName);
+                    return;
+                  }
+                  setSonarPresetSaveMode(true);
+                  setSonarPresetDraftName("");
+                }}
+                disabled={sonarPresetBusy}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  sonarPresetBusy
+                    ? "border-transparent text-zinc-600"
+                    : sonarPresetSaveMode
+                      ? accentButtonClass
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                SAVE
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!sonarPresetId || sonarPresetBusy || sonarPresetSaveMode) return;
+                  const ok = deleteSharedFilterLocalPreset(sonarPresetId);
+                  if (!ok) {
+                    setSonarPresetStatus("Delete failed");
+                    return;
+                  }
+                  const items = listSharedFilterLocalPresets().filter((x) => {
+                    if (x.scope !== "BOTH") return false;
+                    try {
+                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+                    } catch {
+                      return false;
+                    }
+                  });
+                  setSonarPresets(items);
+                  setSonarPresetId("");
+                  setSonarPresetStatus("Deleted");
+                }}
+                disabled={!sonarPresetId || sonarPresetBusy || sonarPresetSaveMode}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  sonarPresetId && !sonarPresetBusy && !sonarPresetSaveMode
+                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                    : "border-transparent text-zinc-600"
+                )}
+              >
+                DEL
+              </button>
+            </div>
 
             {/* COLLAPSE BUTTON - MUST BE LAST (after OFFSET) */}
               <button
@@ -4159,7 +4741,7 @@ export default function ArbitrageSonar() {
 
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        <div className="flex flex-wrap items-center gap-4 bg-[#0a0a0a]/40 backdrop-blur-sm border border-white/[0.04] rounded-xl p-3">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <span className="flex h-[40px] items-center text-zinc-500 text-sm">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
@@ -4190,10 +4772,8 @@ export default function ArbitrageSonar() {
             ))}
           </div>
 
-          <div className="h-7 w-px bg-white/5" />
-
           {/* GREEN GROUP */}
-          <div className={`${SONAR_FILTER_GROUP_BASE} border-emerald-500/20 bg-emerald-500/[0.06]`}>
+          <div className={`${SONAR_FILTER_GROUP_BASE} border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)]`}>
             {[
               { label: "USA", val: includeUSA, set: setIncludeUSA },
               { label: "CHINA", val: includeChina, set: setIncludeChina },
@@ -4202,15 +4782,13 @@ export default function ArbitrageSonar() {
                 key={b.label}
                 onClick={() => b.set(!b.val)}
                 className={`${SONAR_FILTER_INNER_PILL} ${
-                  b.val ? "bg-emerald-500 text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]" : "bg-transparent border-transparent text-emerald-500 hover:bg-emerald-500/10"
+                  b.val ? "bg-[rgba(16,185,129,0.95)] text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]" : "bg-transparent border-transparent text-[#34d399] hover:bg-[rgba(16,185,129,0.10)]"
                 }`}
               >
                 {b.label}
               </button>
             ))}
           </div>
-
-          <div className="h-7 w-px bg-white/5" />
 
           {/* YELLOW GROUP */}
           <div className={`${SONAR_FILTER_GROUP_BASE} border-yellow-200/20 bg-yellow-200/[0.06]`}>
@@ -4393,7 +4971,7 @@ export default function ArbitrageSonar() {
                   const v = clampFloat(e.target.value, zapMode === "zap" ? 0.3 : 0.05);
                   setZapShowAbs(v);
                 }}
-                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 title={zapMode === "delta" ? "Additional delta above direction-specific median print" : "Threshold for filtering (ZAP or SIGZAP depending on mode)"}
               />
               <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -4429,7 +5007,7 @@ export default function ArbitrageSonar() {
                 value={zapSilverAbs}
                 disabled={zapMode === "off"}
                 onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 title="SILVER highlight when |metric| >= this (active+inactive)"
               />
               <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -4465,7 +5043,7 @@ export default function ArbitrageSonar() {
                 value={zapGoldAbs}
                 disabled={zapMode === "off"}
                 onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 title="GOLD highlight when |metric| <= this (ONLY active positions)"
               />
               <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -4551,7 +5129,7 @@ export default function ArbitrageSonar() {
             {showApply && (
               <div className="bg-[#0a0a0a]/80 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-col gap-4 col-span-7 lg:col-span-4">
                 <div className="flex justify-between items-baseline border-b border-white/5 pb-2">
-                  <span className={`text-sm font-bold tracking-tight ${accentTextClass}`}>APPLY ONLY LIST</span>
+                  <span className="text-sm font-bold tracking-tight text-[#6ee7b7]">APPLY ONLY LIST</span>
                   <span className="text-[10px] font-mono text-zinc-500">Show only these when LIST MODE = APPLY</span>
                 </div>
                 <textarea
@@ -4561,7 +5139,7 @@ export default function ArbitrageSonar() {
                   className="w-full h-24 bg-black/40 border border-white/10 rounded-xl p-3 text-xs font-mono text-zinc-300 focus:outline-none resize-none"
                 />
                 <div className="flex gap-2 flex-wrap">
-                  <button onClick={onAddApply} className={`px-4 py-1.5 rounded-lg border text-xs font-bold ${accentButtonClass}`}>
+                  <button onClick={onAddApply} className="px-4 py-1.5 rounded-lg border border-[#6ee7b7]/30 bg-[#6ee7b7]/10 text-[#6ee7b7] text-xs font-bold hover:bg-[#6ee7b7]/15 transition-colors">
                     ADD
                   </button>
                   <button onClick={() => setApplyDraft("")} className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 border border-white/10 text-xs hover:text-white">
@@ -4679,26 +5257,22 @@ export default function ArbitrageSonar() {
 
         {/* ========================= ACTIVE PANEL ========================= */}
         {activePanelVisible && (
-          <div className={`relative overflow-hidden border border-white/10 rounded-2xl bg-black/40 animate-in fade-in zoom-in-95 duration-300 ${accentPanelClass}`}>
-            <div className="relative flex flex-col gap-3 px-4 py-3 border-b border-white/10 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0 flex flex-col gap-2">
+          <div className="relative overflow-hidden border border-white/10 rounded-2xl bg-black/40 animate-in fade-in zoom-in-95 duration-300">
+            <div className={`absolute inset-y-0 left-0 w-px ${accentLineClass}`} />
+            <div className="relative flex flex-col gap-3 px-4 py-3 border-b border-white/10 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0 flex flex-col gap-2 lg:justify-center">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-1 border text-[10px] font-mono font-bold uppercase tracking-[0.18em] ${accentChipClass}`}>
-                      Active Signal
-                    </span>
-                  </div>
                   <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">{activeTicker ?? "-"}</span>
 
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
                     <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
                     <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
                     <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
-                    <span>MD Print Pos: <span className="text-zinc-200">{activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2)}</span></span>
-                    <span>MD Print Neg: <span className="text-zinc-200">{activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2)}</span></span>
                     <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
                     <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
                     <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
+                    <span>MD Print Pos: <span className="text-zinc-200">{activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2)}</span></span>
+                    <span>MD Print Neg: <span className="text-zinc-200">{activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2)}</span></span>
                   </div>
                 </div>
 
@@ -4706,7 +5280,7 @@ export default function ArbitrageSonar() {
                 {activeErr && <div className="w-fit text-[11px] text-rose-300 font-mono bg-rose-500/10 px-2 py-1 border border-rose-500/20">{activeErr}</div>}
               </div>
 
-              <div className="flex flex-wrap gap-2 self-start">
+              <div className="flex flex-wrap items-center gap-2 self-start lg:self-center">
                 <button
                   type="button"
                   disabled={!activeTickerNorm}
@@ -4719,7 +5293,7 @@ export default function ArbitrageSonar() {
                     }
                   }}
                   className={[
-                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
                     !activeTickerNorm
                       ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
                       : activeInIgnoreList
@@ -4743,11 +5317,11 @@ export default function ArbitrageSonar() {
                     }
                   }}
                   className={[
-                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
                     !activeTickerNorm
                       ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
                       : activeInApplyList
-                        ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-300"
+                        ? "border-[#6ee7b7]/35 bg-[#6ee7b7]/12 text-[#6ee7b7]"
                         : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
                   ].join(" ")}
                   title={activeInApplyList ? "Remove ticker from Apply Only List" : "Add ticker to Apply Only List"}
@@ -4767,7 +5341,7 @@ export default function ArbitrageSonar() {
                     }
                   }}
                   className={[
-                    "px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
+                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
                     !activeTickerNorm
                       ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
                       : activePinColor
@@ -4781,14 +5355,14 @@ export default function ArbitrageSonar() {
 
                 <button
                   onClick={() => setActivePanelMode((m) => (m === "mini" ? "expanded" : "mini"))}
-                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-300 hover:bg-white/[0.05] transition-colors"
+                  className="inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-300 hover:bg-white/[0.05] transition-colors"
                 >
                   {activePanelMode === "mini" ? "EXPAND" : "MINI"}
                 </button>
 
                 <button
                   onClick={() => setActivePanelCollapsed(!activePanelCollapsed)}
-                  className="px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono text-zinc-300 hover:bg-white/[0.05] transition-colors group"
+                  className="inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono text-zinc-300 hover:bg-white/[0.05] transition-colors group"
                   title={activePanelCollapsed ? "Show Panel" : "Collapse Panel"}
                 >
                   {activePanelCollapsed ? (
@@ -4843,7 +5417,7 @@ export default function ArbitrageSonar() {
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
                         {renderCell("Company", s ? getCompany(s) : "-")}
-                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
+                        {renderCell("PreMhHiLstPrc%", s ? fmtPct(numPreMhBidLstPrcPct(s), 2) : "-")}
                         {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
                         {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
                         {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
@@ -4878,7 +5452,7 @@ export default function ArbitrageSonar() {
                       </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
-                        {renderCell("PreMhHiLstPrc%", s ? fmtPct(numPreMhBidLstPrcPct(s), 2) : "-")}
+                        {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? activeMarketCapM2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
                         {renderCell("PreMhLoLstPrc%", s ? fmtPct(numPreMhLoLstPrcPct(s), 2) : "-")}
                         {renderCell("PreMhHiLstCls%", s ? fmtPct(numPreMhHiLstClsPct(s), 2) : "-")}
                         {renderCell("PreMhLoLstCls%", s ? fmtPct(numPreMhLoLstClsPct(s), 2) : "-")}
@@ -5107,24 +5681,18 @@ export default function ArbitrageSonar() {
             })()}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             {benchBlocks.map((bench) => {
-              const accent = BENCH_COLORS[bench.benchmark] ?? BENCH_COLORS.DEFAULT;
-
               return (
                 <div
                   key={bench.benchmark}
-                  className="border border-white/[0.06] rounded-2xl overflow-hidden flex flex-col min-w-0"
+                  className="flex min-w-0 flex-col self-start"
                 >
-                  {/* Minimal hedge panel (top) */}
                   <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
 
-                  {/* old divider under header */}
                   <div className="px-4 pb-3">
                     <div className="h-px bg-white/5" />
                   </div>
 
-
-
-                  <div className="p-4 space-y-6">
+                  <div className="space-y-6">
                     {bench.buckets.map((g) => {
                       const isExpanded = !!expandedMap[g.id];
                       const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
@@ -5132,14 +5700,28 @@ export default function ArbitrageSonar() {
                       return (
                         <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
                           <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
-                            <div className="w-5 h-5 rounded flex items-center justify-center bg-rose-950/45 border border-rose-900/40 text-rose-500/75 text-[10px]">
-                              v
+                            <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
+                              <svg
+                                aria-hidden="true"
+                                viewBox="0 0 12 12"
+                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
+                                fill="currentColor"
+                              >
+                                <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
+                              </svg>
                             </div>
                             <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
                               {betaLabels[g.betaKey]}
                             </div>
-                            <div className="w-5 h-5 rounded flex items-center justify-center bg-emerald-950/45 border border-emerald-900/40 text-emerald-500/75 text-[10px]">
-                              ^
+                            <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
+                              <svg
+                                aria-hidden="true"
+                                viewBox="0 0 12 12"
+                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
+                                fill="currentColor"
+                              >
+                                <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
+                              </svg>
                             </div>
                           </div>
 

@@ -7,6 +7,10 @@ import { todayNyYmd } from "../../lib/time";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
 import { useUi } from "../UiProvider";
+import PresetPicker from "../presets/PresetPicker";
+import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
+import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
+import type { PresetDto } from "../../types/presets";
 import clsx from "clsx";
 
 // =========================
@@ -103,6 +107,7 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         outlineButton: "border-orange-300/55 text-orange-100 hover:bg-red-500/14 shadow-[0_0_14px_rgba(249,115,22,0.14)]",
       };
     case "asher":
+    case "rain":
       return {
         selection: "selection:bg-zinc-200/25",
         dot: "bg-zinc-300",
@@ -137,14 +142,14 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
       };
     default:
       return {
-        selection: "selection:bg-emerald-500/30",
-        dot: "bg-emerald-500",
-        activeButton: "border border-emerald-500 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-emerald-500/10",
-        activeText: "text-emerald-300",
-        activeBorder: "border-emerald-500/30 bg-emerald-500/[0.05]",
-        activeSoft: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20 shadow-[0_0_10px_-3px_rgba(16,185,129,0.2)]",
-        buttonBorder: "border-emerald-500/20",
-        outlineButton: "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.1)]",
+        selection: "selection:bg-zinc-200/24",
+        dot: "bg-zinc-300",
+        activeButton: "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10",
+        activeText: "text-zinc-200",
+        activeBorder: "border-zinc-300/30 bg-zinc-200/[0.05]",
+        activeSoft: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]",
+        buttonBorder: "border-zinc-300/20",
+        outlineButton: "border-zinc-300/50 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.08)]",
       };
   }
 }
@@ -153,10 +158,11 @@ function getScannerHeaderButtonActiveClass(theme?: string | null): string {
   if (theme === "sparkle") return "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10";
   if (theme === "inferno") return "border border-orange-300/80 text-orange-100 shadow-[0_0_14px_rgba(249,115,22,0.26)] bg-red-500/14";
   if (theme === "asher") return "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10";
+  if (theme === "rain") return "border border-zinc-300/45 text-zinc-100 shadow-[0_0_10px_rgba(228,228,231,0.14)] bg-zinc-200/10";
   if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
-  return "border border-emerald-500 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)] bg-emerald-500/10";
+  return "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10";
 }
 
 type TapeArbSide = "Long" | "Short" | number | string;
@@ -440,7 +446,6 @@ type PaperArbAnalyticsRequest = {
   optimizerParameterKeys?: string[] | null;
 
   topN?: number;
-  minTradesPerTicker?: number;
 
   // priceMode intentionally omitted (server forces LastPrint)
 };
@@ -1896,6 +1901,13 @@ function buildPaperQuery(params: Record<string, any>) {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === "") continue;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item === undefined || item === null || item === "") continue;
+        sp.append(k, String(item));
+      }
+      continue;
+    }
     sp.set(k, String(v));
   }
   const qs = sp.toString();
@@ -2111,6 +2123,13 @@ const SCANNER_CONTROL_SURFACE =
 const SCANNER_EYE_BUTTON =
   "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
 
+const SOFT_LOSS_TEXT_CLASS = "text-[#f3a6b2]";
+const SOFT_LOSS_SOLID = "rgba(243,166,178,0.95)";
+const SOFT_LOSS_MUTED = "rgba(243,166,178,0.25)";
+const SOFT_LOSS_STROKE = "rgba(243,166,178,0.55)";
+const SOFT_LOSS_LINE = "rgba(243,166,178,0.6)";
+const SOFT_LOSS_CHIP = "border-[rgba(243,166,178,0.18)] bg-[rgba(243,166,178,0.08)] text-[#f3a6b2]/90";
+
 function SummaryMetricCard({
   label,
   value,
@@ -2155,15 +2174,22 @@ function GlassSelect({
   options,
   className,
   compact = false,
+  panelOffsetX = 0,
+  panelWidth,
+  panelAnchorRef,
 }: {
   value: string;
   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   options: Array<GlassSelectOption | GlassSelectGroup>;
   className?: string;
   compact?: boolean;
+  panelOffsetX?: number;
+  panelWidth?: number;
+  panelAnchorRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const { theme } = useUi();
   const accent = getScannerAccent(theme);
+  const isLightTheme = theme === "light";
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
@@ -2181,7 +2207,7 @@ function GlassSelect({
   useEffect(() => {
     if (!open) return;
     const updatePosition = () => {
-      const rect = rootRef.current?.getBoundingClientRect();
+      const rect = (panelAnchorRef?.current ?? rootRef.current)?.getBoundingClientRect();
       if (!rect) return;
       const viewportHeight = window.innerHeight || 0;
       const roomBelow = viewportHeight - rect.bottom;
@@ -2190,8 +2216,8 @@ function GlassSelect({
       setOpenUpward(nextOpenUpward);
       setPanelStyle({
         position: "fixed",
-        left: rect.left,
-        width: rect.width,
+        left: Math.max(12, rect.left + panelOffsetX),
+        width: panelWidth ?? rect.width,
         top: nextOpenUpward ? undefined : Math.min(viewportHeight - 12, rect.bottom + 6),
         bottom: nextOpenUpward ? Math.max(12, viewportHeight - rect.top + 6) : undefined,
       });
@@ -2245,7 +2271,7 @@ function GlassSelect({
               ? clsx(accent.activeText, "border-transparent bg-transparent shadow-none")
               : clsx(accent.activeText, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]", accent.buttonBorder ?? "border-white/20")
             : compact
-              ? clsx(accent.activeText, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
+              ? clsx(isLightTheme ? "text-slate-900" : accent.activeText, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
               : clsx(accent.activeText, SCANNER_CONTROL_SURFACE),
           className
         )}
@@ -2261,15 +2287,17 @@ function GlassSelect({
               ref={panelRef}
               style={panelStyle}
               className={clsx(
-                "z-[9999] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0a0a]/90 backdrop-blur-xl",
-                "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] transition-all duration-200 origin-top"
+                "z-[9999] overflow-hidden rounded-xl backdrop-blur-xl transition-all duration-200 origin-top",
+                isLightTheme
+                  ? "border border-slate-900/10 bg-white/95 shadow-[0_10px_32px_-12px_rgba(15,23,42,0.18)]"
+                  : "border border-white/[0.08] bg-[#0a0a0a]/90 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)]"
               )}
             >
               <div className="max-h-[340px] overflow-y-auto py-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                 {options.map((opt) =>
                   "options" in opt ? (
                     <div key={`group-${opt.label}`} className="px-1.5 py-1">
-                      <div className="px-2.5 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">
+                      <div className={clsx("px-2.5 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-mono", isLightTheme ? "text-slate-500" : "text-zinc-500")}>
                         {opt.label}
                       </div>
                       <div className="space-y-0.5">
@@ -2285,10 +2313,10 @@ function GlassSelect({
                               className={clsx(
                                 "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
                                 groupOption.disabled
-                                  ? "cursor-not-allowed text-zinc-600"
+                                  ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
                                   : isSelected
-                                    ? accent.activeSoft
-                                    : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
+                                    ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : accent.activeSoft)
+                                    : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
                               )}
                               title={groupOption.disabled ? "Unavailable" : groupOption.label}
                             >
@@ -2309,10 +2337,10 @@ function GlassSelect({
                         className={clsx(
                           "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
                           opt.disabled
-                            ? "cursor-not-allowed text-zinc-600"
+                            ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
                             : opt.value === value
-                              ? accent.activeSoft
-                              : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
+                              ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : accent.activeSoft)
+                              : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
                         )}
                       >
                         <span className="min-w-0 flex-1 truncate">{opt.label}</span>
@@ -2398,7 +2426,7 @@ function MinMaxRow({
           hasValue
             ? isOff
               ? "border-rose-500/30 bg-rose-500/[0.05]"
-              : "border-emerald-500/30 bg-emerald-500/[0.05]"
+              : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
             : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
         )}
       >
@@ -2411,7 +2439,7 @@ function MinMaxRow({
                 onClick={() => onToggleMode(filterKey)}
                 className={clsx(
                   "text-[10px] font-mono transition-colors uppercase",
-                  isOff ? "text-rose-300 hover:text-rose-200" : "text-emerald-300 hover:text-emerald-200"
+                  isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
                 )}
                 title={isOff ? "Stored but ignored in requests" : "Applied to requests"}
               >
@@ -2437,13 +2465,13 @@ function MinMaxRow({
             value={minValue}
             onChange={(e) => setMin(e.target.value)}
             placeholder={placeholderMin}
-            className="!h-auto w-full !rounded !border-white/5 !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
+            className="!h-auto w-full !rounded !border-0 hover:!border-0 focus:!border-0 focus-visible:!border-0 !ring-0 focus:!ring-0 focus-visible:!ring-0 !shadow-none !outline-none !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
           />
           <GlassInput
             value={maxValue}
             onChange={(e) => setMax(e.target.value)}
             placeholder={placeholderMax}
-            className="!h-auto w-full !rounded !border-white/5 !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
+            className="!h-auto w-full !rounded !border-0 hover:!border-0 focus:!border-0 focus-visible:!border-0 !ring-0 focus:!ring-0 focus-visible:!ring-0 !shadow-none !outline-none !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
           />
         </div>
       </div>
@@ -2502,9 +2530,9 @@ function SideBadge({ side }: { side: TapeArbSide }) {
   const isLong = s.isLong === true;
   const isShort = s.isLong === false;
   const colorClass = isLong
-    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+    ? "bg-[#6ee7b7]/10 text-[#6ee7b7] border-[#6ee7b7]/20"
     : isShort
-      ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+      ? "border-[rgba(243,166,178,0.22)] bg-[rgba(243,166,178,0.10)] text-[#f3a6b2]"
       : "bg-zinc-800/50 text-zinc-400 border-zinc-700/50";
 
   return (
@@ -2986,6 +3014,18 @@ function OptimizerParameterRangeCard({
   const baseTotalPnl = parameter.baseTotalPnlUsd ?? 0;
   const baseAvgPnl = parameter.baseAvgPnlUsd ?? 0;
   const baseWinRate = parameter.baseWinRate ?? 0;
+  const positiveTextClass = "text-[#6ee7b7]";
+  const negativeTextClass = SOFT_LOSS_TEXT_CLASS;
+  const positiveScoreTextClass = "text-[#86efc5]";
+  const negativeScoreTextClass = "text-[#ffb3bf]";
+  const positiveChipClass = "border-[#6ee7b7]/30 bg-[#6ee7b7]/10 text-[#6ee7b7]";
+  const negativeChipClass = "border-[rgba(243,166,178,0.28)] bg-[rgba(243,166,178,0.10)] text-[#f3a6b2]";
+  const valueTextClass = (value: number, neutral = "text-zinc-300") =>
+    value > 0 ? positiveTextClass : value < 0 ? negativeTextClass : neutral;
+  const scoreTextClass = (value: number, neutral = "text-zinc-300") =>
+    value > 0 ? positiveScoreTextClass : value < 0 ? negativeScoreTextClass : neutral;
+  const valueChipClass = (value: number, neutral = "border-white/10 bg-black/20 text-zinc-400") =>
+    value > 0 ? positiveChipClass : value < 0 ? negativeChipClass : neutral;
   const bestBucket = useMemo(
     () => sortBucketsByMetric(buckets)[0] ?? null,
     [buckets, rankMetric]
@@ -3021,13 +3061,13 @@ function OptimizerParameterRangeCard({
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
               <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">PnL</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", baseTotalPnl > 0 ? "text-emerald-300" : baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-100")}>
+              <div className={clsx("text-[11px] font-mono mt-0.5", valueTextClass(baseTotalPnl, "text-zinc-100"))}>
                 {num(baseTotalPnl, 2)}
               </div>
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
               <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Avg</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", baseAvgPnl > 0 ? "text-emerald-300" : baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-100")}>
+              <div className={clsx("text-[11px] font-mono mt-0.5", valueTextClass(baseAvgPnl, "text-zinc-100"))}>
                 {num(baseAvgPnl, 2)}
               </div>
             </div>
@@ -3044,7 +3084,7 @@ function OptimizerParameterRangeCard({
               <div className="min-w-0">
                 <div className="text-[11px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
                 <div className="text-[10px] font-mono mt-1.5">
-                  <span className={clsx(entry.item && entry.item.avgPnlUsd > 0 ? "text-emerald-300" : entry.item && entry.item.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-400")}>
+                  <span className={clsx(valueTextClass(entry.item?.avgPnlUsd ?? 0, "text-zinc-400"))}>
                     avg {num(entry.item?.avgPnlUsd, 2)}
                   </span>
                   {" | "}
@@ -3057,10 +3097,10 @@ function OptimizerParameterRangeCard({
               </div>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.avgPnlUsd ?? 0) - baseAvgPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-black/20 text-zinc-400")}>
+              <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl))}>
                 dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
               </span>
-              <span className={clsx("rounded-md border px-1.5 py-0.5", (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl > 0 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : (entry.item?.totalPnlUsd ?? 0) - baseTotalPnl < 0 ? "border-rose-500/25 bg-rose-500/10 text-rose-300" : "border-white/10 bg-black/20 text-zinc-400")}>
+              <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl))}>
                 dPnL {num((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl, 2)}
               </span>
             </div>
@@ -3075,9 +3115,9 @@ function OptimizerParameterRangeCard({
             className={clsx(
               "h-7 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono bg-black/20",
               bucket.avgPnlUsd > 0
-                ? "bg-emerald-500/20 text-emerald-300"
+                ? "bg-[#6ee7b7]/20 text-[#6ee7b7]"
                 : bucket.avgPnlUsd < 0
-                  ? "bg-rose-500/20 text-rose-300"
+                  ? "bg-[#f87171]/20 text-[#f87171]"
                   : "bg-white/[0.04] text-zinc-400"
             )}
             title={`${bucket.label} | avg ${num(bucket.avgPnlUsd, 2)} | pnl ${num(bucket.totalPnlUsd, 2)} | trades ${intn(bucket.trades)}`}
@@ -3104,12 +3144,12 @@ function OptimizerParameterRangeCard({
                 <div
                   className={clsx(
                     "h-full",
-                    bucket.score >= 0 ? "bg-emerald-400/80" : "bg-rose-400/80"
+                    bucket.score >= 0 ? "bg-[#6ee7b7]/80" : "bg-[#f3a6b2]/80"
                   )}
                   style={{ width: `${widthPct}%`, opacity: bucket.coveragePct < 0.08 ? 0.4 : 1 }}
                 />
               </div>
-              <div className={clsx("text-right text-[10px] font-mono tabular-nums", bucket.score >= 0 ? "text-emerald-300" : "text-rose-300")}>
+              <div className={clsx("text-right text-[10px] font-mono font-semibold tabular-nums", scoreTextClass(bucket.score))}>
                 {num(bucket.score, 2)}
               </div>
             </div>
@@ -3140,19 +3180,19 @@ function OptimizerParameterRangeCard({
                 <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.winRate - baseWinRate > 0 ? "text-emerald-300" : bucket.winRate - baseWinRate < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.winRate - baseWinRate))}>
                   {num((bucket.winRate - baseWinRate) * 100, 1)}%
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.totalPnlUsd > 0 ? "text-emerald-300" : bucket.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd))}>
                   {num(bucket.totalPnlUsd, 2)}
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", bucket.totalPnlUsd - baseTotalPnl > 0 ? "text-emerald-300" : bucket.totalPnlUsd - baseTotalPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd - baseTotalPnl))}>
                   {num(bucket.totalPnlUsd - baseTotalPnl, 2)}
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", bucket.avgPnlUsd > 0 ? "text-emerald-300" : bucket.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd))}>
                   {num(bucket.avgPnlUsd, 2)}
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", bucket.avgPnlUsd - baseAvgPnl > 0 ? "text-emerald-300" : bucket.avgPnlUsd - baseAvgPnl < 0 ? "text-rose-300" : "text-zinc-300")}>
+                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd - baseAvgPnl))}>
                   {num(bucket.avgPnlUsd - baseAvgPnl, 2)}
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300 whitespace-nowrap">
@@ -3266,8 +3306,8 @@ function StartsByTimeChart({
             <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
           </linearGradient>
           <linearGradient id="starts-bad-bar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
-            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
+            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
+            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
           </linearGradient>
         </defs>
 
@@ -3294,7 +3334,7 @@ function StartsByTimeChart({
           return (
             <g key={`${idx}-${i}`}>
               <rect x={xBase} y={yOk} width={barW} height={hOk} rx="3" fill="url(#starts-ok-bar)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={yBad} width={barW} height={hBad} rx="3" fill="url(#starts-bad-bar)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={yBad} width={barW} height={hBad} rx="3" fill="url(#starts-bad-bar)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
             </g>
           );
         })}
@@ -3412,8 +3452,8 @@ function StartsEndsByTimeChart({
             <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
           </linearGradient>
           <linearGradient id="se-end" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
-            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
+            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
+            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
           </linearGradient>
         </defs>
 
@@ -3438,7 +3478,7 @@ function StartsEndsByTimeChart({
           return (
             <g key={`${idx}-${i}`}>
               <rect x={xBase} y={ys} width={barW} height={hs} rx="3" fill="url(#se-start)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={ye} width={barW} height={he} rx="3" fill="url(#se-end)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={ye} width={barW} height={he} rx="3" fill="url(#se-end)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
             </g>
           );
         })}
@@ -3799,8 +3839,8 @@ function PeakReversionTwoThirdsChart({
             <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
           </linearGradient>
           <linearGradient id="rev-no" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(251,113,133,0.95)" />
-            <stop offset="100%" stopColor="rgba(251,113,133,0.25)" />
+            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
+            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
           </linearGradient>
         </defs>
 
@@ -3828,7 +3868,7 @@ function PeakReversionTwoThirdsChart({
           return (
             <g key={`${idx}-${i}`}>
               <rect x={xBase} y={yYes} width={barW} height={hYes} rx="3" fill="url(#rev-yes)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={yNo} width={barW} height={hNo} rx="3" fill="url(#rev-no)" stroke="rgba(251,113,133,0.55)" strokeWidth="0.6" />
+              <rect x={xBase + barW + 1} y={yNo} width={barW} height={hNo} rx="3" fill="url(#rev-no)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
             </g>
           );
         })}
@@ -3952,7 +3992,7 @@ function ScopeResearchSeriesChart({
     { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
     { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
     { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
-    { stroke: "rgba(251,113,133,0.95)", chip: "border-rose-500/15 bg-rose-500/8 text-rose-300/90" },
+    { stroke: SOFT_LOSS_SOLID, chip: SOFT_LOSS_CHIP },
   ];
 
   const showTooltip = (
@@ -4227,8 +4267,8 @@ function ScopeResearchBoxChart({
                 onMouseMove={(event) => showTooltip(event, row)}
               />
               <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke="rgba(255,255,255,0.35)" />
-              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMax} y2={yMax} stroke="rgba(251,113,133,0.6)" />
-              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMin} y2={yMin} stroke="rgba(251,113,133,0.6)" />
+              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMax} y2={yMax} stroke={SOFT_LOSS_LINE} />
+              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMin} y2={yMin} stroke={SOFT_LOSS_LINE} />
               <rect
                 x={x - boxWidth / 2}
                 y={yQ3}
@@ -5203,6 +5243,7 @@ function fmtHms(d: Date | null): string {
 }
 
 const PAPER_ARB_FILTERS_LS_KEY = "paper.arb.filters.v1";
+const SCANNER_ACTIVE_PRESET_ID_LS_KEY = "paper.arb.shared-preset.active-id";
 
 // =========================
 // MAIN PAGE
@@ -5224,6 +5265,10 @@ export default function ArbitrageScanner() {
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
   const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
+  const daySelectWrapperRef = useRef<HTMLDivElement | null>(null);
+  const rangePresetWrapperRef = useRef<HTMLDivElement | null>(null);
+  const dateFromSelectWrapperRef = useRef<HTMLDivElement | null>(null);
+  const dateToSelectWrapperRef = useRef<HTMLDivElement | null>(null);
 
   // global filters (variant)
   const [session, setSession] = useState<PaperArbSession>("GLOB");
@@ -5241,7 +5286,6 @@ export default function ArbitrageScanner() {
   const [topN, setTopN] = useState<number>(1000);
   const [scopeMode, setScopeMode] = useState<"ALL" | "TOP">("ALL");
   const [offset, setOffset] = useState<number>(0);
-  const [minTradesPerTicker, setMinTradesPerTicker] = useState<number>(0);
 
   // table sub-filters (client-side)
   const [qTicker, setQTicker] = useState("");
@@ -5260,6 +5304,20 @@ export default function ArbitrageScanner() {
   const [showIgnore, setShowIgnore] = useState(false);
   const [showApply, setShowApply] = useState(false);
   const [showPin, setShowPin] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [scannerPresets, setScannerPresets] = useState<PresetDto[]>([]);
+  const [scannerPresetId, setScannerPresetId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return localStorage.getItem(SCANNER_ACTIVE_PRESET_ID_LS_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [scannerPresetBusy, setScannerPresetBusy] = useState(false);
+  const [scannerPresetSaveMode, setScannerPresetSaveMode] = useState(false);
+  const [scannerPresetDraftName, setScannerPresetDraftName] = useState("");
+  const [scannerPresetStatus, setScannerPresetStatus] = useState<string>("");
   const [episodesSort, setEpisodesSort] = useState<{ key: EpisodeSortKey; dir: SortDir }>({
     key: "total",
     dir: "desc",
@@ -5302,6 +5360,7 @@ export default function ArbitrageScanner() {
   const ignoreFileInputRef = useRef<HTMLInputElement | null>(null);
   const applyFileInputRef = useRef<HTMLInputElement | null>(null);
   const pinFileInputRef = useRef<HTMLInputElement | null>(null);
+  const sessionSelectWrapperRef = useRef<HTMLDivElement | null>(null);
   const [sideFilter, setSideFilter] = useState<"" | "Long" | "Short">("");
 
   const [exchangesText, setExchangesText] = useState<string>("");
@@ -5725,7 +5784,7 @@ export default function ArbitrageScanner() {
       preset === "10d" ? 10 :
       preset === "15d" ? 15 :
       preset === "20d" ? 20 : 30;
-    const end = toYmd(dateTo) ? dateTo : (sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd());
+    const end = sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd();
     if (!sortedDaysAsc.length) {
       setDateTo(end);
       setDateFrom(end);
@@ -5791,7 +5850,6 @@ export default function ArbitrageScanner() {
         if (typeof s.topN === "number") setTopN(s.topN);
         if (s.scopeMode === "ALL" || s.scopeMode === "TOP") setScopeMode(s.scopeMode);
         if (typeof s.offset === "number") setOffset(s.offset);
-        if (typeof s.minTradesPerTicker === "number") setMinTradesPerTicker(s.minTradesPerTicker);
 
         if (typeof s.qTicker === "string") setQTicker(s.qTicker);
         if (s.qSide === "" || s.qSide === "Long" || s.qSide === "Short") setQSide(s.qSide);
@@ -5952,7 +6010,6 @@ export default function ArbitrageScanner() {
       topN,
       scopeMode,
       offset,
-      minTradesPerTicker,
       qTicker,
       qSide,
       listMode,
@@ -6084,7 +6141,7 @@ export default function ArbitrageScanner() {
     [
       tab, ruleBand, zapUiMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
       session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, pnlMode,
-      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset, minTradesPerTicker,
+      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       exchangesText, countriesText, sectorsL3Text, imbExchsText, minTierBp, maxTierBp,
@@ -6115,6 +6172,238 @@ export default function ArbitrageScanner() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    function loadScannerPresets() {
+      try {
+        const items = listSharedFilterLocalPresets()
+          .filter((x) => {
+            if (x.scope !== "BOTH") return false;
+            try {
+              return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+            } catch {
+              return false;
+            }
+          });
+        if (cancelled) return;
+        setScannerPresets(items);
+        setScannerPresetId((prev) => {
+          const candidate = prev || (() => {
+            try {
+              return localStorage.getItem(SCANNER_ACTIVE_PRESET_ID_LS_KEY) ?? "";
+            } catch {
+              return "";
+            }
+          })();
+          if (candidate === "") return "";
+          return items.some((x) => x.id === candidate) ? candidate : "";
+        });
+      } catch {
+        if (!cancelled) setScannerPresets([]);
+      }
+    }
+
+    loadScannerPresets();
+    window.addEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
+    window.addEventListener("focus", loadScannerPresets);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
+      window.removeEventListener("focus", loadScannerPresets);
+    };
+  }, []);
+
+  const buildScannerSharedFilterPresetJson = () =>
+    JSON.stringify({
+      version: 1,
+      presetType: "shared-filters",
+      filters: Object.fromEntries(
+        SHARED_FILTER_PRESET_FIELDS.map(({ key, scannerMin, scannerMax }) => [
+          key,
+          {
+            mode: sharedRangeFilterModes[key] === "off" ? "off" : "on",
+            min: String((persistedFilters as Record<string, any>)[scannerMin] ?? ""),
+            max: String((persistedFilters as Record<string, any>)[scannerMax] ?? ""),
+          },
+        ])
+      ),
+    });
+
+  useEffect(() => {
+    try {
+      if (scannerPresetId) {
+        localStorage.setItem(SCANNER_ACTIVE_PRESET_ID_LS_KEY, scannerPresetId);
+      } else {
+        localStorage.removeItem(SCANNER_ACTIVE_PRESET_ID_LS_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [scannerPresetId]);
+
+  const scannerSharedFilterSetters = {
+    minAdv20: setMinAdv20,
+    maxAdv20: setMaxAdv20,
+    minAdv20NF: setMinAdv20NF,
+    maxAdv20NF: setMaxAdv20NF,
+    minAdv90: setMinAdv90,
+    maxAdv90: setMaxAdv90,
+    minAdv90NF: setMinAdv90NF,
+    maxAdv90NF: setMaxAdv90NF,
+    minAvPreMhv: setMinAvPreMhv,
+    maxAvPreMhv: setMaxAvPreMhv,
+    minRoundLot: setMinRoundLot,
+    maxRoundLot: setMaxRoundLot,
+    minVWAP: setMinVWAP,
+    maxVWAP: setMaxVWAP,
+    minSpread: setMinSpread,
+    maxSpread: setMaxSpread,
+    minLstPrcL: setMinLstPrcL,
+    maxLstPrcL: setMaxLstPrcL,
+    minLstCls: setMinLstCls,
+    maxLstCls: setMaxLstCls,
+    minYCls: setMinYCls,
+    maxYCls: setMaxYCls,
+    minTCls: setMinTCls,
+    maxTCls: setMaxTCls,
+    minClsToClsPct: setMinClsToClsPct,
+    maxClsToClsPct: setMaxClsToClsPct,
+    minLo: setMinLo,
+    maxLo: setMaxLo,
+    minLstClsNewsCnt: setMinLstClsNewsCnt,
+    maxLstClsNewsCnt: setMaxLstClsNewsCnt,
+    minMarketCapM: setMinMarketCapM,
+    maxMarketCapM: setMaxMarketCapM,
+    minPreMktVolNF: setMinPreMktVolNF,
+    maxPreMktVolNF: setMaxPreMktVolNF,
+    minVolNFfromLstCls: setMinVolNFfromLstCls,
+    maxVolNFfromLstCls: setMaxVolNFfromLstCls,
+    minAvPostMhVol90NF: setMinAvPostMhVol90NF,
+    maxAvPostMhVol90NF: setMaxAvPostMhVol90NF,
+    minAvPreMhVol90NF: setMinAvPreMhVol90NF,
+    maxAvPreMhVol90NF: setMaxAvPreMhVol90NF,
+    minAvPreMhValue20NF: setMinAvPreMhValue20NF,
+    maxAvPreMhValue20NF: setMaxAvPreMhValue20NF,
+    minAvPreMhValue90NF: setMinAvPreMhValue90NF,
+    maxAvPreMhValue90NF: setMaxAvPreMhValue90NF,
+    minAvgDailyValue20: setMinAvgDailyValue20,
+    maxAvgDailyValue20: setMaxAvgDailyValue20,
+    minAvgDailyValue90: setMinAvgDailyValue90,
+    maxAvgDailyValue90: setMaxAvgDailyValue90,
+    minVolatility20: setMinVolatility20,
+    maxVolatility20: setMaxVolatility20,
+    minVolatility90: setMinVolatility90,
+    maxVolatility90: setMaxVolatility90,
+    minPreMhMDV20NF: setMinPreMhMDV20NF,
+    maxPreMhMDV20NF: setMaxPreMhMDV20NF,
+    minPreMhMDV90NF: setMinPreMhMDV90NF,
+    maxPreMhMDV90NF: setMaxPreMhMDV90NF,
+    minVolRel: setMinVolRel,
+    maxVolRel: setMaxVolRel,
+    minPreMhBidLstPrcPct: setMinPreMhBidLstPrcPct,
+    maxPreMhBidLstPrcPct: setMaxPreMhBidLstPrcPct,
+    minPreMhLoLstPrcPct: setMinPreMhLoLstPrcPct,
+    maxPreMhLoLstPrcPct: setMaxPreMhLoLstPrcPct,
+    minPreMhHiLstClsPct: setMinPreMhHiLstClsPct,
+    maxPreMhHiLstClsPct: setMaxPreMhHiLstClsPct,
+    minPreMhLoLstClsPct: setMinPreMhLoLstClsPct,
+    maxPreMhLoLstClsPct: setMaxPreMhLoLstClsPct,
+    minLstPrcLstClsPct: setMinLstPrcLstClsPct,
+    maxLstPrcLstClsPct: setMaxLstPrcLstClsPct,
+    minImbExch925: setMinImbExch925,
+    maxImbExch925: setMaxImbExch925,
+    minImbExch1555: setMinImbExch1555,
+    maxImbExch1555: setMaxImbExch1555,
+  } as const;
+
+  const clearScannerSharedFilters = () => {
+    setScannerPresetId("");
+    setScannerPresetStatus("");
+    const base = {
+      ...persistedFilters,
+      sharedRangeFilterModes: { ...DEFAULT_SHARED_RANGE_FILTER_MODES },
+    } as Record<string, any>;
+
+    for (const { scannerMin, scannerMax } of SHARED_FILTER_PRESET_FIELDS) {
+      base[scannerMin] = "";
+      base[scannerMax] = "";
+      scannerSharedFilterSetters[scannerMin]("");
+      scannerSharedFilterSetters[scannerMax]("");
+    }
+    setSharedRangeFilterModes({ ...DEFAULT_SHARED_RANGE_FILTER_MODES });
+
+    try {
+      localStorage.setItem(PAPER_ARB_FILTERS_LS_KEY, JSON.stringify(base));
+      setScannerPresetStatus("Cleared");
+    } catch {
+      setScannerPresetStatus("Clear failed");
+    }
+  };
+
+  const applyScannerPreset = (preset: PresetDto) => {
+    try {
+      const parsed = JSON.parse(preset.configJson ?? "{}");
+      if (!isSharedFilterPreset(parsed)) return false;
+      let base: Record<string, any> = {};
+      try {
+        base = JSON.parse(localStorage.getItem(PAPER_ARB_FILTERS_LS_KEY) ?? JSON.stringify(persistedFilters));
+      } catch {
+        base = { ...persistedFilters };
+      }
+      const next = {
+        ...base,
+        sharedRangeFilterModes: {
+          ...DEFAULT_SHARED_RANGE_FILTER_MODES,
+          ...(base?.sharedRangeFilterModes && typeof base.sharedRangeFilterModes === "object" ? base.sharedRangeFilterModes : {}),
+        },
+      } as Record<string, any>;
+
+      for (const { key, scannerMin, scannerMax } of SHARED_FILTER_PRESET_FIELDS) {
+        const filter = parsed.filters?.[key];
+        if (!filter || typeof filter !== "object") continue;
+        next.sharedRangeFilterModes[key] = filter.mode === "off" ? "off" : "on";
+        next[scannerMin] = typeof filter.min === "string" ? filter.min : String(filter.min ?? "");
+        next[scannerMax] = typeof filter.max === "string" ? filter.max : String(filter.max ?? "");
+      }
+
+      localStorage.setItem(PAPER_ARB_FILTERS_LS_KEY, JSON.stringify(next));
+      window.location.reload();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const saveCurrentScannerPreset = async (presetName?: string) => {
+    const name = presetName?.trim();
+    if (!name) return;
+
+    setScannerPresetBusy(true);
+    setScannerPresetStatus("");
+    try {
+      saveSharedFilterLocalPreset(name, buildScannerSharedFilterPresetJson());
+      const items = listSharedFilterLocalPresets()
+        .filter((x) => {
+          if (x.scope !== "BOTH") return false;
+          try {
+            return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+          } catch {
+            return false;
+          }
+        });
+      setScannerPresets(items);
+      setScannerPresetId(items[0]?.id ?? "");
+      setScannerPresetDraftName("");
+      setScannerPresetSaveMode(false);
+      setScannerPresetStatus("Shared filters saved");
+    } catch {
+      setScannerPresetStatus("Save failed");
+    } finally {
+      setScannerPresetBusy(false);
+    }
+  };
+
+  useEffect(() => {
     if (!filtersHydratedRef.current) return;
     if (filtersRestoringRef.current) return;
     try {
@@ -6128,6 +6417,11 @@ export default function ArbitrageScanner() {
   function buildGetParams(d: string) {
     // NOTE: priceMode not sent (server accepts empty or LastPrint; Quotes rejected)
     const mh = Math.max(0, Math.min(60, clampInt(minHoldCandles, 0)));
+    const applyTickers = splitListUpper(tickersText);
+    const pinTickers = splitListUpper(benchTickersText);
+    const reqTickers =
+      listMode === "apply" ? applyTickers : listMode === "pin" ? pinTickers : [];
+
     return {
       dateNy: d,
       metric,
@@ -6139,6 +6433,20 @@ export default function ArbitrageScanner() {
       closeMode,
       minHoldCandles: mh,
       pnlMode,
+      ratingType: ratingType ?? "any",
+
+      tickers: reqTickers.length ? reqTickers : null,
+      benchTickers: null,
+      side: sideFilter ? sideFilter : null,
+
+      exchanges: splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
+      countries: splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
+      sectorsL3: splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
+
+      minTierBp: optNumOrNull(minTierBp),
+      maxTierBp: optNumOrNull(maxTierBp),
+      minBeta: optNumOrNull(minBeta),
+      maxBeta: optNumOrNull(maxBeta),
 
       // shared min/max filters
       minAdv20: rangeValueOrNull("adv20", minAdv20),
@@ -6209,6 +6517,34 @@ export default function ArbitrageScanner() {
       maxImbExch925: rangeValueOrNull("imbexch925", maxImbExch925),
       minImbExch1555: rangeValueOrNull("imbexch1555", minImbExch1555),
       maxImbExch1555: rangeValueOrNull("imbexch1555", maxImbExch1555),
+
+      requireHasNews: requireHasNews ? true : null,
+      excludeHasNews: excludeHasNews ? true : null,
+      requireHasReport: requireHasReport ? true : null,
+      excludeHasReport: excludeHasReport ? true : null,
+      minNewsCnt: optNumOrNull(minNewsCnt),
+      maxNewsCnt: optNumOrNull(maxNewsCnt),
+
+      requireIsPTP: requireIsPTP ? true : null,
+      requireIsSSR: requireIsSSR ? true : null,
+      requireIsETF: requireIsETF ? true : null,
+      requireIsCrap: requireIsCrap ? true : null,
+      excludePTP: excludePTP ? true : null,
+      excludeSSR: excludeSSR ? true : null,
+      excludeETF: excludeETF ? true : null,
+      excludeCrap: excludeCrap ? true : null,
+      includeUSA: includeUSA ? true : null,
+      includeChina: includeChina ? true : null,
+
+      minMdnPreMhVol90: optNumOrNull(minMdnPreMhVol90),
+      maxMdnPreMhVol90: optNumOrNull(maxMdnPreMhVol90),
+      minMdnPostMhVol90NF: optNumOrNull(minMdnPostMhVol90NF),
+      maxMdnPostMhVol90NF: optNumOrNull(maxMdnPostMhVol90NF),
+      minImbARCA: optNumOrNull(minImbARCA),
+      maxImbARCA: optNumOrNull(maxImbARCA),
+      minImbExchValue: optNumOrNull(minImbExchValue),
+      maxImbExchValue: optNumOrNull(maxImbExchValue),
+      imbExchs: splitListUpper(imbExchsText).length ? splitListUpper(imbExchsText) : null,
     };
   }
 
@@ -6450,8 +6786,6 @@ export default function ArbitrageScanner() {
         req.equityCurveMode = equityCurveMode;
         req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
         req.startCutoffMinuteIdx = Math.max(0, clampInt(offset, 0));
-        req.minTradesPerTicker = Math.max(0, clampInt(minTradesPerTicker, 0));
-
         const [analyticsResp, rows] = await Promise.all([
           apiPost<PaperArbAnalyticsResponse>("/api/paper/arbitrage/analytics", req),
           fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo)),
@@ -8106,6 +8440,24 @@ export default function ArbitrageScanner() {
           </div>
         </header>
 
+        {showPresets && (
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 backdrop-blur-md">
+            <PresetPicker
+              kind={SHARED_FILTER_PRESET_API_KIND}
+              scope="BOTH"
+              sharedFilterOnly
+              getCurrentConfigJson={buildScannerSharedFilterPresetJson}
+              onApplyPresetJson={(_, preset) => {
+                try {
+                  applyScannerPreset(preset);
+                } catch {
+                  // ignore storage/reload errors
+                }
+              }}
+            />
+          </div>
+        )}
+
         {(showIgnore || showApply || showPin) && (
           <GlassCard className="p-3 border-white/[0.08] bg-[#05070b]/95">
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
@@ -8402,37 +8754,118 @@ export default function ArbitrageScanner() {
               </div>
             </div>
 
-            <div className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg", SCANNER_CONTROL_SURFACE)}>
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
-              <GlassSelect
-                value={session}
-                onChange={(e) => {
-                  const nextSession = e.target.value as PaperArbSession;
-                  setSession(nextSession);
-                  const band = ratingBandFromSession(nextSession);
-                  setRuleBand(band);
-                  setRatingEnabledBands({
-                    BLUE: band === "BLUE",
-                    ARK: band === "ARK",
-                    OPEN: band === "OPEN",
-                    INTRA: band === "INTRA",
-                    PRINT: band === "PRINT",
-                    POST: band === "POST",
-                    GLOBAL: band === "GLOBAL",
-                  });
+            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
+              {scannerPresetSaveMode ? (
+                <input
+                  type="text"
+                  value={scannerPresetDraftName}
+                  onChange={(e) => setScannerPresetDraftName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setScannerPresetSaveMode(false);
+                      setScannerPresetDraftName("");
+                    }
+                  }}
+                  autoFocus
+                  placeholder="NAME..."
+                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
+                />
+              ) : (
+                <GlassSelect
+                  value={scannerPresetId}
+                  onChange={async (e) => {
+                    const nextId = e.target.value;
+                    setScannerPresetId(nextId);
+                    if (!nextId) {
+                      clearScannerSharedFilters();
+                      return;
+                    }
+                    if (scannerPresetBusy || scannerPresetSaveMode) return;
+                    setScannerPresetBusy(true);
+                    try {
+                      const preset = getSharedFilterLocalPreset(nextId);
+                      if (preset && applyScannerPreset(preset)) return;
+                      const fallbackPreset = scannerPresets.find((x) => x.id === nextId);
+                      if (fallbackPreset && applyScannerPreset(fallbackPreset)) return;
+                      setScannerPresetStatus("Apply failed");
+                    } catch {
+                      setScannerPresetStatus("Apply failed");
+                    } finally {
+                      setScannerPresetBusy(false);
+                    }
+                  }}
+                  options={[
+                    { value: "", label: "NONE" },
+                    ...scannerPresets.map((preset) => ({
+                      value: preset.id,
+                      label: preset.name.toUpperCase(),
+                    })),
+                  ]}
+                  compact
+                  panelOffsetX={-42}
+                  panelWidth={124}
+                  className="w-[92px] !h-7 !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (scannerPresetSaveMode) {
+                    if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
+                    return;
+                  }
+                  setScannerPresetSaveMode(true);
+                  setScannerPresetDraftName("");
                 }}
-                options={[
-                  { value: "GLOB", label: "GLOB" },
-                  { value: "BLUE", label: "BLUE" },
-                  { value: "ARK", label: "ARK" },
-                  { value: "OPEN", label: "OPEN" },
-                  { value: "INTRA", label: "INTRA" },
-                  { value: "POST", label: "POST" },
-                  { value: "NIGHT", label: "NIGHT" },
-                ]}
-                compact
-                className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-              />
+                disabled={scannerPresetBusy}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  scannerPresetBusy
+                    ? "border-transparent text-zinc-600"
+                    : scannerPresetSaveMode
+                      ? accent.activeSoft
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                SAVE
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode) return;
+                  const ok = deleteSharedFilterLocalPreset(scannerPresetId);
+                  if (!ok) {
+                    setScannerPresetStatus("Delete failed");
+                    return;
+                  }
+                  const items = listSharedFilterLocalPresets().filter((x) => {
+                    if (x.scope !== "BOTH") return false;
+                    try {
+                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
+                    } catch {
+                      return false;
+                    }
+                  });
+                  setScannerPresets(items);
+                  setScannerPresetId(items[0]?.id ?? "");
+                  setScannerPresetStatus("Deleted");
+                }}
+                disabled={!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  scannerPresetId && !scannerPresetBusy && !scannerPresetSaveMode
+                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                    : "border-transparent text-zinc-600"
+                )}
+              >
+                DEL
+              </button>
             </div>
 
             <button
@@ -8615,6 +9048,40 @@ export default function ArbitrageScanner() {
                 ))}
             </div>
 
+            <div ref={sessionSelectWrapperRef} className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg", SCANNER_CONTROL_SURFACE)}>
+              <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
+              <GlassSelect
+                value={session}
+                onChange={(e) => {
+                  const nextSession = e.target.value as PaperArbSession;
+                  setSession(nextSession);
+                  const band = ratingBandFromSession(nextSession);
+                  setRuleBand(band);
+                  setRatingEnabledBands({
+                    BLUE: band === "BLUE",
+                    ARK: band === "ARK",
+                    OPEN: band === "OPEN",
+                    INTRA: band === "INTRA",
+                    PRINT: band === "PRINT",
+                    POST: band === "POST",
+                    GLOBAL: band === "GLOBAL",
+                  });
+                }}
+                options={[
+                  { value: "GLOB", label: "GLOB" },
+                  { value: "BLUE", label: "BLUE" },
+                  { value: "ARK", label: "ARK" },
+                  { value: "OPEN", label: "OPEN" },
+                  { value: "INTRA", label: "INTRA" },
+                  { value: "POST", label: "POST" },
+                  { value: "NIGHT", label: "NIGHT" },
+                ]}
+                compact
+                panelAnchorRef={sessionSelectWrapperRef}
+                className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+              />
+            </div>
+
             <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">SIDE</span>
               <GlassSelect
@@ -8659,41 +9126,6 @@ export default function ArbitrageScanner() {
                     onClick={() => setMinHoldCandles((v) => Math.max(0, Math.min(180, Math.trunc(v - 1))))}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Decrease min hold"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">TRADES</span>
-              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  step={10}
-                  value={minTradesPerTicker}
-                  onChange={(e) => setMinTradesPerTicker(Math.max(0, clampInt(e.target.value, 0)))}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMinTradesPerTicker((v) => Math.max(0, Math.trunc(v + 10)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase trades"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMinTradesPerTicker((v) => Math.max(0, Math.trunc(v - 10)))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease trades"
                   >
                     ▼
                   </button>
@@ -8785,7 +9217,7 @@ export default function ArbitrageScanner() {
 
               <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
                 {dateMode === "day" ? (
-                  <div className="flex h-7 items-center rounded-lg px-3">
+                  <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={dateNy}
                       onChange={(e) => {
@@ -8795,11 +9227,12 @@ export default function ArbitrageScanner() {
                         setDateTo(d);
                       }}
                       options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
-                      className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      panelAnchorRef={daySelectWrapperRef}
                     />
                   </div>
                 ) : dateMode === "last" ? (
-                  <div className="flex h-7 items-center rounded-lg px-3">
+                  <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
                       onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
@@ -8811,12 +9244,13 @@ export default function ArbitrageScanner() {
                         { value: "20d", label: "20 DAYS" },
                         { value: "30d", label: "30 DAYS" },
                       ]}
-                      className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                      panelAnchorRef={rangePresetWrapperRef}
                     />
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <div className="flex h-7 items-center rounded-lg px-3">
+                    <div ref={dateFromSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateFrom}
                         onChange={(e) => {
@@ -8825,10 +9259,11 @@ export default function ArbitrageScanner() {
                           if (toYmd(dateTo) && v > dateTo) setDateTo(v);
                         }}
                         options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
-                        className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                        className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                        panelAnchorRef={dateFromSelectWrapperRef}
                       />
                     </div>
-                    <div className="flex h-7 items-center rounded-lg px-3">
+                    <div ref={dateToSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateTo}
                         onChange={(e) => {
@@ -8837,7 +9272,8 @@ export default function ArbitrageScanner() {
                           if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
                         }}
                         options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
-                        className="min-w-[148px] !h-7 !py-0 !px-0 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                        className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                        panelAnchorRef={dateToSelectWrapperRef}
                       />
                     </div>
                   </div>
@@ -8947,7 +9383,7 @@ export default function ArbitrageScanner() {
 
             <div className="h-7 w-px bg-white/5" />
 
-            <div className="inline-flex items-center gap-2 rounded-xl border border-emerald-900/30 bg-emerald-900/10 p-1.5">
+            <div className="inline-flex items-center gap-2 rounded-xl border border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)] p-1.5">
               {[
                 { label: "USA", active: includeUSA, onClick: () => setIncludeUSA((v) => !v) },
                 { label: "CHINA", active: includeChina, onClick: () => setIncludeChina((v) => !v) },
@@ -8959,8 +9395,8 @@ export default function ArbitrageScanner() {
                   className={clsx(
                     "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
                     b.active
-                      ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
-                      : "bg-transparent text-emerald-500 hover:bg-emerald-500/10"
+                      ? "bg-[rgba(16,185,129,0.95)] text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
+                      : "bg-transparent text-[#34d399] hover:bg-[rgba(16,185,129,0.10)]"
                   )}
                 >
                   {b.label}
@@ -9039,7 +9475,7 @@ export default function ArbitrageScanner() {
                   value={startAbs}
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -9073,7 +9509,7 @@ export default function ArbitrageScanner() {
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setStartAbsMax(e.target.value)}
                   placeholder="start max"
-                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -9106,7 +9542,7 @@ export default function ArbitrageScanner() {
                   value={endAbs}
                   disabled={zapUiMode === "off"}
                   onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
-                  className="center-spin w-full h-7 bg-black/20 border border-white/10 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -9161,9 +9597,9 @@ export default function ArbitrageScanner() {
                   clsx(
                     "text-4xl md:text-6xl font-bold",
                     activeAnalyticsSummary.totalPnlUsd > 0
-                      ? "text-emerald-300"
+                      ? "text-[#6ee7b7]"
                       : activeAnalyticsSummary.totalPnlUsd < 0
-                        ? "text-rose-300"
+                        ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
                   )
                 }
@@ -9186,7 +9622,7 @@ export default function ArbitrageScanner() {
                   activeAnalyticsSummary.avgPnlUsd > 0
                     ? "text-emerald-300"
                     : activeAnalyticsSummary.avgPnlUsd < 0
-                      ? "text-rose-300"
+                      ? SOFT_LOSS_TEXT_CLASS
                       : "text-zinc-200"
                 }
               />
@@ -9194,13 +9630,13 @@ export default function ArbitrageScanner() {
                 label="MAX WIN"
                 value={num(activeAnalyticsSummary.maxWinUsd, 2)}
                 inline
-                valueClassName={activeAnalyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={activeAnalyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG WIN"
                 value={num(activeAnalyticsSummary.avgWinUsd, 2)}
                 inline
-                valueClassName={activeAnalyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={activeAnalyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="PROFIT FACTOR"
@@ -9221,13 +9657,13 @@ export default function ArbitrageScanner() {
                 label="MAX LOSS"
                 value={num(activeAnalyticsSummary.maxLossUsd, 2)}
                 inline
-                valueClassName={activeAnalyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={activeAnalyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG LOSS"
                 value={num(activeAnalyticsSummary.avgLossUsd, 2)}
                 inline
-                valueClassName={activeAnalyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={activeAnalyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
 
@@ -9350,7 +9786,7 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
-                              pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-zinc-200"
+                              pnl > 0 ? "text-[#6ee7b7]" : pnl < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
                             )}
                           >
                             {num(r.totalPnlUsd ?? null, 2)}
@@ -9378,16 +9814,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums border-l border-white/10",
-                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.rawPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.rawPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >
@@ -9397,16 +9833,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums",
-                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.benchPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.benchPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >
@@ -9416,16 +9852,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums",
-                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.hedgedPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.hedgedPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >
@@ -9460,9 +9896,9 @@ export default function ArbitrageScanner() {
                   clsx(
                     "text-4xl md:text-6xl font-bold",
                     analyticsSummary.totalPnlUsd > 0
-                      ? "text-emerald-300"
+                      ? "text-[#6ee7b7]"
                       : analyticsSummary.totalPnlUsd < 0
-                        ? "text-rose-300"
+                        ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
                   )
                 }
@@ -9485,7 +9921,7 @@ export default function ArbitrageScanner() {
                   analyticsSummary.avgPnlUsd > 0
                     ? "text-emerald-300"
                     : analyticsSummary.avgPnlUsd < 0
-                      ? "text-rose-300"
+                      ? SOFT_LOSS_TEXT_CLASS
                       : "text-zinc-200"
                 }
               />
@@ -9493,13 +9929,13 @@ export default function ArbitrageScanner() {
                 label="MAX WIN"
                 value={num(analyticsSummary.maxWinUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG WIN"
                 value={num(analyticsSummary.avgWinUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="PROFIT FACTOR"
@@ -9520,13 +9956,13 @@ export default function ArbitrageScanner() {
                 label="MAX LOSS"
                 value={num(analyticsSummary.maxLossUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG LOSS"
                 value={num(analyticsSummary.avgLossUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
 
@@ -9781,7 +10217,7 @@ export default function ArbitrageScanner() {
                           ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
                           : status.error
                             ? "border-rose-500/25 bg-rose-500/10 text-rose-300"
-                          : "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                          : "border-[#6ee7b7]/25 bg-[#6ee7b7]/10 text-[#6ee7b7]"
                     )}
                   >
                     {group}: {status.loading ? "loading" : status.partial ? "partial" : status.error ? "error" : "ready"}
@@ -11098,9 +11534,9 @@ export default function ArbitrageScanner() {
                   clsx(
                     "text-4xl md:text-6xl font-bold",
                     analyticsSummary.totalPnlUsd > 0
-                      ? "text-emerald-300"
+                      ? "text-[#6ee7b7]"
                       : analyticsSummary.totalPnlUsd < 0
-                        ? "text-rose-300"
+                        ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
                   )
                 }
@@ -11123,7 +11559,7 @@ export default function ArbitrageScanner() {
                   analyticsSummary.avgPnlUsd > 0
                     ? "text-emerald-300"
                     : analyticsSummary.avgPnlUsd < 0
-                      ? "text-rose-300"
+                      ? SOFT_LOSS_TEXT_CLASS
                       : "text-zinc-200"
                 }
               />
@@ -11131,13 +11567,13 @@ export default function ArbitrageScanner() {
                 label="MAX WIN"
                 value={num(analyticsSummary.maxWinUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG WIN"
                 value={num(analyticsSummary.avgWinUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-emerald-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="PROFIT FACTOR"
@@ -11158,13 +11594,13 @@ export default function ArbitrageScanner() {
                 label="MAX LOSS"
                 value={num(analyticsSummary.maxLossUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.maxLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG LOSS"
                 value={num(analyticsSummary.avgLossUsd, 2)}
                 inline
-                valueClassName={analyticsSummary.avgLossUsd < 0 ? "text-rose-300" : "text-zinc-200"}
+                valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
 
@@ -11288,7 +11724,7 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
-                              pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-zinc-200"
+                              pnl > 0 ? "text-[#6ee7b7]" : pnl < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
                             )}
                           >
                             {num(r.totalPnlUsd ?? null, 2)}
@@ -11316,16 +11752,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums border-l border-white/10",
-                              (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.rawPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.rawPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >
@@ -11335,16 +11771,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums",
-                              (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.benchPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.benchPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >
@@ -11354,16 +11790,16 @@ export default function ArbitrageScanner() {
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums",
-                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.hedgedPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-300"
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
                             )}
                           >
                             <span
                               className={clsx(
                                 "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
                                 (r.hedgedPnlUsd ?? 0) > 0
-                                  ? "bg-emerald-500/12"
+                                  ? "bg-[#6ee7b7]/12"
                                   : (r.hedgedPnlUsd ?? 0) < 0
-                                    ? "bg-rose-500/12"
+                                    ? "bg-transparent"
                                     : "bg-white/[0.04]"
                               )}
                             >

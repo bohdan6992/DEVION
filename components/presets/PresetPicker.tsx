@@ -3,11 +3,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import type { PresetDto, PresetScope } from "@/types/presets";
-import { listPresets, createPreset, updatePreset, deletePreset } from "@/lib/presets/presetsApi";
+import { listPresets, getPreset, createPreset, updatePreset, deletePreset } from "@/lib/presets/presetsApi";
 
 type Props = {
   kind?: string;
   scope?: PresetScope | "BOTH";
+  sharedFilterOnly?: boolean;
   valueId?: string | null;
   onChangeId?: (id: string | null, preset?: PresetDto | null) => void;
   getCurrentConfigJson: () => string;
@@ -17,6 +18,7 @@ type Props = {
 export default function PresetPicker({
   kind = "ARBITRAGE",
   scope = "BOTH",
+  sharedFilterOnly = false,
   valueId,
   onChangeId,
   getCurrentConfigJson,
@@ -40,8 +42,18 @@ export default function PresetPicker({
     setErr(null);
     try {
       const data = await listPresets({ kind, scope });
-      setItems(data);
-      if (selectedId && !data.some((x) => x.id === selectedId)) {
+      const nextItems = sharedFilterOnly
+        ? data.filter((x) => {
+            try {
+              const parsed = JSON.parse(x.configJson ?? "{}");
+              return parsed?.presetType === "shared-filters";
+            } catch {
+              return false;
+            }
+          })
+        : data;
+      setItems(nextItems);
+      if (selectedId && !nextItems.some((x) => x.id === selectedId)) {
         setSelectedId("");
         onChangeId?.(null, null);
       }
@@ -54,7 +66,7 @@ export default function PresetPicker({
 
   useEffect(() => {
     reload();
-  }, [kind, scope]);
+  }, [kind, scope, sharedFilterOnly]);
 
   useEffect(() => {
     setSelectedId(valueId ?? "");
@@ -127,9 +139,19 @@ export default function PresetPicker({
     }
   }
 
-  function handleApply() {
+  async function handleApply() {
     if (!selected) return;
-    onApplyPresetJson?.(selected.configJson, selected);
+    try {
+      const fullPreset = await getPreset(selected.id, kind);
+      const parsed = JSON.parse(fullPreset.configJson ?? "{}");
+      if (sharedFilterOnly && parsed?.presetType !== "shared-filters") {
+        onApplyPresetJson?.(selected.configJson, selected);
+        return;
+      }
+      onApplyPresetJson?.(fullPreset.configJson, fullPreset);
+    } catch {
+      onApplyPresetJson?.(selected.configJson, selected);
+    }
   }
 
   return (

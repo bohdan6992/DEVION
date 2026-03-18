@@ -147,12 +147,19 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         buttonText: "text-zinc-200",
         buttonBorder: "border-zinc-400/20",
       };
+    case "rain":
+      return {
+        selectedItem: "bg-zinc-200/10 text-zinc-100 font-bold",
+        dot: "bg-zinc-200 shadow-[0_0_10px_rgba(228,228,231,0.32)]",
+        buttonText: "text-zinc-100",
+        buttonBorder: "border-zinc-300/22",
+      };
     case "matrix":
       return {
-        selectedItem: "bg-emerald-500/10 text-emerald-300 font-bold",
-        dot: "bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.55)]",
-        buttonText: "text-emerald-200",
-        buttonBorder: "border-emerald-500/20",
+        selectedItem: "bg-zinc-200/10 text-zinc-200 font-bold",
+        dot: "bg-zinc-300 shadow-[0_0_8px_rgba(212,212,216,0.35)]",
+        buttonText: "text-zinc-200",
+        buttonBorder: "border-zinc-400/20",
       };
     case "neon":
       return {
@@ -308,9 +315,15 @@ export default function TopBar() {
         };
       case "matrix":
         return {
-          activeText: "text-emerald-300 drop-shadow-[0_0_8px_rgba(16,185,129,0.32)]",
-          activeBg: "bg-emerald-500/10 opacity-100 border border-transparent",
-          activeLine: "bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.6)]",
+          activeText: "text-zinc-200 drop-shadow-[0_0_8px_rgba(212,212,216,0.18)]",
+          activeBg: "bg-zinc-200/10 opacity-100 border border-transparent",
+          activeLine: "bg-zinc-300 shadow-[0_0_10px_rgba(212,212,216,0.3)]",
+        };
+      case "rain":
+        return {
+          activeText: "text-zinc-100 drop-shadow-[0_0_8px_rgba(228,228,231,0.16)]",
+          activeBg: "bg-zinc-200/10 opacity-100 border border-transparent",
+          activeLine: "bg-zinc-200 shadow-[0_0_10px_rgba(228,228,231,0.28)]",
         };
       case "neon":
         return {
@@ -437,6 +450,7 @@ export default function TopBar() {
                 { key: "sparkle", label: "SPARKLE" },
                 { key: "inferno", label: "INFERNO" },
                 { key: "asher", label: "ASHER" },
+                { key: "rain", label: "RAIN" },
                 { key: "matrix", label: "Matrix" },
                 { key: "neon", label: "Neon" },
                 { key: "dark", label: "Dark" },

@@ -7,7 +7,7 @@ import { useUi } from "@/components/UiProvider";
 const DARK_THEMES = new Set([
   "dark", "neon", "matrix", "solaris", "cyberpunk",
   "oceanic", "sakura", "asher", "inferno", "sparkle",
-  "desert", "midnight", "forest", "candy", "monochrome", "space",
+  "desert", "midnight", "forest", "candy", "monochrome", "space", "rain",
 ]);
 
 function themeIsDark(name?: string | null) {

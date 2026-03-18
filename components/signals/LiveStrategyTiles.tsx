@@ -139,43 +139,73 @@ function GlobalDashboard({ items }: { items: ContainerState }) {
   const totalScore = all.reduce((acc, i) => acc + (i?.score || 0), 0);
   const maxScore = Math.max(...all.map(i => i?.score || 0), 1);
   const centerX = 150, centerY = 150, maxR = 130;
+  const primaryAccent = "var(--dash-accent)";
+  const secondaryAccent = "var(--dash-topline)";
 
   return (
-    <div className="flex flex-col lg:flex-row gap-0 mb-24 h-auto lg:h-[400px] relative select-none border border-white/[0.05] rounded-[3rem] overflow-hidden bg-[#050505]" onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}>
+    <div
+      className="flex flex-col lg:flex-row gap-0 mb-24 h-auto lg:h-[400px] relative select-none rounded-[3rem] overflow-hidden backdrop-blur-xl"
+      style={{
+        border: "1px solid rgba(255,255,255,0.08)",
+        background: "rgba(10,10,10,0.6)",
+        boxShadow: "0 24px 60px -34px rgba(0,0,0,0.72)",
+      }}
+      onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+    >
       <GlassTooltip visible={!!hoveredData} x={mousePos.x} y={mousePos.y} {...hoveredData} />
 
       {/* LASER SCANNER */}
       <div className="absolute inset-0 z-40 pointer-events-none overflow-hidden">
         <div className="h-full w-[300px] absolute top-0 animate-[scannerWide_5s_linear_infinite] -translate-x-1/2">
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-500/20 to-transparent" style={{ mixBlendMode: 'plus-lighter', filter: 'blur(45px)' }} />
-            <div className="h-full w-[2px] bg-gradient-to-b from-transparent via-emerald-400 to-transparent absolute top-0 left-1/2 -translate-x-1/2" style={{ boxShadow: '0 0 20px rgba(16, 185, 129, 0.9)', mixBlendMode: 'screen' }} />
+            <div
+              className="absolute inset-0"
+              style={{
+                backgroundImage: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--dash-accent) 20%, transparent), transparent)",
+                mixBlendMode: "plus-lighter",
+                filter: "blur(45px)",
+              }}
+            />
+            <div
+              className="h-full w-[2px] absolute top-0 left-1/2 -translate-x-1/2"
+              style={{
+                backgroundImage: "linear-gradient(180deg, transparent, var(--dash-accent), transparent)",
+                boxShadow: "0 0 20px var(--dash-accent-shadow)",
+                mixBlendMode: "screen",
+              }}
+            />
         </div>
       </div>
 
       {/* RADAR */}
-      <div className="lg:w-[400px] flex flex-col items-center justify-center relative shrink-0 border-r border-white/[0.05] bg-black/20 z-10">
-        <span className="absolute top-8 font-mono text-[8px] text-zinc-600 uppercase tracking-[0.6em]">Spatial Load Radar</span>
+      <div
+        className="lg:w-[400px] flex flex-col items-center justify-center relative shrink-0 z-10"
+        style={{
+          borderRight: "1px solid rgba(255,255,255,0.05)",
+          background: "rgba(10,10,10,0.6)",
+        }}
+      >
+        <span className="absolute top-8 font-mono text-[8px] uppercase tracking-[0.6em]" style={{ color: "var(--dash-text-muted)" }}>Spatial Load Radar</span>
         <div className="relative w-[300px] h-[300px] flex items-center justify-center pointer-events-none group/radar">
           <svg viewBox="0 0 300 300" className="w-full h-full overflow-visible">
             <defs>
               <radialGradient id="gradP_deep" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#10b881" stopOpacity="0.4" />
-                <stop offset="100%" stopColor="#10b881" stopOpacity="0.05" />
+                <stop offset="0%" stopColor={primaryAccent} stopOpacity="0.4" />
+                <stop offset="100%" stopColor={primaryAccent} stopOpacity="0.05" />
               </radialGradient>
               <radialGradient id="gradC_deep" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#a78bfa" stopOpacity="0.3" />
-                <stop offset="100%" stopColor="#a78bfa" stopOpacity="0.05" />
+                <stop offset="0%" stopColor={secondaryAccent} stopOpacity="0.3" />
+                <stop offset="100%" stopColor={secondaryAccent} stopOpacity="0.05" />
               </radialGradient>
             </defs>
             {[0.25, 0.5, 0.75, 1].map((lvl) => (
-              <circle key={lvl} cx={centerX} cy={centerY} r={maxR * lvl} fill="none" stroke="white" strokeWidth="1" className="opacity-[0.05]" />
+              <circle key={lvl} cx={centerX} cy={centerY} r={maxR * lvl} fill="none" stroke="var(--dash-panel-border)" strokeWidth="1" className="opacity-40" />
             ))}
-            <RadarLayer list={safeCatalog} color="#a78bfa" gradId="gradC_deep" maxR={maxR} centerX={centerX} centerY={centerY} onHover={setHoveredData} />
-            <RadarLayer list={safePriority} color="#10b881" gradId="gradP_deep" maxR={maxR} centerX={centerX} centerY={centerY} onHover={setHoveredData} />
+            <RadarLayer list={safeCatalog} color={secondaryAccent} gradId="gradC_deep" maxR={maxR} centerX={centerX} centerY={centerY} onHover={setHoveredData} />
+            <RadarLayer list={safePriority} color={primaryAccent} gradId="gradP_deep" maxR={maxR} centerX={centerX} centerY={centerY} onHover={setHoveredData} />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-20">
-              <span className="text-6xl font-bold font-mono text-white tracking-tighter tabular-nums leading-none drop-shadow-[0_0_20px_rgba(255,255,255,0.15)]">{totalScore}</span>
-              <span className="font-mono text-[8px] text-zinc-600 uppercase tracking-[0.4em] mt-3">Total Pulse</span>
+              <span className="text-6xl font-bold font-mono tracking-tighter tabular-nums leading-none" style={{ color: "var(--dash-text-main)", filter: "drop-shadow(0 0 20px color-mix(in oklab, var(--dash-accent-shadow) 45%, transparent))" }}>{totalScore}</span>
+              <span className="font-mono text-[8px] uppercase tracking-[0.4em] mt-3" style={{ color: "var(--dash-text-muted)" }}>Total Pulse</span>
           </div>
         </div>
       </div>
@@ -183,15 +213,15 @@ function GlobalDashboard({ items }: { items: ContainerState }) {
       {/* ANALYZER */}
       <div className="flex-1 flex flex-col relative overflow-hidden z-10">
         <div className="flex items-center gap-6 p-8 pb-0 relative z-10">
-             <span className="font-mono text-[8px] text-zinc-500 uppercase tracking-[0.6em] whitespace-nowrap italic">Engine Spectrum Analyzer</span>
-             <div className="h-px w-full bg-gradient-to-r from-white/10 to-transparent" />
+             <span className="font-mono text-[8px] uppercase tracking-[0.6em] whitespace-nowrap italic" style={{ color: "var(--dash-text-muted)" }}>Engine Spectrum Analyzer</span>
+             <div className="h-px w-full" style={{ backgroundImage: "linear-gradient(90deg, color-mix(in oklab, var(--dash-topline) 60%, transparent), transparent)" }} />
         </div>
 
         <div className="flex-1 flex flex-col relative px-4">
             <div className="h-[140px] w-full mt-4 relative z-20">
                 <svg viewBox="0 0 1000 200" preserveAspectRatio="none" className="w-full h-full overflow-visible">
-                    <TrendGraph data={safePriority} color="#10b881" title="Priority Trend" gradId="areaP" onHover={setHoveredData} yOffset={20} />
-                    <TrendGraph data={safeCatalog} color="#a78bfa" title="Catalog Trend" gradId="areaC" onHover={setHoveredData} yOffset={100} />
+                    <TrendGraph data={safePriority} color={primaryAccent} title="Priority Trend" gradId="areaP" onHover={setHoveredData} yOffset={20} />
+                    <TrendGraph data={safeCatalog} color={secondaryAccent} title="Catalog Trend" gradId="areaC" onHover={setHoveredData} yOffset={100} />
                 </svg>
             </div>
 
@@ -224,6 +254,9 @@ function GlobalDashboard({ items }: { items: ContainerState }) {
             </div>
         </div>
       </div>
+
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ backgroundImage: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--dash-topline) 76%, transparent), transparent)" }} />
+      <div className="pointer-events-none absolute inset-0" style={{ boxShadow: "inset 0 0 0 1px color-mix(in oklab, var(--dash-accent-border) 20%, transparent)" }} />
 
       <style jsx global>{`
         @keyframes scannerWide {
@@ -421,7 +454,7 @@ export default function LiveStrategyTiles() {
 
   return (
     // ТУТ ЗМІНЕНО: bg-[#030303] -> bg-transparent
-    <section className="w-full py-20 px-10 bg-transparent min-h-screen selection:bg-emerald-500/30 selection:text-white relative overflow-hidden text-white">
+    <section className="w-full pt-6 pb-20 px-10 bg-transparent min-h-screen selection:bg-emerald-500/30 selection:text-white relative overflow-hidden text-white">
       <div className="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-500/5 blur-[150px] pointer-events-none" />
       <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-violet-500/5 blur-[150px] pointer-events-none" />
       

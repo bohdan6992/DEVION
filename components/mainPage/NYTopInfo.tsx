@@ -4,7 +4,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import OnThisDayFacts from "@/components/OnThisDayFacts";
 import { AppDock } from "@/components/nav/AppDock";
-import { Calendar, Activity } from "lucide-react";
+import { Calendar } from "lucide-react";
 import { useUi } from "@/components/UiProvider";
 
 // --- LOGIC HELPER ---
@@ -74,8 +74,14 @@ export default function NYTopInfo() {
   if (!mounted) {
     return (
       <div
-        className="w-full max-w-[1400px] mx-auto h-[200px] rounded-2xl border border-white/12 animate-pulse"
-        style={{ backgroundColor: isDark ? "#000000" : "rgba(255, 255, 255, 0.92)" }}
+        className="relative isolate z-10 w-full max-w-[1400px] mx-auto h-[200px] rounded-2xl border animate-pulse"
+        style={{
+          backgroundColor: isDark ? "rgba(0, 0, 0, 0.44)" : "rgba(255, 255, 255, 0.82)",
+          borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(17,24,39,0.12)",
+          backgroundImage: "none",
+          isolation: "isolate",
+          mixBlendMode: "normal",
+        }}
       />
     );
   }
@@ -85,22 +91,27 @@ export default function NYTopInfo() {
   return (
     <section className="w-full max-w-[1400px] mx-auto">
       <div
-        className="relative overflow-hidden rounded-2xl border border-white/12 shadow-xl"
-        style={{ backgroundColor: isDark ? "#000000" : "rgba(255, 255, 255, 0.94)" }}
+        className="relative isolate z-10 overflow-hidden rounded-2xl border backdrop-blur-md shadow-xl"
+        style={{
+          backgroundColor: isDark ? "rgba(0, 0, 0, 0.44)" : "rgba(255, 255, 255, 0.82)",
+          borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(17,24,39,0.12)",
+          backgroundImage: "none",
+          isolation: "isolate",
+          mixBlendMode: "normal",
+        }}
       >
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent opacity-50" />
-
+        <div className="absolute inset-0 z-0" style={{ backgroundColor: isDark ? "rgba(0, 0, 0, 0.44)" : "rgba(255, 255, 255, 0.82)", backgroundImage: "none" }} />
         {/* Dock stays top-right */}
-        <div className="absolute top-4 right-4 z-10 hidden md:flex items-start gap-3">
+        <div className="absolute top-4 right-4 z-20 hidden md:flex items-start gap-3">
           <AppDock />
         </div>
 
         {/* ЗМІНА: lg:grid-cols-[auto_1fr] дозволяє правій частині "притиснутися" до годинника */}
-        <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr]">
+        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-[auto_1fr]">
           
           {/* --- LEFT: CLOCK --- */}
           {/* ЗМІНА: Прибрано justify-center, додано border-r для візуального розділення */}
-          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 border-emerald-400/20">
+          <div className="p-6 lg:p-8 flex items-center border-b lg:border-b-0 border-white/8">
             <div className="flex items-center gap-6 lg:gap-8">
               {/* ANALOG */}
               <div className="relative w-[110px] h-[110px] lg:w-[130px] lg:h-[130px] shrink-0">
@@ -116,8 +127,8 @@ export default function NYTopInfo() {
                       />
                     ))}
                   </g>
-                  <line ref={hourRef} x1="50" y1="50" x2="50" y2="30" className="stroke-emerald-100 stroke-[3px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
-                  <line ref={minuteRef} x1="50" y1="50" x2="50" y2="22" className="stroke-emerald-400 stroke-[2px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
+                  <line ref={hourRef} x1="50" y1="50" x2="50" y2="30" className="stroke-[3px] stroke-linecap-round" style={{ transformOrigin: "50px 50px", stroke: "var(--dash-accent)" }} />
+                  <line ref={minuteRef} x1="50" y1="50" x2="50" y2="22" className="stroke-zinc-200 stroke-[2px] stroke-linecap-round" style={{ transformOrigin: "50px 50px" }} />
                   <line ref={secondRef} x1="50" y1="60" x2="50" y2="15" className="stroke-rose-500 stroke-[1px]" style={{ transformOrigin: "50px 50px" }} />
                   <circle cx="50" cy="50" r="2.5" className="fill-zinc-200" />
                 </svg>
@@ -125,15 +136,15 @@ export default function NYTopInfo() {
 
               {/* DIGITAL */}
               <div className="flex flex-col whitespace-nowrap">
-                <div className="flex items-baseline font-mono text-5xl lg:text-7xl font-bold tracking-tighter text-emerald-100 leading-none tabular-nums">
+                <div className="flex items-baseline font-mono text-5xl lg:text-7xl font-bold tracking-tighter text-white leading-none tabular-nums">
                   <span ref={hRef}>--</span>
-                  <span className="mx-1 text-emerald-300/45 animate-pulse">:</span>
+                  <span className="mx-1 animate-pulse" style={{ color: "color-mix(in oklab, var(--dash-accent) 52%, white)" }}>:</span>
                   <span ref={mRef}>--</span>
-                  <span className="mx-1 text-emerald-300/40 text-2xl lg:text-4xl">:</span>
-                  <span ref={sRef} className="text-2xl lg:text-4xl text-emerald-400">--</span>
+                  <span className="mx-1 text-2xl lg:text-4xl text-white/45">:</span>
+                  <span ref={sRef} className="text-2xl lg:text-4xl" style={{ color: "var(--dash-accent)" }}>--</span>
                 </div>
-                <div className="flex items-center gap-2 mt-3 text-[10px] lg:text-xs font-mono font-medium text-emerald-300/60 tracking-wider">
-                  <Calendar size={12} className="text-emerald-300/45" />
+                <div className="flex items-center gap-2 mt-3 text-[10px] lg:text-xs font-mono font-medium text-white/70 tracking-wider">
+                  <Calendar size={12} style={{ color: "color-mix(in oklab, var(--dash-accent) 58%, white)" }} />
                   <span className="capitalize">{dateStr}</span>
                 </div>
               </div>
@@ -143,20 +154,16 @@ export default function NYTopInfo() {
           {/* --- RIGHT: FACTS --- */}
           {/* ЗМІНА: Тепер займає весь вільний простір (1fr) */}
           <div className="p-6 lg:p-8 flex flex-col overflow-hidden relative min-h-[160px]">
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute top-0 right-0 p-6 opacity-10">
-                <Activity size={100} className="text-emerald-500 blur-[40px]" />
-              </div>
-            </div>
-
             <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
               <div
                 className="
-                  text-sm lg:text-[15px] text-emerald-200/75 leading-relaxed font-sans
+                  text-sm lg:text-[15px] text-white/78 leading-relaxed font-sans
                   [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-3
-                  [&_li]:pl-3 [&_li]:border-l-[2px] [&_li]:border-emerald-400/15 [&_li]:transition-all
-                  [&_li:hover]:border-emerald-500/50 [&_li:hover]:text-emerald-100 [&_li:hover]:bg-emerald-500/[0.06]
-                  [&_strong]:text-emerald-400/80 [&_strong]:font-mono [&_strong]:text-[11px] [&_strong]:mr-2
+                  [&_li]:pl-3 [&_li]:border-l-[2px] [&_li]:border-white/10 [&_li]:transition-all
+                  [&_li:hover]:border-[color:var(--dash-accent-border)] [&_li:hover]:text-white [&_li:hover]:bg-[color:var(--dash-accent-soft)]
+                  [&_strong]:text-white [&_strong]:font-mono [&_strong]:text-[11px] [&_strong]:mr-2
+                  [&_span]:text-white
+                  [&_p]:text-white
                 "
               >
                 <OnThisDayFacts tz="America/New_York" lang="uk" />
