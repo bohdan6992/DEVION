@@ -356,6 +356,8 @@ export default function TopBar() {
     { href: "/signals", label: "Strategies" },
     { href: "/news", label: "Market" },
     { href: "/guide", label: "Explorer" },
+    { href: "/hyperliquid", label: "Hyperliquid" },
+    { href: "/hyperliquid-trader", label: "HL Trader" },
   ];
 
   const isActive = (href: string) =>

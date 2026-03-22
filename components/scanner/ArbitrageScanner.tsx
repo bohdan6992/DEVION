@@ -6,6 +6,7 @@ import Link from "next/link";
 import { todayNyYmd } from "../../lib/time";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
+import { getArbitrageList } from "../../lib/trapClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
@@ -50,10 +51,13 @@ type PaperArbMetric = "SigmaZap" | "ZapPct";
 type PaperArbSession = "BLUE" | "ARK" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 type PaperArbCloseMode = "Active" | "Passive";
 type PaperArbPnlMode = "RawOnly" | "Hedged";
+type PaperArbSizingMode = "Tier" | "Notional";
+type PaperArbDilutionMode = "Undiluted" | "Diluted";
 
 // rating (best_params gates)
 type PaperArbRatingBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 type PaperArbRatingType = "any" | "hard" | "soft";
+type PaperArbRatingMode = "SESSION" | "BIN";
 type PaperArbRatingRule = {
   band: PaperArbRatingBand;
   minRate: number;
@@ -190,6 +194,8 @@ type PaperArbActiveRow = {
   // config echoed back (optional but we show if present)
   closeMode?: PaperArbCloseMode;
   minHoldCandles?: number;
+  tierBp?: number | null;
+  beta?: number | null;
   startClass?: string | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
@@ -231,6 +237,13 @@ type PaperArbClosedDto = {
   totalPnlUsd?: number | null; // depends on pnlMode on server, but server returns it already
   rating?: number | null;
   ratingTotal?: number | null;
+  corr?: number | null;
+  beta?: number | null;
+  sigma?: number | null;
+  tierBp?: number | null;
+  positionNotionalUsd?: number | null;
+  entryCount?: number | null;
+  best_params?: any;
 
   adv20?: number | null;
   adv20NF?: number | null;
@@ -286,6 +299,10 @@ type PaperArbAnalyticsRequest = {
   minHoldCandles?: number;
   startCutoffMinuteIdx?: number | null;
   pnlMode?: PaperArbPnlMode;
+  sizingMode?: PaperArbSizingMode;
+  sizeValue?: number | null;
+  dilutionMode?: PaperArbDilutionMode;
+  dilutionStep?: number | null;
 
   // rating rules
   ratingType?: PaperArbRatingType | string | null;
@@ -305,8 +322,12 @@ type PaperArbAnalyticsRequest = {
   minTierBp?: number | null;
   maxTierBp?: number | null;
 
+  minCorr?: number | null;
+  maxCorr?: number | null;
   minBeta?: number | null;
   maxBeta?: number | null;
+  minSigma?: number | null;
+  maxSigma?: number | null;
 
   minMarketCapM?: number | null;
   maxMarketCapM?: number | null;
@@ -601,6 +622,7 @@ type ScopeParameterDefinition = {
   label: string;
   group: OptimizerRangeGroupKey;
   scenarioParameter?: string | null;
+  optimizerApiKey?: string | null;
 };
 
 type ScopeResearchChartType =
@@ -628,6 +650,9 @@ type ScopeResearchParameterKey =
   | "minHoldCandles"
   | "rating"
   | "ratingTotal"
+  | "corr"
+  | "beta"
+  | "sigma"
   | "adv20"
   | "adv20NF"
   | "adv90"
@@ -788,10 +813,45 @@ function num(x: number | null | undefined, digits = 2): string {
   if (!Number.isFinite(x)) return "-";
   return x.toFixed(digits);
 }
+function numSpaced(x: number | null | undefined, digits = 2): string {
+  if (x === null || x === undefined) return "-";
+  if (!Number.isFinite(x)) return "-";
+  const fixed = x.toFixed(digits);
+  const [intPart, fracPart] = fixed.split(".");
+  const sign = intPart.startsWith("-") ? "-" : "";
+  const absInt = sign ? intPart.slice(1) : intPart;
+  const grouped = absInt.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return fracPart != null ? `${sign}${grouped}.${fracPart}` : `${sign}${grouped}`;
+}
+function scannerTickerAmountUsd(
+  sizingMode: PaperArbSizingMode,
+  sizeValue: number,
+  tierBp: number | null | undefined,
+  entryCount: number | null | undefined,
+  dilutionMode: PaperArbDilutionMode
+): number | null {
+  const entries =
+    dilutionMode === "Diluted" && Number.isFinite(entryCount ?? NaN) && Number(entryCount) > 0
+      ? Math.max(1, Math.trunc(Number(entryCount)))
+      : 1;
+  if (sizingMode === "Notional") {
+    return Number.isFinite(sizeValue) && sizeValue > 0 ? sizeValue * entries : null;
+  }
+  if (!Number.isFinite(tierBp ?? NaN) || !Number.isFinite(sizeValue) || sizeValue <= 0) return null;
+  return Number(tierBp) * sizeValue * entries;
+}
 function intn(x: number | null | undefined): string {
   if (x === null || x === undefined) return "-";
   if (!Number.isFinite(x)) return "-";
   return String(Math.trunc(x));
+}
+function numOrNull(x: any): number | null {
+  if (typeof x === "number" && Number.isFinite(x)) return x;
+  if (typeof x === "string") {
+    const n = Number(x.trim().replace(",", "."));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 function minuteIdxToClockLabel(x: number | null | undefined): string {
   if (x === null || x === undefined || !Number.isFinite(x)) return "-";
@@ -811,6 +871,30 @@ function clampInt(x: any, def = 0) {
 function clampNumber(x: any, def = 0) {
   const v = Number(x);
   return Number.isFinite(v) ? v : def;
+}
+function normalizeScannerSizeValue(mode: PaperArbSizingMode, value: number | null | undefined) {
+  const raw = Math.abs(clampNumber(value, mode === "Tier" ? 1 : 1000));
+  if (mode === "Tier") return Math.max(1, Math.round(raw));
+  return Math.max(1000, Math.round(raw / 1000) * 1000);
+}
+function stepScannerSizeValue(mode: PaperArbSizingMode, value: number, delta: number) {
+  if (mode === "Tier") return normalizeScannerSizeValue(mode, value + delta);
+  return normalizeScannerSizeValue(mode, value + (delta * 1000));
+}
+function formatScannerSizeValue(mode: PaperArbSizingMode, value: number) {
+  const normalized = normalizeScannerSizeValue(mode, value);
+  return mode === "Notional" ? String(Math.trunc(normalized)) : String(Math.trunc(normalized));
+}
+function normalizeDilutionStepValue(value: number | null | undefined) {
+  const raw = Math.abs(clampNumber(value, 0.3));
+  if (raw <= 0) return 0.3;
+  return Math.round(raw * 1000) / 1000;
+}
+function stepDilutionStepValue(value: number, delta: number) {
+  return normalizeDilutionStepValue(value + (delta * 0.1));
+}
+function formatDilutionStepValue(value: number) {
+  return normalizeDilutionStepValue(value).toFixed(1).replace(/\.0$/, "");
 }
 function splitList(s: string): string[] {
   return (s ?? "")
@@ -881,6 +965,146 @@ function normalizeSide(
   return { label: s.length ? s : "-", isLong: null };
 }
 
+function scannerBestParams(row: any) {
+  return row?.best_params ?? row?.bestParams ?? row?.BestParams ?? row?.best_params_row ?? null;
+}
+
+function safeObjRecord(value: any): Record<string, any> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function ratingBandToBinClassKey(band: PaperArbRatingBand): string {
+  switch (band) {
+    case "BLUE":
+      return "blue";
+    case "ARK":
+      return "ark";
+    case "OPEN":
+      return "open";
+    case "INTRA":
+      return "intra";
+    case "PRINT":
+      return "print";
+    case "POST":
+      return "post";
+    default:
+      return "global";
+  }
+}
+
+function binSignKeyForSide(side: TapeArbSide): "pos" | "neg" | null {
+  const normalized = normalizeSide(side);
+  if (normalized.isLong === true) return "neg";
+  if (normalized.isLong === false) return "pos";
+  return null;
+}
+
+function parseBinIntervals(value: any): Array<{ lo: number; hi: number; rate: number; total: number }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const obj = safeObjRecord(item);
+      const lo = optNumOrNull(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
+      const hi = optNumOrNull(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
+      const rate = optNumOrNull(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
+      const total = optNumOrNull(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count);
+      if (lo == null || hi == null || rate == null || total == null) return null;
+      return { lo: Math.min(lo, hi), hi: Math.max(lo, hi), rate, total };
+    })
+    .filter((item): item is { lo: number; hi: number; rate: number; total: number } => item != null);
+}
+
+function scannerBinRatingSnapshot(args: {
+  row: any;
+  session: PaperArbSession;
+  side: TapeArbSide;
+  sigmaAbs: number | null | undefined;
+}) {
+  const { row, session, side, sigmaAbs } = args;
+  const signKey = binSignKeyForSide(side);
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
+  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
+  const root = safeObjRecord(scannerBestParams(row));
+  const binsRoot =
+    safeObjRecord(root?.best_windows_any)?.stitched ??
+    safeObjRecord(root?.BestWindowsAny)?.stitched ??
+    safeObjRecord(root?.best_windows_any)?.Stitched ??
+    safeObjRecord(root?.BestWindowsAny)?.Stitched ??
+    null;
+  const sigmaPeakBins =
+    safeObjRecord(binsRoot)?.sigma_peak_bins ??
+    safeObjRecord(binsRoot)?.SigmaPeakBins ??
+    null;
+  const classBins = safeObjRecord(safeObjRecord(sigmaPeakBins)?.[classKey]);
+  const intervals = parseBinIntervals(classBins?.[signKey]);
+  if (!intervals.length) return null;
+  const absSigma = Math.abs(sigmaAbs);
+  const match = intervals.find((interval) => absSigma >= interval.lo && absSigma <= interval.hi);
+  return match ?? null;
+}
+
+function passesBinRatingByBestParams(args: {
+  bestParams: any;
+  classKey: string;
+  signKey: "pos" | "neg" | null;
+  sigmaAbs: number | null | undefined;
+  minRate: number;
+  minTotal: number;
+}) {
+  const { bestParams, classKey, signKey, sigmaAbs, minRate, minTotal } = args;
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
+  const root = safeObjRecord(bestParams);
+  const binsRoot =
+    safeObjRecord(root?.best_windows_any)?.stitched ??
+    safeObjRecord(root?.BestWindowsAny)?.stitched ??
+    safeObjRecord(root?.best_windows_any)?.Stitched ??
+    safeObjRecord(root?.BestWindowsAny)?.Stitched ??
+    null;
+  const sigmaPeakBins =
+    safeObjRecord(binsRoot)?.sigma_peak_bins ??
+    safeObjRecord(binsRoot)?.SigmaPeakBins ??
+    null;
+  const classBins = safeObjRecord(safeObjRecord(sigmaPeakBins)?.[classKey]);
+  const intervals = parseBinIntervals(classBins?.[signKey]);
+  if (!intervals.length) return false;
+
+  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
+  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
+  const absSigma = Math.abs(sigmaAbs);
+
+  return intervals.some((interval) =>
+    absSigma >= interval.lo &&
+    absSigma <= interval.hi &&
+    interval.rate >= effectiveMinRate &&
+    interval.total >= effectiveMinTotal
+  );
+}
+
+function scannerBinFilterEnabled(args: {
+  ratingMode: PaperArbRatingMode;
+  metric: PaperArbMetric;
+}) {
+  return args.ratingMode === "BIN" && args.metric === "SigmaZap";
+}
+
+function passesScannerBinRatingFilter(args: {
+  enabled: boolean;
+  row: any;
+  session: PaperArbSession;
+  side: TapeArbSide;
+  sigmaAbs: number | null | undefined;
+  minRate: number;
+  minTotal: number;
+}) {
+  const { enabled, row, session, side, sigmaAbs, minRate, minTotal } = args;
+  if (!enabled) return true;
+  const snapshot = scannerBinRatingSnapshot({ row, session, side, sigmaAbs });
+  if (!snapshot) return false;
+  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
+  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
+  return snapshot.rate >= effectiveMinRate && snapshot.total >= effectiveMinTotal;
+}
+
 function passesDeltaZapGate(args: {
   side: TapeArbSide;
   metricAbs: number | null | undefined;
@@ -910,6 +1134,9 @@ function toYmd(d: string) {
 }
 
 type SharedRangeFilterKey =
+  | "corr"
+  | "beta"
+  | "sigma"
   | "adv20"
   | "adv20nf"
   | "adv90"
@@ -950,6 +1177,9 @@ type SharedRangeFilterKey =
 type SharedRangeFilterMode = "on" | "off";
 
 const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRangeFilterMode> = {
+  corr: "on",
+  beta: "on",
+  sigma: "on",
   adv20: "on",
   adv20nf: "on",
   adv90: "on",
@@ -1002,6 +1232,9 @@ const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchP
   { value: "minHoldCandles", label: "Min Hold", format: "minutes" },
   { value: "rating", label: "Rating", format: "number" },
   { value: "ratingTotal", label: "Rating Total", format: "number" },
+  { value: "corr", label: "CORR", format: "number" },
+  { value: "beta", label: "BETA", format: "number" },
+  { value: "sigma", label: "SIGMA", format: "number" },
   { value: "adv20", label: "ADV20", format: "number" },
   { value: "adv20NF", label: "ADV20NF", format: "number" },
   { value: "adv90", label: "ADV90", format: "number" },
@@ -1062,7 +1295,7 @@ const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
   {
     label: "RATING FILTERS",
     options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
-      ["rating", "ratingTotal"].includes(option.value)
+      ["rating", "ratingTotal", "corr", "beta", "sigma"].includes(option.value)
     ).map((option) => ({ value: option.value, label: option.label })),
   },
   {
@@ -1148,6 +1381,9 @@ const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
 const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "minrate", label: "MINRATE", group: "RATING GATES", scenarioParameter: "MINRATE" },
   { key: "mintotal", label: "MINTOTAL", group: "RATING GATES", scenarioParameter: "MINTOTAL" },
+  { key: "corr", label: "CORR", group: "RATING GATES", scenarioParameter: "CORR", optimizerApiKey: "CORR" },
+  { key: "beta", label: "BETA", group: "RATING GATES", scenarioParameter: "BETA", optimizerApiKey: "BETA" },
+  { key: "sigma", label: "SIGMA", group: "RATING GATES", scenarioParameter: "SIGMA", optimizerApiKey: "SIGMA" },
   { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
   { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
   { key: "adv20", label: "ADV20", group: "TAPE FILTERS", scenarioParameter: "ADV20" },
@@ -1315,6 +1551,12 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
       return row.rating ?? null;
     case "ratingTotal":
       return row.ratingTotal ?? null;
+    case "corr":
+      return row.corr ?? null;
+    case "beta":
+      return row.beta ?? null;
+    case "sigma":
+      return row.sigma ?? null;
     case "adv20":
       return row.adv20 ?? null;
     case "adv20NF":
@@ -1388,6 +1630,523 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
     case "imbExch1555":
       return row.imbExch1555 ?? null;
   }
+}
+
+function getOptimizerFallbackValue(
+  row: PaperArbClosedDto,
+  key: "corr" | "beta" | "sigma",
+  tickerMeta?: { corr?: number | null; beta?: number | null; sigma?: number | null } | null
+): number | null {
+  const anyRow = row as any;
+  const pick = (...values: any[]) => {
+    for (const value of values) {
+      const parsed = numOrNull(value);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  };
+
+  if (key === "corr") {
+    return pick(
+      row.corr,
+      anyRow?.Corr,
+      anyRow?.cor,
+      anyRow?.Cor,
+      anyRow?.correlation,
+      anyRow?.Correlation,
+      anyRow?.best?.corr,
+      anyRow?.best?.Corr,
+      anyRow?.meta?.corr,
+      anyRow?.meta?.Corr,
+      anyRow?.static?.corr,
+      anyRow?.static?.Corr,
+      tickerMeta?.corr
+    );
+  }
+
+  if (key === "beta") {
+    return pick(
+      row.beta,
+      anyRow?.Beta,
+      anyRow?.best?.beta,
+      anyRow?.best?.Beta,
+      anyRow?.meta?.beta,
+      anyRow?.meta?.Beta,
+      anyRow?.static?.beta,
+      anyRow?.static?.Beta,
+      tickerMeta?.beta
+    );
+  }
+
+  return pick(
+    row.sigma,
+    anyRow?.sig,
+    anyRow?.Sig,
+    anyRow?.Sigma,
+    anyRow?.best?.sigma,
+    anyRow?.best?.Sigma,
+    anyRow?.meta?.sigma,
+    anyRow?.meta?.Sigma,
+    anyRow?.static?.sigma,
+    anyRow?.static?.Sigma,
+    tickerMeta?.sigma
+  );
+}
+
+function buildFallbackOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  key: "corr" | "beta" | "sigma",
+  label: string,
+  group: OptimizerRangeGroupKey,
+  bucketCount: number,
+  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
+): PaperArbOptimizerParameterDto | null {
+  const source = rows
+    .map((row) => ({
+      row,
+      value: getOptimizerFallbackValue(
+        row,
+        key,
+        tickerMetaByTicker?.[String(row.ticker ?? "").trim().toUpperCase()] ?? null
+      ),
+    }))
+    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
+
+  if (!source.length) return null;
+
+  const values = source.map((entry) => entry.value);
+  const observedMin = Math.min(...values);
+  const observedMax = Math.max(...values);
+  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
+  const span = observedMax - observedMin;
+  const equalValues = span <= 0;
+
+  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
+    const trades = items.length;
+    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
+    const wins = pnls.filter((value) => value > 0).length;
+    const losses = pnls.filter((value) => value < 0).length;
+    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const winRate = trades > 0 ? wins / trades : 0;
+    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
+  };
+
+  const buildBucket = (
+    bucketId: string,
+    bucketLabel: string,
+    items: Array<{ row: PaperArbClosedDto; value: number }>,
+    fromValue?: number | null,
+    toValue?: number | null
+  ): PaperArbOptimizerRangeBucketDto => {
+    const summary = summarize(items);
+    return {
+      bucketId,
+      label: bucketLabel,
+      fromValue: fromValue ?? null,
+      toValue: toValue ?? null,
+      trades: summary.trades,
+      wins: summary.wins,
+      losses: summary.losses,
+      totalPnlUsd: summary.totalPnlUsd,
+      avgPnlUsd: summary.avgPnlUsd,
+      winRate: summary.winRate,
+      score: summary.score,
+      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
+    };
+  };
+
+  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
+  if (equalValues) {
+    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
+  } else {
+    const step = span / safeBucketCount;
+    for (let index = 0; index < safeBucketCount; index += 1) {
+      const fromValue = observedMin + (step * index);
+      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
+      const items = source.filter((entry) =>
+        index === safeBucketCount - 1
+          ? entry.value >= fromValue && entry.value <= toValue
+          : entry.value >= fromValue && entry.value < toValue
+      );
+      if (!items.length) continue;
+      buckets.push(
+        buildBucket(
+          `${key}-bucket-${index}`,
+          `${num(fromValue, 2)} .. ${num(toValue, 2)}`,
+          items,
+          fromValue,
+          toValue
+        )
+      );
+    }
+  }
+
+  const lowerTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${key}-lt-${index}`,
+      `<= ${num(bucket.toValue, 2)}`,
+      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
+      observedMin,
+      bucket.toValue ?? observedMax
+    )
+  );
+  const upperTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${key}-gt-${index}`,
+      `>= ${num(bucket.fromValue, 2)}`,
+      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
+      bucket.fromValue ?? observedMin,
+      observedMax
+    )
+  );
+
+  const base = summarize(source);
+  return {
+    key,
+    group,
+    label,
+    observedMin,
+    observedMax,
+    valueCount: source.length,
+    baseTrades: base.trades,
+    baseWins: base.wins,
+    baseLosses: base.losses,
+    baseTotalPnlUsd: base.totalPnlUsd,
+    baseAvgPnlUsd: base.avgPnlUsd,
+    baseWinRate: base.winRate,
+    buckets,
+    lowerTailBuckets,
+    upperTailBuckets,
+  };
+}
+
+function buildFallbackBinRatingOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  key: "minrate" | "mintotal",
+  label: string,
+  group: OptimizerRangeGroupKey,
+  bucketCount: number,
+  session: PaperArbSession
+): PaperArbOptimizerParameterDto | null {
+  const source = rows
+    .map((row) => {
+      const snapshot = scannerBinRatingSnapshot({
+        row,
+        session,
+        side: row.side,
+        sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
+      });
+      const value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
+      return { row, value };
+    })
+    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
+
+  if (!source.length) return null;
+
+  const values = source.map((entry) => entry.value);
+  const observedMin = Math.min(...values);
+  const observedMax = Math.max(...values);
+  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
+  const span = observedMax - observedMin;
+  const equalValues = span <= 0;
+
+  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
+    const trades = items.length;
+    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
+    const wins = pnls.filter((value) => value > 0).length;
+    const losses = pnls.filter((value) => value < 0).length;
+    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const winRate = trades > 0 ? wins / trades : 0;
+    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
+  };
+
+  const buildBucket = (
+    bucketId: string,
+    bucketLabel: string,
+    items: Array<{ row: PaperArbClosedDto; value: number }>,
+    fromValue?: number | null,
+    toValue?: number | null
+  ): PaperArbOptimizerRangeBucketDto => {
+    const summary = summarize(items);
+    return {
+      bucketId,
+      label: bucketLabel,
+      fromValue: fromValue ?? null,
+      toValue: toValue ?? null,
+      trades: summary.trades,
+      wins: summary.wins,
+      losses: summary.losses,
+      totalPnlUsd: summary.totalPnlUsd,
+      avgPnlUsd: summary.avgPnlUsd,
+      winRate: summary.winRate,
+      score: summary.score,
+      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
+    };
+  };
+
+  const valueDigits = key === "minrate" ? 2 : 0;
+  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
+  if (equalValues) {
+    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, valueDigits)} .. ${num(observedMax, valueDigits)}`, source, observedMin, observedMax));
+  } else {
+    const step = span / safeBucketCount;
+    for (let index = 0; index < safeBucketCount; index += 1) {
+      const fromValue = observedMin + (step * index);
+      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
+      const items = source.filter((entry) =>
+        index === safeBucketCount - 1
+          ? entry.value >= fromValue && entry.value <= toValue
+          : entry.value >= fromValue && entry.value < toValue
+      );
+      if (!items.length) continue;
+      buckets.push(buildBucket(`${key}-bucket-${index}`, `${num(fromValue, valueDigits)} .. ${num(toValue, valueDigits)}`, items, fromValue, toValue));
+    }
+  }
+
+  const lowerTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${key}-lt-${index}`,
+      `<= ${num(bucket.toValue, valueDigits)}`,
+      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
+      observedMin,
+      bucket.toValue ?? observedMax
+    )
+  );
+  const upperTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${key}-gt-${index}`,
+      `>= ${num(bucket.fromValue, valueDigits)}`,
+      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
+      bucket.fromValue ?? observedMin,
+      observedMax
+    )
+  );
+
+  const base = summarize(source);
+  return {
+    key,
+    group,
+    label,
+    observedMin,
+    observedMax,
+    valueCount: source.length,
+    baseTrades: base.trades,
+    baseWins: base.wins,
+    baseLosses: base.losses,
+    baseTotalPnlUsd: base.totalPnlUsd,
+    baseAvgPnlUsd: base.avgPnlUsd,
+    baseWinRate: base.winRate,
+    buckets,
+    lowerTailBuckets,
+    upperTailBuckets,
+  };
+}
+
+function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResearchParameterKey | null {
+  switch (key) {
+    case "corr":
+      return "corr";
+    case "beta":
+      return "beta";
+    case "sigma":
+      return "sigma";
+    case "startabs":
+      return "startMetricAbs";
+    case "endabs":
+      return "endMetricAbs";
+    case "adv20":
+      return "adv20";
+    case "adv20nf":
+      return "adv20NF";
+    case "adv90":
+      return "adv90";
+    case "adv90nf":
+      return "adv90NF";
+    case "avpremhv":
+      return "avPreMhv";
+    case "roundlot":
+      return "roundLot";
+    case "vwap":
+      return "vwap";
+    case "spread":
+      return "spread";
+    case "lstprcl":
+      return "lstPrcL";
+    case "lstcls":
+      return "lstCls";
+    case "ycls":
+      return "yCls";
+    case "tcls":
+      return "tCls";
+    case "clstocls":
+      return "clsToClsPct";
+    case "lo":
+      return "lo";
+    case "lstclsnewscnt":
+      return "newsCnt";
+    case "marketcapm":
+      return "marketCapM";
+    case "premhvolnf":
+      return "preMktVolNF";
+    case "volnffromlstcls":
+      return "volNFfromLstCls";
+    case "avpostmhvol90nf":
+      return "avPostMhVol90NF";
+    case "avpremhvol90nf":
+      return "avPreMhVol90NF";
+    case "avpremhvalue20nf":
+      return "avPreMhValue20NF";
+    case "avpremhvalue90nf":
+      return "avPreMhValue90NF";
+    case "avgdailyvalue20":
+      return "avgDailyValue20";
+    case "avgdailyvalue90":
+      return "avgDailyValue90";
+    case "volatility20":
+      return "volatility20";
+    case "volatility90":
+      return "volatility90";
+    case "premhmdv20nf":
+      return "preMhMDV20NF";
+    case "premhmdv90nf":
+      return "preMhMDV90NF";
+    case "volrel":
+      return "volRel";
+    case "premhbidlstprc":
+      return "preMhBidLstPrcPct";
+    case "premhlolstprc":
+      return "preMhLoLstPrcPct";
+    case "premhhilstcls":
+      return "preMhHiLstClsPct";
+    case "premhlolstcls":
+      return "preMhLoLstClsPct";
+    case "lstprclstcls":
+      return "lstPrcLstClsPct";
+    case "imbexch925":
+      return "imbExch925";
+    case "imbexch1555":
+      return "imbExch1555";
+    default:
+      return null;
+  }
+}
+
+function buildFallbackScopeOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  definition: ScopeParameterDefinition,
+  bucketCount: number
+): PaperArbOptimizerParameterDto | null {
+  const parameterKey = optimizerKeyToScopeResearchParameterKey(definition.key);
+  if (!parameterKey) return null;
+
+  const source = rows
+    .map((row) => ({
+      row,
+      value: scopeResearchParameterValue(row, parameterKey),
+    }))
+    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
+
+  if (!source.length) return null;
+
+  const values = source.map((entry) => entry.value);
+  const observedMin = Math.min(...values);
+  const observedMax = Math.max(...values);
+  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
+  const span = observedMax - observedMin;
+  const equalValues = span <= 0;
+
+  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
+    const trades = items.length;
+    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
+    const wins = pnls.filter((value) => value > 0).length;
+    const losses = pnls.filter((value) => value < 0).length;
+    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const winRate = trades > 0 ? wins / trades : 0;
+    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
+  };
+
+  const buildBucket = (
+    bucketId: string,
+    bucketLabel: string,
+    items: Array<{ row: PaperArbClosedDto; value: number }>,
+    fromValue?: number | null,
+    toValue?: number | null
+  ): PaperArbOptimizerRangeBucketDto => {
+    const summary = summarize(items);
+    return {
+      bucketId,
+      label: bucketLabel,
+      fromValue: fromValue ?? null,
+      toValue: toValue ?? null,
+      trades: summary.trades,
+      wins: summary.wins,
+      losses: summary.losses,
+      totalPnlUsd: summary.totalPnlUsd,
+      avgPnlUsd: summary.avgPnlUsd,
+      winRate: summary.winRate,
+      score: summary.score,
+      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
+    };
+  };
+
+  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
+  if (equalValues) {
+    buckets.push(buildBucket(`${definition.key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
+  } else {
+    const step = span / safeBucketCount;
+    for (let index = 0; index < safeBucketCount; index += 1) {
+      const fromValue = observedMin + (step * index);
+      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
+      const items = source.filter((entry) =>
+        index === safeBucketCount - 1
+          ? entry.value >= fromValue && entry.value <= toValue
+          : entry.value >= fromValue && entry.value < toValue
+      );
+      if (!items.length) continue;
+      buckets.push(buildBucket(`${definition.key}-bucket-${index}`, `${num(fromValue, 2)} .. ${num(toValue, 2)}`, items, fromValue, toValue));
+    }
+  }
+
+  const lowerTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${definition.key}-lt-${index}`,
+      `<= ${num(bucket.toValue, 2)}`,
+      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
+      observedMin,
+      bucket.toValue ?? observedMax
+    )
+  );
+  const upperTailBuckets = buckets.map((bucket, index) =>
+    buildBucket(
+      `${definition.key}-gt-${index}`,
+      `>= ${num(bucket.fromValue, 2)}`,
+      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
+      bucket.fromValue ?? observedMin,
+      observedMax
+    )
+  );
+
+  const base = summarize(source);
+  return {
+    key: definition.key,
+    group: definition.group,
+    label: definition.label,
+    observedMin,
+    observedMax,
+    valueCount: source.length,
+    baseTrades: base.trades,
+    baseWins: base.wins,
+    baseLosses: base.losses,
+    baseTotalPnlUsd: base.totalPnlUsd,
+    baseAvgPnlUsd: base.avgPnlUsd,
+    baseWinRate: base.winRate,
+    buckets,
+    lowerTailBuckets,
+    upperTailBuckets,
+  };
 }
 
 function scopeResearchResultValue(row: PaperArbClosedDto, key: ScopeResearchResultKey): number | null {
@@ -2054,15 +2813,18 @@ function GlassCard({
   children,
   className,
   glow = false,
+  hoverable = true,
 }: {
   children: React.ReactNode;
   className?: string;
   glow?: boolean;
+  hoverable?: boolean;
 }) {
   return (
     <div
       className={clsx(
-        "scanner-glass-card bg-[#0a0a0a]/50 backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70",
+        "scanner-glass-card bg-[#0a0a0a]/50 backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl transition-all duration-300",
+        hoverable ? "hover:border-white/[0.12] hover:bg-[#0a0a0a]/70" : "hover:border-white/[0.06] hover:bg-[#0a0a0a]/50",
         glow && "border-l-4 border-l-emerald-500 shadow-[0_0_30px_-10px_rgba(16,185,129,0.18)]",
         className
       )}
@@ -2144,7 +2906,7 @@ function SummaryMetricCard({
   inline?: boolean;
 }) {
   return (
-    <GlassCard className={clsx("p-3", className)}>
+    <GlassCard hoverable={false} className={clsx("p-3", className)}>
       <div
         className={clsx(
           inline
@@ -5279,6 +6041,10 @@ export default function ArbitrageScanner() {
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
+  const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
+  const [sizeValue, setSizeValue] = useState<number>(1000);
+  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>("Undiluted");
+  const [dilutionStep, setDilutionStep] = useState<number>(0.3);
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -5333,6 +6099,7 @@ export default function ArbitrageScanner() {
 
   // ===== Advanced filters (ALL switches)
   // rating
+  const [ratingMode, setRatingMode] = useState<PaperArbRatingMode>("SESSION");
   const [ratingType, setRatingType] = useState<PaperArbRatingType>("any");
   const [ratingRules, setRatingRules] = useState<PaperArbRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
@@ -5372,8 +6139,12 @@ export default function ArbitrageScanner() {
   // numeric ranges (as strings for easy empty/null)
   const [minTierBp, setMinTierBp] = useState<string>("");
   const [maxTierBp, setMaxTierBp] = useState<string>("");
+  const [minCorr, setMinCorr] = useState<string>("");
+  const [maxCorr, setMaxCorr] = useState<string>("");
   const [minBeta, setMinBeta] = useState<string>("");
   const [maxBeta, setMaxBeta] = useState<string>("");
+  const [minSigma, setMinSigma] = useState<string>("");
+  const [maxSigma, setMaxSigma] = useState<string>("");
 
   const [minMarketCapM, setMinMarketCapM] = useState<string>("1000");
   const [maxMarketCapM, setMaxMarketCapM] = useState<string>("");
@@ -5556,8 +6327,27 @@ export default function ArbitrageScanner() {
     left: { extra: false, parallel: false },
     right: { extra: false, parallel: false },
   });
+  const [arbitrageTickerMetaByTicker, setArbitrageTickerMetaByTicker] = useState<
+    Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
+  >({});
+  const [arbitrageTickerMetaLoading, setArbitrageTickerMetaLoading] = useState(false);
+  const arbitrageTickerMetaLoadedRef = useRef(false);
   const episodesSearchCacheRef = useRef<Map<string, { ts: number; rows: PaperArbClosedDto[] }>>(new Map());
   const episodesSearchInFlightRef = useRef<Map<string, Promise<PaperArbClosedDto[]>>>(new Map());
+
+  useEffect(() => {
+    setScopeSelectedParameterKeys((prev) => {
+      if (!prev.length) return prev;
+      const hasLegacyRatingGate = prev.includes("minrate") || prev.includes("mintotal");
+      if (!hasLegacyRatingGate) return prev;
+
+      const requiredKeys = ["corr", "beta", "sigma"];
+      const missingKeys = requiredKeys.filter((key) => !prev.includes(key));
+      if (!missingKeys.length) return prev;
+
+      return [...prev, ...missingKeys];
+    });
+  }, []);
 
   const toggleSharedRangeFilterMode = (key: SharedRangeFilterKey) => {
     setSharedRangeFilterModes((prev) => ({
@@ -5602,6 +6392,9 @@ export default function ArbitrageScanner() {
     const startAbsMaxNum = optNumOrNull(startAbsMax);
     const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs);
     return (
+      has(minCorr) || has(maxCorr) ||
+      has(minBeta) || has(maxBeta) ||
+      has(minSigma) || has(maxSigma) ||
       has(minAdv20) || has(maxAdv20) ||
       has(minAdv20NF) || has(maxAdv20NF) ||
       has(minAdv90) || has(maxAdv90) ||
@@ -5646,6 +6439,7 @@ export default function ArbitrageScanner() {
       excludePTP || excludeSSR || excludeETF || excludeCrap
     );
   }, [
+    minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
     minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
     minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
     minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
@@ -5827,6 +6621,10 @@ export default function ArbitrageScanner() {
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
+        if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
+        if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
+        if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
+        if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
         if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
@@ -5861,6 +6659,7 @@ export default function ArbitrageScanner() {
         if (typeof s.episodesUseSearch === "boolean") setEpisodesUseSearch(s.episodesUseSearch);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
+        if (s.ratingMode === "SESSION" || s.ratingMode === "BIN") setRatingMode(s.ratingMode);
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -5909,7 +6708,9 @@ export default function ArbitrageScanner() {
           if (typeof v === "string") setter(v);
         };
         applyStr(s.minTierBp, setMinTierBp); applyStr(s.maxTierBp, setMaxTierBp);
+        applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
+        applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
         applyStr(s.minRoundLot, setMinRoundLot); applyStr(s.maxRoundLot, setMaxRoundLot);
         applyStr(s.minAdv20, setMinAdv20); applyStr(s.maxAdv20, setMaxAdv20);
@@ -6001,6 +6802,10 @@ export default function ArbitrageScanner() {
       endAbs,
       minHoldCandles,
       pnlMode,
+      sizingMode,
+      sizeValue,
+      dilutionMode,
+      dilutionStep,
       optimizerRangeRankMetric,
       optimizerRangeMinTrades,
       optimizerBucketCount,
@@ -6018,6 +6823,7 @@ export default function ArbitrageScanner() {
       showPin,
       episodesUseSearch,
       showAdvanced,
+      ratingMode,
       ratingType,
       ratingRules,
       ratingEnabledBands,
@@ -6031,8 +6837,12 @@ export default function ArbitrageScanner() {
       imbExchsText,
       minTierBp,
       maxTierBp,
+      minCorr,
+      maxCorr,
       minBeta,
       maxBeta,
+      minSigma,
+      maxSigma,
       minMarketCapM,
       maxMarketCapM,
       minRoundLot,
@@ -6143,9 +6953,9 @@ export default function ArbitrageScanner() {
       session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, pnlMode,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
-      ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
+      ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       exchangesText, countriesText, sectorsL3Text, imbExchsText, minTierBp, maxTierBp,
-      minBeta, maxBeta, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
+      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
       minSpreadBps, maxSpreadBps, minGap, maxGap, minGapPct, maxGapPct, minClsToClsPct,
@@ -6242,6 +7052,12 @@ export default function ArbitrageScanner() {
   }, [scannerPresetId]);
 
   const scannerSharedFilterSetters = {
+    minCorr: setMinCorr,
+    maxCorr: setMaxCorr,
+    minBeta: setMinBeta,
+    maxBeta: setMaxBeta,
+    minSigma: setMinSigma,
+    maxSigma: setMaxSigma,
     minAdv20: setMinAdv20,
     maxAdv20: setMaxAdv20,
     minAdv20NF: setMinAdv20NF,
@@ -6417,10 +7233,7 @@ export default function ArbitrageScanner() {
   function buildGetParams(d: string) {
     // NOTE: priceMode not sent (server accepts empty or LastPrint; Quotes rejected)
     const mh = Math.max(0, Math.min(60, clampInt(minHoldCandles, 0)));
-    const applyTickers = splitListUpper(tickersText);
-    const pinTickers = splitListUpper(benchTickersText);
-    const reqTickers =
-      listMode === "apply" ? applyTickers : listMode === "pin" ? pinTickers : [];
+    const reqTickers = requestScopedTickers;
 
     return {
       dateNy: d,
@@ -6433,6 +7246,10 @@ export default function ArbitrageScanner() {
       closeMode,
       minHoldCandles: mh,
       pnlMode,
+      sizingMode,
+      sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
+      dilutionMode,
+      dilutionStep: normalizeDilutionStepValue(dilutionStep),
       ratingType: ratingType ?? "any",
 
       tickers: reqTickers.length ? reqTickers : null,
@@ -6445,8 +7262,12 @@ export default function ArbitrageScanner() {
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
+      minCorr: optNumOrNull(minCorr),
+      maxCorr: optNumOrNull(maxCorr),
       minBeta: optNumOrNull(minBeta),
       maxBeta: optNumOrNull(maxBeta),
+      minSigma: optNumOrNull(minSigma),
+      maxSigma: optNumOrNull(maxSigma),
 
       // shared min/max filters
       minAdv20: rangeValueOrNull("adv20", minAdv20),
@@ -6552,10 +7373,7 @@ export default function ArbitrageScanner() {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const startAbsMaxNum = optNumOrNull(startAbsMax);
     const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
-    const applyTickers = splitListUpper(tickersText);
-    const pinTickers = splitListUpper(benchTickersText);
-    const reqTickers =
-      listMode === "apply" ? applyTickers : listMode === "pin" ? pinTickers : [];
+    const reqTickers = requestScopedTickers;
 
     const sessionBand = ratingBandFromSession(session);
     const sessionRule = ratingRules.find((r) => r.band === sessionBand) ?? { band: sessionBand, minRate: 0, minTotal: 0 };
@@ -6564,6 +7382,7 @@ export default function ArbitrageScanner() {
       minRate: Math.max(0, Number(sessionRule.minRate) || 0),
       minTotal: Math.max(0, clampInt(sessionRule.minTotal, 0)),
     }];
+    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
 
     const req: PaperArbAnalyticsRequest = {
       dateFrom: from,
@@ -6578,9 +7397,13 @@ export default function ArbitrageScanner() {
       closeMode,
       minHoldCandles: mh,
       pnlMode,
+      sizingMode,
+      sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
+      dilutionMode,
+      dilutionStep: normalizeDilutionStepValue(dilutionStep),
 
       ratingType: ratingType ?? "any",
-      ratingRules: rrForRequest,
+      ratingRules: useBinRatingFilter ? null : rrForRequest,
 
       tickers: reqTickers.length ? reqTickers : null,
       benchTickers: null,
@@ -6592,8 +7415,12 @@ export default function ArbitrageScanner() {
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
+      minCorr: optNumOrNull(minCorr),
+      maxCorr: optNumOrNull(maxCorr),
       minBeta: optNumOrNull(minBeta),
       maxBeta: optNumOrNull(maxBeta),
+      minSigma: optNumOrNull(minSigma),
+      maxSigma: optNumOrNull(maxSigma),
 
       minMarketCapM: rangeValueOrNull("marketcapm", minMarketCapM),
       maxMarketCapM: rangeValueOrNull("marketcapm", maxMarketCapM),
@@ -6788,7 +7615,7 @@ export default function ArbitrageScanner() {
         req.startCutoffMinuteIdx = Math.max(0, clampInt(offset, 0));
         const [analyticsResp, rows] = await Promise.all([
           apiPost<PaperArbAnalyticsResponse>("/api/paper/arbitrage/analytics", req),
-          fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo)),
+          fetchEpisodesSearchRows(req),
         ]);
 
         setAnalytics(analyticsResp ?? null);
@@ -6874,6 +7701,10 @@ export default function ArbitrageScanner() {
   }
 
   const applyOptimizerRatingRule = (req: PaperArbAnalyticsRequest, patch: Partial<PaperArbRatingRule> = {}) => {
+    if (scannerBinFilterEnabled({ ratingMode, metric })) {
+      req.ratingRules = null;
+      return;
+    }
     const currentRatingRule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
     req.ratingRules = [{
       band: currentRatingRule.band,
@@ -6885,6 +7716,7 @@ export default function ArbitrageScanner() {
   const optimizerScenarios = useMemo<OptimizerScenario[]>(() => {
     const scenarios: OptimizerScenario[] = [];
     const currentRatingRule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const pushRangeScenarios = (
       key: SharedRangeFilterKey,
       label: string,
@@ -6948,6 +7780,9 @@ export default function ArbitrageScanner() {
       apply: () => {},
     });
 
+    pushRangeScenarios("corr", "CORR", minCorr, maxCorr, "minCorr", "maxCorr");
+    pushRangeScenarios("beta", "BETA", minBeta, maxBeta, "minBeta", "maxBeta");
+    pushRangeScenarios("sigma", "SIGMA", minSigma, maxSigma, "minSigma", "maxSigma");
     pushRangeScenarios("adv20", "ADV20", minAdv20, maxAdv20, "minAdv20", "maxAdv20");
     pushRangeScenarios("adv20nf", "ADV20NF", minAdv20NF, maxAdv20NF, "minAdv20NF", "maxAdv20NF");
     pushRangeScenarios("adv90", "ADV90", minAdv90, maxAdv90, "minAdv90", "maxAdv90");
@@ -6985,7 +7820,7 @@ export default function ArbitrageScanner() {
     pushRangeScenarios("imbexch925", "ImbExch9:25", minImbExch925, maxImbExch925, "minImbExch925", "maxImbExch925");
     pushRangeScenarios("imbexch1555", "ImbExch15:55", minImbExch1555, maxImbExch1555, "minImbExch1555", "maxImbExch1555");
 
-    if (currentRatingRule.minRate > 0) {
+    if (!useBinRatingFilter && currentRatingRule.minRate > 0) {
       scenarios.push({
         id: "minrate",
         parameter: "MINRATE",
@@ -6996,7 +7831,7 @@ export default function ArbitrageScanner() {
         },
       });
     }
-    if (currentRatingRule.minTotal > 0) {
+    if (!useBinRatingFilter && currentRatingRule.minTotal > 0) {
       scenarios.push({
         id: "mintotal",
         parameter: "MINTOTAL",
@@ -7053,6 +7888,11 @@ export default function ArbitrageScanner() {
     dateFrom,
     dateTo,
     endAbs,
+    ratingMode,
+    metric,
+    maxCorr,
+    maxBeta,
+    maxSigma,
     maxAdv20,
     maxAdv20NF,
     maxAdv90,
@@ -7075,6 +7915,9 @@ export default function ArbitrageScanner() {
     minAdv20NF,
     minAdv90,
     minAdv90NF,
+    minCorr,
+    minBeta,
+    minSigma,
     minAvPreMhv,
     minClsToClsPct,
     minLo,
@@ -7097,6 +7940,9 @@ export default function ArbitrageScanner() {
   ]);
 
   const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
+    req.minCorr = null; req.maxCorr = null;
+    req.minBeta = null; req.maxBeta = null;
+    req.minSigma = null; req.maxSigma = null;
     req.minAdv20 = null; req.maxAdv20 = null;
     req.minAdv20NF = null; req.maxAdv20NF = null;
     req.minAdv90 = null; req.maxAdv90 = null;
@@ -7135,10 +7981,22 @@ export default function ArbitrageScanner() {
     req.minImbExch925 = null; req.maxImbExch925 = null;
     req.minImbExch1555 = null; req.maxImbExch1555 = null;
     req.startAbsMax = null;
-    req.ratingRules = [{ band: ruleBand, minRate: 0, minTotal: 0 }];
+    req.ratingRules = scannerBinFilterEnabled({ ratingMode, metric }) ? null : [{ band: ruleBand, minRate: 0, minTotal: 0 }];
   };
 
   async function loadOptimizerRangesByGroup(from: string, to: string) {
+    if (scannerBinFilterEnabled({ ratingMode, metric })) {
+      setOptimizerRanges(null);
+      setOptimizerRangesErr(null);
+      setOptimizerRangesLoading(false);
+      setOptimizerRangeGroupStatus({
+        "RATING GATES": { loading: false, error: null, partial: false },
+        "ZAP THRESHOLDS": { loading: false, error: null, partial: false },
+        "TAPE FILTERS": { loading: false, error: null, partial: false },
+      });
+      return;
+    }
+
     const effectiveScopeKeys = scopeSelectedParameterKeys.length
       ? scopeSelectedParameterKeys
       : SCOPE_PARAMETER_DEFINITIONS.map((item) => item.key);
@@ -7148,7 +8006,7 @@ export default function ArbitrageScanner() {
       const def = SCOPE_PARAMETER_BY_KEY.get(key);
       if (!def) continue;
       const list = requestedGroups.get(def.group) ?? [];
-      list.push(def.key);
+      list.push(def.optimizerApiKey ?? def.scenarioParameter ?? def.key);
       requestedGroups.set(def.group, list);
     }
     const chunkKeys = (keys: string[], size: number) => {
@@ -7163,9 +8021,12 @@ export default function ArbitrageScanner() {
       bucketCount?: number;
     }> = [];
     for (const group of ["TAPE FILTERS", "RATING GATES", "ZAP THRESHOLDS"] as OptimizerRangeGroupKey[]) {
+      if (scannerBinFilterEnabled({ ratingMode, metric }) && group === "RATING GATES") continue;
       if (!loadAllScopeKeys && !requestedGroups.has(group)) continue;
       const groupKeys = loadAllScopeKeys
-        ? SCOPE_PARAMETER_DEFINITIONS.filter((item) => item.group === group).map((item) => item.key)
+        ? SCOPE_PARAMETER_DEFINITIONS
+            .filter((item) => item.group === group)
+            .map((item) => item.optimizerApiKey ?? item.scenarioParameter ?? item.key)
         : requestedGroups.get(group) ?? [];
 
       if (group === "TAPE FILTERS") {
@@ -7221,9 +8082,9 @@ export default function ArbitrageScanner() {
     setOptimizerRangesErr(null);
     setOptimizerRangesLoading(true);
     setOptimizerRangeGroupStatus({
-      "RATING GATES": { loading: true, error: null, partial: false },
-      "ZAP THRESHOLDS": { loading: true, error: null, partial: false },
-      "TAPE FILTERS": { loading: true, error: null, partial: false },
+      "RATING GATES": { loading: groupPending["RATING GATES"] > 0, error: null, partial: false },
+      "ZAP THRESHOLDS": { loading: groupPending["ZAP THRESHOLDS"] > 0, error: null, partial: false },
+      "TAPE FILTERS": { loading: groupPending["TAPE FILTERS"] > 0, error: null, partial: false },
     });
     let anyGroupReady = false;
     const failedGroups: string[] = [];
@@ -7481,6 +8342,19 @@ export default function ArbitrageScanner() {
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
   const pinSet = useMemo(() => new Set(splitListUpper(benchTickersText)), [benchTickersText]);
+  const requestScopedTickers = useMemo(() => {
+    if (listMode === "apply") return Array.from(applySet);
+    if (listMode === "pin") return Array.from(pinSet);
+    if (listMode !== "ignore") return [] as string[];
+
+    const seen = new Set<string>();
+    for (const row of [...activeRows, ...episodesRows]) {
+      const ticker = tickerKey((row as any)?.ticker);
+      if (!ticker || ignoreSet.has(ticker)) continue;
+      seen.add(ticker);
+    }
+    return Array.from(seen);
+  }, [listMode, applySet, pinSet, ignoreSet, activeRows, episodesRows]);
 
   const listModeAllowsTicker = (tkRaw: string | null | undefined) => {
     const tk = tickerKey(tkRaw);
@@ -7491,9 +8365,37 @@ export default function ArbitrageScanner() {
     return true;
   };
 
+  const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
+    const ticker = String(row.ticker ?? "").trim().toUpperCase();
+    const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
+    const filters = [
+      { key: "corr" as const, min: minCorr, max: maxCorr },
+      { key: "beta" as const, min: minBeta, max: maxBeta },
+      { key: "sigma" as const, min: minSigma, max: maxSigma },
+    ];
+
+    for (const filter of filters) {
+      const minValue = optNumOrNull(filter.min);
+      const maxValue = optNumOrNull(filter.max);
+      if (minValue == null && maxValue == null) continue;
+
+      const value = getOptimizerFallbackValue(row, filter.key, tickerMeta);
+      if (value == null) {
+        if (arbitrageTickerMetaLoading || !arbitrageTickerMetaLoadedRef.current) continue;
+        return false;
+      }
+      if (minValue != null && value < minValue) return false;
+      if (maxValue != null && value > maxValue) return false;
+    }
+
+    return true;
+  };
+
   // ========= Client-side filters
   const filteredActive = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
+    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
+    const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return activeRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
@@ -7509,12 +8411,24 @@ export default function ArbitrageScanner() {
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
+      if (!passesScannerBinRatingFilter({
+        enabled: useBinRatingFilter,
+        row: r,
+        session,
+        side: r.side,
+        sigmaAbs: r.last?.metricAbs ?? r.start?.metricAbs,
+        minRate: activeBinRule.minRate,
+        minTotal: activeBinRule.minTotal,
+      })) return false;
+      if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
+    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
+    const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return episodesRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
@@ -7530,9 +8444,72 @@ export default function ArbitrageScanner() {
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
+      if (!passesScannerBinRatingFilter({
+        enabled: useBinRatingFilter,
+        row: r,
+        session,
+        side: r.side,
+        sigmaAbs: r.peakMetricAbs ?? r.startMetricAbs,
+        minRate: episodeBinRule.minRate,
+        minTotal: episodeBinRule.minTotal,
+      })) return false;
+      if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+
+  useEffect(() => {
+    if (arbitrageTickerMetaLoadedRef.current) return;
+    const hasStaticMetricBounds =
+      optNumOrNull(minCorr) != null ||
+      optNumOrNull(maxCorr) != null ||
+      optNumOrNull(minBeta) != null ||
+      optNumOrNull(maxBeta) != null ||
+      optNumOrNull(minSigma) != null ||
+      optNumOrNull(maxSigma) != null;
+    const needsStaticMetricMeta =
+      hasStaticMetricBounds ||
+      scopeSelectedParameterKeys.some((key) => key === "corr" || key === "beta" || key === "sigma");
+    if (!needsStaticMetricMeta) return;
+
+    const sourceRows = [...episodesRows, ...(activeRows as any[])];
+    const needRatingMeta =
+      !optimizerRanges?.parameters?.some((parameter) => ["corr", "beta", "sigma"].includes(String(parameter.key).toLowerCase())) &&
+      sourceRows.some((row) => {
+        const ticker = String((row as any)?.ticker ?? "").trim();
+        if (!ticker) return false;
+        return (
+          getOptimizerFallbackValue(row as PaperArbClosedDto, "corr") == null ||
+          getOptimizerFallbackValue(row as PaperArbClosedDto, "beta") == null ||
+          getOptimizerFallbackValue(row as PaperArbClosedDto, "sigma") == null
+        );
+      });
+
+    if (!needRatingMeta) return;
+
+    arbitrageTickerMetaLoadedRef.current = true;
+    setArbitrageTickerMetaLoading(true);
+    getArbitrageList()
+      .then((rows) => {
+        const next: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }> = {};
+        for (const row of rows ?? []) {
+          const ticker = String(row?.ticker ?? "").trim().toUpperCase();
+          if (!ticker) continue;
+          next[ticker] = {
+            corr: numOrNull(row?.corr),
+            beta: numOrNull(row?.beta),
+            sigma: numOrNull(row?.sig ?? row?.sigma),
+          };
+        }
+        setArbitrageTickerMetaByTicker(next);
+      })
+      .catch(() => {
+        arbitrageTickerMetaLoadedRef.current = false;
+      })
+      .finally(() => {
+        setArbitrageTickerMetaLoading(false);
+      });
+  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -7610,6 +8587,8 @@ export default function ArbitrageScanner() {
         endMetricAbs: lastAbs,
         closeMode: row.closeMode ?? closeMode,
         minHoldCandles: row.minHoldCandles ?? minHoldCandles,
+        tierBp: row.tierBp ?? (row as any).TierBp ?? null,
+        beta: row.beta ?? (row as any).Beta ?? null,
         rawPnlUsd: currentDelta,
         benchPnlUsd: 0,
         hedgedPnlUsd: currentDelta,
@@ -7855,7 +8834,55 @@ export default function ArbitrageScanner() {
         return b.trades - a.trades;
       });
   }, [optimizerRows, optimizerBaselineRow]);
-  const optimizerRangeParameters = useMemo(() => optimizerRanges?.parameters ?? [], [optimizerRanges]);
+  const optimizerRangeParameters = useMemo(() => {
+    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
+    if (useBinRatingFilter) {
+      const selectedKeySet = new Set(scopeSelectedParameterKeys);
+      const includeAllParameters = selectedKeySet.size === 0;
+      return SCOPE_PARAMETER_DEFINITIONS
+        .filter((definition) => includeAllParameters || selectedKeySet.has(definition.key))
+        .map((definition) => {
+          if (definition.key === "minrate" || definition.key === "mintotal") {
+            return buildFallbackBinRatingOptimizerParameter(
+              filteredEpisodes,
+              definition.key as "minrate" | "mintotal",
+              definition.label,
+              definition.group,
+              optimizerBucketCount,
+              session
+            );
+          }
+          return buildFallbackScopeOptimizerParameter(filteredEpisodes, definition, optimizerBucketCount);
+        })
+        .filter((parameter): parameter is PaperArbOptimizerParameterDto => parameter != null);
+    }
+
+    const serverParameters = optimizerRanges?.parameters ?? [];
+    const parameterMap = new Map(serverParameters.map((parameter) => [String(parameter.key).toLowerCase(), parameter]));
+    const selectedKeySet = new Set(scopeSelectedParameterKeys);
+    const includeAllParameters = selectedKeySet.size === 0;
+
+    for (const definition of SCOPE_PARAMETER_DEFINITIONS) {
+      if (!["corr", "beta", "sigma"].includes(definition.key)) continue;
+      if (!includeAllParameters && !selectedKeySet.has(definition.key)) continue;
+      if (parameterMap.has(definition.key)) continue;
+
+      const fallbackParameter = buildFallbackOptimizerParameter(
+        filteredEpisodes,
+        definition.key as "corr" | "beta" | "sigma",
+        definition.label,
+        definition.group,
+        optimizerBucketCount,
+        arbitrageTickerMetaByTicker
+      );
+
+      if (fallbackParameter) {
+        parameterMap.set(definition.key, fallbackParameter);
+      }
+    }
+
+    return [...parameterMap.values()];
+  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
   const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
     optimizerRangeRankMetric === "winRate"
       ? bucket.winRate
@@ -7964,14 +8991,28 @@ export default function ArbitrageScanner() {
     optimizerImpactRows.length > 0 ||
     optimizerRangeGroups.length > 0;
   const hasVisualScopeLoaded = episodesRows.length > 0 || filteredEpisodes.length > 0;
-
+  const episodeEntryCount = (row: PaperArbClosedDto) => {
+    const count = Math.trunc(row.entryCount ?? 1);
+    return Number.isFinite(count) && count > 0 ? count : 1;
+  };
+  const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
+    pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
+  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
+  const episodeMoneyflowUsd = (row: PaperArbClosedDto) => {
+    const baseNotional = row.positionNotionalUsd ?? 0;
+    if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
+    const hedgeFlow = episodeHasHedgeLeg(row) ? Math.abs(row.beta ?? 0) : 0;
+    return baseNotional * episodeEntryCount(row) * (1 + hedgeFlow);
+  };
   const analyticsSummary = useMemo(() => {
     const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
-    const trades = pnl.length;
+    const situations = pnl.length;
+    const trades = filteredEpisodes.reduce((sum, row) => sum + episodeTradeCount(row), 0);
+    const moneyflowUsd = filteredEpisodes.reduce((sum, row) => sum + episodeMoneyflowUsd(row), 0);
     const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
     const wins = pnl.filter((x) => x > 0).length;
     const losses = pnl.filter((x) => x < 0).length;
-    const winRate = trades > 0 ? wins / trades : 0;
+    const winRate = situations > 0 ? wins / situations : 0;
     const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
     const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
 
@@ -8038,23 +9079,23 @@ export default function ArbitrageScanner() {
       }
     }
 
-    const serverEquityCurve = includeEquityCurve ? (analytics?.equityCurve ?? null) : null;
-
     return {
+      situations,
       trades,
-      totalPnlUsd: analytics?.totalPnlUsd ?? totalPnlUsd,
-      winRate: analytics?.winRate ?? winRate,
-      profitFactor: analytics?.profitFactor ?? profitFactor,
-      avgPnlUsd: analytics?.avgPnlUsd ?? avgPnlUsd,
-      avgWinUsd: analytics?.avgWinUsd ?? avgWin,
-      avgLossUsd: analytics?.avgLossUsd != null ? -Math.abs(analytics.avgLossUsd) : avgLoss,
-      maxWinUsd: analytics?.maxWinUsd ?? maxWinUsd,
-      maxLossUsd: analytics?.maxLossUsd != null ? Math.min(analytics.maxLossUsd, 0) : maxLossUsd,
-      expectancyUsd: analytics?.expectancyUsd ?? expectancyUsd,
-      maxDrawdownUsd: analytics?.maxDrawdownUsd ?? maxDrawdownUsd,
-      equityCurve: serverEquityCurve && serverEquityCurve.length > 0 ? serverEquityCurve : equityCurve,
+      moneyflowUsd,
+      totalPnlUsd,
+      winRate,
+      profitFactor,
+      avgPnlUsd,
+      avgWinUsd: avgWin,
+      avgLossUsd: avgLoss,
+      maxWinUsd,
+      maxLossUsd,
+      expectancyUsd,
+      maxDrawdownUsd,
+      equityCurve,
     };
-  }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, analytics, includeEquityCurve]);
+  }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
 
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
@@ -8584,6 +9625,328 @@ export default function ArbitrageScanner() {
           </GlassCard>
         )}
 
+        <div className="mb-3 flex flex-wrap justify-end gap-3">
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20 px-2">
+            {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
+              <button
+                key={modeKey}
+                type="button"
+                onClick={() => setRatingMode(modeKey)}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? accent.activeButton
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                {modeKey}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="decimal"
+                step={0.1}
+                min={0}
+                value={activeRule.minRate}
+                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min rate"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min rate"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={0}
+                value={activeRule.minTotal}
+                onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min total"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min total"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {[
+            { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
+            { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
+            { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+          ].map((field) => (
+            <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+              <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+                {field.label}
+              </span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={field.step}
+                  value={field.minValue}
+                  onChange={(e) => field.setMin(e.target.value)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  placeholder="min"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={field.step}
+                  value={field.maxValue}
+                  onChange={(e) => field.setMax(e.target.value)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  placeholder="max"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {false && tab === "analytics" && (
+          <div className="mb-3 flex flex-wrap justify-end gap-3">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20 px-2">
+              {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
+                <button
+                  key={modeKey}
+                  type="button"
+                  onClick={() => setRatingMode(modeKey)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    ratingMode === modeKey
+                      ? accent.activeButton
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {modeKey}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={0.1}
+                  min={0}
+                  value={activeRule.minRate}
+                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min rate"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min rate"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={0}
+                  value={activeRule.minTotal}
+                  onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min total"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min total"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {[
+              { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
+              { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
+              { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+            ].map((field) => (
+              <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+                <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+                  {field.label}
+                </span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={field.step}
+                    value={field.minValue}
+                    onChange={(e) => field.setMin(e.target.value)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                    placeholder="min"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={field.step}
+                    value={field.maxValue}
+                    onChange={(e) => field.setMax(e.target.value)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                    placeholder="max"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
             <div className="flex h-7 items-center gap-2">
@@ -8683,76 +10046,6 @@ export default function ArbitrageScanner() {
             </div>
 
             <div className="flex-1" />
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={0.1}
-                  min={0}
-                  value={activeRule.minRate}
-                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase min rate"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease min rate"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  step={1}
-                  min={0}
-                  value={activeRule.minTotal}
-                  onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase min total"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease min total"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
 
             <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
               <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
@@ -9025,6 +10318,134 @@ export default function ArbitrageScanner() {
                   {m.label}
                 </button>
               ))}
+            </div>
+
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {[
+                { key: "Notional", label: "USD" },
+                { key: "Tier", label: "TIER" },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => {
+                    const nextMode = m.key as PaperArbSizingMode;
+                    setSizingMode(nextMode);
+                    setSizeValue((current) =>
+                      nextMode === "Tier"
+                        ? 1
+                        : normalizeScannerSizeValue(nextMode, current)
+                    );
+                  }}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    sizingMode === m.key
+                      ? accent.activeSoft
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+                {sizingMode === "Notional" ? "SIZE" : "TIERS"}
+              </span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={sizingMode === "Tier" ? 1 : 1000}
+                  step={sizingMode === "Tier" ? 1 : 1000}
+                  value={formatScannerSizeValue(sizingMode, sizeValue)}
+                  onChange={(e) => setSizeValue(normalizeScannerSizeValue(sizingMode, Number(e.target.value)))}
+                  className={clsx("center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setSizeValue((v) => stepScannerSizeValue(sizingMode, v, 1))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label={sizingMode === "Tier" ? "Increase tier count" : "Increase size"}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setSizeValue((v) => stepScannerSizeValue(sizingMode, v, -1))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label={sizingMode === "Tier" ? "Decrease tier count" : "Decrease size"}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {[
+                { key: "Undiluted", label: "UNDILUTED" },
+                { key: "Diluted", label: "DILUTED" },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => setDilutionMode(m.key as PaperArbDilutionMode)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    dilutionMode === m.key
+                      ? accent.activeSoft
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">STEP</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0.1}
+                  step={0.1}
+                  value={formatDilutionStepValue(dilutionStep)}
+                  onChange={(e) => setDilutionStep(normalizeDilutionStepValue(Number(e.target.value)))}
+                  disabled={dilutionMode !== "Diluted"}
+                  className={clsx(
+                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
+                    accent.activeText
+                  )}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, 1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase dilution step"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, -1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Decrease dilution step"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
@@ -9728,7 +11149,7 @@ export default function ArbitrageScanner() {
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[1720px] w-full text-xs font-mono">
+                <table className="min-w-[1840px] w-full text-xs font-mono">
                   <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
                       <th className="text-left p-2.5" rowSpan={2}>
@@ -9742,6 +11163,9 @@ export default function ArbitrageScanner() {
                       </th>
                       <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
+                        Bp
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Time
@@ -9768,6 +11192,11 @@ export default function ArbitrageScanner() {
                   <tbody>
                     {activeRealtimeSorted.map((r, i) => {
                       const pnl = r.totalPnlUsd ?? 0;
+                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
+                      const benchAmountUsd =
+                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
+                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
+                          : null;
                       return (
                         <tr
                           key={`${r.ticker}|active|${i}`}
@@ -9790,6 +11219,20 @@ export default function ArbitrageScanner() {
                             )}
                           >
                             {num(r.totalPnlUsd ?? null, 2)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums border-l border-white/10">
+                            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Ticker</span>{" "}
+                              <span className="text-zinc-300">
+                                {tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Bench</span>{" "}
+                              <span className="text-zinc-300">
+                                {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
                           </td>
 
                           <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
@@ -9887,83 +11330,49 @@ export default function ArbitrageScanner() {
 
         {tab === "episodes" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <SummaryMetricCard
-                label="TOTAL PNL"
-                value={num(analyticsSummary.totalPnlUsd, 2)}
-                className="xl:row-span-2 xl:min-h-[124px]"
-                valueClassName={
-                  clsx(
-                    "text-4xl md:text-6xl font-bold",
-                    analyticsSummary.totalPnlUsd > 0
-                      ? "text-[#6ee7b7]"
-                      : analyticsSummary.totalPnlUsd < 0
+            <div className="grid gap-3 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <SummaryMetricCard
+                  label="TOTAL PNL"
+                  value={num(analyticsSummary.totalPnlUsd, 2)}
+                  className="xl:row-span-2 xl:min-h-[124px]"
+                  valueClassName={
+                    clsx(
+                      "text-4xl md:text-6xl font-bold",
+                      analyticsSummary.totalPnlUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.totalPnlUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                    )
+                  }
+                />
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.moneyflowUsd, 2)} inline valueClassName={accent.activeText} />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+                <SummaryMetricCard
+                  label="AVG TRADE"
+                  value={num(analyticsSummary.avgPnlUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.avgPnlUsd > 0
+                      ? "text-emerald-300"
+                      : analyticsSummary.avgPnlUsd < 0
                         ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
-                  )
-                }
-              />
-              <SummaryMetricCard
-                label="TRADES"
-                value={intn(analyticsSummary.trades)}
-                inline
-              />
-              <SummaryMetricCard
-                label="WIN RATE"
-                value={`${num(analyticsSummary.winRate * 100, 1)}%`}
-                inline
-              />
-              <SummaryMetricCard
-                label="AVG TRADE"
-                value={num(analyticsSummary.avgPnlUsd, 2)}
-                inline
-                valueClassName={
-                  analyticsSummary.avgPnlUsd > 0
-                    ? "text-emerald-300"
-                    : analyticsSummary.avgPnlUsd < 0
-                      ? SOFT_LOSS_TEXT_CLASS
-                      : "text-zinc-200"
-                }
-              />
-              <SummaryMetricCard
-                label="MAX WIN"
-                value={num(analyticsSummary.maxWinUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG WIN"
-                value={num(analyticsSummary.avgWinUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="PROFIT FACTOR"
-                value={num(analyticsSummary.profitFactor, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="EXPECTANCY"
-                value={num(analyticsSummary.expectancyUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX DRAWDOWN"
-                value={num(analyticsSummary.maxDrawdownUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX LOSS"
-                value={num(analyticsSummary.maxLossUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG LOSS"
-                value={num(analyticsSummary.avgLossUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
+                  }
+                />
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+              </div>
             </div>
 
             <div className="flex items-center justify-end">
@@ -11525,83 +12934,49 @@ export default function ArbitrageScanner() {
 
         {tab === "analytics" && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <SummaryMetricCard
-                label="TOTAL PNL"
-                value={num(analyticsSummary.totalPnlUsd, 2)}
-                className="xl:row-span-2 xl:min-h-[124px]"
-                valueClassName={
-                  clsx(
-                    "text-4xl md:text-6xl font-bold",
-                    analyticsSummary.totalPnlUsd > 0
-                      ? "text-[#6ee7b7]"
-                      : analyticsSummary.totalPnlUsd < 0
+            <div className="grid gap-3 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <SummaryMetricCard
+                  label="TOTAL PNL"
+                  value={num(analyticsSummary.totalPnlUsd, 2)}
+                  className="xl:row-span-2 xl:min-h-[124px]"
+                  valueClassName={
+                    clsx(
+                      "text-4xl md:text-6xl font-bold",
+                      analyticsSummary.totalPnlUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.totalPnlUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                    )
+                  }
+                />
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.moneyflowUsd, 2)} inline valueClassName={accent.activeText} />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+                <SummaryMetricCard
+                  label="AVG TRADE"
+                  value={num(analyticsSummary.avgPnlUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.avgPnlUsd > 0
+                      ? "text-emerald-300"
+                      : analyticsSummary.avgPnlUsd < 0
                         ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
-                  )
-                }
-              />
-              <SummaryMetricCard
-                label="TRADES"
-                value={intn(analyticsSummary.trades)}
-                inline
-              />
-              <SummaryMetricCard
-                label="WIN RATE"
-                value={`${num(analyticsSummary.winRate * 100, 1)}%`}
-                inline
-              />
-              <SummaryMetricCard
-                label="AVG TRADE"
-                value={num(analyticsSummary.avgPnlUsd, 2)}
-                inline
-                valueClassName={
-                  analyticsSummary.avgPnlUsd > 0
-                    ? "text-emerald-300"
-                    : analyticsSummary.avgPnlUsd < 0
-                      ? SOFT_LOSS_TEXT_CLASS
-                      : "text-zinc-200"
-                }
-              />
-              <SummaryMetricCard
-                label="MAX WIN"
-                value={num(analyticsSummary.maxWinUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG WIN"
-                value={num(analyticsSummary.avgWinUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="PROFIT FACTOR"
-                value={num(analyticsSummary.profitFactor, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="EXPECTANCY"
-                value={num(analyticsSummary.expectancyUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX DRAWDOWN"
-                value={num(analyticsSummary.maxDrawdownUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX LOSS"
-                value={num(analyticsSummary.maxLossUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG LOSS"
-                value={num(analyticsSummary.avgLossUsd, 2)}
-                inline
-                valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
+                  }
+                />
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+              </div>
             </div>
 
             {analytics !== null && (analyticsSorted.length > 0 ? (
@@ -11666,7 +13041,7 @@ export default function ArbitrageScanner() {
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[1720px] w-full text-xs font-mono">
+                <table className="min-w-[1840px] w-full text-xs font-mono">
                   <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
                       <th className="text-left p-2.5" rowSpan={2}>
@@ -11680,6 +13055,9 @@ export default function ArbitrageScanner() {
                       </th>
                       <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
+                        Bp
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Time
@@ -11706,6 +13084,11 @@ export default function ArbitrageScanner() {
                   <tbody>
                     {analyticsSorted.map((r, i) => {
                       const pnl = r.totalPnlUsd ?? 0;
+                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
+                      const benchAmountUsd =
+                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
+                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
+                          : null;
                       return (
                         <tr
                           key={`${r.ticker}|analytics|${i}`}
@@ -11728,6 +13111,20 @@ export default function ArbitrageScanner() {
                             )}
                           >
                             {num(r.totalPnlUsd ?? null, 2)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums border-l border-white/10">
+                            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Ticker</span>{" "}
+                              <span className="text-zinc-300">
+                                {tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Bench</span>{" "}
+                              <span className="text-zinc-300">
+                                {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
                           </td>
 
                           <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
@@ -11811,7 +13208,7 @@ export default function ArbitrageScanner() {
                     })}
                     {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={13} className="p-8 text-center text-zinc-500">
+                        <td colSpan={14} className="p-8 text-center text-zinc-500">
                           No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>

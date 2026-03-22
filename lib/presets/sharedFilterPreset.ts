@@ -4,6 +4,9 @@ export const SHARED_FILTER_PRESET_API_KIND = "ARBITRAGE";
 export type SharedFilterPresetMode = "on" | "off";
 
 export const SHARED_FILTER_PRESET_FIELDS = [
+  { key: "corr", scannerMin: "minCorr", scannerMax: "maxCorr", sonarMode: "Corr", sonarMin: "corrMin", sonarMax: "corrMax" },
+  { key: "beta", scannerMin: "minBeta", scannerMax: "maxBeta", sonarMode: "Beta", sonarMin: "betaMin", sonarMax: "betaMax" },
+  { key: "sigma", scannerMin: "minSigma", scannerMax: "maxSigma", sonarMode: "Sigma", sonarMin: "sigmaMin", sonarMax: "sigmaMax" },
   { key: "adv20", scannerMin: "minAdv20", scannerMax: "maxAdv20", sonarMode: "ADV20", sonarMin: "adv20Min", sonarMax: "adv20Max" },
   { key: "adv20nf", scannerMin: "minAdv20NF", scannerMax: "maxAdv20NF", sonarMode: "ADV20NF", sonarMin: "adv20NFMin", sonarMax: "adv20NFMax" },
   { key: "adv90", scannerMin: "minAdv90", scannerMax: "maxAdv90", sonarMode: "ADV90", sonarMin: "adv90Min", sonarMax: "adv90Max" },

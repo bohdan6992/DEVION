@@ -110,6 +110,7 @@ export type ArbitrageSignal = {
 };
 
 type Mode = "top" | "all";
+type RatingMode = "SESSION" | "BIN";
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
@@ -129,7 +130,7 @@ const betaLabels: Record<BetaKey, string> = {
   unknown: "N/A",
 };
 
-const benchmarkOrder = ["QQQ", "SPY", "IWM", "XLF", "KRE", "XLE", "SOXL", "GDX", "KWEB", "BITO"];
+const benchmarkOrder = ["QQQ", "SPY", "IWM", "XLF", "KRE", "XLE", "XLP", "SOXL", "GDX", "KWEB", "BITO"];
 
 const BENCH_COLORS: Record<string, string> = {
   QQQ: "#c084fc",
@@ -138,6 +139,7 @@ const BENCH_COLORS: Record<string, string> = {
   XLF: "#38bdf8",
   KRE: "#22d3ee",
   XLE: "#f87171",
+  XLP: "#fbbf24",
   SOXL: "#2dd4bf",
   GDX: "#facc15",
   KWEB: "#e879f9",
@@ -598,6 +600,40 @@ const getBetaValue = (s: any): number | null => {
   return null;
 };
 
+const getCorrValue = (s: any): number | null => {
+  const best = s?.best ?? s?.Best ?? null;
+  const c1 = toNum(best?.corr ?? best?.Corr);
+  if (c1 != null) return c1;
+
+  const meta = s?.meta ?? s?.Meta ?? null;
+  const c2 = toNum(meta?.corr ?? meta?.Corr);
+  if (c2 != null) return c2;
+
+  const bp = s?.best_params ?? s?.bestParams ?? s?.BestParams ?? null;
+  const st = bp?.static ?? bp?.Static ?? null;
+  const c3 = toNum(st?.corr ?? st?.Corr);
+  if (c3 != null) return c3;
+
+  return null;
+};
+
+const getSigmaValue = (s: any): number | null => {
+  const best = s?.best ?? s?.Best ?? null;
+  const s1 = toNum(best?.sigma ?? best?.Sigma);
+  if (s1 != null) return s1;
+
+  const meta = s?.meta ?? s?.Meta ?? null;
+  const s2 = toNum(meta?.sigma ?? meta?.Sigma);
+  if (s2 != null) return s2;
+
+  const bp = s?.best_params ?? s?.bestParams ?? s?.BestParams ?? null;
+  const st = bp?.static ?? bp?.Static ?? null;
+  const s3 = toNum(st?.sigma ?? st?.Sigma);
+  if (s3 != null) return s3;
+
+  return null;
+};
+
 const sortBenchmarks = (a: string, b: string) => {
   const ua = a.toUpperCase();
   const ub = b.toUpperCase();
@@ -609,6 +645,89 @@ const sortBenchmarks = (a: string, b: string) => {
   return ua.localeCompare(ub);
 };
 
+const BIN_SERVER_MIN_RATE = 0.3;
+const BIN_SERVER_MIN_TOTAL = 1;
+
+function safeRecord(value: any): Record<string, any> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function sonarClassToBinClassKey(cls: ArbClass): string {
+  return cls === "global" ? "global" : cls;
+}
+
+function sonarBinSignKey(signal: ArbitrageSignal): "pos" | "neg" | null {
+  const dir = String(signal?.direction ?? "").trim().toLowerCase();
+  if (dir === "down") return "pos";
+  if (dir === "up") return "neg";
+  return null;
+}
+
+function parseSonarBinIntervals(value: any): Array<{ lo: number; hi: number; rate: number; total: number }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const obj = safeRecord(item);
+      const lo = toNum(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
+      const hi = toNum(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
+      const rate = toNum(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
+      const total = toNum(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count);
+      if (lo == null || hi == null || rate == null || total == null) return null;
+      return { lo: Math.min(lo, hi), hi: Math.max(lo, hi), rate, total };
+    })
+    .filter((item): item is { lo: number; hi: number; rate: number; total: number } => item != null);
+}
+
+function getSignalSigmaAbs(signal: ArbitrageSignal): number | null {
+  const signKey = sonarBinSignKey(signal);
+  if (signKey === "pos") {
+    const value = toNum(signal?.zapSsigma);
+    return value == null ? null : Math.abs(value);
+  }
+  if (signKey === "neg") {
+    const value = toNum(signal?.zapLsigma);
+    return value == null ? null : Math.abs(value);
+  }
+  return null;
+}
+
+function passesSonarBinRating(args: {
+  signal: ArbitrageSignal;
+  cls: ArbClass;
+  minRate: number;
+  minTotal: number;
+}) {
+  const { signal, cls, minRate, minTotal } = args;
+  const signKey = sonarBinSignKey(signal);
+  const sigmaAbs = getSignalSigmaAbs(signal);
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
+
+  const root = safeRecord(getBestParams(signal));
+  const stitched =
+    safeRecord(safeRecord(root?.best_windows_any)?.stitched) ??
+    safeRecord(safeRecord(root?.BestWindowsAny)?.stitched) ??
+    safeRecord(safeRecord(root?.best_windows_any)?.Stitched) ??
+    safeRecord(safeRecord(root?.BestWindowsAny)?.Stitched) ??
+    null;
+  const sigmaPeakBins =
+    safeRecord(stitched?.sigma_peak_bins) ??
+    safeRecord(stitched?.SigmaPeakBins) ??
+    null;
+  const classBins = safeRecord(safeRecord(sigmaPeakBins)?.[sonarClassToBinClassKey(cls)]);
+  const intervals = parseSonarBinIntervals(classBins?.[signKey]);
+  if (!intervals.length) return false;
+
+  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
+  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
+
+  return intervals.some((interval) =>
+    sigmaAbs >= interval.lo &&
+    sigmaAbs <= interval.hi &&
+    interval.rate >= effectiveMinRate &&
+    interval.total >= effectiveMinTotal
+  );
+}
+
 /* =========================
    URL builder
 ========================= */
@@ -616,16 +735,44 @@ function buildSignalsUrl(args: {
   cls: ArbClass;
   type: ArbType;
   mode: Mode;
+  ratingMode: RatingMode;
+  zapMode: "zap" | "sigma" | "delta" | "off";
   minRate: number;
   minTotal: number;
   tickers?: string;
+  minCorr?: number | null;
+  maxCorr?: number | null;
+  minBeta?: number | null;
+  maxBeta?: number | null;
+  minSigma?: number | null;
+  maxSigma?: number | null;
 }) {
-  const { cls, type, mode, minRate, minTotal, tickers } = args;
+  const {
+    cls,
+    type,
+    mode,
+    ratingMode,
+    zapMode,
+    minRate,
+    minTotal,
+    tickers,
+    minCorr,
+    maxCorr,
+    minBeta,
+    maxBeta,
+    minSigma,
+    maxSigma,
+  } = args;
 
   const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
 
-  const safeMinRate = Number.isFinite(minRate) ? Math.max(0, minRate) : 0.3;
-  const safeMinTotal = Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : 1;
+  const useBinRatingFilter = ratingMode === "BIN" && zapMode === "sigma";
+  const safeMinRate = useBinRatingFilter
+    ? BIN_SERVER_MIN_RATE
+    : Number.isFinite(minRate) ? Math.max(0, minRate) : BIN_SERVER_MIN_RATE;
+  const safeMinTotal = useBinRatingFilter
+    ? BIN_SERVER_MIN_TOTAL
+    : Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : BIN_SERVER_MIN_TOTAL;
 
   u.searchParams.set("minRate", String(safeMinRate));
   u.searchParams.set("minTotal", String(safeMinTotal));
@@ -633,6 +780,19 @@ function buildSignalsUrl(args: {
 
   const t = (tickers ?? "").trim();
   if (t) u.searchParams.set("tickers", t);
+
+  const setOptional = (key: string, value: number | null | undefined) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      u.searchParams.set(key, String(value));
+    }
+  };
+
+  setOptional("minCorr", minCorr);
+  setOptional("maxCorr", maxCorr);
+  setOptional("minBeta", minBeta);
+  setOptional("maxBeta", maxBeta);
+  setOptional("minSigma", minSigma);
+  setOptional("maxSigma", maxSigma);
 
   return u.toString();
 }
@@ -817,6 +977,7 @@ type MinMaxProps = {
 };
 
 const RANGE_BOUND_KEYS = [
+  "Corr", "Beta", "Sigma",
   "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "Spread", "LstPrcL",
   "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
   "VolNFfromLstCls", "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
@@ -2286,12 +2447,19 @@ export default function ArbitrageSonar() {
   const [cls, setCls] = useState<ArbClass>("global");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
+  const [corrMin, setCorrMin] = useState("");
+  const [corrMax, setCorrMax] = useState("");
+  const [betaMin, setBetaMin] = useState("");
+  const [betaMax, setBetaMax] = useState("");
+  const [sigmaMin, setSigmaMin] = useState("");
+  const [sigmaMax, setSigmaMax] = useState("");
   const [corrEnabled, setCorrEnabled] = useState(false);
   const [corrAbs, setCorrAbs] = useState(0.5);
 
 
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
+  const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
 
   type NumField = {
     label: string;
@@ -2785,6 +2953,7 @@ export default function ArbitrageSonar() {
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
+        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN") setRatingMode(s.ratingMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
@@ -2814,9 +2983,12 @@ export default function ArbitrageSonar() {
         if (typeof s?.filterReport === 'string') setFilterReport(s.filterReport);
         if (typeof s?.equityType === 'string') setEquityType(s.equityType);
 
-        // corr
-        if (typeof s?.corrEnabled === 'boolean') setCorrEnabled(s.corrEnabled);
-        if (typeof s?.corrAbs === 'number') setCorrAbs(s.corrAbs);
+        if (typeof s?.corrMin === 'string') setCorrMin(s.corrMin);
+        if (typeof s?.corrMax === 'string') setCorrMax(s.corrMax);
+        if (typeof s?.betaMin === 'string') setBetaMin(s.betaMin);
+        if (typeof s?.betaMax === 'string') setBetaMax(s.betaMax);
+        if (typeof s?.sigmaMin === 'string') setSigmaMin(s.sigmaMin);
+        if (typeof s?.sigmaMax === 'string') setSigmaMax(s.sigmaMax);
 
         // multi-select
         if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled);
@@ -2953,15 +3125,14 @@ export default function ArbitrageSonar() {
           zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
 
           // query params
-          minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+          ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
           includeUSA, includeChina,
           filterReport, equityType,
 
-          // corr
-          corrEnabled, corrAbs,
+          corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
 
           // multi-select
           countryEnabled, selCountries: Array.from(selCountries),
@@ -3012,11 +3183,11 @@ export default function ArbitrageSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
-    minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
     filterReport, equityType,
-    corrEnabled, corrAbs,
+    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     countryEnabled, selCountries,
     exchangeEnabled, selExchanges,
     sectorEnabled, selSectors,
@@ -3116,6 +3287,7 @@ export default function ArbitrageSonar() {
   const buildSonarSharedFilterPresetJson = () => {
     const current = {
       rangeModes,
+      corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
       adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
       avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
       lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
@@ -3148,6 +3320,12 @@ export default function ArbitrageSonar() {
   };
 
   const sonarSharedFilterSetters = {
+    corrMin: setCorrMin,
+    corrMax: setCorrMax,
+    betaMin: setBetaMin,
+    betaMax: setBetaMax,
+    sigmaMin: setSigmaMin,
+    sigmaMax: setSigmaMax,
     adv20Min: setAdv20Min,
     adv20Max: setAdv20Max,
     adv20NFMin: setAdv20NFMin,
@@ -3332,6 +3510,9 @@ export default function ArbitrageSonar() {
     const mm = (key: RangeBoundKey, minS: string, maxS: string) =>
       rangeModes[key] === "off" ? { min: null, max: null } : { min: toNum(minS), max: toNum(maxS) };
     return {
+      Corr: mm("Corr", corrMin, corrMax),
+      Beta: mm("Beta", betaMin, betaMax),
+      Sigma: mm("Sigma", sigmaMin, sigmaMax),
       ADV20: mm("ADV20", adv20Min, adv20Max),
       ADV20NF: mm("ADV20NF", adv20NFMin, adv20NFMax),
       ADV90: mm("ADV90", adv90Min, adv90Max),
@@ -3371,6 +3552,9 @@ export default function ArbitrageSonar() {
     };
   }, [
     rangeModes,
+    corrMin, corrMax,
+    betaMin, betaMax,
+    sigmaMin, sigmaMax,
     adv20Min, adv20Max,
     adv20NFMin, adv20NFMax,
     adv90Min, adv90Max,
@@ -3414,6 +3598,7 @@ export default function ArbitrageSonar() {
       cls,
       type,
       mode,
+      ratingMode,
       minRate,
       minTotal,
       tickersFilterNorm,
@@ -3424,7 +3609,6 @@ export default function ArbitrageSonar() {
       pinMap,
       sortKey,
       sortDir,
-
 
       bounds,
 
@@ -3450,6 +3634,13 @@ export default function ArbitrageSonar() {
       filterReport,
       equityType,
 
+      corrMin,
+      corrMax,
+      betaMin,
+      betaMax,
+      sigmaMin,
+      sigmaMax,
+
       zapMode,
       zapShowAbs,
       zapSilverAbs,
@@ -3457,7 +3648,7 @@ export default function ArbitrageSonar() {
 
     };
   }, [
-    cls, type, mode, minRate, minTotal, tickersFilterNorm,
+    cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
     listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -3465,6 +3656,7 @@ export default function ArbitrageSonar() {
     includeUSA, includeChina,
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
+    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
 
   ]);
@@ -3488,6 +3680,7 @@ export default function ArbitrageSonar() {
     const out: ArbitrageSignal[] = [];
     const mr = toNum(f.minRate);
     const mt = toNum(f.minTotal);
+    const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
 
     const base = Number(f.zapShowAbs ?? 0);
     const zapThr = Math.max(0.3, base);   // for ZAP
@@ -3518,6 +3711,9 @@ export default function ArbitrageSonar() {
 
 
       // thresholds
+      if (!passMinMax(getCorrValue(s), f.bounds.Corr.min, f.bounds.Corr.max)) continue;
+      if (!passMinMax(getBetaValue(s), f.bounds.Beta.min, f.bounds.Beta.max)) continue;
+      if (!passMinMax(getSigmaValue(s), f.bounds.Sigma.min, f.bounds.Sigma.max)) continue;
       if (!passMinMax(numADV20(s), f.bounds.ADV20.min, f.bounds.ADV20.max)) continue;
       if (!passMinMax(numADV20NF(s), f.bounds.ADV20NF.min, f.bounds.ADV20NF.max)) continue;
       if (!passMinMax(numADV90(s), f.bounds.ADV90.min, f.bounds.ADV90.max)) continue;
@@ -3556,13 +3752,22 @@ export default function ArbitrageSonar() {
       if (!passMinMax(numImbExch1555(s), f.bounds.ImbExch1555.min, f.bounds.ImbExch1555.max)) continue;
 
       // minRate/minTotal
-      if (mr != null) {
-        const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-        if (r == null || r < mr) continue;
-      }
-      if (mt != null) {
-        const t = getBestTotalByType(s, f.type);
-        if (t == null || t < mt) continue;
+      if (useBinRatingFilter) {
+        if (!passesSonarBinRating({
+          signal: s,
+          cls: f.cls,
+          minRate: mr ?? 0,
+          minTotal: mt ?? 0,
+        })) continue;
+      } else {
+        if (mr != null) {
+          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+          if (r == null || r < mr) continue;
+        }
+        if (mt != null) {
+          const t = getBestTotalByType(s, f.type);
+          if (t == null || t < mt) continue;
+        }
       }
 
 
@@ -3673,9 +3878,17 @@ export default function ArbitrageSonar() {
         cls: f.cls,
         type: f.type,
         mode: f.mode,
+        ratingMode: f.ratingMode,
+        zapMode: f.zapMode,
         minRate: f.minRate,
         minTotal: f.minTotal,
         tickers: f.tickersFilterNorm || undefined,
+        minCorr: toNum(f.corrMin),
+        maxCorr: toNum(f.corrMax),
+        minBeta: toNum(f.betaMin),
+        maxBeta: toNum(f.betaMax),
+        minSigma: toNum(f.sigmaMin),
+        maxSigma: toNum(f.sigmaMax),
       });
 
       const r = await fetch(url, { cache: "no-store" });
@@ -4445,6 +4658,76 @@ export default function ArbitrageSonar() {
           </div>
         )}
 
+        <div className="mb-3 flex flex-wrap justify-end gap-3">
+          <div className={clsx(secondaryGroupClass, "px-2")}>
+            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+              <button
+                key={modeKey}
+                type="button"
+                onClick={() => setRatingMode(modeKey)}
+                className={[
+                  secondaryButtonBaseClass,
+                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
+                ].join(" ")}
+              >
+                {modeKey}
+              </button>
+            ))}
+          </div>
+
+          {fields.map((field) => (
+            <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode={field.integer ? "numeric" : "decimal"}
+                  step={field.step}
+                  min={field.min}
+                  value={field.val}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) {
+                      field.set(field.min);
+                      return;
+                    }
+                    field.set(field.integer ? Math.max(field.min, Math.trunc(next)) : Math.max(field.min, +next.toFixed(4)));
+                  }}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, field.step)} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, -field.step)} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {[
+            { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
+            { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
+            { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
+          ].map((field) => (
+            <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+              <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">{field.label}</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input type="number" inputMode="decimal" step={field.step} value={field.minValue} onChange={(e) => field.setMin(e.target.value)} className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]" placeholder="min" />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
+                </div>
+              </div>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input type="number" inputMode="decimal" step={field.step} value={field.maxValue} onChange={(e) => field.setMax(e.target.value)} className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]" placeholder="max" />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
+                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
@@ -4477,7 +4760,7 @@ export default function ArbitrageSonar() {
 
           {/* RIGHT GROUP */}
           <div className="flex gap-2 items-center">
-            {fields.map((f) => (
+            {false && fields.map((f) => (
               <div key={f.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
                 <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{f.label}</span>
                 <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -4739,6 +5022,135 @@ export default function ArbitrageSonar() {
           </div>
         )}
 
+        <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
+          <div className={clsx(secondaryGroupClass, "px-2")}>
+            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+              <button
+                key={modeKey}
+                type="button"
+                onClick={() => setRatingMode(modeKey)}
+                className={[
+                  secondaryButtonBaseClass,
+                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
+                ].join(" ")}
+              >
+                {modeKey}
+              </button>
+            ))}
+          </div>
+
+          {fields.map((field) => (
+            <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode={field.integer ? "numeric" : "decimal"}
+                  step={field.step}
+                  min={field.min}
+                  value={field.val}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) {
+                      field.set(field.min);
+                      return;
+                    }
+                    field.set(field.integer ? Math.max(field.min, Math.trunc(next)) : Math.max(field.min, +next.toFixed(4)));
+                  }}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => bumpNumField(field, field.step)}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => bumpNumField(field, -field.step)}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {[
+            { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
+            { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
+            { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
+          ].map((field) => (
+            <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+              <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+                {field.label}
+              </span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={field.step}
+                  value={field.minValue}
+                  onChange={(e) => field.setMin(e.target.value)}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                  placeholder="min"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={field.step}
+                  value={field.maxValue}
+                  onChange={(e) => field.setMax(e.target.value)}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                  placeholder="max"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
@@ -4854,7 +5266,7 @@ export default function ArbitrageSonar() {
           </div>
 
           {/* CORR (pink group; button + threshold input) */}
-          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-pink-500/20 bg-pink-500/[0.06]`}>
+          <div className="hidden">
             <button
               type="button"
               onClick={() => setCorrEnabled((v) => !v)}
@@ -4913,6 +5325,55 @@ export default function ArbitrageSonar() {
                   </button>
                 </div>
               </div>
+          </div>
+
+          <div className="hidden">
+            {[
+              { label: "CORR MIN", value: corrMin, setValue: setCorrMin, step: 0.05 },
+              { label: "CORR MAX", value: corrMax, setValue: setCorrMax, step: 0.05 },
+              { label: "BETA MIN", value: betaMin, setValue: setBetaMin, step: 0.1 },
+              { label: "BETA MAX", value: betaMax, setValue: setBetaMax, step: 0.1 },
+              { label: "SIGMA MIN", value: sigmaMin, setValue: setSigmaMin, step: 0.1 },
+              { label: "SIGMA MAX", value: sigmaMax, setValue: setSigmaMax, step: 0.1 },
+            ].map((field) => (
+              <div key={field.label} className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={field.step}
+                    value={field.value}
+                    onChange={(e) => field.setValue(e.target.value)}
+                    className="center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none transition-all"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const next = (toNum(field.value) ?? 0) + field.step;
+                        field.setValue(String(+next.toFixed(4)));
+                      }}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const next = (toNum(field.value) ?? 0) - field.step;
+                        field.setValue(String(+next.toFixed(4)));
+                      }}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
 
