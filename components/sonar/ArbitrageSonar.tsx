@@ -3866,30 +3866,32 @@ export default function ArbitrageSonar() {
   ========================= */
 
   const reqIdRef = useRef(0);
+  const inFlightUrlRef = useRef<string | null>(null);
   const fetchSignals = useCallback(async () => {
     const f = filtersRef.current;
+    const url = buildSignalsUrl({
+      cls: f.cls,
+      type: f.type,
+      mode: f.mode,
+      ratingMode: f.ratingMode,
+      zapMode: f.zapMode,
+      minRate: f.minRate,
+      minTotal: f.minTotal,
+      tickers: f.tickersFilterNorm || undefined,
+      minCorr: toNum(f.corrMin),
+      maxCorr: toNum(f.corrMax),
+      minBeta: toNum(f.betaMin),
+      maxBeta: toNum(f.betaMax),
+      minSigma: toNum(f.sigmaMin),
+      maxSigma: toNum(f.sigmaMax),
+    });
+    if (inFlightUrlRef.current === url) return;
+    inFlightUrlRef.current = url;
     const myId = ++reqIdRef.current;
 
     try {
       setLoading(true);
       setError(null);
-
-      const url = buildSignalsUrl({
-        cls: f.cls,
-        type: f.type,
-        mode: f.mode,
-        ratingMode: f.ratingMode,
-        zapMode: f.zapMode,
-        minRate: f.minRate,
-        minTotal: f.minTotal,
-        tickers: f.tickersFilterNorm || undefined,
-        minCorr: toNum(f.corrMin),
-        maxCorr: toNum(f.corrMax),
-        minBeta: toNum(f.betaMin),
-        maxBeta: toNum(f.betaMax),
-        minSigma: toNum(f.sigmaMin),
-        maxSigma: toNum(f.sigmaMax),
-      });
 
       const r = await fetch(url, { cache: "no-store" });
 
@@ -3925,6 +3927,7 @@ export default function ArbitrageSonar() {
       setItems([]);
       setError(e?.message ?? "Unknown error");
     } finally {
+      if (inFlightUrlRef.current === url) inFlightUrlRef.current = null;
       if (myId === reqIdRef.current) setLoading(false);
     }
   }, [applyAllClientFilters]);
