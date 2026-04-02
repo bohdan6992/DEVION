@@ -116,10 +116,14 @@ function canonicalMainWindowHeading(value: string): string {
 function extractMainWindowControls(snapshot: MainWindowDataSnapshot | null): Array<{ label: string; state: "GREEN" | "RED" | "UNKNOWN" }> {
   if (Array.isArray(snapshot?.controls) && snapshot.controls.length) {
     return snapshot.controls
-      .map((control) => ({
-        label: String(control.label ?? "").trim().toUpperCase(),
-        state: control.state === "GREEN" || control.state === "RED" ? control.state : "UNKNOWN",
-      }))
+      .map((control) => {
+        const state: "GREEN" | "RED" | "UNKNOWN" =
+          control.state === "GREEN" || control.state === "RED" ? control.state : "UNKNOWN";
+        return {
+          label: String(control.label ?? "").trim().toUpperCase(),
+          state,
+        };
+      })
       .filter((control) => control.label === "MD" || control.label === "NW" || control.label === "EX");
   }
 
