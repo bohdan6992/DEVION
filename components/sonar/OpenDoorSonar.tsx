@@ -10,6 +10,7 @@ import { useUi } from "@/components/UiProvider";
 import PresetPicker from "@/components/presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
+import { getOpendoorBestParamsByTicker, getOpendoorSignals, getOpendoorTicker } from "@/lib/trapClient";
 import type { PresetDto } from "@/types/presets";
 
 /* =========================
@@ -150,13 +151,30 @@ const BENCH_COLORS: Record<string, string> = {
 const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
 const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
+const OPEN_DOOR_VISIBLE_CLASS_ORDER: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra"];
+const OPEN_DOOR_CLASS_META: Record<ArbClass, { api: "glob" | "5m" | "10m" | "15m" | "20m" | "30m"; label: string }> = {
+  global: { api: "glob", label: "GLOB" },
+  blue: { api: "5m", label: "5M" },
+  ark: { api: "10m", label: "10M" },
+  print: { api: "15m", label: "15M" },
+  open: { api: "20m", label: "20M" },
+  intra: { api: "30m", label: "30M" },
+  post: { api: "30m", label: "30M" },
+};
+
+const OPEN_DOOR_TYPE_META: Record<ArbType, { api: "any" | "up" | "down"; label: string }> = {
+  any: { api: "any", label: "ANY" },
+  hard: { api: "up", label: "UP" },
+  soft: { api: "down", label: "DOWN" },
+};
+
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
-const IGNORE_LS_KEY = "bridge.arb.ignoreTickers.v2";
-const APPLY_LS_KEY = "bridge.arb.applyOnlyTickers.v1";
-const PIN_LS_KEY = "bridge.arb.pinTickers.v1";
-const ACTIVE_PANEL_LS_KEY = "bridge.arb.activePanel.v1";
-const UI_STATE_LS_KEY = "bridge.arb.uiState.v1";
+const IGNORE_LS_KEY = "bridge.opendoor.ignoreTickers.v1";
+const APPLY_LS_KEY = "bridge.opendoor.applyOnlyTickers.v1";
+const PIN_LS_KEY = "bridge.opendoor.pinTickers.v1";
+const ACTIVE_PANEL_LS_KEY = "bridge.opendoor.activePanel.v1";
+const UI_STATE_LS_KEY = "bridge.opendoor.uiState.v1";
 
 /* =========================
    SMALL UTILS (fast)
@@ -356,12 +374,9 @@ const getBestTotal = (d: any) =>
 
 const getBestTotalByType = (d: any, type: ArbType): number | null => {
   const best = getBestObj(d);
+  const anyTotal = toNum(best?.total ?? best?.Total ?? best?.count ?? best?.Count ?? (d as any)?._bestTotal ?? (d as any)?.total);
   const hardTotal = toNum(best?.hard ?? best?.Hard ?? (d as any)?._bestHard);
   const softTotal = toNum(best?.soft ?? best?.Soft ?? (d as any)?._bestSoft);
-  const anyTotal =
-    hardTotal != null || softTotal != null
-      ? (hardTotal ?? 0) + (softTotal ?? 0)
-      : toNum(best?.total ?? best?.Total ?? best?.count ?? best?.Count ?? (d as any)?._bestTotal ?? (d as any)?.total);
   if (type === "hard") return hardTotal;
   if (type === "soft") return softTotal;
   return anyTotal;
@@ -477,44 +492,6 @@ const numPreMhMDV90NF = (s: any) =>
   getNumAny(s, PRE_MH_MDV_90_NF_KEYS);
 
 const numVolNFfromLstCls = (s: any) => getNumAny(s, VOL_NF_FROM_LST_CLS_KEYS);
-const RANGE_VALUE_GETTERS = {
-  ADV20: numADV20,
-  ADV20NF: numADV20NF,
-  ADV90: numADV90,
-  ADV90NF: numADV90NF,
-  AvPreMhv: numAvPreMh,
-  RoundLot: numRoundLot,
-  VWAP: numVWAP,
-  Spread: numSpread,
-  LstPrcL: numLstPrcL,
-  LstCls: numLastClose,
-  YCls: numYCls,
-  TCls: numTCls,
-  ClsToClsPct: numClsToClsPct,
-  Lo: numLo,
-  LstClsNewsCnt: numLstClsNewsCnt,
-  MarketCapM: numMarketCapM,
-  PreMhVolNF: numPreMktVolNF,
-  VolNFfromLstCls: numVolNFfromLstCls,
-  AvPostMhVol90NF: numAvPostMhVol90NF,
-  AvPreMhVol90NF: numAvPreMhVol90NF,
-  AvPreMhValue20NF: numAvPreMhValue20NF,
-  AvPreMhValue90NF: numAvPreMhValue90NF,
-  AvgDailyValue20: numAvgDailyValue20,
-  AvgDailyValue90: numAvgDailyValue90,
-  Volatility20: numVolatility20,
-  Volatility90: numVolatility90,
-  PreMhMDV20NF: numPreMhMDV20NF,
-  PreMhMDV90NF: numPreMhMDV90NF,
-  VolRel: numVolRel,
-  PreMhBidLstPrcPct: numPreMhBidLstPrcPct,
-  PreMhLoLstPrcPct: numPreMhLoLstPrcPct,
-  PreMhHiLstClsPct: numPreMhHiLstClsPct,
-  PreMhLoLstClsPct: numPreMhLoLstClsPct,
-  LstPrcLstClsPct: numLstPrcLstClsPctSafe,
-  ImbExch925: numImbExch925,
-  ImbExch1555: numImbExch1555,
-} as const;
 
 const strEquityType = (s: any) => getStrAny(s, ["equityType", "EquityType", "eqType", "EqType"], "");
 const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount"]);
@@ -574,7 +551,7 @@ const getSignalMetricAbs = (
   return raw == null ? null : Math.abs(raw);
 };
 
-const SONAR_ACTIVE_PRESET_ID_LS_KEY = "arb.sonar.shared-preset.active-id";
+const SONAR_ACTIVE_PRESET_ID_LS_KEY = "opendoor.sonar.shared-preset.active-id";
 
 const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
   const best = getBestParams(s);
@@ -802,7 +779,9 @@ export function buildSignalsUrl(args: {
     maxSigma,
   } = args;
 
-  const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
+  const windowKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
+  const typeKey = OPEN_DOOR_TYPE_META[type]?.api ?? "any";
+  const u = new URL(`${BRIDGE_BASE}/api/opendoor/signals/${windowKey}/${typeKey}/${mode}`);
 
   const useBinRatingFilter = ratingMode === "BIN" && zapMode === "sigma";
   const safeMinRate = useBinRatingFilter
@@ -1015,7 +994,6 @@ type MinMaxProps = {
   onToggleMode?: (key: RangeBoundKey) => void;
   minPh?: string;
   maxPh?: string;
-  dataAvailable?: boolean;
   startEditing: () => void;
   stopEditing: () => void;
 };
@@ -1039,8 +1017,6 @@ const createDefaultRangeModes = (): RangeFilterModes =>
 export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
   const hasValue = Boolean(props.min || props.max);
   const isOff = props.mode === "off";
-  const hasData = props.dataAvailable !== false;
-  const showUnavailable = hasValue && !isOff && !hasData;
 
   return (
     <div
@@ -1048,8 +1024,6 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
         hasValue
           ? isOff
             ? "border-rose-500/30 bg-rose-500/[0.05]"
-            : showUnavailable
-              ? "border-amber-400/30 bg-amber-400/[0.06]"
             : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
           : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
       }`}
@@ -1063,26 +1037,18 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
       <div className="flex items-center justify-between">
         <div className="mr-1 truncate text-[10px] font-mono uppercase tracking-widest text-zinc-500">{props.label}</div>
         <div className="flex items-center gap-2">
-          {hasValue && props.filterKey && props.onToggleMode &&
-            (showUnavailable ? (
-              <span
-                className="text-[10px] font-mono uppercase text-amber-300"
-                title="No values in the current batch; this filter is temporarily ignored"
-              >
-                N/D
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => props.onToggleMode?.(props.filterKey!)}
-                className={`text-[10px] font-mono transition-colors uppercase ${
-                  isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
-                }`}
-                title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
-              >
-                {isOff ? "OFF" : "ON"}
-              </button>
-            ))}
+          {hasValue && props.filterKey && props.onToggleMode && (
+            <button
+              type="button"
+              onClick={() => props.onToggleMode?.(props.filterKey!)}
+              className={`text-[10px] font-mono transition-colors uppercase ${
+                isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
+              }`}
+              title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
+            >
+              {isOff ? "OFF" : "ON"}
+            </button>
+          )}
           {hasValue && (
             <button
               type="button"
@@ -1902,6 +1868,8 @@ const SignalCard: React.FC<SignalCardProps> = ({
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
   const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : mintTextClass;
+  const rateCell = getDisplayedRatingCell(s, side);
+  const rateTextClass = isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass;
 
   const tickerColor = isActive
     ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass
@@ -1945,11 +1913,17 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
       <div className={`flex items-center justify-between w-full font-mono ${compact ? "text-[9px]" : "text-[10px]"} opacity-80`}>
         <div className="flex items-center gap-1.5">
-          <span className="text-zinc-600">SIG</span>
-          <span className="text-zinc-400 tabular-nums">{s.sig == null ? "-" : fmtNum(toNum(s.sig), 2)}</span>
+          <span className="text-zinc-600">RATE</span>
+          <span className={`${rateTextClass} tabular-nums`}>
+            {rateCell.rate == null ? "-" : `${Math.round(rateCell.rate * 100)}%`}
+          </span>
         </div>
 
           <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-600">N</span>
+            <span className="text-zinc-400 tabular-nums">{rateCell.total == null ? "-" : fmtMaybeInt(rateCell.total)}</span>
+          </div>
           <div className="flex items-center gap-1">
             <span className="text-zinc-600">%</span>
             <span className="text-zinc-400 tabular-nums">{z == null ? "-" : fmtNum(z, 2)}</span>
@@ -1969,6 +1943,191 @@ const SignalCard: React.FC<SignalCardProps> = ({
 const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
 const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
 
+const toOpenDoorRateCell = (value: any) => {
+  const obj = safeObj(value);
+  return {
+    rate: toNum(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating),
+    total: toNum(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count),
+  };
+};
+
+const normalizeOpenDoorRatings = (value: any) => {
+  const source = safeObj(value);
+  const out: Record<string, any> = {};
+  if (!source) return out;
+
+  for (const [windowKey, rawBucket] of Object.entries(source)) {
+    const bucket = safeObj(rawBucket);
+    if (!bucket) continue;
+    out[windowKey] = {
+      any: toOpenDoorRateCell(bucket.any ?? bucket.Any),
+      hard: toOpenDoorRateCell(bucket.up ?? bucket.Up),
+      soft: toOpenDoorRateCell(bucket.down ?? bucket.Down),
+    };
+  }
+
+  return out;
+};
+
+const normalizeOpenDoorBestRanges = (value: any) => {
+  const source = safeObj(value);
+  return source ?? {};
+};
+
+const buildOpenDoorRatingsFromClasses = (value: any) => {
+  const source = safeObj(value);
+  const out: Record<string, any> = {};
+  if (!source) return out;
+
+  for (const [windowKey, rawClass] of Object.entries(source)) {
+    const stats = safeObj((rawClass as any)?.stats ?? (rawClass as any)?.Stats);
+    if (!stats) continue;
+
+    const total = toNum(stats.total ?? stats.Total ?? stats.count ?? stats.Count);
+    const upRate = toNum(stats.up_rate ?? stats.UpRate ?? stats.upRate ?? stats.Up_Rate);
+    const downRate = toNum(stats.down_rate ?? stats.DownRate ?? stats.downRate ?? stats.Down_Rate);
+    const anyRate =
+      upRate == null && downRate == null
+        ? null
+        : Math.max(upRate ?? Number.NEGATIVE_INFINITY, downRate ?? Number.NEGATIVE_INFINITY);
+
+    out[windowKey] = {
+      any: { rate: anyRate, total },
+      hard: { rate: upRate, total },
+      soft: { rate: downRate, total },
+    };
+  }
+
+  return out;
+};
+
+const toSyntheticOpenDoorSignal = (raw: any, direction: "up" | "down", cls: ArbClass): ArbitrageSignal | null => {
+  const ticker = normalizeTicker(String(raw?.ticker ?? raw?.Ticker ?? ""));
+  if (!ticker) return null;
+
+  const ratings = normalizeOpenDoorRatings(raw?.ratings ?? raw?.Ratings);
+  const classKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
+  const classBucket = safeObj(ratings[classKey]);
+  const anyCell = toOpenDoorRateCell(classBucket?.any);
+  const dirCell = direction === "up" ? toOpenDoorRateCell(classBucket?.hard) : toOpenDoorRateCell(classBucket?.soft);
+
+  const metricAbs = Math.abs(dirCell.rate ?? anyCell.rate ?? 0);
+  const signedMetric = direction === "down" ? metricAbs : -metricAbs;
+  const bestRanges = raw?.best_ranges ?? raw?.bestRanges ?? raw?.BestRanges ?? null;
+
+  return {
+    ...raw,
+    strategy: "opendoor",
+    ticker,
+    benchmark: "OPEN",
+    betaBucket: "unknown",
+    direction,
+    sig: signedMetric,
+    zapS: direction === "down" ? metricAbs : null,
+    zapSsigma: direction === "down" ? metricAbs : null,
+    zapL: direction === "up" ? signedMetric : null,
+    zapLsigma: direction === "up" ? signedMetric : null,
+    shortCandidate: direction === "down",
+    longCandidate: direction === "up",
+    kind: direction === "up" ? "hard" : "soft",
+    company: ticker,
+    active: true,
+    isActive: true,
+    PositionBp: direction === "down" ? -1 : 1,
+    best: {
+      classKey,
+      rating: dirCell.rate ?? anyCell.rate ?? null,
+      total: dirCell.total ?? anyCell.total ?? null,
+      hard: toNum(classBucket?.hard?.total),
+      soft: toNum(classBucket?.soft?.total),
+      ratings,
+    },
+    ratings,
+    best_ranges: bestRanges,
+    best_params: {
+      ratings,
+      best_ranges: bestRanges,
+    },
+    _bestRating: dirCell.rate ?? anyCell.rate ?? null,
+    _bestTotal: dirCell.total ?? anyCell.total ?? null,
+    _bestHard: toNum(classBucket?.hard?.total),
+    _bestSoft: toNum(classBucket?.soft?.total),
+    _isActive: true,
+  };
+};
+
+const mergeOpenDoorActivePayload = (signalRow: any, tickerItem: any, bestParamsItem: any) => {
+  const mergedTicker = normalizeTicker(
+    String(
+      signalRow?.ticker ??
+        signalRow?.Ticker ??
+        tickerItem?.ticker ??
+        tickerItem?.Ticker ??
+        bestParamsItem?.ticker ??
+        bestParamsItem?.Ticker ??
+        ""
+    )
+  );
+
+  const bestParamRatings = normalizeOpenDoorRatings(bestParamsItem?.ratings ?? bestParamsItem?.Ratings);
+  const tickerRatings = buildOpenDoorRatingsFromClasses(tickerItem?.classes ?? tickerItem?.Classes);
+  const signalRatings = normalizeOpenDoorRatings(signalRow?.ratings ?? signalRow?.Ratings);
+  const ratings =
+    Object.keys(bestParamRatings).length > 0
+      ? bestParamRatings
+      : Object.keys(signalRatings).length > 0
+        ? signalRatings
+        : tickerRatings;
+
+  const bestRanges = normalizeOpenDoorBestRanges(
+    bestParamsItem?.best_ranges ??
+      bestParamsItem?.bestRanges ??
+      bestParamsItem?.BestRanges ??
+      signalRow?.best_ranges ??
+      signalRow?.bestRanges ??
+      signalRow?.BestRanges
+  );
+
+  const merged = {
+    ...(safeObj(tickerItem) ?? {}),
+    ...(safeObj(signalRow) ?? {}),
+    ticker: mergedTicker ?? signalRow?.ticker ?? tickerItem?.ticker ?? bestParamsItem?.ticker,
+    strategy: "opendoor",
+    benchmark: "OPEN",
+    betaBucket: "unknown",
+    ratings,
+    best_ranges: bestRanges,
+  };
+
+  const classKey =
+    Object.entries(OPEN_DOOR_CLASS_META).find(([, meta]) => meta.api === String((signalRow as any)?.best?.classKey ?? ""))?.[0] ??
+    null;
+
+  const currentWindowKey = classKey ? OPEN_DOOR_CLASS_META[classKey as ArbClass]?.api : null;
+  const currentBucket = currentWindowKey ? safeObj(ratings[currentWindowKey]) : null;
+
+  return {
+    ...merged,
+    classes: safeObj(tickerItem?.classes ?? tickerItem?.Classes) ?? merged.classes,
+    best: {
+      ...(safeObj(signalRow?.best) ?? {}),
+      ratings,
+      classKey: currentWindowKey ?? signalRow?.best?.classKey ?? null,
+      rating: toNum(signalRow?.best?.rating ?? signalRow?.best?.Rating) ?? toNum(currentBucket?.any?.rate),
+      total: toNum(signalRow?.best?.total ?? signalRow?.best?.Total) ?? toNum(currentBucket?.any?.total),
+      hard: toNum(signalRow?.best?.hard ?? signalRow?.best?.Hard) ?? toNum(currentBucket?.hard?.total),
+      soft: toNum(signalRow?.best?.soft ?? signalRow?.best?.Soft) ?? toNum(currentBucket?.soft?.total),
+    },
+    best_params: {
+      ...(safeObj(signalRow?.best_params) ?? {}),
+      ...(safeObj(bestParamsItem) ?? {}),
+      ratings,
+      best_ranges: bestRanges,
+      classes: safeObj(tickerItem?.classes ?? tickerItem?.Classes) ?? undefined,
+    },
+  };
+};
+
 type WindowRateCell = {
   rate: number | null;
   total: number | null;
@@ -1980,6 +2139,23 @@ type WindowRatingRow = {
   hard: WindowRateCell;
   soft: WindowRateCell;
 };
+
+const chunkRowPairs = (rows: RowPair[], size: number): RowPair[][] => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const safeSize = Math.max(1, Math.trunc(size || 1));
+  const chunks: RowPair[][] = [];
+  for (let i = 0; i < rows.length; i += safeSize) chunks.push(rows.slice(i, i + safeSize));
+  return chunks;
+};
+
+type OpenDoorLiveQuote = {
+  bid: number | null;
+  ask: number | null;
+  bidLstClsDeltaPct: number | null;
+  askLstClsDeltaPct: number | null;
+};
+
+const OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE = 120;
 
 const WINDOW_RATING_LABELS: Record<string, string> = {
   glob: "GLOBAL",
@@ -2013,7 +2189,7 @@ const toWindowRateCell = (value: any): WindowRateCell => {
 };
 
 const pickWindowRatingsSource = (d: any) => {
-  return (
+  const direct =
     safeObj(d?.ratings) ??
     safeObj(d?.Ratings) ??
     safeObj(d?.best?.ratings) ??
@@ -2024,8 +2200,14 @@ const pickWindowRatingsSource = (d: any) => {
     safeObj(getBestParams(d)?.Ratings) ??
     safeObj(getBestParams(d)?.windows) ??
     safeObj(getBestParams(d)?.Windows) ??
-    null
-  );
+    null;
+
+  if (direct) return direct;
+
+  const fromClasses = buildOpenDoorRatingsFromClasses(d?.classes ?? d?.Classes);
+  if (Object.keys(fromClasses).length > 0) return fromClasses;
+
+  return null;
 };
 
 const getWindowRatings = (d: any): WindowRatingRow[] => {
@@ -2068,55 +2250,127 @@ const getWindowRatings = (d: any): WindowRatingRow[] => {
   });
 };
 
+const getDisplayedRatingCell = (s: any, side: "short" | "long"): WindowRateCell => {
+  const best = getBestObj(s);
+  const rate = toNum(best?.rating ?? best?.Rating ?? best?.rate ?? best?.Rate ?? (s as any)?._bestRating);
+  const directionalTotal = side === "long"
+    ? toNum(best?.hard ?? best?.Hard ?? (s as any)?._bestHard)
+    : toNum(best?.soft ?? best?.Soft ?? (s as any)?._bestSoft);
+
+  return {
+    rate,
+    total: directionalTotal ?? toNum(best?.total ?? best?.Total ?? (s as any)?._bestTotal),
+  };
+};
+
+const getOpenDoorLiveQuoteComparison = (row: WindowRatingRow | null) => {
+  if (!row) {
+    return {
+      askRate: null as number | null,
+      askTotal: null as number | null,
+      bidRate: null as number | null,
+      bidTotal: null as number | null,
+      edge: null as number | null,
+      bias: "NEUTRAL" as "ASK" | "BID" | "NEUTRAL",
+    };
+  }
+
+  const askRate = row.hard.rate;
+  const bidRate = row.soft.rate;
+  const edge = askRate == null || bidRate == null ? null : askRate - bidRate;
+
+  return {
+    askRate,
+    askTotal: row.hard.total,
+    bidRate,
+    bidTotal: row.soft.total,
+    edge,
+    bias: edge == null ? "NEUTRAL" : edge > 0 ? "ASK" : edge < 0 ? "BID" : "NEUTRAL",
+  };
+};
+
+const mergeLiveQuoteIntoSignal = (signal: ArbitrageSignal, quote: OpenDoorLiveQuote | null | undefined): ArbitrageSignal => {
+  if (!quote) return signal;
+
+  const bid = quote.bid;
+  const ask = quote.ask;
+  const bidLstClsDeltaPct = quote.bidLstClsDeltaPct;
+  const askLstClsDeltaPct = quote.askLstClsDeltaPct;
+  const spread = bid != null && ask != null ? Math.max(0, ask - bid) : toNum(signal.spread ?? signal.Spread);
+
+  return {
+    ...signal,
+    Bid: bid,
+    Ask: ask,
+    ["BidLstClsΔ%"]: bidLstClsDeltaPct ?? undefined,
+    ["AskLstClsΔ%"]: askLstClsDeltaPct ?? undefined,
+    BidLstClsDeltaPct: bidLstClsDeltaPct ?? undefined,
+    AskLstClsDeltaPct: askLstClsDeltaPct ?? undefined,
+    bidStock: bidLstClsDeltaPct ?? undefined,
+    askStock: askLstClsDeltaPct ?? undefined,
+    spread: spread ?? undefined,
+    Spread: spread ?? undefined,
+  };
+};
+
+const enrichOpenDoorSignalsWithLiveQuotes = (
+  signals: ArbitrageSignal[],
+  quotes: Record<string, OpenDoorLiveQuote>
+): ArbitrageSignal[] =>
+  signals.map((signal) => mergeLiveQuoteIntoSignal(signal, quotes[String(signal.ticker ?? "").toUpperCase()] ?? null));
+
+const getOpenDoorLiveQuotes = async (tickers: string[]): Promise<Record<string, OpenDoorLiveQuote>> => {
+  const normalized = Array.from(
+    new Set(
+      tickers
+        .map((ticker) => normalizeTicker(ticker))
+        .filter((ticker): ticker is string => !!ticker)
+    )
+  );
+
+  if (normalized.length === 0) return {};
+
+  const out: Record<string, OpenDoorLiveQuote> = {};
+  const chunks: string[][] = [];
+  for (let i = 0; i < normalized.length; i += OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE) {
+    chunks.push(normalized.slice(i, i + OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE));
+  }
+
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const url = new URL(`${BRIDGE_BASE}/api/live/full-quotes`);
+      url.searchParams.set("tickers", chunk.join(","));
+      url.searchParams.set("fields", "Bid,Ask,BidLstClsΔ%,AskLstClsΔ%");
+
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (!res.ok) throw new Error(`Live quotes HTTP ${res.status}`);
+
+      const json = await res.json();
+      const items = Array.isArray(json?.items) ? json.items : [];
+
+      for (const item of items) {
+        const ticker = normalizeTicker(String(item?.ticker ?? item?.Ticker ?? ""));
+        if (!ticker) continue;
+        const fields = safeObj(item?.fields ?? item?.Fields);
+        out[ticker] = {
+          bid: toNum(fields?.Bid ?? fields?.bid),
+          ask: toNum(fields?.Ask ?? fields?.ask),
+          bidLstClsDeltaPct: toNum(fields?.["BidLstClsΔ%"] ?? fields?.BidLstClsDeltaPct ?? fields?.bidLstClsDeltaPct),
+          askLstClsDeltaPct: toNum(fields?.["AskLstClsΔ%"] ?? fields?.AskLstClsDeltaPct ?? fields?.askLstClsDeltaPct),
+        };
+      }
+    })
+  );
+
+  return out;
+};
+
 type ListMode = "off" | "ignore" | "apply" | "pin";
 type ActiveMode = "off" | "onlyActive" | "onlyInactive";
 
 
 type PinColor = "orange" | "lavender" | "cyan";
 type PinMap = Record<string, PinColor>;
-
-export type SonarExactFilterSnapshot = {
-  cls: string;
-  type: string;
-  mode: string;
-  ratingMode: "BIN" | "SESSION";
-  minRate: number | string;
-  minTotal: number | string;
-  tickersFilterNorm: string;
-  listMode: ListMode;
-  ignoreSet: Set<string>;
-  applySet: Set<string>;
-  pinMap: Record<string, string>;
-  bounds: any;
-  excludeDividend: boolean;
-  excludeNews: boolean;
-  excludePTP: boolean;
-  excludeSSR: boolean;
-  excludeReport: boolean;
-  excludeETF: boolean;
-  excludeCrap: boolean;
-  activeMode: ActiveMode;
-  includeUSA: boolean;
-  includeChina: boolean;
-  selCountries: Set<string>;
-  countryEnabled: boolean;
-  selExchanges: Set<string>;
-  exchangeEnabled: boolean;
-  selSectors: Set<string>;
-  sectorEnabled: boolean;
-  filterReport: "ALL" | "YES" | "NO";
-  equityType: string;
-  corrMin: string;
-  corrMax: string;
-  betaMin: string;
-  betaMax: string;
-  sigmaMin: string;
-  sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "off";
-  zapShowAbs: number;
-  zapSilverAbs: number;
-  zapGoldAbs: number;
-};
 
 type SortKey = "alpha" | "sigma" | "zapAbs" | "sigZapAbs" | "rate" | "posBpAbs" | "beta" | "pin";
 type SortDir = "asc" | "desc";
@@ -2126,165 +2380,6 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
   lavender: "bg-violet-300",
   cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
 };
-
-export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
-  const out: ArbitrageSignal[] = [];
-  const mr = toNum(f.minRate);
-  const mt = toNum(f.minTotal);
-  const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
-
-  const base = Number(f.zapShowAbs ?? 0);
-  const zapThr = Math.max(0.3, base);
-  const sigThr = Math.max(0.05, base);
-  const eqNeedle = f.equityType.trim().toLowerCase();
-
-  const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
-    if ((min != null || max != null) && val == null) return false;
-    if (min != null && val != null && val < min) return false;
-    if (max != null && val != null && val > max) return false;
-    return true;
-  };
-
-  const boundKeys = Object.keys(RANGE_VALUE_GETTERS) as Array<keyof typeof RANGE_VALUE_GETTERS>;
-  const hasAnyRangeValue = Object.fromEntries(
-    boundKeys.map((key) => {
-      const bounds = f.bounds[key];
-      const isActive = bounds.min != null || bounds.max != null;
-      return [key, !isActive || (arr ?? []).some((s) => RANGE_VALUE_GETTERS[key](s) != null)];
-    })
-  ) as Record<keyof typeof RANGE_VALUE_GETTERS, boolean>;
-  const passesRangeBound = (key: keyof typeof RANGE_VALUE_GETTERS, signal: ArbitrageSignal) => {
-    const bounds = f.bounds[key];
-    if (!hasAnyRangeValue[key]) return true;
-    return passMinMaxLocal(RANGE_VALUE_GETTERS[key](signal), bounds.min, bounds.max);
-  };
-
-  for (const s of arr ?? []) {
-    const tk = normalizeTicker(s?.ticker || "");
-    if (!tk) continue;
-    const posActive = isActiveByPositionBp(s);
-
-    if (f.activeMode === "onlyActive") {
-      if (!posActive) continue;
-      out.push(s);
-      continue;
-    }
-
-    if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
-    if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
-    if (f.listMode === "pin" && !f.pinMap[tk]) continue;
-
-    if (f.activeMode === "onlyInactive") {
-      if (posActive) continue;
-    }
-
-    if (!passMinMaxLocal(getCorrValue(s), toNum(f.corrMin), toNum(f.corrMax))) continue;
-    if (!passMinMaxLocal(getBetaValue(s), toNum(f.betaMin), toNum(f.betaMax))) continue;
-    if (!passMinMaxLocal(getSigmaValue(s), toNum(f.sigmaMin), toNum(f.sigmaMax))) continue;
-    let failedRangeBound = false;
-    for (const key of boundKeys) {
-      if (!passesRangeBound(key, s)) {
-        failedRangeBound = true;
-        break;
-      }
-    }
-    if (failedRangeBound) continue;
-
-    if (useBinRatingFilter) {
-      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
-    } else {
-      if (mr != null) {
-        const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-        if (r == null || r < mr) continue;
-      }
-      if (mt != null) {
-        const t = getBestTotalByType(s, f.type as any);
-        if (t == null || t < mt) continue;
-      }
-    }
-
-    if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
-    if (f.excludeNews) {
-      const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-      if (nn > 0) continue;
-    }
-    if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
-    if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
-    if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) continue;
-    if (f.excludeETF) {
-      if (boolIsETF(s) === true) continue;
-      const eqt = strEquityType(s).toLowerCase();
-      if (eqt && eqt.includes("etf")) continue;
-    }
-    if (f.excludeCrap) {
-      const px = numLastClose(s);
-      if (px != null && px < 5) continue;
-    }
-
-    if (f.includeUSA || f.includeChina) {
-      const matchUSA = isUSA(s);
-      const c = getCountryStr(s);
-      const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
-      if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
-    }
-
-    if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) continue;
-    if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) continue;
-    if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
-
-    if (f.filterReport !== "ALL") {
-      const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-      if (f.filterReport === "YES" && rep !== true) continue;
-      if (f.filterReport === "NO" && rep !== false) continue;
-    }
-
-    if (eqNeedle) {
-      const et = strEquityType(s).toLowerCase();
-      if (!et.includes(eqNeedle)) continue;
-    }
-
-    if (f.zapMode !== "off") {
-      const dir = s.direction;
-      const isShort = dir === "down";
-      const isLong = dir === "up";
-      if (!isShort && !isLong) continue;
-
-      if (!posActive) {
-        if (f.zapMode === "zap") {
-          if (isShort) {
-            const v = toNum(s.zapS);
-            if (v == null || v < zapThr) continue;
-          } else {
-            const v = toNum(s.zapL);
-            if (v == null || v > -zapThr) continue;
-          }
-        } else if (f.zapMode === "delta") {
-          const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
-          const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < deltaThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -deltaThr) continue;
-          }
-        } else {
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < sigThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -sigThr) continue;
-          }
-        }
-      }
-    }
-
-    out.push(s);
-  }
-
-  return out;
-}
 
 
 
@@ -2679,7 +2774,7 @@ function HedgeHeaderMinimal({
 /* =========================
    COMPONENT
 ========================= */
-export default function ArbitrageSonar() {
+export default function OpenDoorSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const isDark = true;
@@ -3935,7 +4030,212 @@ export default function ArbitrageSonar() {
   };
 
   const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
-    return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
+    const out: ArbitrageSignal[] = [];
+    const mr = toNum(f.minRate);
+    const mt = toNum(f.minTotal);
+    const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
+
+    const base = Number(f.zapShowAbs ?? 0);
+    const zapThr = Math.max(0.3, base);   // for ZAP
+    const sigThr = Math.max(0.05, base);  // for SIGZAP
+    const eqNeedle = f.equityType.trim().toLowerCase();
+    const rangeValueGetters = {
+      ADV20: numADV20,
+      ADV20NF: numADV20NF,
+      ADV90: numADV90,
+      ADV90NF: numADV90NF,
+      AvPreMhv: numAvPreMh,
+      RoundLot: numRoundLot,
+      VWAP: numVWAP,
+      Spread: numSpread,
+      LstPrcL: numLstPrcL,
+      LstCls: numLastClose,
+      YCls: numYCls,
+      TCls: numTCls,
+      ClsToClsPct: numClsToClsPct,
+      Lo: numLo,
+      LstClsNewsCnt: numLstClsNewsCnt,
+      MarketCapM: numMarketCapM,
+      PreMhVolNF: numPreMktVolNF,
+      VolNFfromLstCls: numVolNFfromLstCls,
+      AvPostMhVol90NF: numAvPostMhVol90NF,
+      AvPreMhVol90NF: numAvPreMhVol90NF,
+      AvPreMhValue20NF: numAvPreMhValue20NF,
+      AvPreMhValue90NF: numAvPreMhValue90NF,
+      AvgDailyValue20: numAvgDailyValue20,
+      AvgDailyValue90: numAvgDailyValue90,
+      Volatility20: numVolatility20,
+      Volatility90: numVolatility90,
+      PreMhMDV20NF: numPreMhMDV20NF,
+      PreMhMDV90NF: numPreMhMDV90NF,
+      VolRel: numVolRel,
+      PreMhBidLstPrcPct: numPreMhBidLstPrcPct,
+      PreMhLoLstPrcPct: numPreMhLoLstPrcPct,
+      PreMhHiLstClsPct: numPreMhHiLstClsPct,
+      PreMhLoLstClsPct: numPreMhLoLstClsPct,
+      LstPrcLstClsPct: numLstPrcLstClsPctSafe,
+      ImbExch925: numImbExch925,
+      ImbExch1555: numImbExch1555,
+    } as const;
+    const boundKeys = Object.keys(rangeValueGetters) as Array<keyof typeof rangeValueGetters>;
+    const hasAnyRangeValue = Object.fromEntries(
+      boundKeys.map((key) => {
+        const bounds = f.bounds[key];
+        const isActive = bounds.min != null || bounds.max != null;
+        return [key, !isActive || (arr ?? []).some((s) => rangeValueGetters[key](s) != null)];
+      })
+    ) as Record<keyof typeof rangeValueGetters, boolean>;
+    const passesRangeBound = (key: keyof typeof rangeValueGetters, signal: ArbitrageSignal) => {
+      const bounds = f.bounds[key];
+      if (!hasAnyRangeValue[key]) return true;
+      return passMinMax(rangeValueGetters[key](signal), bounds.min, bounds.max);
+    };
+
+    for (const s of arr ?? []) {
+      const tk = normalizeTicker(s?.ticker || "");
+      if (!tk) continue;
+      const posActive = isActiveByPositionBp(s);
+
+      // ACTIVE tab should surface the same active position set used by hedge,
+      // so active rows bypass list mode and secondary client-side filters here.
+      if (f.activeMode === "onlyActive") {
+        if (!posActive) continue;
+        out.push(s);
+        continue;
+      }
+
+      // list mode first (cheap)
+      if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
+      if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
+      if (f.listMode === "pin" && !f.pinMap[tk]) continue;
+
+      if (f.activeMode === "onlyInactive") {
+        if (posActive) continue;
+      }
+
+
+      // thresholds
+      if (!passMinMax(getCorrValue(s), f.bounds.Corr.min, f.bounds.Corr.max)) continue;
+      if (!passMinMax(getBetaValue(s), f.bounds.Beta.min, f.bounds.Beta.max)) continue;
+      if (!passMinMax(getSigmaValue(s), f.bounds.Sigma.min, f.bounds.Sigma.max)) continue;
+      let failedRangeBound = false;
+      for (const key of boundKeys) {
+        if (!passesRangeBound(key, s)) {
+          failedRangeBound = true;
+          break;
+        }
+      }
+      if (failedRangeBound) continue;
+
+      // minRate/minTotal
+      if (useBinRatingFilter) {
+        if (!passesSonarBinRating({
+          signal: s,
+          cls: f.cls,
+          minRate: mr ?? 0,
+          minTotal: mt ?? 0,
+        })) continue;
+      } else {
+        if (mr != null) {
+          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+          if (r == null || r < mr) continue;
+        }
+        if (mt != null) {
+          const t = getBestTotalByType(s, f.type);
+          if (t == null || t < mt) continue;
+        }
+      }
+
+
+      // exclude group
+      if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
+      if (f.excludeNews) {
+        const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
+        if (nn > 0) continue;
+      }
+      if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
+      if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
+      if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) continue;
+      if (f.excludeETF) {
+        if (boolIsETF(s) === true) continue;
+        const eqt = strEquityType(s).toLowerCase();
+        if (eqt && eqt.includes("etf")) continue;
+      }
+      if (f.excludeCrap) {
+        const px = numLastClose(s);
+        if (px != null && px < 5) continue;
+      }
+
+
+      // include group
+      if (f.includeUSA || f.includeChina) {
+        const matchUSA = isUSA(s);
+        const c = getCountryStr(s);
+        const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
+        if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
+      }
+
+      // multi
+      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) continue;
+      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) continue;
+      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
+
+      // report tri-state
+      if (f.filterReport !== "ALL") {
+        const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
+        if (f.filterReport === "YES" && rep !== true) continue;
+        if (f.filterReport === "NO" && rep !== false) continue;
+      }
+
+      // equity type
+      if (eqNeedle) {
+        const et = strEquityType(s).toLowerCase();
+        if (!et.includes(eqNeedle)) continue;
+      }
+
+      // ZAP/SigmaZAP (mutually exclusive)
+      if (f.zapMode !== "off") {
+        const dir = s.direction;
+        const isShort = dir === "down";
+        const isLong = dir === "up";
+        if (!isShort && !isLong) continue;
+
+        // Start-deviation filter applies only to inactive candidates.
+        if (!posActive) {
+          if (f.zapMode === "zap") {
+            if (isShort) {
+              const v = toNum(s.zapS);
+              if (v == null || v < zapThr) continue;
+            } else {
+              const v = toNum(s.zapL);
+              if (v == null || v > -zapThr) continue;
+            }
+          } else if (f.zapMode === "delta") {
+            const base = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+            const deltaThr = base + Math.max(0.05, Number(f.zapShowAbs ?? 0));
+            if (isShort) {
+              const v = toNum(s.zapSsigma);
+              if (v == null || v < deltaThr) continue;
+            } else {
+              const v = toNum(s.zapLsigma);
+              if (v == null || v > -deltaThr) continue;
+            }
+          } else {
+            if (isShort) {
+              const v = toNum(s.zapSsigma);
+              if (v == null || v < sigThr) continue;
+            } else {
+              const v = toNum(s.zapLsigma);
+              if (v == null || v > -sigThr) continue;
+            }
+          }
+        }
+      }
+
+      out.push(s);
+    }
+
+    return out;
   }, []);
 
   /* =========================
@@ -3946,53 +4246,66 @@ export default function ArbitrageSonar() {
   const inFlightUrlRef = useRef<string | null>(null);
   const fetchSignals = useCallback(async () => {
     const f = filtersRef.current;
-    const url = buildSignalsUrl({
-      cls: f.cls,
+    const classKey = OPEN_DOOR_CLASS_META[f.cls]?.api ?? "glob";
+    const signature = JSON.stringify({
+      cls: classKey,
       type: f.type,
       mode: f.mode,
-      ratingMode: f.ratingMode,
-      zapMode: f.zapMode,
       minRate: f.minRate,
       minTotal: f.minTotal,
-      tickers: f.tickersFilterNorm || undefined,
-      minCorr: toNum(f.corrMin),
-      maxCorr: toNum(f.corrMax),
-      minBeta: toNum(f.betaMin),
-      maxBeta: toNum(f.betaMax),
-      minSigma: toNum(f.sigmaMin),
-      maxSigma: toNum(f.sigmaMax),
+      tickers: f.tickersFilterNorm || "",
     });
-    if (inFlightUrlRef.current === url) return;
-    inFlightUrlRef.current = url;
+    if (inFlightUrlRef.current === signature) return;
+    inFlightUrlRef.current = signature;
     const myId = ++reqIdRef.current;
 
     try {
       setLoading(true);
       setError(null);
 
-      const r = await fetch(url, { cache: "no-store" });
+      const tickersArg = f.tickersFilterNorm || undefined;
+      const baseArgs = {
+        cls: classKey,
+        mode: f.mode,
+        minRate: f.minRate,
+        minTotal: f.minTotal,
+        limit: 5000,
+        offset: 0,
+        tickers: tickersArg,
+      } as const;
 
-      // ignore if a newer request was fired
-      if (myId !== reqIdRef.current) return;
+      const loadDirection = async (apiType: "up" | "down", direction: "up" | "down") => {
+        const json = await getOpendoorSignals({ ...baseArgs, type: apiType });
+        const rawItems = Array.isArray(json?.items) ? json.items : [];
+        return rawItems
+          .map((item) => toSyntheticOpenDoorSignal(item, direction, f.cls))
+          .filter(Boolean) as ArbitrageSignal[];
+      };
 
-      if (!r.ok) {
-        const txt = await r.text().catch(() => "");
-        setAllItems([]);
-        setItems([]);
-        setError(`HTTP ${r.status}: ${txt || r.statusText}`);
-        return;
+      let normalized: ArbitrageSignal[] = [];
+      if (f.type === "any") {
+        const [upItems, downItems] = await Promise.all([
+          loadDirection("up", "up"),
+          loadDirection("down", "down"),
+        ]);
+        const byKey = new Map<string, ArbitrageSignal>();
+        for (const item of [...upItems, ...downItems]) {
+          byKey.set(`${item.ticker}|${item.direction}`, item);
+        }
+        normalized = Array.from(byKey.values());
+      } else if (f.type === "hard") {
+        normalized = await loadDirection("up", "up");
+      } else {
+        normalized = await loadDirection("down", "down");
       }
 
-      const j = await r.json();
-      const rawItems: any[] = Array.isArray(j)
-        ? j
-        : Array.isArray(j?.items)
-        ? j.items
-        : [];
+      if (myId !== reqIdRef.current) return;
 
-      const normalized = rawItems
-        .map(normalizeSignal)
-        .filter(Boolean) as ArbitrageSignal[];
+      try {
+        const liveQuotes = await getOpenDoorLiveQuotes(normalized.map((item) => item.ticker));
+        if (myId !== reqIdRef.current) return;
+        normalized = enrichOpenDoorSignalsWithLiveQuotes(normalized, liveQuotes);
+      } catch {}
 
       const filtered = applyAllClientFilters(normalized, f);
       setAllItems(normalized);
@@ -4004,7 +4317,7 @@ export default function ArbitrageSonar() {
       setItems([]);
       setError(e?.message ?? "Unknown error");
     } finally {
-      if (inFlightUrlRef.current === url) inFlightUrlRef.current = null;
+      if (inFlightUrlRef.current === signature) inFlightUrlRef.current = null;
       if (myId === reqIdRef.current) setLoading(false);
     }
   }, [applyAllClientFilters]);
@@ -4138,10 +4451,66 @@ export default function ArbitrageSonar() {
   }, [activeTicker, items]);
 
   useEffect(() => {
-    setActiveLoading(false);
+    const tk = normalizeTicker(activeTicker || "");
+    if (!tk) {
+      setActiveErr(null);
+      setActiveData(null);
+      return;
+    }
+
+    setActiveData((prev: any) => {
+      if (!prev) return activeItem;
+      return mergeOpenDoorActivePayload(activeItem, prev, getBestParams(prev));
+    });
+  }, [activeItem, activeTicker]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tk = normalizeTicker(activeTicker || "");
+
+    if (!tk) {
+      setActiveLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setActiveErr(null);
     setActiveData(activeItem);
-  }, [activeItem]);
+    setActiveLoading(true);
+
+    Promise.allSettled([getOpendoorTicker(tk), getOpendoorBestParamsByTicker(tk)])
+      .then((results) => {
+        if (cancelled) return;
+
+        const tickerRes = results[0].status === "fulfilled" ? results[0].value : null;
+        const bestParamsRes = results[1].status === "fulfilled" ? results[1].value : null;
+
+        const tickerItem = tickerRes?.item ?? null;
+        const bestParamsItem = bestParamsRes?.item ?? null;
+
+        setActiveData(mergeOpenDoorActivePayload(activeItem, tickerItem, bestParamsItem));
+
+        const errors = results
+          .filter((entry) => entry.status === "rejected")
+          .map((entry) => ((entry as PromiseRejectedResult).reason as any)?.message ?? "Unknown error")
+          .filter(Boolean);
+
+        setActiveErr(errors.length > 0 ? errors.join(" | ") : null);
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setActiveErr(e?.message ?? "Unknown error");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setActiveLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTicker]);
 
   const onTickerClick = (tk: string) => {
     const n = normalizeTicker(tk);
@@ -4345,12 +4714,6 @@ export default function ArbitrageSonar() {
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
-  const rangeDataAvailability = useMemo(() => {
-    const keys = Object.keys(RANGE_VALUE_GETTERS) as RangeBoundKey[];
-    return Object.fromEntries(
-      keys.map((key) => [key, allItems.some((s) => RANGE_VALUE_GETTERS[key](s) != null)])
-    ) as Record<RangeBoundKey, boolean>;
-  }, [allItems]);
 
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
   const rawSignalCount = allItems.length;
@@ -4359,12 +4722,6 @@ export default function ArbitrageSonar() {
   const bridgeReturnedNoSignals = !loading && !error && !hasAny && rawSignalCount === 0;
   const activeEmptyStateHints = useMemo(() => {
     const hints: string[] = [];
-    const pushRangeHint = (label: string, mode: RangeFilterMode, min: string, max: string) => {
-      if (mode === "off" || (!min && !max)) return;
-      hints.push(`${label} ${min || "min"}..${max || "max"}`);
-    };
-    pushRangeHint(`PreMhVolNF`, rangeModes.PreMhVolNF, preMhVolNFMin, preMhVolNFMax);
-    pushRangeHint(`VolNFfromLstCls`, rangeModes.VolNFfromLstCls, volNFfromLstClsMin, volNFfromLstClsMax);
     if (tickersFilterNorm) hints.push(`tickers ${tickersFilterNorm}`);
     if (corrMin || corrMax) hints.push(`ρ ${corrMin || "min"}..${corrMax || "max"}`);
     if (betaMin || betaMax) hints.push(`β ${betaMin || "min"}..${betaMax || "max"}`);
@@ -4411,9 +4768,6 @@ export default function ArbitrageSonar() {
     includeUSA,
     listMode,
     pinMap,
-    preMhVolNFMax,
-    preMhVolNFMin,
-    rangeModes,
     sectorEnabled,
     selCountries,
     selExchanges,
@@ -4421,8 +4775,6 @@ export default function ArbitrageSonar() {
     sigmaMax,
     sigmaMin,
     tickersFilterNorm,
-    volNFfromLstClsMax,
-    volNFfromLstClsMin,
     zapMode,
     zapShowAbs,
   ]);
@@ -4443,8 +4795,8 @@ export default function ArbitrageSonar() {
   const ignoreList = useMemo(() => sortedTickers(ignoreSet), [ignoreSet]);
   const applyList = useMemo(() => sortedTickers(applySet), [applySet]);
 
-  const classLabel = cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase();
-  const typeLabel = type.toUpperCase();
+  const classLabel = OPEN_DOOR_CLASS_META[cls]?.label ?? (cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase());
+  const typeLabel = OPEN_DOOR_TYPE_META[type]?.label ?? type.toUpperCase();
   const modeLabel = mode.toUpperCase();
 
   const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
@@ -4511,14 +4863,15 @@ export default function ArbitrageSonar() {
   }, [allItems, zapMode, zapGoldAbs]);
 
   const bestRating = toNum(bestObj?.rating);
+  const bestTotalAny = toNum(bestObj?.total);
   const bestTotalHard = toNum(bestObj?.hard);
   const bestTotalSoft = toNum(bestObj?.soft);
-  const bestTotalAny =
-    bestTotalHard != null || bestTotalSoft != null
-      ? (bestTotalHard ?? 0) + (bestTotalSoft ?? 0)
-      : toNum(bestObj?.total);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
   const activeWindowRatings = useMemo(() => getWindowRatings(activeData), [activeData]);
+  const activeCurrentWindowKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
+  const activeCurrentWindowRow =
+    activeWindowRatings.find((row) => row.windowKey.toLowerCase() === activeCurrentWindowKey.toLowerCase()) ?? null;
+  const activeBidAskComparison = getOpenDoorLiveQuoteComparison(activeCurrentWindowRow);
 
 
   return (
@@ -4531,7 +4884,7 @@ export default function ArbitrageSonar() {
             <div className="flex items-center gap-3">
               <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${accentDotClass} ${loading ? "animate-pulse" : ""}`} />
               <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                ARBITRAGE SONAR
+                OPEN DOOR SONAR
               </h1>
 
               <div className="flex gap-2 ml-4">
@@ -4561,20 +4914,20 @@ export default function ArbitrageSonar() {
             {/* Group 1: MONEY / SCANNER / SONAR */}
             <div className={secondaryGroupClass}>
               <Link
-                href="/money/arbitrage"
+                href="/stats/opendoor"
                 className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /money/arbitrage"
+                title="Open /stats/opendoor"
               >
-                MONEY
+                MATRIX
               </Link>
 
               {/* SCANNER */}
               <Link
-                href="/paper/arbitrage"
+                href="/stats/opendoor"
                 className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /paper/arbitrage"
+                title="Open /stats/opendoor"
               >
-                SCANNER
+                STATS
               </Link>
 
               {/* SONAR (current) */}
@@ -4899,11 +5252,11 @@ export default function ArbitrageSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+            {OPEN_DOOR_VISIBLE_CLASS_ORDER.map((c) => (
               <FilterButton
                 key={c}
                 active={cls === c}
-                label={c === "global" ? "GLOB" : c.toUpperCase()}
+                label={OPEN_DOOR_CLASS_META[c].label}
                 onClick={() => setCls(c)}
               />
             ))}
@@ -4918,9 +5271,9 @@ export default function ArbitrageSonar() {
 
           <div className="h-7 w-px self-center bg-white/5" />
 
-          <div className="flex h-7 items-center gap-2">
-            {(["any", "hard", "soft"] as ArbType[]).map((t) => (
-              <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
+            <div className="flex h-7 items-center gap-2">
+              {(["any", "hard", "soft"] as ArbType[]).map((t) => (
+              <FilterButton key={t} active={type === t} label={OPEN_DOOR_TYPE_META[t].label} onClick={() => setType(t)} />
             ))}
           </div>
 
@@ -5150,43 +5503,43 @@ export default function ArbitrageSonar() {
         {/* ========================= THRESHOLDS GRID ========================= */}
         {!filtersCollapsed && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} dataAvailable={rangeDataAvailability.ADV20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} dataAvailable={rangeDataAvailability.ADV20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} dataAvailable={rangeDataAvailability.ADV90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} dataAvailable={rangeDataAvailability.ADV90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} dataAvailable={rangeDataAvailability.AvPreMhv} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} dataAvailable={rangeDataAvailability.RoundLot} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} dataAvailable={rangeDataAvailability.VWAP} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} dataAvailable={rangeDataAvailability.Spread} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} dataAvailable={rangeDataAvailability.LstPrcL} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
-            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} dataAvailable={rangeDataAvailability.LstCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} dataAvailable={rangeDataAvailability.YCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} dataAvailable={rangeDataAvailability.TCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} dataAvailable={rangeDataAvailability.ClsToClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} dataAvailable={rangeDataAvailability.Lo} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} dataAvailable={rangeDataAvailability.LstClsNewsCnt} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} dataAvailable={rangeDataAvailability.MarketCapM} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} dataAvailable={rangeDataAvailability.PreMhVolNF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} dataAvailable={rangeDataAvailability.VolNFfromLstCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} dataAvailable={rangeDataAvailability.AvPostMhVol90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} dataAvailable={rangeDataAvailability.AvPreMhVol90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} dataAvailable={rangeDataAvailability.AvPreMhValue20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} dataAvailable={rangeDataAvailability.AvPreMhValue90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} dataAvailable={rangeDataAvailability.AvgDailyValue20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} dataAvailable={rangeDataAvailability.AvgDailyValue90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} dataAvailable={rangeDataAvailability.Volatility20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} dataAvailable={rangeDataAvailability.Volatility90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} dataAvailable={rangeDataAvailability.PreMhMDV20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} dataAvailable={rangeDataAvailability.PreMhMDV90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} dataAvailable={rangeDataAvailability.VolRel} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} dataAvailable={rangeDataAvailability.PreMhBidLstPrcPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} dataAvailable={rangeDataAvailability.PreMhLoLstPrcPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} dataAvailable={rangeDataAvailability.PreMhHiLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} dataAvailable={rangeDataAvailability.PreMhLoLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} dataAvailable={rangeDataAvailability.LstPrcLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} dataAvailable={rangeDataAvailability.ImbExch925} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} dataAvailable={rangeDataAvailability.ImbExch1555} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
           </div>
         )}
 
@@ -6124,6 +6477,51 @@ export default function ArbitrageSonar() {
                       </div>
                     </div>
 
+                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
+                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
+                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Bid / Ask vs Window Rating</span>
+                        <span className="text-[10px] font-mono text-zinc-600">
+                          {WINDOW_RATING_LABELS[activeCurrentWindowKey.toLowerCase()] ?? activeCurrentWindowKey.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-px bg-white/10">
+                        {[
+                          { k: "Bid", v: activeData?.Bid == null ? "-" : fmtNum(toNum(activeData?.Bid), 2), c: "text-emerald-400" },
+                          {
+                            k: "Bid Down Rate",
+                            v: activeBidAskComparison.bidRate == null ? "-" : `${Math.round(activeBidAskComparison.bidRate * 100)}%`,
+                            c: activeBidAskComparison.bias === "BID" ? "text-rose-300" : "text-zinc-200",
+                          },
+                          { k: "Bid N", v: fmtMaybeInt(activeBidAskComparison.bidTotal) },
+                          { k: "Ask", v: activeData?.Ask == null ? "-" : fmtNum(toNum(activeData?.Ask), 2), c: "text-rose-300" },
+                          {
+                            k: "Ask Up Rate",
+                            v: activeBidAskComparison.askRate == null ? "-" : `${Math.round(activeBidAskComparison.askRate * 100)}%`,
+                            c: activeBidAskComparison.bias === "ASK" ? accentTextClass : "text-zinc-200",
+                          },
+                          {
+                            k: "Edge",
+                            v: activeBidAskComparison.edge == null
+                              ? "-"
+                              : `${activeBidAskComparison.edge >= 0 ? "+" : ""}${fmtPct(activeBidAskComparison.edge * 100, 1)}`,
+                            c:
+                              activeBidAskComparison.edge == null
+                                ? "text-zinc-500"
+                                : activeBidAskComparison.edge > 0
+                                  ? accentTextClass
+                                  : activeBidAskComparison.edge < 0
+                                    ? "text-rose-300"
+                                    : "text-zinc-200",
+                          },
+                        ].map((item) => (
+                          <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
+                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
+                            <span className={`text-[12px] font-mono tabular-nums ${item.c ?? "text-zinc-200"}`}>{item.v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
                     {activeWindowRatings.length > 0 && (
                       <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
                         <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
@@ -6374,7 +6772,10 @@ export default function ArbitrageSonar() {
               return (
                 <div
                   key={bench.benchmark}
-                  className="flex min-w-0 flex-col self-start"
+                  className={clsx(
+                    "flex min-w-0 flex-col self-start",
+                    benchBlocks.length === 1 && "sm:col-span-2 md:col-span-3 lg:col-span-4 xl:col-span-5"
+                  )}
                 >
                   <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
 
@@ -6386,84 +6787,89 @@ export default function ArbitrageSonar() {
                     {bench.buckets.map((g) => {
                       const isExpanded = !!expandedMap[g.id];
                       const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
+                      const visibleRows = g.rows.slice(0, rowsToShow);
+                      const rowChunks = chunkRowPairs(visibleRows, 6);
 
                       return (
-                        <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
-                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
-                            <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
-                              </svg>
-                            </div>
-                            <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
-                              {betaLabels[g.betaKey]}
-                            </div>
-                            <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
-                              </svg>
-                            </div>
-                          </div>
+                        <div key={g.id} className="space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+                            {rowChunks.map((chunk, chunkIndex) => {
+                              const shortSignals = (chunk.map((r) => r.short).filter(Boolean) as ArbitrageSignal[]);
+                              const longSignals = (chunk.map((r) => r.long).filter(Boolean) as ArbitrageSignal[]);
 
-                          <div className="p-2 grid grid-cols-2 gap-2">
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.short)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`S-${s.ticker}`}
-                                  s={s}
-                                  side="short"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  zapMode={zapMode}
-                                  zapShowAbs={zapShowAbs}
-                                  zapSilverAbs={zapSilverAbs}
-                                  zapGoldAbs={zapGoldAbs}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
+                              return (
+                                <div key={`${g.id}__chunk_${chunkIndex}`} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
+                                  <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
+                                    <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
+                                      <svg
+                                        aria-hidden="true"
+                                        viewBox="0 0 12 12"
+                                        className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
+                                        fill="currentColor"
+                                      >
+                                        <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
+                                      </svg>
+                                    </div>
+                                    <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
+                                      {betaLabels[g.betaKey]}
+                                    </div>
+                                    <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
+                                      <svg
+                                        aria-hidden="true"
+                                        viewBox="0 0 12 12"
+                                        className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
+                                        fill="currentColor"
+                                      >
+                                        <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
+                                      </svg>
+                                    </div>
+                                  </div>
 
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.long)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`L-${s.ticker}`}
-                                  s={s}
-                                  side="long"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  zapMode={zapMode}
-                                  zapShowAbs={zapShowAbs}
-                                  zapSilverAbs={zapSilverAbs}
-                                  zapGoldAbs={zapGoldAbs}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
+                                  <div className="p-2 grid grid-cols-2 gap-2">
+                                    <div className="flex flex-col gap-2 content-start">
+                                      {shortSignals.map((s) => (
+                                        <SignalCard
+                                          key={`S-${chunkIndex}-${s.ticker}`}
+                                          s={s}
+                                          side="short"
+                                          onClick={onTickerClick}
+                                          activeTicker={activeTicker}
+                                          flashClass={flashClass}
+                                          zapMode={zapMode}
+                                          zapShowAbs={zapShowAbs}
+                                          zapSilverAbs={zapSilverAbs}
+                                          zapGoldAbs={zapGoldAbs}
+                                          pinColor={pinMap[s.ticker] ?? null}
+                                        />
+                                      ))}
+                                    </div>
+
+                                    <div className="flex flex-col gap-2 content-start">
+                                      {longSignals.map((s) => (
+                                        <SignalCard
+                                          key={`L-${chunkIndex}-${s.ticker}`}
+                                          s={s}
+                                          side="long"
+                                          onClick={onTickerClick}
+                                          activeTicker={activeTicker}
+                                          flashClass={flashClass}
+                                          zapMode={zapMode}
+                                          zapShowAbs={zapShowAbs}
+                                          zapSilverAbs={zapSilverAbs}
+                                          zapGoldAbs={zapGoldAbs}
+                                          pinColor={pinMap[s.ticker] ?? null}
+                                        />
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                           {g.rows.length > 10 && (
                             <button
                               onClick={() => toggleBucket(g.id)}
-                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border-t border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
+                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border border-white/5 rounded-xl bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
                             >
                               {isExpanded ? "SHOW LESS" : `SHOW ALL (${g.rows.length})`}
                             </button>

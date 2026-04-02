@@ -9,7 +9,7 @@ const ArbitrageSonar = dynamic(
 );
 
 const OpenDoorTerminal = dynamic(
-  () => import("@/components/sonar/1111"),
+  () => import("@/components/sonar/OpenDoorSonar"),
   { ssr: false, loading: () => null }
 );
 

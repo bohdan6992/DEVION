@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ResponsiveContainer,
@@ -80,6 +80,38 @@ type HeaderMetrics = {
   };
 };
 
+const PEAK_STACK_KEYS = [
+  { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
+  { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
+  { key: "none", name: "none", color: THEME.colors.none, fillId: "gradNone" },
+] as const;
+
+const BENCH_STACK_KEYS = [
+  { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
+  { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
+] as const;
+
+const TIME_BIN_STACK_KEYS = [
+  { key: "start_hard", name: "start hard", color: "#22c55e", stackId: "start" },
+  { key: "start_soft", name: "start soft", color: "#a78bfa", stackId: "start" },
+  { key: "start_none", name: "start none", color: "#fb7185", stackId: "start" },
+  { key: "norm_hard", name: "norm hard", color: THEME.colors.hard, fillId: "gradHard", stackId: "norm" },
+  { key: "norm_soft", name: "norm soft", color: THEME.colors.soft, fillId: "gradSoft", stackId: "norm" },
+] as const;
+
+const HEADER_RATE_CARD_CONFIG = [
+  ["GLOBAL", "global", Globe, "bg-cyan-500", "text-cyan-400"],
+  ["BLUE", "blue", Layers, "bg-blue-500", "text-blue-400"],
+  ["ARK", "ark", Layers, "bg-emerald-500", "text-emerald-400"],
+  ["PRINT", "print", Layers, "bg-emerald-500", "text-emerald-400"],
+  ["OPEN", "open", Layers, "bg-emerald-500", "text-emerald-400"],
+  ["INTRA", "intra", Layers, "bg-emerald-500", "text-emerald-400"],
+  ["POST", "post", Layers, "bg-amber-500", "text-amber-400"],
+] as const;
+
+const PRINT_AREA_CONFIG = { key: "print", name: "Print dev", stroke: THEME.colors.any, fill: "url(#gradAny)" } as const;
+const PRINT_PEAK_LINE_CONFIG = [{ key: "peak", name: "Peak dev", stroke: THEME.colors.soft, dash: "4 4", dot: true, width: 2 }] as const;
+
 function isObj(v: any): v is AnyObj {
   return v && typeof v === "object" && !Array.isArray(v);
 }
@@ -149,19 +181,31 @@ const NeonGradientDefs = () => (
   </defs>
 );
 
-const GlassCard = ({ children, className = "", glow = false }: { children: React.ReactNode; className?: string, glow?: boolean }) => (
-  <div
-    className={`
-      relative group overflow-hidden rounded-2xl border backdrop-blur-md transition-all duration-500
-      ${glow ? "shadow-[0_0_40px_-10px_rgba(16,185,129,0.1)]" : "shadow-xl"}
-      bg-[#0a0a0a]/60 border-white/[0.06] hover:border-white/[0.12] hover:bg-[#0a0a0a]/80
-      ${className}
-    `}
-  >
-    <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
-    {children}
-  </div>
-);
+const GlassCard = React.memo(function GlassCard({ children, className = "", glow = false }: { children: React.ReactNode; className?: string, glow?: boolean }) {
+  return (
+    <div
+      className={`
+        relative group overflow-hidden rounded-2xl border backdrop-blur-md transition-all duration-500
+        ${glow ? "shadow-[0_0_40px_-10px_rgba(16,185,129,0.1)]" : "shadow-xl"}
+        bg-[#0a0a0a]/60 border-white/[0.06] hover:border-white/[0.12] hover:bg-[#0a0a0a]/80
+        ${className}
+      `}
+    >
+      <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
+      {children}
+    </div>
+  );
+});
+
+const AnimatedBackground = React.memo(function AnimatedBackground() {
+  return (
+    <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-emerald-900/10 blur-[150px] rounded-full mix-blend-screen" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-violet-900/10 blur-[150px] rounded-full mix-blend-screen" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-[0.03]" />
+    </div>
+  );
+});
 
 const Chip = ({
   children,
@@ -191,7 +235,7 @@ const Chip = ({
   );
 };
 
-const SectionHeader = ({
+const SectionHeader = React.memo(function SectionHeader({
   icon: Icon,
   title,
   subtitle,
@@ -201,23 +245,25 @@ const SectionHeader = ({
   title: string;
   subtitle?: string;
   right?: React.ReactNode;
-}) => (
-  <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-white/[0.04]">
-    <div className="flex items-center gap-4">
-      <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 border border-white/5 shadow-inner">
-        <Icon size={18} className="text-zinc-200" />
-        <div className="absolute inset-0 rounded-xl bg-white/5 opacity-0 hover:opacity-100 transition-opacity" />
+}) {
+  return (
+    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-white/[0.04]">
+      <div className="flex items-center gap-4">
+        <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-b from-zinc-800 to-zinc-900 border border-white/5 shadow-inner">
+          <Icon size={18} className="text-zinc-200" />
+          <div className="absolute inset-0 rounded-xl bg-white/5 opacity-0 hover:opacity-100 transition-opacity" />
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-white tracking-tight">{title}</h3>
+          {subtitle && <p className="text-xs font-medium text-zinc-500 mt-0.5">{subtitle}</p>}
+        </div>
       </div>
-      <div>
-        <h3 className="text-lg font-semibold text-white tracking-tight">{title}</h3>
-        {subtitle && <p className="text-xs font-medium text-zinc-500 mt-0.5">{subtitle}</p>}
-      </div>
+      {right}
     </div>
-    {right}
-  </div>
-);
+  );
+});
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = React.memo(function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-[#050505]/90 border border-white/10 p-3 rounded-lg backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] min-w-[180px]">
@@ -239,20 +285,23 @@ const CustomTooltip = ({ active, payload, label }: any) => {
       </div>
     </div>
   );
-};
+});
 
 // =========================
 // ACCESSORS & LOGIC
 // =========================
 function getMeta(item: AnyObj | null) {
   const meta = (item?.meta ?? item?.static ?? item?.header ?? {}) as AnyObj;
+  const best = (item?.best ?? item?.Best ?? {}) as AnyObj;
+  const bestParams = (item?.best_params ?? item?.bestParams ?? item?.BestParams ?? {}) as AnyObj;
+  const staticBlock = (bestParams?.static ?? bestParams?.Static ?? item?.static ?? {}) as AnyObj;
   const bench = meta?.bench ?? item?.bench ?? meta?.benchmark ?? "—";
   const sector = meta?.sector ?? meta?.lvl2 ?? meta?.SectorL3 ?? item?.sector ?? "—";
   const exchange = meta?.exchange ?? item?.exchange;
   const marketCap = meta?.marketCap ?? meta?.market_cap ?? item?.marketCap ?? item?.market_cap;
-  const corr = meta?.corr ?? meta?.cor ?? meta?.correlation ?? item?.corr ?? item?.static?.corr;
-  const beta = meta?.beta ?? item?.beta ?? item?.static?.beta;
-  const sigma = meta?.sigma ?? meta?.sig ?? item?.sigma ?? item?.static?.sigma;
+  const corr = best?.corr ?? best?.Corr ?? meta?.corr ?? meta?.cor ?? meta?.correlation ?? item?.corr ?? staticBlock?.corr ?? staticBlock?.Corr;
+  const beta = best?.beta ?? best?.Beta ?? item?.beta ?? meta?.beta ?? staticBlock?.beta ?? staticBlock?.Beta;
+  const sigma = best?.sigma ?? best?.Sigma ?? meta?.sigma ?? item?.sigma ?? item?.sig ?? staticBlock?.sigma ?? staticBlock?.Sigma;
   return { bench, sector, exchange, marketCap, corr, beta, sigma };
 }
 
@@ -450,7 +499,7 @@ function buildStartNormRows(startObj: AnyObj | null, normObj: AnyObj | null): St
 // CHART HELPERS
 // =========================
 
-function StackedBarChart({
+const StackedBarChart = React.memo(function StackedBarChart({
   data,
   keys,
   xKey = "label",
@@ -499,9 +548,9 @@ function StackedBarChart({
       </BarChart>
     </ResponsiveContainer>
   );
-}
+});
 
-function AreaWithLines({
+const AreaWithLines = React.memo(function AreaWithLines({
   data,
   xKey = "label",
   area,
@@ -563,7 +612,7 @@ function AreaWithLines({
       </AreaChart>
     </ResponsiveContainer>
   );
-}
+});
 
 // =========================
 // UI COMPONENTS (ClassSection, etc.)
@@ -576,7 +625,7 @@ function kindPill(kind: any) {
   return { label: k ? k.toUpperCase() : "OK", variant: "zinc" as const };
 }
 
-function Last3Success({ rows, tone }: { rows: AnyObj[]; tone: "pos" | "neg" }) {
+const Last3Success = React.memo(function Last3Success({ rows, tone }: { rows: AnyObj[]; tone: "pos" | "neg" }) {
   const items = (rows ?? []).slice(0, 3);
   if (!items.length) return <div className="h-24 flex items-center justify-center text-xs text-zinc-700 italic border border-dashed border-white/5 rounded-lg">No examples recorded</div>;
 
@@ -628,23 +677,22 @@ function Last3Success({ rows, tone }: { rows: AnyObj[]; tone: "pos" | "neg" }) {
       })}
     </div>
   );
-}
+});
 
-function ClassSection({
+const ClassSection = React.memo(function ClassSection({
   title,
   subtitle,
   cls,
   item,
-  benchMoment,
-  setBenchMoment,
+  onBenchMomentChange,
 }: {
   title: string;
   subtitle?: string;
   cls: Exclude<ArbTypeKey, "global">;
   item: AnyObj | null;
-  benchMoment: "start" | "peak" | "norm";
-  setBenchMoment: (m: "start" | "peak" | "norm") => void;
+  onBenchMomentChange?: (m: "start" | "peak" | "norm") => void;
 }) {
+  const [benchMoment, setBenchMoment] = useState<"start" | "peak" | "norm">("start");
   const sigmaPos = useMemo(() => binsToStacked(getPeakBins(item, cls, "pos")), [item, cls]);
   const sigmaNeg = useMemo(() => binsToStacked(getPeakBins(item, cls, "neg")), [item, cls]);
   const benchPos = useMemo(() => benchBinsToStacked(getBenchBins(item, cls, benchMoment, "pos")), [item, cls, benchMoment]);
@@ -672,7 +720,10 @@ function ClassSection({
             {(["start", "peak", "norm"] as const).map((m) => (
               <button
                 key={m}
-                onClick={() => setBenchMoment(m)}
+                onClick={() => {
+                  setBenchMoment(m);
+                  onBenchMomentChange?.(m);
+                }}
                 className={`px-3 py-1 rounded-[6px] text-[10px] font-bold uppercase transition-all ${
                   m === benchMoment ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"
                 }`}
@@ -693,11 +744,7 @@ function ClassSection({
           <div className="h-[200px]">
             <StackedBarChart
               data={sigmaPos as any}
-              keys={[
-                { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-                { key: "none", name: "none", color: THEME.colors.none, fillId: "gradNone" },
-              ]}
+              keys={PEAK_STACK_KEYS as any}
             />
           </div>
         </GlassCard>
@@ -710,11 +757,7 @@ function ClassSection({
           <div className="h-[200px]">
             <StackedBarChart
               data={sigmaNeg as any}
-              keys={[
-                { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-                { key: "none", name: "none", color: THEME.colors.none, fillId: "gradNone" },
-              ]}
+              keys={PEAK_STACK_KEYS as any}
             />
           </div>
         </GlassCard>
@@ -729,10 +772,7 @@ function ClassSection({
           <div className="h-[200px]">
             <StackedBarChart
               data={benchPos as any}
-              keys={[
-                { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-              ]}
+              keys={BENCH_STACK_KEYS as any}
             />
           </div>
         </GlassCard>
@@ -744,10 +784,7 @@ function ClassSection({
           <div className="h-[200px]">
             <StackedBarChart
               data={benchNeg as any}
-              keys={[
-                { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-              ]}
+              keys={BENCH_STACK_KEYS as any}
             />
           </div>
         </GlassCard>
@@ -767,13 +804,7 @@ function ClassSection({
               <div className="h-[220px]">
                 <StackedBarChart
                   data={timePos as any}
-                  keys={[
-                    { key: "start_hard", name: "start hard", color: "#22c55e", stackId: "start" },
-                    { key: "start_soft", name: "start soft", color: "#a78bfa", stackId: "start" },
-                    { key: "start_none", name: "start none", color: "#fb7185", stackId: "start" },
-                    { key: "norm_hard", name: "norm hard", color: THEME.colors.hard, fillId: "gradHard", stackId: "norm" },
-                    { key: "norm_soft", name: "norm soft", color: THEME.colors.soft, fillId: "gradSoft", stackId: "norm" },
-                  ]}
+                  keys={TIME_BIN_STACK_KEYS as any}
                 />
               </div>
             </GlassCard>
@@ -783,13 +814,7 @@ function ClassSection({
               <div className="h-[220px]">
                 <StackedBarChart
                   data={timeNeg as any}
-                  keys={[
-                    { key: "start_hard", name: "start hard", color: "#22c55e", stackId: "start" },
-                    { key: "start_soft", name: "start soft", color: "#a78bfa", stackId: "start" },
-                    { key: "start_none", name: "start none", color: "#fb7185", stackId: "start" },
-                    { key: "norm_hard", name: "norm hard", color: THEME.colors.hard, fillId: "gradHard", stackId: "norm" },
-                    { key: "norm_soft", name: "norm soft", color: THEME.colors.soft, fillId: "gradSoft", stackId: "norm" },
-                  ]}
+                  keys={TIME_BIN_STACK_KEYS as any}
                 />
               </div>
             </GlassCard>
@@ -815,7 +840,7 @@ function ClassSection({
       </div>
     </div>
   );
-}
+});
 
 // =========================
 // MAIN PAGE COMPONENT
@@ -827,10 +852,10 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [item, setItem] = useState<AnyObj | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | undefined>(undefined);
-
   const [benchMoment, setBenchMoment] = useState<"start" | "peak" | "norm">("start");
   const [rateThr, setRateThr] = useState(0.6);
   const [minTotal, setMinTotal] = useState(20);
+  const deferredItem = useDeferredValue(item);
 
   useEffect(() => {
     let cancelled = false;
@@ -842,8 +867,10 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
         const env = await getArbTicker(t);
         if (!env?.item) throw new Error("No item data found");
         if (!cancelled) {
-          setItem(env.item);
-          setUpdatedAt(env.updatedAt ?? undefined);
+          startTransition(() => {
+            setItem(env.item);
+            setUpdatedAt(env.updatedAt ?? undefined);
+          });
         }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message ?? "Unknown error");
@@ -856,8 +883,8 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
     };
   }, [t]);
 
-  const meta = useMemo(() => getMeta(item), [item]);
-  const headerMetrics = useMemo(() => getHeaderMetrics(item), [item]);
+  const meta = useMemo(() => getMeta(deferredItem), [deferredItem]);
+  const headerMetrics = useMemo(() => getHeaderMetrics(deferredItem), [deferredItem]);
 
   const headerRates = useMemo(() => {
     const r = headerMetrics?.rates ?? ({} as any);
@@ -881,11 +908,38 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
 
   }, [headerMetrics]);
 
-  const globalPos = useMemo(() => binsToStacked(getPeakBins(item, "global", "pos")), [item]);
-  const globalNeg = useMemo(() => binsToStacked(getPeakBins(item, "global", "neg")), [item]);
+  const headerRateCards = useMemo(() => {
+    return HEADER_RATE_CARD_CONFIG.map(([label, key, Icon, barColor, txtColor]) => {
+      const r = (headerRates as any)[key];
+      const total = r?.total ?? 0;
+      const hardPct = (n(r?.hard) ?? 0) * 100;
+      const softPct = (n(r?.soft) ?? 0) * 100;
+
+      return (
+        <GlassCard key={key} className="p-3 flex flex-col justify-between h-[90px]">
+          <div className="flex justify-between items-start">
+            <span className={`text-[9px] font-bold uppercase tracking-widest ${label === "GLOBAL" ? "text-cyan-200" : "text-zinc-500"}`}>{label}</span>
+            <span className="text-[9px] font-mono text-zinc-600">n:{total}</span>
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-end justify-between">
+              <span className={`text-lg font-mono font-medium leading-none ${txtColor}`}>{Math.round(hardPct)}%</span>
+              <span className="text-[10px] font-mono text-violet-400 leading-none">{Math.round(softPct)}%</span>
+            </div>
+            <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+              <div className={`h-full ${barColor} shadow-[0_0_10px_currentColor]`} style={{ width: `${hardPct}%` }} />
+            </div>
+          </div>
+        </GlassCard>
+      );
+    });
+  }, [headerRates]);
+
+  const globalPos = useMemo(() => binsToStacked(getPeakBins(deferredItem, "global", "pos")), [deferredItem]);
+  const globalNeg = useMemo(() => binsToStacked(getPeakBins(deferredItem, "global", "neg")), [deferredItem]);
 
   const last10Print = useMemo(() => {
-    const r = item?.recent ?? {};
+    const r = deferredItem?.recent ?? {};
     const raw = Array.isArray(r?.last10_print) ? r.last10_print : Array.isArray(r?.print_last10) ? r.print_last10 : [];
     return raw.map((x: AnyObj, i: number) => {
       const dt = x.dt ?? x.date ?? x.day ?? null;
@@ -894,10 +948,10 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
       const peakDev = n(x.peak) ?? n(x.peak_dev) ?? n(x.pre_peak_signed) ?? (n(x.pre_peak_abs) != null && n(x.first_sign) != null ? (n(x.pre_peak_abs)! * (n(x.first_sign)! >= 0 ? 1 : -1)) : null);
       return { label, print: printDev, peak: peakDev };
     });
-  }, [item]);
+  }, [deferredItem]);
 
   const last5Pos = useMemo(() => {
-    const r = item?.recent ?? {};
+    const r = deferredItem?.recent ?? {};
     const block = r?.print_last5?.pos ?? r?.last5_print?.pos ?? null;
     const vals = block?.values;
     const median = n(block?.median);
@@ -908,10 +962,10 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
       ...(median != null ? { median } : {}),
       ...(mean != null ? { mean } : {}),
     })) : [];
-  }, [item]);
+  }, [deferredItem]);
 
   const last5Neg = useMemo(() => {
-    const r = item?.recent ?? {};
+    const r = deferredItem?.recent ?? {};
     const block = r?.print_last5?.neg ?? r?.last5_print?.neg ?? null;
     const vals = block?.values;
     const median = n(block?.median);
@@ -922,10 +976,10 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
       ...(median != null ? { median } : {}),
       ...(mean != null ? { mean } : {}),
     })) : [];
-  }, [item]);
+  }, [deferredItem]);
 
   const openOverlay = useMemo(() => {
-    const r = item?.recent ?? {};
+    const r = deferredItem?.recent ?? {};
     const raw = Array.isArray(r?.open_0931_0940) ? r.open_0931_0940 : Array.isArray(r?.last10_open_dev_series) ? r.last10_open_dev_series : [];
     const series = raw.slice(0, 10);
     const keys = series.map((s: AnyObj, idx: number) => String(s.date ?? s.id ?? `D${idx + 1}`));
@@ -949,9 +1003,9 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
     });
     const data = [...map.values()].sort((a, b) => String(a.label).localeCompare(String(b.label)));
     return { data, keys };
-  }, [item]);
+  }, [deferredItem]);
 
-  const best = useMemo(() => item?.best_params ?? null, [item]);
+  const best = useMemo(() => deferredItem?.best_params ?? null, [deferredItem]);
   const filteredBest = useMemo(() => {
     if (!best) return null;
     const walk = (x: any): RangeItem[] | null => {
@@ -968,17 +1022,12 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
     };
   }, [best, rateThr, minTotal, benchMoment]);
 
-  const canShow = !!item && !err;
+  const canShow = !!deferredItem && !err;
   if (!t) return null;
 
   return (
     <div className="min-h-screen bg-[#030303] text-zinc-200 font-sans pb-24 selection:bg-emerald-500/30 selection:text-white">
-      {/* Immersive Background */}
-      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-emerald-900/10 blur-[150px] rounded-full mix-blend-screen" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-violet-900/10 blur-[150px] rounded-full mix-blend-screen" />
-        <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-[0.03]" />
-      </div>
+      <AnimatedBackground />
 
       {/* Nav */}
       <nav className="sticky top-0 z-40 backdrop-blur-xl bg-[#030303]/70 border-b border-white/[0.06]">
@@ -1020,40 +1069,7 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
               {/* Stat Cards */}
               {canShow && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3 w-full xl:w-auto">
-                   {(
-                    [
-                      ["GLOBAL", "global", Globe, "bg-cyan-500", "text-cyan-400"],
-                      ["BLUE", "blue", Layers, "bg-blue-500", "text-blue-400"],
-                      ["ARK", "ark", Layers, "bg-emerald-500", "text-emerald-400"],
-                      ["PRINT", "print", Layers, "bg-emerald-500", "text-emerald-400"],
-                      ["OPEN", "open", Layers, "bg-emerald-500", "text-emerald-400"],
-                      ["INTRA", "intra", Layers, "bg-emerald-500", "text-emerald-400"],
-                      ["POST", "post", Layers, "bg-amber-500", "text-amber-400"],
-                    ] as const
-
-                  ).map(([label, key, Icon, barColor, txtColor]) => {
-                     const r = (headerRates as any)[key];
-                     const total = r?.total ?? 0;
-                     const hardPct = (n(r?.hard) ?? 0) * 100;
-                     const softPct = (n(r?.soft) ?? 0) * 100;
-                     return (
-                       <GlassCard key={key} className="p-3 flex flex-col justify-between h-[90px]">
-                          <div className="flex justify-between items-start">
-                             <span className={`text-[9px] font-bold uppercase tracking-widest ${label === "GLOBAL" ? "text-cyan-200" : "text-zinc-500"}`}>{label}</span>
-                             <span className="text-[9px] font-mono text-zinc-600">n:{total}</span>
-                          </div>
-                          <div className="space-y-1.5">
-                             <div className="flex items-end justify-between">
-                                <span className={`text-lg font-mono font-medium leading-none ${txtColor}`}>{Math.round(hardPct)}%</span>
-                                <span className="text-[10px] font-mono text-violet-400 leading-none">{Math.round(softPct)}%</span>
-                             </div>
-                             <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
-                                <div className={`h-full ${barColor} shadow-[0_0_10px_currentColor]`} style={{ width: `${hardPct}%` }} />
-                             </div>
-                          </div>
-                       </GlassCard>
-                     );
-                  })}
+                   {headerRateCards}
                 </div>
               )}
            </div>
@@ -1078,11 +1094,7 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
                       </div>
                       <StackedBarChart
                         data={globalPos as any}
-                        keys={[
-                          { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                          { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-                          { key: "none", name: "none", color: THEME.colors.none, fillId: "gradNone" },
-                        ]}
+                        keys={PEAK_STACK_KEYS as any}
                       />
                    </GlassCard>
                    <GlassCard className="p-6 h-[320px]">
@@ -1092,11 +1104,7 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
                       </div>
                       <StackedBarChart
                         data={globalNeg as any}
-                        keys={[
-                          { key: "hard", name: "hard", color: THEME.colors.hard, fillId: "gradHard" },
-                          { key: "soft", name: "soft", color: THEME.colors.soft, fillId: "gradSoft" },
-                          { key: "none", name: "none", color: THEME.colors.none, fillId: "gradNone" },
-                        ]}
+                        keys={PEAK_STACK_KEYS as any}
                       />
                    </GlassCard>
                 </div>
@@ -1104,12 +1112,12 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
 
              {/* Classes Grid */}
              <div className="grid grid-cols-1 gap-12">
-            <ClassSection title="BLUE" subtitle="Overnight / BLOOTION window" cls="blue" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-            <ClassSection title="ARK" subtitle="Deep dive into ARK strategy performance" cls="ark" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-            <ClassSection title="PRINT" subtitle="Print signatures analysis" cls="print" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-            <ClassSection title="OPEN" subtitle="Opening range breakouts" cls="open" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-            <ClassSection title="INTRA" subtitle="Intraday mean reversion" cls="intra" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
-            <ClassSection title="POST" subtitle="After-hours normalization window" cls="post" item={item} benchMoment={benchMoment} setBenchMoment={setBenchMoment} />
+            <ClassSection title="BLUE" subtitle="Overnight / BLOOTION window" cls="blue" item={deferredItem} onBenchMomentChange={setBenchMoment} />
+            <ClassSection title="ARK" subtitle="Deep dive into ARK strategy performance" cls="ark" item={deferredItem} onBenchMomentChange={setBenchMoment} />
+            <ClassSection title="PRINT" subtitle="Print signatures analysis" cls="print" item={deferredItem} onBenchMomentChange={setBenchMoment} />
+            <ClassSection title="OPEN" subtitle="Opening range breakouts" cls="open" item={deferredItem} onBenchMomentChange={setBenchMoment} />
+            <ClassSection title="INTRA" subtitle="Intraday mean reversion" cls="intra" item={deferredItem} onBenchMomentChange={setBenchMoment} />
+            <ClassSection title="POST" subtitle="After-hours normalization window" cls="post" item={deferredItem} onBenchMomentChange={setBenchMoment} />
 
                         </div>
 
@@ -1128,8 +1136,8 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
                   <AreaWithLines
                     data={last10Print as any}
                     referenceZero
-                    area={{ key: "print", name: "Print dev", stroke: THEME.colors.any, fill: "url(#gradAny)" }}
-                    lines={[{ key: "peak", name: "Peak dev", stroke: THEME.colors.soft, dash: "4 4", dot: true, width: 2 }]}
+                    area={PRINT_AREA_CONFIG as any}
+                    lines={PRINT_PEAK_LINE_CONFIG as any}
                   />
                 </GlassCard>
 
@@ -1270,12 +1278,7 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
              </section>
 
              <div className="pt-20 pb-10 flex justify-center opacity-30 hover:opacity-100 transition-opacity">
-                <details className="text-center">
-                   <summary className="text-[10px] font-mono uppercase tracking-widest cursor-pointer text-zinc-600 hover:text-white">View Raw JSON Payload</summary>
-                   <pre className="mt-8 text-[10px] text-left text-zinc-500 font-mono bg-black p-6 rounded-2xl border border-white/5 overflow-auto max-w-3xl max-h-[400px]">
-                      {JSON.stringify(item, null, 2)}
-                   </pre>
-                </details>
+                <RawJsonDetails item={deferredItem} />
              </div>
           </div>
         )}
@@ -1284,7 +1287,26 @@ export default function ArbitrageTickerStats({ ticker }: { ticker: string }) {
   );
 }
 
-function BestWindowsCard({ title, items }: { title: string; items: Array<RangeItem> | null }) {
+const RawJsonDetails = React.memo(function RawJsonDetails({ item }: { item: AnyObj | null }) {
+  const [open, setOpen] = useState(false);
+  const rawJson = useMemo(() => {
+    if (!open || !item) return "";
+    return JSON.stringify(item, null, 2);
+  }, [open, item]);
+
+  return (
+    <details className="text-center" onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="text-[10px] font-mono uppercase tracking-widest cursor-pointer text-zinc-600 hover:text-white">View Raw JSON Payload</summary>
+      {open ? (
+        <pre className="mt-8 text-[10px] text-left text-zinc-500 font-mono bg-black p-6 rounded-2xl border border-white/5 overflow-auto max-w-3xl max-h-[400px]">
+          {rawJson}
+        </pre>
+      ) : null}
+    </details>
+  );
+});
+
+const BestWindowsCard = React.memo(function BestWindowsCard({ title, items }: { title: string; items: Array<RangeItem> | null }) {
   if (!items?.length) return null;
   return (
     <GlassCard className="p-4 flex flex-col gap-3 h-[240px]">
@@ -1307,6 +1329,6 @@ function BestWindowsCard({ title, items }: { title: string; items: Array<RangeIt
       </div>
     </GlassCard>
   );
-}
+});
 
 export { ArbitrageTickerStats };

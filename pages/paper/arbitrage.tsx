@@ -6,5 +6,5 @@ const ArbitrageScanner = dynamic(
 );
 
 export default function Page() {
-  return <ArbitrageScanner />;
+  return <ArbitrageScanner initialPrimaryPanel="scanner" />;
 }

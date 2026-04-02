@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { todayNyYmd } from "../../lib/time";
@@ -12,6 +12,10 @@ import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
+import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
+import ArbitrageMoneyView from "../money/ArbitrageMoneyView";
+import { buildMoneyFilterConfig, type MoneyAutomationConfig, type MoneyExecutionDescriptor, useMoneyEngine } from "../money/moneyEngine";
+import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import clsx from "clsx";
 
 // =========================
@@ -25,6 +29,7 @@ function apiUrl(pathAndQuery: string) {
 // =========================
 // TYPES (Paper Arbitrage)
 // =========================
+type PrimaryPanelKey = "money" | "scanner";
 type TabKey = "active" | "episodes" | "analytics";
 type DateMode = "day" | "last" | "range";
 type PaperListMode = "off" | "ignore" | "apply" | "pin";
@@ -177,7 +182,13 @@ type PaperArbSnap = {
   metric?: number | null;
   metricAbs?: number | null;
 
-  // LastPrint-only fields (may be present on Start/Peak/Last)
+  // Quote-space fields used by arbitrage math
+  bidPct?: number | null;
+  askPct?: number | null;
+  benchBidPct?: number | null;
+  benchAskPct?: number | null;
+
+  // LastPrint fields kept for fallback/debug
   lstPrcLstClsPct?: number | null;
   benchLstPrcLstClsPct?: number | null;
 };
@@ -196,6 +207,15 @@ type PaperArbActiveRow = {
   minHoldCandles?: number;
   tierBp?: number | null;
   beta?: number | null;
+  positionNotionalUsd?: number | null;
+  entryCount?: number | null;
+  rawPnlUsd?: number | null;
+  benchPnlUsd?: number | null;
+  hedgedPnlUsd?: number | null;
+  totalPnlUsd?: number | null;
+  lstPrcL?: number | null;
+  lstCls?: number | null;
+  yCls?: number | null;
   startClass?: string | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
@@ -262,6 +282,7 @@ type PaperArbClosedDto = {
   newsCnt?: number | null;
   marketCapM?: number | null;
   preMktVolNF?: number | null;
+  volNFfromLstCls?: number | null;
   avPostMhVol90NF?: number | null;
   avPreMhVol90NF?: number | null;
   avPreMhValue20NF?: number | null;
@@ -303,6 +324,7 @@ type PaperArbAnalyticsRequest = {
   sizeValue?: number | null;
   dilutionMode?: PaperArbDilutionMode;
   dilutionStep?: number | null;
+  maxAdds?: number | null;
 
   // rating rules
   ratingType?: PaperArbRatingType | string | null;
@@ -382,6 +404,7 @@ type PaperArbAnalyticsRequest = {
   requireIsETF?: boolean | null;
   requireIsCrap?: boolean | null;
 
+  excludeDividend?: boolean | null;
   excludePTP?: boolean | null;
   excludeSSR?: boolean | null;
   excludeETF?: boolean | null;
@@ -840,6 +863,71 @@ function scannerTickerAmountUsd(
   if (!Number.isFinite(tierBp ?? NaN) || !Number.isFinite(sizeValue) || sizeValue <= 0) return null;
   return Number(tierBp) * sizeValue * entries;
 }
+function scannerRealtimePnlUsd(args: {
+  side: TapeArbSide;
+  beta: number | null | undefined;
+  tickerAmountUsd: number | null | undefined;
+  start: PaperArbSnap | null | undefined;
+  last: PaperArbSnap | null | undefined;
+  pnlMode: PaperArbPnlMode;
+}): { rawPnlUsd: number | null; benchPnlUsd: number | null; hedgedPnlUsd: number | null; totalPnlUsd: number | null } {
+  const { side, beta, tickerAmountUsd, start, last, pnlMode } = args;
+  if (!Number.isFinite(tickerAmountUsd ?? NaN) || Number(tickerAmountUsd) <= 0) {
+    return { rawPnlUsd: null, benchPnlUsd: pnlMode === "RawOnly" ? null : null, hedgedPnlUsd: null, totalPnlUsd: null };
+  }
+
+  const normalizedSide = String(side).toLowerCase() === "short" ? "Short" : "Long";
+  const stockStart = start?.lstPrcLstClsPct;
+  const stockLast = last?.lstPrcLstClsPct;
+  const benchStart = start?.benchLstPrcLstClsPct;
+  const benchLast = last?.benchLstPrcLstClsPct;
+
+  let rawPnlUsd: number | null = null;
+  let benchPnlUsd: number | null = null;
+
+  const stockReturnFrac = scannerLastPriceReturnFrac(stockStart, stockLast, normalizedSide);
+  if (stockReturnFrac != null) {
+    rawPnlUsd = Number(tickerAmountUsd) * stockReturnFrac;
+  }
+
+  if (
+    pnlMode === "Hedged" &&
+    Number.isFinite(beta ?? NaN) &&
+    Number.isFinite(benchStart ?? NaN) &&
+    Number.isFinite(benchLast ?? NaN)
+  ) {
+    const hedgeSide = normalizedSide === "Short" ? "Long" : "Short";
+    const benchReturnFrac = scannerLastPriceReturnFrac(benchStart, benchLast, hedgeSide);
+    if (benchReturnFrac != null) {
+      benchPnlUsd = Number(tickerAmountUsd) * Number(beta) * benchReturnFrac;
+    }
+  }
+
+  const hedgedPnlUsd =
+    pnlMode === "RawOnly"
+      ? rawPnlUsd
+      : rawPnlUsd != null || benchPnlUsd != null
+        ? (rawPnlUsd ?? 0) + (benchPnlUsd ?? 0)
+        : null;
+
+  return {
+    rawPnlUsd,
+    benchPnlUsd: pnlMode === "RawOnly" ? null : benchPnlUsd,
+    hedgedPnlUsd,
+    totalPnlUsd: pnlMode === "RawOnly" ? rawPnlUsd : hedgedPnlUsd,
+  };
+}
+function scannerLastPriceReturnFrac(
+  entryPct: number | null | undefined,
+  exitPct: number | null | undefined,
+  side: "Long" | "Short"
+): number | null {
+  if (!Number.isFinite(entryPct ?? NaN) || !Number.isFinite(exitPct ?? NaN)) return null;
+  const entryFactor = 1 + Number(entryPct) / 100;
+  const exitFactor = 1 + Number(exitPct) / 100;
+  if (entryFactor <= 0 || exitFactor <= 0) return null;
+  return side === "Long" ? exitFactor / entryFactor - 1 : entryFactor / exitFactor - 1;
+}
 function intn(x: number | null | undefined): string {
   if (x === null || x === undefined) return "-";
   if (!Number.isFinite(x)) return "-";
@@ -889,6 +977,11 @@ function normalizeDilutionStepValue(value: number | null | undefined) {
   const raw = Math.abs(clampNumber(value, 0.3));
   if (raw <= 0) return 0.3;
   return Math.round(raw * 1000) / 1000;
+}
+function normalizeMaxAddsValue(value: number | null | undefined) {
+  const raw = Math.trunc(clampNumber(value, 3));
+  if (!Number.isFinite(raw)) return 3;
+  return Math.max(0, Math.min(9, raw));
 }
 function stepDilutionStepValue(value: number, delta: number) {
   return normalizeDilutionStepValue(value + (delta * 0.1));
@@ -1592,7 +1685,7 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
     case "preMktVolNF":
       return row.preMktVolNF ?? null;
     case "volNFfromLstCls":
-      return row.preMktVolNF != null && row.lstCls != null ? row.preMktVolNF * row.lstCls : null;
+      return row.volNFfromLstCls ?? null;
     case "avPostMhVol90NF":
       return row.avPostMhVol90NF ?? null;
     case "avPreMhVol90NF":
@@ -2884,6 +2977,10 @@ const SCANNER_CONTROL_SURFACE =
 
 const SCANNER_EYE_BUTTON =
   "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
+const MONEY_FIXED_ACTIVE_SOFT =
+  "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 shadow-[0_0_10px_-4px_rgba(16,185,129,0.35)]";
+const MONEY_FIXED_ACTIVE_TEXT = "text-emerald-300";
+const MONEY_FIXED_ICON_GREEN = "#63e6be";
 
 const SOFT_LOSS_TEXT_CLASS = "text-[#f3a6b2]";
 const SOFT_LOSS_SOLID = "rgba(243,166,178,0.95)";
@@ -3744,6 +3841,62 @@ function EyeToggleIcon({ closed, className }: { closed: boolean; className?: str
   );
 }
 
+function LockToggleIcon({ open, className }: { open: boolean; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {open ? (
+        <>
+          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+        </>
+      ) : (
+        <>
+          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function CrosshairIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      style={style}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="1.5" />
+      <path d="M12 2v4" />
+      <path d="M12 18v4" />
+      <path d="M2 12h4" />
+      <path d="M18 12h4" />
+    </svg>
+  );
+}
+
 function OptimizerParameterRangeCard({
   parameter,
   rankMetric,
@@ -3807,75 +3960,74 @@ function OptimizerParameterRangeCard({
   ];
 
   return (
-    <GlassCard className="p-0 overflow-hidden border border-white/[0.08] bg-[linear-gradient(180deg,rgba(11,10,8,0.96),rgba(8,8,7,0.98))] shadow-[0_22px_60px_-38px_rgba(0,0,0,0.92)]">
-      <div className="border-b border-white/[0.06] bg-[linear-gradient(180deg,rgba(18,16,11,0.92),rgba(11,12,12,0.84))] px-3 py-2.5">
-        <div className="flex items-start justify-between gap-2.5">
-          <div>
-            <div className={clsx("text-[12px] uppercase tracking-[0.20em] font-mono", accent.activeText)}>{parameter.label}</div>
-            <div className="text-[10px] font-mono text-zinc-200 mt-1.5">
-              {num(parameter.observedMin, 2)} .. {num(parameter.observedMax, 2)} | n {intn(parameter.valueCount)} | b {intn(bucketCount)}
-            </div>
+    <GlassCard className="p-0 overflow-hidden border border-white/5 bg-black/20 shadow-none">
+      <div className="border-b border-white/5 bg-black/10 px-2.5 py-2">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <div className={clsx("text-[12px] uppercase tracking-[0.18em] font-mono", accent.activeText)}>{parameter.label}</div>
           </div>
-          <div className="grid grid-cols-3 gap-1.5 text-right">
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
-              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Trades</div>
-              <div className="text-[11px] font-mono text-zinc-100 mt-0.5">{intn(parameter.baseTrades)}</div>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
-              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">PnL</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", valueTextClass(baseTotalPnl, "text-zinc-100"))}>
-                {num(baseTotalPnl, 2)}
+          <div className="flex shrink-0 items-center gap-1 text-right whitespace-nowrap">
+            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
+              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
+                <span className="uppercase tracking-[0.16em] text-zinc-500">Trades</span>
+                <span className="text-[11px] text-zinc-100">{intn(parameter.baseTrades)}</span>
               </div>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 min-w-[58px]">
-              <div className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">Avg</div>
-              <div className={clsx("text-[11px] font-mono mt-0.5", valueTextClass(baseAvgPnl, "text-zinc-100"))}>
-                {num(baseAvgPnl, 2)}
+            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
+              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
+                <span className="uppercase tracking-[0.16em] text-zinc-500">PnL</span>
+                <span className={clsx("text-[11px]", valueTextClass(baseTotalPnl, "text-zinc-100"))}>{num(baseTotalPnl, 2)}</span>
+              </div>
+            </div>
+            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
+              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
+                <span className="uppercase tracking-[0.16em] text-zinc-500">Avg</span>
+                <span className={clsx("text-[11px]", valueTextClass(baseAvgPnl, "text-zinc-100"))}>{num(baseAvgPnl, 2)}</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="p-3">
-      <div className={clsx("grid gap-1.5 mb-3", summaryCards.length >= 3 ? "grid-cols-1 md:grid-cols-3" : summaryCards.length === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
+      <div className="p-2.5">
+      <div className={clsx("grid gap-1.5 mb-2", summaryCards.length >= 3 ? "grid-cols-1 md:grid-cols-3" : summaryCards.length === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
         {summaryCards.map((entry) => (
-          <div key={`${parameter.key}-${entry.label}`} className="rounded-xl border border-white/[0.06] bg-[linear-gradient(180deg,rgba(14,13,11,0.72),rgba(9,9,10,0.9))] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-            <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500 mb-1">{entry.label}</div>
-            <div className="flex items-start justify-between gap-4">
+          <div key={`${parameter.key}-${entry.label}`} className="rounded-lg border border-white/5 bg-black/20 px-2 py-1.5">
+            <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[11px] font-mono text-zinc-100">{entry.item?.label ?? "-"}</div>
-                <div className="text-[10px] font-mono mt-1.5">
-                  <span className={clsx(valueTextClass(entry.item?.avgPnlUsd ?? 0, "text-zinc-400"))}>
-                    avg {num(entry.item?.avgPnlUsd, 2)}
-                  </span>
-                  {" | "}
-                  <span className="text-zinc-400">pnl {num(entry.item?.totalPnlUsd, 2)}</span>
-                </div>
+                <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">{entry.label}</div>
+                <div className="text-[11px] font-mono text-zinc-100 mt-1 truncate">{entry.item?.label ?? "-"}</div>
               </div>
-              <div className="shrink-0 text-right">
-                <div className="text-[10px] font-mono text-zinc-400">trades {intn(entry.item?.trades)}</div>
-                <div className="text-[10px] font-mono text-zinc-500 mt-1">hit {num((entry.item?.winRate ?? 0) * 100, 1)}%</div>
+              <div className="shrink-0 text-right text-[10px] font-mono">
+                <div className="text-zinc-400">trades {intn(entry.item?.trades)}</div>
+                <div className="text-zinc-500 mt-0.5">hit {num((entry.item?.winRate ?? 0) * 100, 1)}%</div>
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-              <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl))}>
+            <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] font-mono">
+              <div className="min-w-0">
+                <span className={clsx(valueTextClass(entry.item?.avgPnlUsd ?? 0, "text-zinc-300"))}>avg {num(entry.item?.avgPnlUsd, 2)}</span>
+                <span className="text-zinc-500"> | </span>
+                <span className="text-zinc-400">pnl {num(entry.item?.totalPnlUsd, 2)}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl))}>
                 dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
-              </span>
-              <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl))}>
+                </span>
+                <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl))}>
                 dPnL {num((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl, 2)}
-              </span>
+                </span>
+              </div>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 xl:grid-cols-8 gap-1 mb-3">
+      <div className="grid grid-cols-7 xl:grid-cols-8 gap-1 mb-2.5">
         {buckets.map((bucket) => (
           <div
             key={`heat-${bucket.bucketId}`}
             className={clsx(
-              "h-7 rounded border border-white/[0.06] flex items-center justify-center text-[9px] font-mono bg-black/20",
+              "h-7 rounded border border-white/5 flex items-center justify-center text-[9px] font-mono bg-black/20",
               bucket.avgPnlUsd > 0
                 ? "bg-[#6ee7b7]/20 text-[#6ee7b7]"
                 : bucket.avgPnlUsd < 0
@@ -3890,7 +4042,7 @@ function OptimizerParameterRangeCard({
         ))}
       </div>
 
-      <div className="space-y-1.5 mb-3 rounded-xl border border-white/[0.06] bg-[linear-gradient(180deg,rgba(12,12,12,0.9),rgba(9,9,9,0.95))] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="space-y-1.5 mb-2.5 rounded-xl border border-white/5 bg-black/20 p-2">
         <div className="flex items-center justify-between">
           <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Range Strength</div>
           <div className="text-[9px] font-mono text-zinc-600">score</div>
@@ -3898,17 +4050,20 @@ function OptimizerParameterRangeCard({
         {buckets.map((bucket) => {
           const widthPct = Math.max(6, (Math.abs(bucket.score) / maxAbsScore) * 100);
           return (
-            <div key={bucket.bucketId} className="grid grid-cols-[118px_1fr_58px] gap-2 items-center">
+            <div key={bucket.bucketId} className="grid grid-cols-[112px_1fr_54px] gap-2 items-center">
               <div className="text-[10px] font-mono text-zinc-400 truncate" title={bucket.label}>
                 {bucket.label}
               </div>
-              <div className="h-[18px] rounded bg-black/20 border border-white/[0.06] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+              <div className="h-[18px] rounded bg-black/20 border border-white/5 overflow-hidden">
                 <div
                   className={clsx(
                     "h-full",
                     bucket.score >= 0 ? "bg-[#6ee7b7]/80" : "bg-[#f3a6b2]/80"
                   )}
-                  style={{ width: `${widthPct}%`, opacity: bucket.coveragePct < 0.08 ? 0.4 : 1 }}
+                  style={{
+                    width: `${widthPct}%`,
+                    opacity: bucket.coveragePct < 0.08 ? 0.4 : 1,
+                  }}
                 />
               </div>
               <div className={clsx("text-right text-[10px] font-mono font-semibold tabular-nums", scoreTextClass(bucket.score))}>
@@ -3919,39 +4074,39 @@ function OptimizerParameterRangeCard({
         })}
       </div>
 
-      <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(12,12,12,0.96),rgba(8,8,8,0.98))] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <table className="min-w-[760px] w-full text-[11px] font-mono">
-          <thead className="sticky top-0 z-10 bg-[#111111]/95 text-zinc-400 border-b border-white/[0.08]">
+      <div className="overflow-auto rounded-xl border border-white/5 bg-black/20">
+        <table className="min-w-[760px] w-full text-[10px] font-mono">
+          <thead className="sticky top-0 z-10 bg-black/30 text-zinc-400 border-b border-white/5 backdrop-blur-sm">
             <tr>
-              <th className="text-left px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Range</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">N</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Cov</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Win</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dW</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">PnL</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dP</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">Avg</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">dA</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[9px]">W/L</th>
+              <th className="text-left px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Range</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">N</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Cov</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Win</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dW</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">PnL</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dP</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Avg</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dA</th>
+              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">W/L</th>
             </tr>
           </thead>
           <tbody>
             {buckets.map((bucket) => (
               <tr key={`${parameter.key}-${bucket.bucketId}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
                 <td className="px-2 py-1.5 text-zinc-200 whitespace-nowrap">{bucket.label}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
-                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.winRate - baseWinRate))}>
+                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
+                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
+                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.winRate - baseWinRate))}>
                   {num((bucket.winRate - baseWinRate) * 100, 1)}%
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd))}>
+                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd))}>
                   {num(bucket.totalPnlUsd, 2)}
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd - baseTotalPnl))}>
+                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd - baseTotalPnl))}>
                   {num(bucket.totalPnlUsd - baseTotalPnl, 2)}
                 </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd))}>
+                <td className={clsx("px-2 py-1 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd))}>
                   {num(bucket.avgPnlUsd, 2)}
                 </td>
                 <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd - baseAvgPnl))}>
@@ -6010,13 +6165,74 @@ const SCANNER_ACTIVE_PRESET_ID_LS_KEY = "paper.arb.shared-preset.active-id";
 // =========================
 // MAIN PAGE
 // =========================
-export default function ArbitrageScanner() {
+type ArbitrageScannerProps = {
+  initialPrimaryPanel?: PrimaryPanelKey;
+  shellMode?: "full" | "moneyOnly";
+  controlledTab?: TabKey;
+  onControlledTabChange?: (tab: TabKey) => void;
+  controlledSession?: PaperArbSession;
+  onControlledSessionChange?: (session: PaperArbSession) => void;
+  controlledRuleBand?: PaperArbRatingBand;
+  onControlledRuleBandChange?: (band: PaperArbRatingBand) => void;
+  moneyExecutionDescriptorOverride?: MoneyExecutionDescriptor;
+  moneyAutomationConfigOverride?: MoneyAutomationConfig;
+  moneyAutoStartEnabledOverride?: boolean;
+  moneyViewModeOverride?: "money" | "auto" | "money-auto-tab";
+  onMoneyAutomationConfigChange?: (patch: Partial<MoneyAutomationConfig>) => void;
+  headerTitleOverride?: string;
+  headerBadgeValuesOverride?: string[];
+  headerMetaLabelOverride?: string;
+  activeTabLabelOverride?: string;
+  episodesTabLabelOverride?: string;
+  analyticsTabLabelOverride?: string;
+  onMoneyShellStatsChange?: (stats: {
+    signals: number;
+    ready: number;
+    open: number;
+    autoEnabled: boolean;
+  }) => void;
+  onSharedRatingRulesChange?: (rules: Array<{ band: PaperArbRatingBand; minRate: number; minTotal: number }>) => void;
+};
+
+export default function ArbitrageScanner({
+  initialPrimaryPanel = "scanner",
+  shellMode = "full",
+  controlledTab,
+  onControlledTabChange,
+  controlledSession,
+  onControlledSessionChange,
+  controlledRuleBand,
+  onControlledRuleBandChange,
+  moneyExecutionDescriptorOverride,
+  moneyAutomationConfigOverride,
+  moneyAutoStartEnabledOverride,
+  moneyViewModeOverride,
+  onMoneyAutomationConfigChange,
+  headerTitleOverride,
+  headerBadgeValuesOverride,
+  headerMetaLabelOverride,
+  activeTabLabelOverride,
+  episodesTabLabelOverride,
+  analyticsTabLabelOverride,
+  onMoneyShellStatsChange,
+  onSharedRatingRulesChange,
+}: ArbitrageScannerProps) {
   const { theme } = useUi();
   const accent = useMemo(() => getScannerAccent(theme), [theme]);
   const headerButtonActiveClass = useMemo(() => getScannerHeaderButtonActiveClass(theme), [theme]);
   const isLightTheme = theme === "light";
-  const [tab, setTab] = useState<TabKey>("active");
-  const [ruleBand, setRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
+  const [primaryPanel, setPrimaryPanel] = useState<PrimaryPanelKey>(() => {
+    if (initialPrimaryPanel === "money" || initialPrimaryPanel === "scanner") return initialPrimaryPanel;
+    if (typeof window === "undefined") return "scanner";
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      return qs.get("panel") === "money" ? "money" : "scanner";
+    } catch {
+      return "scanner";
+    }
+  });
+  const [internalTab, setInternalTab] = useState<TabKey>("active");
+  const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
   const [zapUiMode, setZapUiMode] = useState<ZapUiMode>("zap");
   const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
 
@@ -6027,13 +6243,39 @@ export default function ArbitrageScanner() {
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
   const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
+  const routeLocksPrimaryPanel = initialPrimaryPanel === "money" || initialPrimaryPanel === "scanner";
+  const isMoneyOnlyShell = shellMode === "moneyOnly";
+  const tab = controlledTab ?? internalTab;
+  const [internalSession, setInternalSession] = useState<PaperArbSession>("GLOB");
+  const session = controlledSession ?? internalSession;
+  const ruleBand = controlledRuleBand ?? internalRuleBand;
+  const setTab = useCallback((nextTab: TabKey) => {
+    if (controlledTab != null) {
+      onControlledTabChange?.(nextTab);
+      return;
+    }
+    setInternalTab(nextTab);
+  }, [controlledTab, onControlledTabChange]);
+  const setRuleBand = useCallback((nextBand: PaperArbRatingBand) => {
+    if (controlledRuleBand != null) {
+      onControlledRuleBandChange?.(nextBand);
+      return;
+    }
+    setInternalRuleBand(nextBand);
+  }, [controlledRuleBand, onControlledRuleBandChange]);
+  const setSession = useCallback((nextSession: PaperArbSession) => {
+    if (controlledSession != null) {
+      onControlledSessionChange?.(nextSession);
+      return;
+    }
+    setInternalSession(nextSession);
+  }, [controlledSession, onControlledSessionChange]);
   const daySelectWrapperRef = useRef<HTMLDivElement | null>(null);
   const rangePresetWrapperRef = useRef<HTMLDivElement | null>(null);
   const dateFromSelectWrapperRef = useRef<HTMLDivElement | null>(null);
   const dateToSelectWrapperRef = useRef<HTMLDivElement | null>(null);
 
   // global filters (variant)
-  const [session, setSession] = useState<PaperArbSession>("GLOB");
   const [metric, setMetric] = useState<PaperArbMetric>("SigmaZap");
   const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
   const [startAbs, setStartAbs] = useState<number>(0.1);
@@ -6045,6 +6287,7 @@ export default function ArbitrageScanner() {
   const [sizeValue, setSizeValue] = useState<number>(1000);
   const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>("Undiluted");
   const [dilutionStep, setDilutionStep] = useState<number>(0.3);
+  const [maxAdds, setMaxAdds] = useState<number>(3);
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -6056,6 +6299,7 @@ export default function ArbitrageScanner() {
   // table sub-filters (client-side)
   const [qTicker, setQTicker] = useState("");
   const [qSide, setQSide] = useState<"" | "Long" | "Short">("");
+  const [moneySortKey, setMoneySortKey] = useState<"alpha" | "sigma" | "netEdge">("alpha");
 
   // data
   const [activeRows, setActiveRows] = useState<PaperArbActiveRow[]>([]);
@@ -6129,6 +6373,12 @@ export default function ArbitrageScanner() {
   const pinFileInputRef = useRef<HTMLInputElement | null>(null);
   const sessionSelectWrapperRef = useRef<HTMLDivElement | null>(null);
   const [sideFilter, setSideFilter] = useState<"" | "Long" | "Short">("");
+
+  useEffect(() => {
+    if (sideFilter !== "") {
+      setSideFilter("");
+    }
+  }, [sideFilter]);
 
   const [exchangesText, setExchangesText] = useState<string>("");
   const [countriesText, setCountriesText] = useState<string>("");
@@ -6233,6 +6483,7 @@ export default function ArbitrageScanner() {
   const [requireIsCrap, setRequireIsCrap] = useState<boolean>(false);
 
   // exclude flags
+  const [excludeDividend, setExcludeDividend] = useState<boolean>(false);
   const [excludePTP, setExcludePTP] = useState<boolean>(false);
   const [excludeSSR, setExcludeSSR] = useState<boolean>(false);
   const [excludeETF, setExcludeETF] = useState<boolean>(false);
@@ -6376,16 +6627,17 @@ export default function ArbitrageScanner() {
       `minHoldCandles=${minHoldCandles}`,
       `priceMode=LastPrint`,
       `pnlMode=${pnlMode}`,
+      `maxAdds=${maxAdds}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, zapUiMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, maxAdds, zapUiMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${zapUiMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|LastPrint`;
+    const s = `${metric}|${startAbs}|${zapUiMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|LastPrint`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, zapUiMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, maxAdds, zapUiMode]);
 
   const forceEpisodesSearch = useMemo(() => {
     const has = (v: string) => String(v ?? "").trim().length > 0;
@@ -6436,7 +6688,7 @@ export default function ArbitrageScanner() {
       requireHasNews || excludeHasNews || requireHasReport || excludeHasReport ||
       includeUSA || includeChina ||
       requireIsPTP || requireIsSSR || requireIsETF || requireIsCrap ||
-      excludePTP || excludeSSR || excludeETF || excludeCrap
+      excludeDividend || excludePTP || excludeSSR || excludeETF || excludeCrap
     );
   }, [
     minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
@@ -6457,7 +6709,7 @@ export default function ArbitrageScanner() {
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
-    excludePTP, excludeSSR, excludeETF, excludeCrap,
+    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap,
   ]);
 
   // ========= Preflight validation
@@ -6603,8 +6855,9 @@ export default function ArbitrageScanner() {
       } else {
         const s = JSON.parse(raw) as Record<string, any>;
 
-        if (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics") setTab(s.tab);
-        if (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL") setRuleBand(s.ruleBand);
+        if (!routeLocksPrimaryPanel && (s.primaryPanel === "money" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
+        if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
+        if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
         if (s.zapUiMode === "off" || s.zapUiMode === "zap" || s.zapUiMode === "sigma" || s.zapUiMode === "delta") setZapUiMode(s.zapUiMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
@@ -6613,7 +6866,15 @@ export default function ArbitrageScanner() {
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
 
-        if (s.session === "BLUE" || s.session === "ARK" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB") setSession(s.session);
+        if (controlledSession == null && (s.session === "BLUE" || s.session === "ARK" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB")) {
+          setSession(s.session);
+          const restoredBand = ratingBandFromSession(s.session);
+          if (controlledRuleBand != null) {
+            onControlledRuleBandChange?.(restoredBand);
+          } else {
+            setInternalRuleBand(restoredBand);
+          }
+        }
         if (s.metric === "SigmaZap" || s.metric === "ZapPct") setMetric(s.metric);
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
         if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
@@ -6625,6 +6886,7 @@ export default function ArbitrageScanner() {
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
         if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
         if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
+        if (typeof s.maxAdds === "number") setMaxAdds(normalizeMaxAddsValue(s.maxAdds));
         if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
@@ -6767,6 +7029,7 @@ export default function ArbitrageScanner() {
         if (typeof s.requireIsSSR === "boolean") setRequireIsSSR(s.requireIsSSR);
         if (typeof s.requireIsETF === "boolean") setRequireIsETF(s.requireIsETF);
         if (typeof s.requireIsCrap === "boolean") setRequireIsCrap(s.requireIsCrap);
+        if (typeof s.excludeDividend === "boolean") setExcludeDividend(s.excludeDividend);
         if (typeof s.excludePTP === "boolean") setExcludePTP(s.excludePTP);
         if (typeof s.excludeSSR === "boolean") setExcludeSSR(s.excludeSSR);
         if (typeof s.excludeETF === "boolean") setExcludeETF(s.excludeETF);
@@ -6782,10 +7045,11 @@ export default function ArbitrageScanner() {
         filtersRestoringRef.current = false;
       });
     }
-  }, []);
+  }, [controlledRuleBand, controlledSession, controlledTab, routeLocksPrimaryPanel]);
 
   const persistedFilters = useMemo(
     () => ({
+      primaryPanel,
       tab,
       ruleBand,
       zapUiMode,
@@ -6806,6 +7070,7 @@ export default function ArbitrageScanner() {
       sizeValue,
       dilutionMode,
       dilutionStep,
+      maxAdds,
       optimizerRangeRankMetric,
       optimizerRangeMinTrades,
       optimizerBucketCount,
@@ -6897,6 +7162,7 @@ export default function ArbitrageScanner() {
       requireIsSSR,
       requireIsETF,
       requireIsCrap,
+      excludeDividend,
       excludePTP,
       excludeSSR,
       excludeETF,
@@ -6949,7 +7215,7 @@ export default function ArbitrageScanner() {
       maxImbExchValue,
     }),
     [
-      tab, ruleBand, zapUiMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
+      primaryPanel, tab, ruleBand, zapUiMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
       session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, pnlMode,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
@@ -6962,7 +7228,7 @@ export default function ArbitrageScanner() {
       maxClsToClsPct, minVWAP, maxVWAP, minLo, maxLo, minAvPreMhv, maxAvPreMhv, minLstPrcL,
       maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
       minLstClsNewsCnt, maxLstClsNewsCnt, minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, minNewsCnt,
-      maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludePTP,
+      maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludeDividend, excludePTP,
       excludeSSR, excludeETF, excludeCrap, minMdnPreMhVol90, maxMdnPreMhVol90,
       includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
@@ -7229,6 +7495,512 @@ export default function ArbitrageScanner() {
     }
   }, [persistedFilters]);
 
+  const derivedMoneySignalClass = useMemo(() => {
+    if (ruleBand === "GLOBAL") return "global";
+    return ruleBand.toLowerCase();
+  }, [ruleBand]);
+  const moneySignalClass = moneyExecutionDescriptorOverride?.signalClass ?? derivedMoneySignalClass;
+
+  const derivedMoneyRatingRule = useMemo(() => {
+    return ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+  }, [ratingRules, ruleBand]);
+  const moneyRatingRule = moneyExecutionDescriptorOverride?.ratingRule ?? derivedMoneyRatingRule;
+
+  const moneyFilterConfig = useMemo<ArbitrageFilterConfigV1>(() => {
+    const mm = (minRaw: string, maxRaw: string) => {
+      const min = optNumOrNull(minRaw);
+      const max = optNumOrNull(maxRaw);
+      if (min == null && max == null) return undefined;
+      return {
+        ...(min != null ? { min } : {}),
+        ...(max != null ? { max } : {}),
+      };
+    };
+
+    const applyTickers = splitListUpper(tickersText);
+    const ignoreTickers = splitListUpper(ignoreTickersText);
+    const pinnedTickers = splitListUpper(benchTickersText);
+    const countries = splitListUpper(countriesText);
+    const exchanges = splitListUpper(exchangesText);
+    const sectors = splitListUpper(sectorsL3Text);
+
+    return buildMoneyFilterConfig({
+      signalClass: moneySignalClass,
+      ratingType,
+      minRate: moneyRatingRule.minRate,
+      minTotal: moneyRatingRule.minTotal,
+      listMode,
+      ignoreTickers,
+      applyTickers,
+      pinnedTickers,
+      bounds: {
+        ADV20: mm(minAdv20, maxAdv20),
+        ADV20NF: mm(minAdv20NF, maxAdv20NF),
+        ADV90: mm(minAdv90, maxAdv90),
+        ADV90NF: mm(minAdv90NF, maxAdv90NF),
+        AvPreMhv: mm(minAvPreMhv, maxAvPreMhv),
+        RoundLot: mm(minRoundLot, maxRoundLot),
+        VWAP: mm(minVWAP, maxVWAP),
+        Spread: mm(minSpread, maxSpread),
+        LstPrcL: mm(minLstPrcL, maxLstPrcL),
+        LstCls: mm(minLstCls, maxLstCls),
+        YCls: mm(minYCls, maxYCls),
+        TCls: mm(minTCls, maxTCls),
+        ClsToClsPct: mm(minClsToClsPct, maxClsToClsPct),
+        Lo: mm(minLo, maxLo),
+        LstClsNewsCnt: mm(minLstClsNewsCnt, maxLstClsNewsCnt),
+        MarketCapM: mm(minMarketCapM, maxMarketCapM),
+        PreMhVolNF: mm(minPreMktVolNF, maxPreMktVolNF),
+        VolNFfromLstCls: mm(minVolNFfromLstCls, maxVolNFfromLstCls),
+        AvPostMhVol90NF: mm(minAvPostMhVol90NF, maxAvPostMhVol90NF),
+        AvPreMhVol90NF: mm(minAvPreMhVol90NF, maxAvPreMhVol90NF),
+        AvPreMhValue20NF: mm(minAvPreMhValue20NF, maxAvPreMhValue20NF),
+        AvPreMhValue90NF: mm(minAvPreMhValue90NF, maxAvPreMhValue90NF),
+        AvgDailyValue20: mm(minAvgDailyValue20, maxAvgDailyValue20),
+        AvgDailyValue90: mm(minAvgDailyValue90, maxAvgDailyValue90),
+        Volatility20: mm(minVolatility20, maxVolatility20),
+        Volatility90: mm(minVolatility90, maxVolatility90),
+        PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
+        PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
+        VolRel: mm(minVolRel, maxVolRel),
+      },
+      exclude: {
+        dividend: excludeDividend,
+        news: excludeHasNews,
+        ptp: excludePTP,
+        ssr: excludeSSR,
+        report: excludeHasReport,
+        etf: excludeETF,
+        crap: excludeCrap,
+      },
+      include: {
+        usaOnly: includeUSA,
+        chinaOnly: includeChina,
+      },
+      multi: {
+        countries,
+        exchanges,
+        sectors,
+      },
+      reportMode: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
+      zapMode: metric === "SigmaZap" ? "sigma" : "zap",
+      zapThresholdAbs: startAbs,
+    });
+  }, [
+    moneySignalClass,
+    ratingType,
+    moneyRatingRule,
+    listMode,
+    scopeMode,
+    ignoreTickersText,
+    tickersText,
+    benchTickersText,
+    minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
+    minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
+    minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
+    minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt,
+    minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls,
+    minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF,
+    minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF,
+    minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
+    minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
+    minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
+    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
+    includeUSA, includeChina, countriesText, exchangesText, sectorsL3Text, metric, startAbs,
+  ]);
+
+  const moneyExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
+    const mm = (minRaw: string, maxRaw: string) => ({
+      min: optNumOrNull(minRaw),
+      max: optNumOrNull(maxRaw),
+    });
+    const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
+
+    const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
+
+    return {
+      cls: moneySignalClass,
+      type: ratingType ?? "any",
+      mode: scopeModeForSnapshot,
+      ratingMode,
+      minRate: moneyRatingRule.minRate,
+      minTotal: moneyRatingRule.minTotal,
+      tickersFilterNorm: splitListUpper(tickersText).join(","),
+      listMode,
+      ignoreSet: new Set(splitListUpper(ignoreTickersText)),
+      applySet: new Set(splitListUpper(tickersText)),
+      pinMap,
+      bounds: {
+        Corr: mm(minCorr, maxCorr),
+        Beta: mm(minBeta, maxBeta),
+        Sigma: mm(minSigma, maxSigma),
+        ADV20: mm(minAdv20, maxAdv20),
+        ADV20NF: mm(minAdv20NF, maxAdv20NF),
+        ADV90: mm(minAdv90, maxAdv90),
+        ADV90NF: mm(minAdv90NF, maxAdv90NF),
+        AvPreMhv: mm(minAvPreMhv, maxAvPreMhv),
+        RoundLot: mm(minRoundLot, maxRoundLot),
+        VWAP: mm(minVWAP, maxVWAP),
+        Spread: mm(minSpread, maxSpread),
+        LstPrcL: mm(minLstPrcL, maxLstPrcL),
+        LstCls: mm(minLstCls, maxLstCls),
+        YCls: mm(minYCls, maxYCls),
+        TCls: mm(minTCls, maxTCls),
+        ClsToClsPct: mm(minClsToClsPct, maxClsToClsPct),
+        Lo: mm(minLo, maxLo),
+        LstClsNewsCnt: mm(minLstClsNewsCnt, maxLstClsNewsCnt),
+        MarketCapM: mm(minMarketCapM, maxMarketCapM),
+        PreMhVolNF: mm(minPreMktVolNF, maxPreMktVolNF),
+        VolNFfromLstCls: mm(minVolNFfromLstCls, maxVolNFfromLstCls),
+        AvPostMhVol90NF: mm(minAvPostMhVol90NF, maxAvPostMhVol90NF),
+        AvPreMhVol90NF: mm(minAvPreMhVol90NF, maxAvPreMhVol90NF),
+        AvPreMhValue20NF: mm(minAvPreMhValue20NF, maxAvPreMhValue20NF),
+        AvPreMhValue90NF: mm(minAvPreMhValue90NF, maxAvPreMhValue90NF),
+        AvgDailyValue20: mm(minAvgDailyValue20, maxAvgDailyValue20),
+        AvgDailyValue90: mm(minAvgDailyValue90, maxAvgDailyValue90),
+        Volatility20: mm(minVolatility20, maxVolatility20),
+        Volatility90: mm(minVolatility90, maxVolatility90),
+        PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
+        PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
+        VolRel: mm(minVolRel, maxVolRel),
+        PreMhBidLstPrcPct: mm(minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
+        PreMhLoLstPrcPct: mm(minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
+        PreMhHiLstClsPct: mm(minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
+        PreMhLoLstClsPct: mm(minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
+        LstPrcLstClsPct: mm(minLstPrcLstClsPct, maxLstPrcLstClsPct),
+        ImbExch925: mm(minImbExch925, maxImbExch925),
+        ImbExch1555: mm(minImbExch1555, maxImbExch1555),
+      },
+      excludeDividend: excludeDividend,
+      excludeNews: excludeHasNews,
+      excludePTP: excludePTP,
+      excludeSSR: excludeSSR,
+      excludeReport: excludeHasReport,
+      excludeETF: excludeETF,
+      excludeCrap: excludeCrap,
+      activeMode: "off",
+      includeUSA: includeUSA,
+      includeChina: includeChina,
+      selCountries: new Set(splitListUpper(countriesText)),
+      countryEnabled: splitListUpper(countriesText).length > 0,
+      selExchanges: new Set(splitListUpper(exchangesText)),
+      exchangeEnabled: splitListUpper(exchangesText).length > 0,
+      selSectors: new Set(splitList(sectorsL3Text).map((value) => value.trim().toUpperCase()).filter(Boolean)),
+      sectorEnabled: splitList(sectorsL3Text).length > 0,
+      filterReport: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
+      equityType: "",
+      corrMin: minCorr,
+      corrMax: maxCorr,
+      betaMin: minBeta,
+      betaMax: maxBeta,
+      sigmaMin: minSigma,
+      sigmaMax: maxSigma,
+      zapMode: zapUiMode,
+      zapShowAbs: startAbs,
+      zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
+      zapGoldAbs: Math.max(0, Number(endAbs) || 0),
+    };
+  }, [
+    benchTickersText,
+    countriesText,
+    endAbs,
+    excludeDividend,
+    exchangesText,
+    excludeCrap,
+    excludeETF,
+    excludeHasNews,
+    excludeHasReport,
+    excludePTP,
+    excludeSSR,
+    includeChina,
+    includeUSA,
+    ignoreTickersText,
+    listMode,
+    maxAdv20,
+    maxAdv20NF,
+    maxAdv90,
+    maxAdv90NF,
+    maxAvgDailyValue20,
+    maxAvgDailyValue90,
+    maxAvPostMhVol90NF,
+    maxAvPreMhValue20NF,
+    maxAvPreMhValue90NF,
+    maxAvPreMhVol90NF,
+    maxAvPreMhv,
+    maxBeta,
+    maxCorr,
+    maxImbExch1555,
+    maxImbExch925,
+    maxLo,
+    maxLstCls,
+    maxLstClsNewsCnt,
+    maxLstPrcL,
+    maxLstPrcLstClsPct,
+    maxMarketCapM,
+    maxPreMhBidLstPrcPct,
+    maxPreMhHiLstClsPct,
+    maxPreMhLoLstClsPct,
+    maxPreMhLoLstPrcPct,
+    maxPreMhMDV20NF,
+    maxPreMhMDV90NF,
+    maxPreMktVolNF,
+    maxRoundLot,
+    maxSigma,
+    maxSpread,
+    maxTCls,
+    maxVolNFfromLstCls,
+    maxVolRel,
+    maxVolatility20,
+    maxVolatility90,
+    maxVWAP,
+    maxYCls,
+    metric,
+    ratingMode,
+    minAdv20,
+    minAdv20NF,
+    minAdv90,
+    minAdv90NF,
+    minAvgDailyValue20,
+    minAvgDailyValue90,
+    minAvPostMhVol90NF,
+    minAvPreMhValue20NF,
+    minAvPreMhValue90NF,
+    minAvPreMhVol90NF,
+    minAvPreMhv,
+    minBeta,
+    minCorr,
+    minImbExch1555,
+    minImbExch925,
+    minLo,
+    minLstCls,
+    minLstClsNewsCnt,
+    minLstPrcL,
+    minLstPrcLstClsPct,
+    minMarketCapM,
+    minPreMhBidLstPrcPct,
+    minPreMhHiLstClsPct,
+    minPreMhLoLstClsPct,
+    minPreMhLoLstPrcPct,
+    minPreMhMDV20NF,
+    minPreMhMDV90NF,
+    minPreMktVolNF,
+    minRoundLot,
+    minSigma,
+    minSpread,
+    minTCls,
+    minVolNFfromLstCls,
+    minVolRel,
+    minVolatility20,
+    minVolatility90,
+    minVWAP,
+    minYCls,
+    moneyRatingRule.minRate,
+    moneyRatingRule.minTotal,
+    moneySignalClass,
+    ratingType,
+    sectorsL3Text,
+    startAbs,
+    tickersText,
+    zapUiMode,
+  ]);
+
+  const effectiveMoneyAutomationConfig = useMemo<MoneyAutomationConfig>(() => ({
+    strategyModeEnabled: moneyAutomationConfigOverride?.strategyModeEnabled ?? false,
+    minNetEdge: moneyAutomationConfigOverride?.minNetEdge ?? 0,
+    endSignalThreshold: moneyAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
+    maxOpenPositions: moneyAutomationConfigOverride?.maxOpenPositions ?? 10,
+    maxAdds: moneyAutomationConfigOverride?.maxAdds ?? maxAdds,
+    queueDelayMinSeconds: moneyAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
+    queueDelayMaxSeconds: moneyAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
+    exitExecutionMode: closeMode === "Passive" ? "passive" : "active",
+    hedgeMode: pnlMode === "Hedged" ? "hedged" : "unhedged",
+    scaleMode: dilutionMode === "Diluted" ? "scale_in" : "single",
+    sizingMode: sizingMode === "Tier" ? "TIER" : "USD",
+    sizeValue,
+    dilutionStep,
+    minHoldMinutes: minHoldCandles,
+    exitMode: moneyAutomationConfigOverride?.exitMode ?? "normalize",
+    printStartTime: moneyAutomationConfigOverride?.printStartTime ?? "09:20",
+    printCloseTime: moneyAutomationConfigOverride?.printCloseTime ?? "09:30",
+    noSpreadExit: moneyAutomationConfigOverride?.noSpreadExit ?? true,
+  }), [
+    closeMode,
+    dilutionMode,
+    dilutionStep,
+    endAbs,
+    maxAdds,
+    minHoldCandles,
+    moneyAutomationConfigOverride,
+    pnlMode,
+    sizeValue,
+    sizingMode,
+  ]);
+
+  const {
+    moneySignals,
+    moneyDecisions,
+    moneyPositions,
+    moneyOrderIntents,
+    moneyAutoEnabled,
+    setMoneyAutoEnabled,
+    moneyExecutionSnapshot,
+    moneyBookSnapshot,
+    moneyMainWindowSnapshot,
+    moneyManualExecutionBusy,
+    bindMoneyWindows,
+    clearMoneyBoundWindow,
+    captureMoneyTickerPoint,
+    captureMoneyTickerPointDelayed,
+    clearMoneyTickerPoint,
+    toggleMoneyPanicOff,
+    clearMoneyExecutionQueue,
+    resetMoneyAutomationState,
+    submitManualMoneyOrders,
+    refresh: refreshMoneySignals,
+  } = useMoneyEngine({
+    enabled: primaryPanel === "money",
+    initialAutoEnabled: moneyAutoStartEnabledOverride ?? (moneyViewModeOverride === "auto"),
+    signalClass: moneySignalClass,
+    ratingType,
+    metric,
+    ratingRule: { minRate: moneyRatingRule.minRate, minTotal: moneyRatingRule.minTotal },
+    tickersCsv: splitListUpper(tickersText).join(",") || undefined,
+    minCorr: optNumOrNull(minCorr),
+    maxCorr: optNumOrNull(maxCorr),
+    minBeta: optNumOrNull(minBeta),
+    maxBeta: optNumOrNull(maxBeta),
+    minSigma: optNumOrNull(minSigma),
+    maxSigma: optNumOrNull(maxSigma),
+    filterConfig: moneyFilterConfig,
+    exactSonarFilterSnapshot: moneyExactSonarFilterSnapshot,
+    maxSpreadValue: maxSpread,
+    automationConfig: effectiveMoneyAutomationConfig,
+    onUpdated: () => setUpdatedAt(new Date()),
+    onError: (message) => setErr(message),
+  });
+  const [moneyAutoStartLocked, setMoneyAutoStartLocked] = useState(false);
+  const [moneyWindowCaptureBusy, setMoneyWindowCaptureBusy] = useState(false);
+  const moneyAutomationLaunchEnabled = moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab";
+  const moneyStrategyModeEnabled = effectiveMoneyAutomationConfig.strategyModeEnabled;
+  const moneyPanicOff = moneyExecutionSnapshot?.panicOff ?? false;
+  const moneyAutomationRunning = moneyAutoEnabled && moneyStrategyModeEnabled && !moneyPanicOff;
+  const moneyWindowsBound = Boolean(moneyExecutionSnapshot?.boundWindow?.isBound && moneyExecutionSnapshot?.mainWindow?.isBound);
+
+  const moneyCountries = useMemo(() => {
+    const values = new Set<string>();
+    for (const row of moneySignals) {
+      const raw =
+        (row as any)?.country ??
+        (row as any)?.Country ??
+        (row as any)?.meta?.country ??
+        (row as any)?.meta?.Country ??
+        "";
+      const value = String(raw ?? "").trim().toUpperCase();
+      if (value) values.add(value);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [moneySignals]);
+
+  const moneyExchanges = useMemo(() => {
+    const values = new Set<string>();
+    for (const row of moneySignals) {
+      const raw =
+        (row as any)?.exchange ??
+        (row as any)?.Exchange ??
+        (row as any)?.meta?.exchange ??
+        (row as any)?.meta?.Exchange ??
+        "";
+      const value = String(raw ?? "").trim().toUpperCase();
+      if (value) values.add(value);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [moneySignals]);
+
+  const moneySectors = useMemo(() => {
+    const values = new Set<string>();
+    for (const row of moneySignals) {
+      const raw =
+        (row as any)?.sectorL3 ??
+        (row as any)?.SectorL3 ??
+        (row as any)?.sector ??
+        (row as any)?.Sector ??
+        (row as any)?.meta?.sectorL3 ??
+        (row as any)?.meta?.SectorL3 ??
+        (row as any)?.meta?.sector ??
+        (row as any)?.meta?.Sector ??
+        "";
+      const value = String(raw ?? "").trim().toUpperCase();
+      if (value) values.add(value);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [moneySignals]);
+
+  const moneyCountryValue = useMemo(() => splitListUpper(countriesText)[0] ?? "", [countriesText]);
+  const moneyExchangeValue = useMemo(() => splitListUpper(exchangesText)[0] ?? "", [exchangesText]);
+  const moneySectorValue = useMemo(() => splitListUpper(sectorsL3Text)[0] ?? "", [sectorsL3Text]);
+  const moneyCountryCount = moneyCountryValue ? 1 : 0;
+  const moneyExchangeCount = moneyExchangeValue ? 1 : 0;
+  const moneySectorCount = moneySectorValue ? 1 : 0;
+
+  const sortedMoneyDecisions = useMemo(() => {
+    const rows = [...moneyDecisions];
+    if (moneySortKey === "sigma") {
+      rows.sort((a, b) => Math.abs(b.signal ?? 0) - Math.abs(a.signal ?? 0) || a.ticker.localeCompare(b.ticker));
+      return rows;
+    }
+    if (moneySortKey === "netEdge") {
+      rows.sort((a, b) => (b.netEdge ?? -Infinity) - (a.netEdge ?? -Infinity) || a.ticker.localeCompare(b.ticker));
+      return rows;
+    }
+    rows.sort((a, b) => a.ticker.localeCompare(b.ticker));
+    return rows;
+  }, [moneyDecisions, moneySortKey]);
+
+  const toggleMoneyAutomationRunFromHeader = async () => {
+    if (!moneyAutomationLaunchEnabled) return;
+    if (moneyAutoStartLocked && !moneyAutomationRunning) return;
+
+    if (moneyAutomationRunning) {
+      try {
+        await toggleMoneyPanicOff(true);
+      } finally {
+        try {
+          await clearMoneyExecutionQueue();
+        } catch {
+          // best effort cleanup
+        }
+        onMoneyAutomationConfigChange?.({ strategyModeEnabled: false });
+        setMoneyAutoEnabled(false);
+        resetMoneyAutomationState();
+      }
+      return;
+    }
+
+    resetMoneyAutomationState();
+    await toggleMoneyPanicOff(false);
+    onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
+    setMoneyAutoEnabled(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await refreshMoneySignals();
+  };
+
+  const captureMoneyWindowsFromHeader = async () => {
+    if (moneyWindowCaptureBusy) return;
+    setMoneyWindowCaptureBusy(true);
+    try {
+      setErr(null);
+      if (moneyWindowsBound) {
+        await clearMoneyBoundWindow();
+      } else {
+        await bindMoneyWindows();
+      }
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    } finally {
+      setMoneyWindowCaptureBusy(false);
+    }
+  };
+
   // ========= Build query params for GET /active & /episodes
   function buildGetParams(d: string) {
     // NOTE: priceMode not sent (server accepts empty or LastPrint; Quotes rejected)
@@ -7250,6 +8022,7 @@ export default function ArbitrageScanner() {
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
       dilutionMode,
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
+      maxAdds,
       ratingType: ratingType ?? "any",
 
       tickers: reqTickers.length ? reqTickers : null,
@@ -7350,6 +8123,7 @@ export default function ArbitrageScanner() {
       requireIsSSR: requireIsSSR ? true : null,
       requireIsETF: requireIsETF ? true : null,
       requireIsCrap: requireIsCrap ? true : null,
+      excludeDividend: excludeDividend ? true : null,
       excludePTP: excludePTP ? true : null,
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
@@ -7401,6 +8175,7 @@ export default function ArbitrageScanner() {
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
       dilutionMode,
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
+      maxAdds,
 
       ratingType: ratingType ?? "any",
       ratingRules: useBinRatingFilter ? null : rrForRequest,
@@ -7474,6 +8249,7 @@ export default function ArbitrageScanner() {
       requireIsETF: requireIsETF ? true : null,
       requireIsCrap: requireIsCrap ? true : null,
 
+      excludeDividend: excludeDividend ? true : null,
       excludePTP: excludePTP ? true : null,
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
@@ -7587,6 +8363,10 @@ export default function ArbitrageScanner() {
     setErr(null);
 
     try {
+      if (primaryPanel === "money") {
+        await refreshMoneySignals();
+        return;
+      }
       if (tab === "active") {
         setAnalytics(null);
         const params = buildGetParams(dateNy);
@@ -8532,11 +9312,11 @@ export default function ArbitrageScanner() {
       case "endTime":
         return r.endMinuteIdx ?? -1;
       case "startAbs":
-        return r.startMetricAbs ?? -1;
+        return r.startMetric ?? r.startMetricAbs ?? -1;
       case "peakAbs":
-        return r.peakMetricAbs ?? -1;
+        return r.peakMetric ?? r.peakMetricAbs ?? -1;
       case "endAbs":
-        return r.endMetricAbs ?? -1;
+        return r.endMetric ?? r.endMetricAbs ?? -1;
       case "total":
         return r.totalPnlUsd ?? 0;
       case "raw":
@@ -8560,10 +9340,25 @@ export default function ArbitrageScanner() {
         row.peak?.metricAbs ?? (row.peak?.metric != null ? Math.abs(row.peak.metric) : null);
       const lastAbs =
         row.last?.metricAbs ?? (row.last?.metric != null ? Math.abs(row.last.metric) : null);
-      const currentDelta =
-        startAbs != null && lastAbs != null && Number.isFinite(startAbs) && Number.isFinite(lastAbs)
-          ? lastAbs - startAbs
-          : 0;
+      const tickerAmountUsd = scannerTickerAmountUsd(
+        sizingMode,
+        sizeValue,
+        row.tierBp ?? (row as any).TierBp ?? null,
+        row.entryCount ?? (row as any).EntryCount ?? null,
+        dilutionMode
+      );
+      const pnl = scannerRealtimePnlUsd({
+        side: row.side,
+        beta: row.beta ?? (row as any).Beta ?? null,
+        tickerAmountUsd,
+        start: row.start,
+        last: row.last,
+        pnlMode,
+      });
+      const serverRawPnl = row.rawPnlUsd ?? (row as any).RawPnlUsd ?? null;
+      const serverBenchPnl = row.benchPnlUsd ?? (row as any).BenchPnlUsd ?? null;
+      const serverHedgedPnl = row.hedgedPnlUsd ?? (row as any).HedgedPnlUsd ?? null;
+      const serverTotalPnl = row.totalPnlUsd ?? (row as any).TotalPnlUsd ?? null;
 
       return {
         ticker: row.ticker,
@@ -8589,13 +9384,18 @@ export default function ArbitrageScanner() {
         minHoldCandles: row.minHoldCandles ?? minHoldCandles,
         tierBp: row.tierBp ?? (row as any).TierBp ?? null,
         beta: row.beta ?? (row as any).Beta ?? null,
-        rawPnlUsd: currentDelta,
-        benchPnlUsd: 0,
-        hedgedPnlUsd: currentDelta,
-        totalPnlUsd: currentDelta,
+        positionNotionalUsd: row.positionNotionalUsd ?? (row as any).PositionNotionalUsd ?? null,
+        entryCount: row.entryCount ?? (row as any).EntryCount ?? null,
+        rawPnlUsd: serverRawPnl ?? pnl.rawPnlUsd,
+        benchPnlUsd: serverBenchPnl ?? pnl.benchPnlUsd,
+        hedgedPnlUsd: serverHedgedPnl ?? pnl.hedgedPnlUsd,
+        totalPnlUsd: serverTotalPnl ?? pnl.totalPnlUsd,
+        lstPrcL: row.lstPrcL ?? (row as any).LstPrcL ?? null,
+        lstCls: row.lstCls ?? (row as any).LstCls ?? null,
+        yCls: row.yCls ?? (row as any).YCls ?? null,
       };
     });
-  }, [filteredActive, dateNy, closeMode, minHoldCandles]);
+  }, [filteredActive, dateNy, closeMode, minHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode]);
 
   const activeRealtimeSorted = useMemo(() => {
     const mul = dirMul(analyticsSort.dir);
@@ -8998,11 +9798,19 @@ export default function ArbitrageScanner() {
   const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
     pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
   const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
-  const episodeMoneyflowUsd = (row: PaperArbClosedDto) => {
+  const episodeTickerMoneyflowUsd = (row: PaperArbClosedDto) => {
     const baseNotional = row.positionNotionalUsd ?? 0;
     if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
-    const hedgeFlow = episodeHasHedgeLeg(row) ? Math.abs(row.beta ?? 0) : 0;
-    return baseNotional * episodeEntryCount(row) * (1 + hedgeFlow);
+    return baseNotional * episodeEntryCount(row);
+  };
+  const episodeBenchMoneyflowUsd = (row: PaperArbClosedDto) => {
+    if (!episodeHasHedgeLeg(row)) return 0;
+    const tickerFlow = episodeTickerMoneyflowUsd(row);
+    if (!Number.isFinite(tickerFlow) || tickerFlow <= 0) return 0;
+    return tickerFlow * Math.abs(row.beta ?? 0);
+  };
+  const episodeMoneyflowUsd = (row: PaperArbClosedDto) => {
+    return episodeTickerMoneyflowUsd(row) + episodeBenchMoneyflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
     const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
@@ -9233,6 +10041,59 @@ export default function ArbitrageScanner() {
     setAnalyticsSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
   };
   const sortMark = (active: boolean, dir: SortDir) => (active ? (dir === "asc" ? " ↑" : " ↓") : "");
+  const moneyStats = useMemo(() => ({
+    signals: moneySignals.length,
+    ready: moneyDecisions.filter((x) => x.status === "ENTRY_READY").length,
+    open: moneyPositions.filter((x) => x.status === "OPEN").length,
+    autoEnabled: moneyAutoEnabled,
+  }), [moneyDecisions, moneyPositions, moneySignals.length, moneyAutoEnabled]);
+  const scannerShellTitle = isMoneyOnlyShell
+    ? (headerTitleOverride ?? "ARBITRAGE MONEY")
+    : primaryPanel === "money"
+      ? "ARBITRAGE MONEY"
+      : "ARBITRAGE SCANNER";
+  const headerBadgeValues = isMoneyOnlyShell
+    ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", moneyAutoEnabled ? "AUTO ON" : "AUTO OFF"])
+    : [classLabel, modeLabel, typeLabel];
+  const headerMetaLabel = isMoneyOnlyShell
+    ? (headerMetaLabelOverride ?? `signals ${intn(moneyStats.signals)} | ready ${intn(moneyStats.ready)} | open ${intn(moneyStats.open)}`)
+    : `minRate ${num(minRateLabel, 2)} | minTotal ${intn(minTotalLabel)} | limit ${intn(limitLabel)}`;
+  const activeTabLabel = isMoneyOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "ACTIVE";
+  const episodesTabLabel = isMoneyOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
+  const analyticsTabLabel = isMoneyOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "ANALYTICS";
+  const moneyShellActiveClass = isMoneyOnlyShell || primaryPanel === "money" ? MONEY_FIXED_ACTIVE_SOFT : accent.activeSoft;
+
+  useEffect(() => {
+    if (!isMoneyOnlyShell || !onMoneyShellStatsChange) return;
+    onMoneyShellStatsChange(moneyStats);
+  }, [isMoneyOnlyShell, moneyStats, onMoneyShellStatsChange]);
+
+  useEffect(() => {
+    if (!onSharedRatingRulesChange) return;
+    onSharedRatingRulesChange(ratingRules);
+  }, [onSharedRatingRulesChange, ratingRules]);
+
+  useEffect(() => {
+    if (!routeLocksPrimaryPanel) return;
+    setPrimaryPanel(initialPrimaryPanel);
+  }, [initialPrimaryPanel, routeLocksPrimaryPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      if (routeLocksPrimaryPanel) {
+        url.searchParams.delete("panel");
+      } else if (primaryPanel === "money") {
+        url.searchParams.set("panel", "money");
+      } else {
+        url.searchParams.delete("panel");
+      }
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      // ignore URL sync issues
+    }
+  }, [primaryPanel, routeLocksPrimaryPanel]);
 
   // ========= UI
   return (
@@ -9245,33 +10106,49 @@ export default function ArbitrageScanner() {
             <div className="flex items-center gap-3">
               <span className={clsx("w-2.5 h-2.5 rounded-full border border-white/10", accent.dot, loading && "animate-pulse")} />
               <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                ARBITRAGE SCANNER
+                {scannerShellTitle}
               </h1>
               <div className="flex gap-2 ml-4">
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{classLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{modeLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{typeLabel}</span>
+                {headerBadgeValues.map((value) => (
+                  <span key={value} className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">
+                    {value}
+                  </span>
+                ))}
               </div>
             </div>
             <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
               <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
               <span className="text-zinc-700 mx-1">|</span>
-              <span className="opacity-70">minRate {num(minRateLabel, 2)} | minTotal {intn(minTotalLabel)} | limit {intn(limitLabel)}</span>
+              <span className="opacity-70">{headerMetaLabel}</span>
             </div>
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              <button type="button" disabled className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase border border-transparent text-zinc-600 bg-transparent cursor-not-allowed">
+              <Link
+                href="/money/arbitrage"
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  primaryPanel === "money"
+                    ? MONEY_FIXED_ACTIVE_SOFT
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+                title={primaryPanel === "money" ? "MONEY (current)" : "Open MONEY"}
+              >
                 MONEY
-              </button>
-              <button
-                type="button"
-                className={clsx("px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border", accent.activeSoft)}
-                title="SCANNER (current)"
+              </Link>
+              <Link
+                href="/paper/arbitrage"
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  primaryPanel === "scanner"
+                    ? accent.activeSoft
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+                title={primaryPanel === "scanner" ? "SCANNER (current)" : "Open SCANNER"}
               >
                 SCANNER
-              </button>
+              </Link>
               <Link
                 href="/signals/arbitrage"
                 className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -9288,11 +10165,11 @@ export default function ArbitrageScanner() {
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "active"
-                    ? accent.activeSoft
+                    ? moneyShellActiveClass
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                ACTIVE
+                {activeTabLabel}
               </button>
               <button
                 type="button"
@@ -9300,11 +10177,11 @@ export default function ArbitrageScanner() {
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "episodes"
-                    ? accent.activeSoft
+                    ? moneyShellActiveClass
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                SCOPE
+                {episodesTabLabel}
               </button>
               <button
                 type="button"
@@ -9312,11 +10189,11 @@ export default function ArbitrageScanner() {
                 className={clsx(
                   "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "analytics"
-                    ? accent.activeSoft
+                    ? moneyShellActiveClass
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                ANALYTICS
+                {analyticsTabLabel}
               </button>
             </div>
 
@@ -9964,7 +10841,9 @@ export default function ArbitrageScanner() {
                   type="button"
                   onClick={() => {
                     const nextBand = b.key as PaperArbRatingBand;
-                    setRuleBand(nextBand);
+                    if (controlledSession == null) {
+                      setRuleBand(nextBand);
+                    }
                     setRatingEnabledBands({
                       BLUE: nextBand === "BLUE",
                       ARK: nextBand === "ARK",
@@ -10448,25 +11327,46 @@ export default function ArbitrageScanner() {
               </div>
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {[
-                { key: "Daily", label: "DAILY" },
-                { key: "Trade", label: "TRADE" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => setEquityCurveMode(m.key as "Daily" | "Trade")}
+            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MAXADD</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={9}
+                  step={1}
+                  value={maxAdds}
+                  onChange={(e) => setMaxAdds(normalizeMaxAddsValue(Number(e.target.value)))}
+                  disabled={dilutionMode !== "Diluted"}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    equityCurveMode === m.key
-                      ? accent.activeSoft
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
+                    accent.activeText
                   )}
-                >
-                  {m.label}
-                </button>
-                ))}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v + 1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase max additions"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v - 1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Decrease max additions"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div ref={sessionSelectWrapperRef} className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg", SCANNER_CONTROL_SURFACE)}>
@@ -10477,7 +11377,9 @@ export default function ArbitrageScanner() {
                   const nextSession = e.target.value as PaperArbSession;
                   setSession(nextSession);
                   const band = ratingBandFromSession(nextSession);
-                  setRuleBand(band);
+                  if (controlledSession == null) {
+                    setRuleBand(band);
+                  }
                   setRatingEnabledBands({
                     BLUE: band === "BLUE",
                     ARK: band === "ARK",
@@ -10500,21 +11402,6 @@ export default function ArbitrageScanner() {
                 compact
                 panelAnchorRef={sessionSelectWrapperRef}
                 className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-              />
-            </div>
-
-            <div className="flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">SIDE</span>
-              <GlassSelect
-                value={sideFilter}
-                onChange={(e) => setSideFilter(e.target.value as any)}
-                options={[
-                  { value: "", label: "ANY" },
-                  { value: "Long", label: "LONG" },
-                  { value: "Short", label: "SHORT" },
-                ]}
-                compact
-                className="min-w-[90px] !h-7 !py-0 !px-0 !bg-transparent !border-transparent !focus:border-transparent"
               />
             </div>
 
@@ -10554,6 +11441,115 @@ export default function ArbitrageScanner() {
               </div>
             </div>
 
+            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
+              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={600}
+                  step={1}
+                  value={effectiveMoneyAutomationConfig.queueDelayMinSeconds}
+                  onChange={(e) => {
+                    const nextMin = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
+                    const nextMax = Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds);
+                    onMoneyAutomationConfigChange?.({
+                      queueDelayMinSeconds: nextMin,
+                      queueDelayMaxSeconds: nextMax,
+                    });
+                  }}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMinSeconds + 1)));
+                      const nextMax = Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds);
+                      onMoneyAutomationConfigChange?.({
+                        queueDelayMinSeconds: nextMin,
+                        queueDelayMaxSeconds: nextMax,
+                      });
+                    }}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase delay min seconds"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMinSeconds - 1)));
+                      onMoneyAutomationConfigChange?.({
+                        queueDelayMinSeconds: nextMin,
+                        queueDelayMaxSeconds: Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds),
+                      });
+                    }}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease delay min seconds"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <span className="flex h-7 items-center justify-center text-[10px] font-mono text-zinc-600">-</span>
+              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={600}
+                  step={1}
+                  value={effectiveMoneyAutomationConfig.queueDelayMaxSeconds}
+                  onChange={(e) => {
+                    const nextMax = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
+                    const nextMin = Math.min(effectiveMoneyAutomationConfig.queueDelayMinSeconds, nextMax);
+                    onMoneyAutomationConfigChange?.({
+                      queueDelayMinSeconds: nextMin,
+                      queueDelayMaxSeconds: nextMax,
+                    });
+                  }}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMaxSeconds + 1)));
+                      onMoneyAutomationConfigChange?.({
+                        queueDelayMaxSeconds: nextMax,
+                      });
+                    }}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase delay max seconds"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMaxSeconds - 1)));
+                      const nextMin = Math.min(effectiveMoneyAutomationConfig.queueDelayMinSeconds, nextMax);
+                      onMoneyAutomationConfigChange?.({
+                        queueDelayMinSeconds: nextMin,
+                        queueDelayMaxSeconds: nextMax,
+                      });
+                    }}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease delay max seconds"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+              <span className="flex h-8 items-center pr-3 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
+            </div>
+
             <div className="flex-1" />
 
             {tab === "episodes" && (
@@ -10591,116 +11587,121 @@ export default function ArbitrageScanner() {
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {[
-                  { key: "day", label: "DAY" },
-                  { key: "last", label: "LAST" },
-                  { key: "range", label: "RANGE" },
-                ].map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    onClick={() => {
-                      const wants = m.key as DateMode;
-                      const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearchEffective);
-                      if ((wants === "range" || wants === "last") && !canRange) return;
-                      if (tab === "episodes") {
+            {!isMoneyOnlyShell && (
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                  {[
+                    { key: "day", label: "DAY" },
+                    { key: "last", label: "LAST" },
+                    { key: "range", label: "RANGE" },
+                  ].map((m) => (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => {
+                        const wants = m.key as DateMode;
+                        const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearchEffective);
+                        if ((wants === "range" || wants === "last") && !canRange) return;
+                        if (tab === "episodes") {
+                          if (wants === "day") {
+                            setEpisodesUseSearch(false);
+                            const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
+                            setDateNy(d);
+                            setDateFrom(d);
+                            setDateTo(d);
+                          } else {
+                            setEpisodesUseSearch(true);
+                          }
+                        }
+                        setDateMode(wants);
                         if (wants === "day") {
-                          setEpisodesUseSearch(false);
-                          const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
+                          return;
+                        }
+                        if (wants === "last") {
+                          applyRangePreset(rangePreset);
+                        }
+                      }}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                        dateMode === m.key
+                          ? accent.activeSoft
+                          : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                  {dateMode === "day" ? (
+                    <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
+                      <GlassSelect
+                        value={dateNy}
+                        onChange={(e) => {
+                          const d = e.target.value;
                           setDateNy(d);
                           setDateFrom(d);
                           setDateTo(d);
-                        } else {
-                          setEpisodesUseSearch(true);
-                        }
-                      }
-                      setDateMode(wants);
-                      if (wants === "day") {
-                        return;
-                      }
-                      if (wants === "last") {
-                        applyRangePreset(rangePreset);
-                      }
-                    }}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      dateMode === m.key
-                        ? accent.activeSoft
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {dateMode === "day" ? (
-                  <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
-                    <GlassSelect
-                      value={dateNy}
-                      onChange={(e) => {
-                        const d = e.target.value;
-                        setDateNy(d);
-                        setDateFrom(d);
-                        setDateTo(d);
-                      }}
-                      options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
-                      className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
-                      panelAnchorRef={daySelectWrapperRef}
-                    />
-                  </div>
-                ) : dateMode === "last" ? (
-                  <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
-                    <GlassSelect
-                      value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
-                      options={[
-                        { value: "3d", label: "3 DAYS" },
-                        { value: "5d", label: "5 DAYS" },
-                        { value: "10d", label: "10 DAYS" },
-                        { value: "15d", label: "15 DAYS" },
-                        { value: "20d", label: "20 DAYS" },
-                        { value: "30d", label: "30 DAYS" },
-                      ]}
-                      className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
-                      panelAnchorRef={rangePresetWrapperRef}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <div ref={dateFromSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
-                      <GlassSelect
-                        value={dateFrom}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateFrom(v);
-                          if (toYmd(dateTo) && v > dateTo) setDateTo(v);
                         }}
-                        options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
-                        className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
-                        panelAnchorRef={dateFromSelectWrapperRef}
+                        options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
+                        className="!inline-flex !w-[112px] !min-w-[112px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                        panelWidth={112}
+                        panelAnchorRef={daySelectWrapperRef}
                       />
                     </div>
-                    <div ref={dateToSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
+                  ) : dateMode === "last" ? (
+                    <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
-                        value={dateTo}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateTo(v);
-                          if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
-                        }}
-                        options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                        value={rangePreset}
+                        onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
+                        options={[
+                          { value: "3d", label: "3 DAYS" },
+                          { value: "5d", label: "5 DAYS" },
+                          { value: "10d", label: "10 DAYS" },
+                          { value: "15d", label: "15 DAYS" },
+                          { value: "20d", label: "20 DAYS" },
+                          { value: "30d", label: "30 DAYS" },
+                        ]}
                         className="!inline-flex !w-auto min-w-0 !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
-                        panelAnchorRef={dateToSelectWrapperRef}
+                        panelAnchorRef={rangePresetWrapperRef}
                       />
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <div ref={dateFromSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
+                        <GlassSelect
+                          value={dateFrom}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setDateFrom(v);
+                            if (toYmd(dateTo) && v > dateTo) setDateTo(v);
+                          }}
+                          options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
+                          className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                          panelWidth={124}
+                          panelAnchorRef={dateFromSelectWrapperRef}
+                        />
+                      </div>
+                      <div ref={dateToSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
+                        <GlassSelect
+                          value={dateTo}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setDateTo(v);
+                            if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
+                          }}
+                          options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                          className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
+                          panelWidth={124}
+                          panelAnchorRef={dateToSelectWrapperRef}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </GlassCard>
 
@@ -10716,10 +11717,10 @@ export default function ArbitrageScanner() {
               {[
                 {
                   label: "Div",
-                  disabled: true,
-                  title: "Not available in paper arbitrage API",
-                  active: false,
-                  onClick: () => undefined,
+                  disabled: false,
+                  title: "Exclude dividend=true",
+                  active: excludeDividend,
+                  onClick: () => setExcludeDividend((v) => !v),
                 },
                 {
                   label: "News",
@@ -10823,6 +11824,87 @@ export default function ArbitrageScanner() {
                   {b.label}
                 </button>
               ))}
+            </div>
+
+            <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
+              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
+                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">COUNTRY</span>
+                {moneyCountryCount > 0 ? (
+                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                    {moneyCountryCount}
+                  </span>
+                ) : null}
+                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
+                <GlassSelect
+                  value={moneyCountryValue}
+                  onChange={(e) => setCountriesText(e.target.value)}
+                  options={[
+                    { value: "", label: "-" },
+                    ...(moneyCountryValue && !moneyCountries.includes(moneyCountryValue)
+                      ? [{ value: moneyCountryValue, label: moneyCountryValue }]
+                      : []),
+                    ...moneyCountries.map((value) => ({ value, label: value })),
+                  ]}
+                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
+                />
+              </div>
+              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
+                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">EXCHANGE</span>
+                {moneyExchangeCount > 0 ? (
+                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                    {moneyExchangeCount}
+                  </span>
+                ) : null}
+                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
+                <GlassSelect
+                  value={moneyExchangeValue}
+                  onChange={(e) => setExchangesText(e.target.value)}
+                  options={[
+                    { value: "", label: "-" },
+                    ...(moneyExchangeValue && !moneyExchanges.includes(moneyExchangeValue)
+                      ? [{ value: moneyExchangeValue, label: moneyExchangeValue }]
+                      : []),
+                    ...moneyExchanges.map((value) => ({ value, label: value })),
+                  ]}
+                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
+                />
+              </div>
+              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
+                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">SECTOR</span>
+                {moneySectorCount > 0 ? (
+                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                    {moneySectorCount}
+                  </span>
+                ) : null}
+                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
+                <GlassSelect
+                  value={moneySectorValue}
+                  onChange={(e) => setSectorsL3Text(e.target.value)}
+                  options={[
+                    { value: "", label: "-" },
+                    ...(moneySectorValue && !moneySectors.includes(moneySectorValue)
+                      ? [{ value: moneySectorValue, label: moneySectorValue }]
+                      : []),
+                    ...moneySectors.map((value) => ({ value, label: value })),
+                  ]}
+                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
+                />
+              </div>
+            </div>
+
+            <div className="inline-flex items-center gap-1 rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-1.5">
+              <div className="relative flex h-7 items-center rounded-full border border-sky-400/25 bg-[#0a1520]/85">
+                <GlassSelect
+                  value={moneySortKey}
+                  onChange={(e) => setMoneySortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
+                  options={[
+                    { value: "alpha", label: "ABC" },
+                    { value: "sigma", label: "SIG" },
+                    { value: "netEdge", label: "EDGE" },
+                  ]}
+                  className="!h-7 !min-w-[74px] !w-[74px] !py-0 !px-2 !bg-transparent !border-0 !focus:border-0 text-right rounded-full"
+                />
+              </div>
             </div>
 
             <div className="ml-auto inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-1.5">
@@ -11000,14 +12082,112 @@ export default function ArbitrageScanner() {
           </div>
         )}
 
-        <div className="flex items-center justify-end">
-          <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-            {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
-          </div>
+        <div className="flex items-center justify-end gap-2">
+          {primaryPanel === "money" ? (
+            moneyAutomationLaunchEnabled ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void captureMoneyWindowsFromHeader()}
+                  disabled={moneyWindowCaptureBusy}
+                  className={clsx(
+                    SCANNER_EYE_BUTTON,
+                    moneyWindowCaptureBusy && "cursor-not-allowed opacity-60"
+                  )}
+                  title={
+                    moneyWindowCaptureBusy
+                      ? (moneyWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
+                      : (moneyWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
+                  }
+                  aria-label={
+                    moneyWindowCaptureBusy
+                      ? (moneyWindowsBound ? "Disconnecting windows" : "Capturing windows")
+                      : (moneyWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
+                  }
+                >
+                  <CrosshairIcon
+                    className={clsx(
+                      "transition-colors",
+                      !moneyWindowsBound && "text-zinc-300 group-hover:text-white"
+                    )}
+                    style={moneyWindowsBound ? { color: MONEY_FIXED_ICON_GREEN } : undefined}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMoneyAutoStartLocked((prev) => !prev)}
+                  className={SCANNER_EYE_BUTTON}
+                  title={moneyAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
+                  aria-label={moneyAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
+                >
+                  <LockToggleIcon
+                    open={moneyAutoStartLocked}
+                    className="text-zinc-300 group-hover:text-white transition-colors"
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void toggleMoneyAutomationRunFromHeader()}
+                  disabled={moneyAutoStartLocked && !moneyAutomationRunning}
+                  className={clsx(
+                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                    moneyAutomationRunning
+                      ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                      : MONEY_FIXED_ACTIVE_SOFT,
+                    moneyAutoStartLocked && !moneyAutomationRunning && "cursor-not-allowed opacity-40"
+                  )}
+                >
+                  {moneyAutomationRunning ? "STOP AUTO" : moneyAutoStartLocked ? "START LOCKED" : "START AUTO"}
+                </button>
+              </>
+            ) : (
+              <span className="inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500">
+                AUTO LOCKED
+              </span>
+            )
+          ) : (
+            <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
+              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
+            </div>
+          )}
         </div>
 
         {/* CONTENT */}
-        {tab === "active" && (
+        {primaryPanel === "money" && (
+          <ArbitrageMoneyView
+            tab={tab}
+            moneySignalsCount={moneySignals.length}
+            moneyDecisions={sortedMoneyDecisions}
+            moneyPositions={moneyPositions}
+            moneyOrderIntents={moneyOrderIntents}
+            moneyAutoEnabled={moneyAutoEnabled}
+            onSetAutoEnabled={setMoneyAutoEnabled}
+            executionSnapshot={moneyExecutionSnapshot}
+            bookSnapshot={moneyBookSnapshot}
+            mainWindowSnapshot={moneyMainWindowSnapshot}
+            manualExecutionBusy={moneyManualExecutionBusy}
+            onSubmitManualOrders={submitManualMoneyOrders}
+            onCaptureTickerPoint={captureMoneyTickerPoint}
+            onCaptureTickerPointDelayed={captureMoneyTickerPointDelayed}
+            onClearTickerPoint={clearMoneyTickerPoint}
+            onTogglePanicOff={toggleMoneyPanicOff}
+            onClearExecutionQueue={clearMoneyExecutionQueue}
+            onResetAutomationState={resetMoneyAutomationState}
+            onForceRefresh={refreshMoneySignals}
+            updatedLabel={updatedLabel ?? null}
+            listModeLabel={listMode.toUpperCase()}
+            automationConfig={effectiveMoneyAutomationConfig}
+            onAutomationConfigChange={(patch) => onMoneyAutomationConfigChange?.(patch)}
+            accentActiveSoftClass={MONEY_FIXED_ACTIVE_SOFT}
+            accentActiveTextClass={MONEY_FIXED_ACTIVE_TEXT}
+            viewMode={moneyViewModeOverride ?? "money"}
+            automationLaunchEnabled={moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab"}
+            entryCutoffActive={moneySignalClass === "ark"}
+            hideAutomationButtons
+          />
+        )}
+
+        {primaryPanel === "scanner" && tab === "active" && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
@@ -11171,7 +12351,7 @@ export default function ArbitrageScanner() {
                         Time
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Abs
+                        Metric
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Legs
@@ -11181,9 +12361,9 @@ export default function ArbitrageScanner() {
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>CurrentTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>StartAbs{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>PeakAbs{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>CurrentAbs{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>Current{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
@@ -11194,6 +12374,7 @@ export default function ArbitrageScanner() {
                       const pnl = r.totalPnlUsd ?? 0;
                       const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
                       const benchAmountUsd =
+                        pnlMode === "Hedged" &&
                         Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
                           ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
                           : null;
@@ -11250,10 +12431,9 @@ export default function ArbitrageScanner() {
                             {minuteIdxToClockLabel(r.endMinuteIdx)}
                           </td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetricAbs ?? null, 3)}</td>
-
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums border-l border-white/10",
@@ -11328,7 +12508,7 @@ export default function ArbitrageScanner() {
           </div>
         )}
 
-        {tab === "episodes" && (
+        {primaryPanel === "scanner" && tab === "episodes" && (
           <div className="space-y-3">
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -12932,7 +14112,7 @@ export default function ArbitrageScanner() {
           </div>
         )}
 
-        {tab === "analytics" && (
+        {primaryPanel === "scanner" && tab === "analytics" && (
           <div className="space-y-3">
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -13063,7 +14243,7 @@ export default function ArbitrageScanner() {
                         Time
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Abs
+                        Metric
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Legs
@@ -13073,9 +14253,9 @@ export default function ArbitrageScanner() {
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>EndTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>StartAbs{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>PeakAbs{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>EndAbs{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
@@ -13086,6 +14266,7 @@ export default function ArbitrageScanner() {
                       const pnl = r.totalPnlUsd ?? 0;
                       const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
                       const benchAmountUsd =
+                        pnlMode === "Hedged" &&
                         Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
                           ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
                           : null;
@@ -13142,10 +14323,9 @@ export default function ArbitrageScanner() {
                             {minuteIdxToClockLabel(r.endMinuteIdx)}
                           </td>
 
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetricAbs ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetricAbs ?? null, 3)}</td>
-
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
                           <td
                             className={clsx(
                               "p-2.5 text-right tabular-nums border-l border-white/10",

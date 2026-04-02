@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 // ВАЖЛИВО: працюємо у nodejs runtime, не Edge
-export const config = { api: { bodyParser: false, externalResolver: true }, runtime: "nodejs" } as any;
+export const config = {
+  api: { bodyParser: false, externalResolver: true },
+  runtime: "nodejs",
+};
 
 function toItemsReddit(xml: string) {
   // дуже простий XML-парс без залежностей

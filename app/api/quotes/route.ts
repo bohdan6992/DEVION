@@ -183,7 +183,7 @@ async function runOnce(req: Request) {
     "META,AAPL,AMZN,NFLX,PLTR,AMD,QQQ,SPY,SMH,IBIT,XLF,KRE,XLE,IWM,KWEB,ETHA";
   const fields =
     url.searchParams.get("fields") ||
-    "Bid,Ask,Spread,BidSize,AskSize,VWAP,Exchange,ADV90,ATR14,ImbExch,ImbARCA,LstCls,TOpen";
+    "Bid,Ask,Spread,BidSize,AskSize,VWAP,Exchange,ADV90,ATR14,ImbExch,ImbARCA,LstCls,TOpen,PreMhVolNF,VolNFFromLstCls";
   const timeout = url.searchParams.get("timeout") || "10";
 
   const args = [PROGID, tickers, fields, timeout];

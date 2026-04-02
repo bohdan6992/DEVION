@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "node scripts/dev-stable.mjs",
+    "dev:raw": "next dev",
+    "clean": "node scripts/clean-cache.mjs",
+    "build": "node scripts/build-stable.mjs",
     "start": "next start",
     "lint": "next lint"
   },

@@ -2,6 +2,38 @@ import type { ArbitrageFilterConfigV1, MinMax, ReportMode, ZapMode } from "@/lib
 
 type AnyRow = Record<string, any>;
 
+const BOUND_ALIASES: Partial<Record<string, string[]>> = {
+  ADV20: ["ADV20", "adv20", "Adv20"],
+  ADV20NF: ["ADV20NF", "adv20NF", "Adv20NF"],
+  ADV90: ["ADV90", "adv90", "Adv90", "avg90", "Avg90"],
+  ADV90NF: ["ADV90NF", "adv90NF", "Adv90NF"],
+  AvPreMhv: ["AvPreMhv", "avPreMhv", "AvPreMh", "avPreMh", "avPreMhv"],
+  RoundLot: ["RoundLot", "roundLot"],
+  VWAP: ["VWAP", "vwap"],
+  Spread: ["Spread", "spread"],
+  LstPrcL: ["LstPrcL", "lstPrcL", "LastPriceL", "lastPriceL", "LstPrc", "lstPrc"],
+  LstCls: ["LstCls", "lstCls", "LastClose", "lastClose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "Close", "close"],
+  YCls: ["YCls", "yCls", "YClose", "yClose"],
+  TCls: ["TCls", "tCls", "TClose", "tClose"],
+  ClsToClsPct: ["ClsToClsPct", "clsToClsPct", "ClsToCls%", "clsToCls%", "ClsToClsPcnt", "clsToClsPcnt"],
+  Lo: ["Lo", "lo", "Low", "low"],
+  LstClsNewsCnt: ["LstClsNewsCnt", "lstClsNewsCnt", "LstClsNewsCount", "lstClsNewsCount"],
+  MarketCapM: ["MarketCapM", "marketCapM", "market_cap_m", "market_cap", "MarketCap"],
+  PreMhVolNF: ["PreMhVolNF", "preMhVolNF", "PreMktVolNF", "preMktVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"],
+  VolNFfromLstCls: ["VolNFfromLstCls", "volNFfromLstCls", "VolNFFromLstCls", "volNFFromLstCls", "volnffromlstcls", "vol_nf_from_lst_cls"],
+  AvPostMhVol90NF: ["AvPostMhVol90NF", "avPostMhVol90NF"],
+  AvPreMhVol90NF: ["AvPreMhVol90NF", "avPreMhVol90NF", "avpremhvol90nf", "av_pre_mh_vol_90_nf"],
+  AvPreMhValue20NF: ["AvPreMhValue20NF", "avPreMhValue20NF", "avpremhvalue20nf", "av_pre_mh_value_20_nf"],
+  AvPreMhValue90NF: ["AvPreMhValue90NF", "avPreMhValue90NF", "avpremhvalue90nf", "av_pre_mh_value_90_nf"],
+  AvgDailyValue20: ["AvgDailyValue20", "avgDailyValue20", "avgdailyvalue20", "avg_daily_value_20"],
+  AvgDailyValue90: ["AvgDailyValue90", "avgDailyValue90", "avgdailyvalue90", "avg_daily_value_90"],
+  Volatility20: ["Volatility20", "volatility20", "volatility_20", "Volatility20%", "volatility20%", "Volatility20Pct", "volatility20Pct", "volatility20pct"],
+  Volatility90: ["Volatility90", "volatility90", "volatility_90", "Volatility90%", "volatility90%", "Volatility90Pct", "volatility90Pct", "volatility90pct"],
+  PreMhMDV20NF: ["PreMhMDV20NF", "preMhMDV20NF", "premhmdv20nf", "pre_mh_mdv_20_nf", "PreMktMDV20NF", "preMktMDV20NF"],
+  PreMhMDV90NF: ["PreMhMDV90NF", "preMhMDV90NF", "premhmdv90nf", "pre_mh_mdv_90_nf", "PreMktMDV90NF", "preMktMDV90NF"],
+  VolRel: ["VolRel", "volRel", "vol_rel"],
+};
+
 function normUpperList(xs?: string[]): string[] {
   if (!xs) return [];
   return xs.map(s => (s ?? "").trim().toUpperCase()).filter(Boolean);
@@ -30,6 +62,16 @@ function includesNeedle(hay: string | undefined | null, needle: string | undefin
   if (!n) return true;
   const h = (hay ?? "").toLowerCase();
   return h.includes(n);
+}
+
+function getBoundValue(row: AnyRow, key: string): any {
+  const aliases = BOUND_ALIASES[key];
+  if (!aliases || aliases.length === 0) return row[key];
+  for (const alias of aliases) {
+    const value = row[alias];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return row[key];
 }
 
 /**
@@ -149,7 +191,7 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
 
     // numeric bounds
     for (const [k, mm] of Object.entries(bounds)) {
-      const v = (r as any)[k];
+      const v = getBoundValue(r, k);
       if (!passMinMax(v, mm as MinMax)) return false;
     }
 

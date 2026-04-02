@@ -1,0 +1,1 @@
+ticker,fetch_date,expiration,days_to_exp,opt_type,strike,strike_pct_otm,current_price,lastPrice,bid,ask,volume,openInterest,impliedVolatility,inTheMoney,contractSymbol,vol_oi_ratio,volume_zscore,total_premium_usd,iv_percentile,anomaly_score,flags

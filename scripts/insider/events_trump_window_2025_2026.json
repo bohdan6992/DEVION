@@ -1,0 +1,15 @@
+{
+  "exactEvents": [
+    ["2025-01-23", "Trump signs crypto executive order", "+5-15% broad", "UP"],
+    ["2025-02-03", "Tariffs on Mexico/Canada/China", "-8% BTC, -15% ETH", "DOWN"],
+    ["2025-03-06", "Strategic Bitcoin Reserve EO", "-6% BTC, -8% XRP", "DOWN"],
+    ["2025-04-02", "Liberation Day tariffs", "-15% BTC", "DOWN"],
+    ["2025-04-09", "Trump pauses tariffs for 90 days", "+5-10% in one hour", "UP"],
+    ["2025-06-17", "US Senate passes GENIUS Act", "+10-30% stablecoin tokens", "UP"],
+    ["2025-10-10", "100% China tariffs + crypto crash", "-20% BTC, -25% ETH", "DOWN"],
+    ["2026-03-25", "Iran may seek peace with Israel", "+3% BTC, risk-on", "UP"]
+  ],
+  "skippedEvents": [
+    ["2025-10", "BTC ATH $126,000", "Month-only date in source list"]
+  ]
+}
