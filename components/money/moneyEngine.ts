@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
+import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyExactSonarClientFilters, buildSignalsUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 
 export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
@@ -1004,6 +1005,7 @@ type TradingAppBoundWindowResponse = {
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const tradingAppBridgeUrl = (path: string) => bridgeUrl(`/api/execution/tradingapp${path.startsWith("/") ? path : `/${path}`}`);
 
 export function useMoneyEngine({
   enabled,
@@ -1026,7 +1028,7 @@ export function useMoneyEngine({
   onUpdated,
   onError,
 }: UseMoneyEngineArgs) {
-  const BOOK_REFRESH_INTERVAL_MS = 12000;
+  const BOOK_REFRESH_INTERVAL_MS = 2500;
   const AUTO_DISPATCH_COOLDOWN_MS = 15000;
   const SIGNAL_SURGE_GUARD_MIN_COUNT = 24;
   const SIGNAL_SURGE_GUARD_MULTIPLIER = 3;
@@ -1065,7 +1067,7 @@ export function useMoneyEngine({
 
   const refreshExecutionStatus = useCallback(async (): Promise<TradingAppExecutionSnapshot | null> => {
     try {
-      const response = await fetch("http://localhost:5197/api/execution/tradingapp/status", { cache: "no-store" });
+      const response = await fetch(tradingAppBridgeUrl("/status"), { cache: "no-store" });
       if (!response.ok) return null;
       const json = await response.json();
       const snapshot = json as TradingAppExecutionSnapshot;
@@ -1091,7 +1093,7 @@ export function useMoneyEngine({
 
     try {
       bookRefreshInFlightRef.current = true;
-      const response = await fetch("http://localhost:5197/api/execution/tradingapp/book", { cache: "no-store" });
+      const response = await fetch(tradingAppBridgeUrl("/book"), { cache: "no-store" });
       const json = await response.json().catch(() => ({} as TradingAppBookResponse));
       if (!response.ok || json?.ok === false || !json?.snapshot) return null;
       const sanitized = sanitizeBookSnapshot(json.snapshot);
@@ -1120,7 +1122,7 @@ export function useMoneyEngine({
 
     try {
       mainWindowRefreshInFlightRef.current = true;
-      const response = await fetch("http://localhost:5197/api/execution/tradingapp/main-window-data", { cache: "no-store" });
+      const response = await fetch(tradingAppBridgeUrl("/main-window-data"), { cache: "no-store" });
       const json = await response.json().catch(() => ({} as TradingAppMainWindowResponse));
       if (!response.ok || json?.ok === false || !json?.snapshot) return null;
       const sanitized = sanitizeMainWindowSnapshot(json.snapshot);
@@ -1135,7 +1137,7 @@ export function useMoneyEngine({
   }, [moneyExecutionSnapshot?.mainWindow?.isBound, moneyMainWindowSnapshot]);
 
   const bindMoneyActiveWindow = useCallback(async () => {
-    const response = await fetch("http://localhost:5197/api/execution/tradingapp/bind-active-window", {
+    const response = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1147,7 +1149,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const bindMoneyWindows = useCallback(async () => {
-    const activeResponse = await fetch("http://localhost:5197/api/execution/tradingapp/bind-active-window", {
+    const activeResponse = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1156,7 +1158,7 @@ export function useMoneyEngine({
       throw new Error(activeJson?.error || `Failed to bind Market Maker window (${activeResponse.status})`);
     }
 
-    const mainResponse = await fetch("http://localhost:5197/api/execution/tradingapp/bind-main-window", {
+    const mainResponse = await fetch(tradingAppBridgeUrl("/bind-main-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1191,7 +1193,7 @@ export function useMoneyEngine({
   }, [refreshBookSnapshot, refreshExecutionStatus, refreshMainWindowSnapshot]);
 
   const bindMoneyActiveWindowDelayed = useCallback(async (delayMs = 3000) => {
-    const response = await fetch(`http://localhost:5197/api/execution/tradingapp/bind-active-window-delayed?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
+    const response = await fetch(`${tradingAppBridgeUrl("/bind-active-window-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1203,7 +1205,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const clearMoneyBoundWindow = useCallback(async () => {
-    const response = await fetch("http://localhost:5197/api/execution/tradingapp/bound-window", {
+    const response = await fetch(tradingAppBridgeUrl("/bound-window"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -1219,7 +1221,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const captureMoneyTickerPoint = useCallback(async () => {
-    const response = await fetch("http://localhost:5197/api/execution/tradingapp/capture-ticker-point", {
+    const response = await fetch(tradingAppBridgeUrl("/capture-ticker-point"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1231,7 +1233,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const captureMoneyTickerPointDelayed = useCallback(async (delayMs = 3000) => {
-    const response = await fetch(`http://localhost:5197/api/execution/tradingapp/capture-ticker-point-delayed?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
+    const response = await fetch(`${tradingAppBridgeUrl("/capture-ticker-point-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1243,7 +1245,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const clearMoneyTickerPoint = useCallback(async () => {
-    const response = await fetch("http://localhost:5197/api/execution/tradingapp/ticker-point", {
+    const response = await fetch(tradingAppBridgeUrl("/ticker-point"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -1255,7 +1257,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const toggleMoneyPanicOff = useCallback(async (enabled: boolean) => {
-    const response = await fetch(`http://localhost:5197/api/execution/tradingapp/panic-off?enabled=${enabled ? "true" : "false"}`, {
+    const response = await fetch(`${tradingAppBridgeUrl("/panic-off")}?enabled=${enabled ? "true" : "false"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -1267,7 +1269,7 @@ export function useMoneyEngine({
   }, [refreshExecutionStatus]);
 
   const clearMoneyExecutionQueue = useCallback(async () => {
-    const response = await fetch("http://localhost:5197/api/execution/tradingapp/queue", {
+    const response = await fetch(tradingAppBridgeUrl("/queue"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -1306,7 +1308,7 @@ export function useMoneyEngine({
     setMoneyManualExecutionBusy(true);
     try {
       for (const ticker of tickers) {
-        const response = await fetch("http://localhost:5197/api/execution/tradingapp/queue", {
+        const response = await fetch(tradingAppBridgeUrl("/queue"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1623,7 +1625,7 @@ export function useMoneyEngine({
           type: string;
           note: string;
         }) => {
-          const response = await fetch("http://localhost:5197/api/execution/tradingapp/queue", {
+          const response = await fetch(tradingAppBridgeUrl("/queue"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
