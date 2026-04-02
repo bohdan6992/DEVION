@@ -1005,6 +1005,8 @@ type TradingAppBoundWindowResponse = {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
+const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
+const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -1024,9 +1026,9 @@ function getTradingAppBridgeBaseUrl(): string {
   if (typeof window !== "undefined") {
     try {
       const currentUrl = new URL(window.location.href);
-      const fromQuery = sanitizeTradingAppBridgeBase(currentUrl.searchParams.get("bridge"));
+      const fromQuery = sanitizeTradingAppBridgeBase(currentUrl.searchParams.get(TRADING_APP_BRIDGE_QUERY_KEY));
       if (fromQuery) {
-        window.localStorage.setItem("bridgeApiBase", fromQuery);
+        window.localStorage.setItem(TRADING_APP_BRIDGE_STORAGE_KEY, fromQuery);
         return fromQuery;
       }
     } catch {
@@ -1034,7 +1036,7 @@ function getTradingAppBridgeBaseUrl(): string {
     }
 
     try {
-      const fromStorage = sanitizeTradingAppBridgeBase(window.localStorage.getItem("bridgeApiBase"));
+      const fromStorage = sanitizeTradingAppBridgeBase(window.localStorage.getItem(TRADING_APP_BRIDGE_STORAGE_KEY));
       if (fromStorage) {
         return fromStorage;
       }
