@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyExactSonarClientFilters, buildSignalsUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 
 export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
@@ -1005,7 +1004,61 @@ type TradingAppBoundWindowResponse = {
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const tradingAppBridgeUrl = (path: string) => bridgeUrl(`/api/execution/tradingapp${path.startsWith("/") ? path : `/${path}`}`);
+const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
+
+function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
+  const raw = (x ?? "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw.replace(/\/+$/, ""));
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function getTradingAppBridgeBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const currentUrl = new URL(window.location.href);
+      const fromQuery = sanitizeTradingAppBridgeBase(currentUrl.searchParams.get("bridge"));
+      if (fromQuery) {
+        window.localStorage.setItem("bridgeApiBase", fromQuery);
+        return fromQuery;
+      }
+    } catch {
+      // ignore query parsing issues
+    }
+
+    try {
+      const fromStorage = sanitizeTradingAppBridgeBase(window.localStorage.getItem("bridgeApiBase"));
+      if (fromStorage) {
+        return fromStorage;
+      }
+    } catch {
+      // ignore storage issues
+    }
+
+    return DEFAULT_LOCAL_TRADING_APP_BRIDGE;
+  }
+
+  return (
+    sanitizeTradingAppBridgeBase(process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL) ||
+    sanitizeTradingAppBridgeBase(process.env.NEXT_PUBLIC_BRIDGE_API) ||
+    ""
+  );
+}
+
+const tradingAppBridgeUrl = (path: string) => {
+  const base = getTradingAppBridgeBaseUrl();
+  if (!base) {
+    throw new Error("TradingApp bridge base URL is empty. Use client-side fetch or set NEXT_PUBLIC_TRADING_BRIDGE_URL.");
+  }
+  return `${base}/api/execution/tradingapp${path.startsWith("/") ? path : `/${path}`}`;
+};
 
 export function useMoneyEngine({
   enabled,
