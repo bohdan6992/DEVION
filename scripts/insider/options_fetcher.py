@@ -4,6 +4,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import requests
+
 try:
     import yfinance as yf
 except Exception:
@@ -27,6 +29,10 @@ DEFAULT_TICKERS = [
 ]
 
 OUTPUT_RAW = "options_raw.csv"
+UW_BASE_URL = "https://api.unusualwhales.com/api/option-trade/flow-alerts"
+DEFAULT_UW_MIN_PREMIUM = 50_000
+DEFAULT_UW_MAX_DTE = 45
+DEFAULT_UW_LIMIT = 100
 
 
 def get_output_dir() -> str:
@@ -49,6 +55,102 @@ def get_expiry_limit() -> int:
         return max(1, min(4, int(os.environ.get("INSIDER_EXPIRIES", "2"))))
     except ValueError:
         return 2
+
+
+def get_source() -> str:
+    source = os.environ.get("INSIDER_OPTIONS_SOURCE", "auto").strip().lower()
+    if source in {"uw", "unusual_whales"}:
+        return "unusual_whales"
+    if source == "yfinance":
+        return "yfinance"
+    return "auto"
+
+
+def get_unusual_whales_api_key() -> str:
+    return (
+        os.environ.get("UNUSUAL_WHALES_API_KEY", "").strip()
+        or os.environ.get("UW_API_KEY", "").strip()
+    )
+
+
+def env_bool(name: str, default: bool | None = None) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def get_uw_issue_types():
+    raw = os.environ.get("UW_ISSUE_TYPES", "Common Stock,ETF")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def get_uw_limit() -> int:
+    try:
+        return max(1, min(200, int(os.environ.get("UW_LIMIT", str(DEFAULT_UW_LIMIT)))))
+    except ValueError:
+        return DEFAULT_UW_LIMIT
+
+
+def get_uw_min_premium() -> int:
+    try:
+        return max(0, int(float(os.environ.get("UW_MIN_PREMIUM", str(DEFAULT_UW_MIN_PREMIUM)))))
+    except ValueError:
+        return DEFAULT_UW_MIN_PREMIUM
+
+
+def get_uw_max_dte() -> int:
+    try:
+        return max(0, int(float(os.environ.get("UW_MAX_DTE", str(DEFAULT_UW_MAX_DTE)))))
+    except ValueError:
+        return DEFAULT_UW_MAX_DTE
+
+
+def build_uw_query(ticker: str):
+    params = [
+        ("ticker_symbol", ticker),
+        ("limit", str(get_uw_limit())),
+        ("min_premium", str(get_uw_min_premium())),
+        ("max_dte", str(get_uw_max_dte())),
+    ]
+
+    for issue_type in get_uw_issue_types():
+        params.append(("issue_types[]", issue_type))
+
+    bool_filters = {
+        "all_opening": env_bool("UW_ALL_OPENING", True),
+        "is_otm": env_bool("UW_IS_OTM", True),
+        "vol_greater_oi": env_bool("UW_VOL_GREATER_OI", True),
+        "size_greater_oi": env_bool("UW_SIZE_GREATER_OI", None),
+        "is_multi_leg": env_bool("UW_IS_MULTI_LEG", False),
+        "is_sweep": env_bool("UW_IS_SWEEP", None),
+        "is_call": env_bool("UW_IS_CALL", None),
+        "is_put": env_bool("UW_IS_PUT", None),
+        "is_ask_side": env_bool("UW_IS_ASK_SIDE", None),
+        "is_bid_side": env_bool("UW_IS_BID_SIDE", None),
+    }
+    for key, value in bool_filters.items():
+        if value is not None:
+            params.append((key, "true" if value else "false"))
+
+    optional_numeric_filters = {
+        "min_volume_oi_ratio": os.environ.get("UW_MIN_VOLUME_OI_RATIO", "").strip(),
+        "min_dte": os.environ.get("UW_MIN_DTE", "").strip(),
+        "min_size": os.environ.get("UW_MIN_SIZE", "").strip(),
+        "min_volume": os.environ.get("UW_MIN_VOLUME", "").strip(),
+        "max_spread": os.environ.get("UW_MAX_SPREAD", "").strip(),
+        "min_ask_perc": os.environ.get("UW_MIN_ASK_PERC", "").strip(),
+    }
+    for key, value in optional_numeric_filters.items():
+        if value:
+            params.append((key, value))
+
+    return params
 
 
 def option_chain_for_ticker(ticker: str, expiry_limit: int):
@@ -94,6 +196,20 @@ def safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def parse_iso_date(value: str | None):
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def map_contract_row(
@@ -142,7 +258,109 @@ def map_contract_row(
     }
 
 
+def map_uw_flow_alert(item: dict):
+    ticker = str(item.get("ticker") or "").upper().strip()
+    opt_type = str(item.get("type") or "").lower().strip()
+    if not ticker or opt_type not in {"call", "put"}:
+        return None
+
+    underlying_price = safe_float(item.get("underlying_price"))
+    strike = safe_float(item.get("strike"))
+    if underlying_price <= 0 or strike <= 0:
+        return None
+
+    if opt_type == "call":
+        strike_pct_otm = ((strike / underlying_price) - 1.0) * 100.0
+    else:
+        strike_pct_otm = ((underlying_price / strike) - 1.0) * 100.0
+
+    created_at = str(item.get("created_at") or datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    expiry = str(item.get("expiry") or "")
+
+    days_to_exp = 0
+    expiry_dt = parse_iso_date(expiry)
+    if expiry_dt is not None:
+        if expiry_dt.tzinfo is None:
+            expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+        days_to_exp = max(0, int((expiry_dt - datetime.now(timezone.utc)).days))
+
+    return {
+        "ticker": ticker,
+        "fetch_date": created_at,
+        "expiration": expiry,
+        "days_to_exp": days_to_exp,
+        "opt_type": opt_type,
+        "strike": round(strike, 4),
+        "strike_pct_otm": round(strike_pct_otm, 4),
+        "current_price": round(underlying_price, 4),
+        "lastPrice": round(safe_float(item.get("price")), 4),
+        "bid": 0.0,
+        "ask": 0.0,
+        "volume": safe_int(item.get("volume"), safe_int(item.get("total_size"))),
+        "openInterest": safe_int(item.get("open_interest")),
+        "impliedVolatility": 0.0,
+        "inTheMoney": strike_pct_otm <= 0,
+        "contractSymbol": str(item.get("option_chain") or ""),
+        "source_total_premium": round(safe_float(item.get("total_premium")), 2),
+        "source_volume_oi_ratio": round(safe_float(item.get("volume_oi_ratio")), 4),
+        "source_total_ask_side_prem": round(safe_float(item.get("total_ask_side_prem")), 2),
+        "source_total_bid_side_prem": round(safe_float(item.get("total_bid_side_prem")), 2),
+        "source_trade_count": safe_int(item.get("trade_count")),
+        "source_alert_rule": str(item.get("alert_rule") or ""),
+        "source_has_sweep": bool(item.get("has_sweep")),
+        "source_has_multileg": bool(item.get("has_multileg")),
+        "source_all_opening": bool(item.get("all_opening_trades")),
+        "data_source": "unusual_whales",
+    }
+
+
+def collect_rows_unusual_whales():
+    api_key = get_unusual_whales_api_key()
+    if not api_key:
+        raise RuntimeError("Missing UNUSUAL_WHALES_API_KEY or UW_API_KEY")
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "CenturiON-options-fetcher/1.0",
+        }
+    )
+
+    rows = []
+    for ticker in get_tickers():
+        try:
+            response = session.get(UW_BASE_URL, params=build_uw_query(ticker), timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            print(f"[options_fetcher] Failed UW flow for {ticker}: {exc}", file=sys.stderr)
+            continue
+
+        items = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            print(f"[options_fetcher] Unexpected UW response for {ticker}", file=sys.stderr)
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            row = map_uw_flow_alert(item)
+            if row is not None:
+                rows.append(row)
+
+        time.sleep(0.2)
+
+    return rows
+
+
 def collect_rows():
+    source = get_source()
+    api_key = get_unusual_whales_api_key()
+    if source == "unusual_whales" or (source == "auto" and api_key):
+        return collect_rows_unusual_whales()
+
     rows = []
     fetch_ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     expiry_limit = get_expiry_limit()
@@ -191,6 +409,16 @@ def write_csv(rows):
         "impliedVolatility",
         "inTheMoney",
         "contractSymbol",
+        "source_total_premium",
+        "source_volume_oi_ratio",
+        "source_total_ask_side_prem",
+        "source_total_bid_side_prem",
+        "source_trade_count",
+        "source_alert_rule",
+        "source_has_sweep",
+        "source_has_multileg",
+        "source_all_opening",
+        "data_source",
     ]
     with open(output_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -201,7 +429,8 @@ def write_csv(rows):
 def main():
     rows = collect_rows()
     write_csv(rows)
-    print(f"[options_fetcher] wrote {len(rows)} rows to {os.path.join(get_output_dir(), OUTPUT_RAW)}")
+    source = "Unusual Whales API" if rows and rows[0].get("data_source") == "unusual_whales" else "yfinance"
+    print(f"[options_fetcher] wrote {len(rows)} rows from {source} to {os.path.join(get_output_dir(), OUTPUT_RAW)}")
     if not rows:
         sys.exit(2)
 

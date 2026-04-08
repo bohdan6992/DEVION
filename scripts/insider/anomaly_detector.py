@@ -25,6 +25,16 @@ RAW_FIELDNAMES = [
     "impliedVolatility",
     "inTheMoney",
     "contractSymbol",
+    "source_total_premium",
+    "source_volume_oi_ratio",
+    "source_total_ask_side_prem",
+    "source_total_bid_side_prem",
+    "source_trade_count",
+    "source_alert_rule",
+    "source_has_sweep",
+    "source_has_multileg",
+    "source_all_opening",
+    "data_source",
 ]
 SCORED_FIELDNAMES = RAW_FIELDNAMES + [
     "vol_oi_ratio",
@@ -54,6 +64,19 @@ def safe_int(value, default=0):
         return default
 
 
+def safe_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def read_rows(path):
     if not os.path.exists(path):
         return []
@@ -63,7 +86,7 @@ def read_rows(path):
 
 def write_rows(path, rows, fieldnames):
     with open(path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -113,10 +136,19 @@ def score_rows(rows):
         last_price = safe_float(row.get("lastPrice"))
         days_to_exp = safe_int(row.get("days_to_exp"))
         strike_pct_otm = safe_float(row.get("strike_pct_otm"))
+        source_total_premium = safe_float(row.get("source_total_premium"))
+        source_volume_oi_ratio = safe_float(row.get("source_volume_oi_ratio"))
+        has_sweep = safe_bool(row.get("source_has_sweep"))
+        all_opening = safe_bool(row.get("source_all_opening"))
+        has_multileg = safe_bool(row.get("source_has_multileg"))
 
-        vol_oi_ratio = round(volume / open_interest, 2) if open_interest > 0 else 0.0
+        vol_oi_ratio = (
+            round(source_volume_oi_ratio, 2)
+            if source_volume_oi_ratio > 0
+            else round(volume / open_interest, 2) if open_interest > 0 else 0.0
+        )
         volume_zscore = zscores.get(contract_symbol, 0.0)
-        total_premium_usd = round(volume * last_price * 100.0, 0)
+        total_premium_usd = round(source_total_premium, 0) if source_total_premium > 0 else round(volume * last_price * 100.0, 0)
         iv_percentile = iv_percentiles.get(contract_symbol, 0.0)
 
         flags = []
@@ -130,6 +162,10 @@ def score_rows(rows):
             flags.append("SHORT-OTM")
         if iv_percentile >= 90:
             flags.append("HIGH-IV")
+        if has_sweep and not has_multileg and "Z-SCORE" not in flags and volume_zscore >= 2.5:
+            flags.append("Z-SCORE")
+        if all_opening and "VOL/OI" not in flags and vol_oi_ratio >= 2:
+            flags.append("VOL/OI")
 
         scored.append(
             {

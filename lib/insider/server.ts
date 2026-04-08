@@ -812,8 +812,13 @@ export async function maybeRunInsiderPipeline() {
   ensureInsiderDataDir();
 
   const python = process.env.PYTHON_BIN || "python";
+  const manualImportPath = path.join(INSIDER_DATA_DIR, "uw_manual_flow.csv");
+  const bootstrapScript =
+    fs.existsSync(manualImportPath) && fs.statSync(manualImportPath).size > 0
+      ? "uw_manual_import.py"
+      : "options_fetcher.py";
   const scripts = [
-    "options_fetcher.py",
+    bootstrapScript,
     "anomaly_detector.py",
     "actor_profiler.py",
   ];

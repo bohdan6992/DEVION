@@ -229,16 +229,10 @@ function MainWindowBookSplitCard({
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Book Depth</div>
-          <div className="text-[10px] font-mono uppercase text-zinc-500">
-            {bookSnapshot?.capturedAtUtc || "No Snapshot"}
-          </div>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+      <div className="flex h-full flex-col rounded-xl border border-white/10 bg-black/20 p-3">
+        <div className="grid flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
           <div
-            className="rounded-lg px-3 py-3"
+            className="flex h-full flex-col rounded-lg px-3 py-3"
             style={{ border: `1px solid ${MONEY_BID_MINT_SOFT}`, backgroundColor: MONEY_BID_MINT_PANEL }}
           >
             <div
@@ -248,7 +242,7 @@ function MainWindowBookSplitCard({
               <div className="text-[10px] uppercase tracking-widest font-mono" style={{ color: MONEY_BID_MINT }}>Bids</div>
               <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
             </div>
-            <div className="mt-2 space-y-1.5">
+            <div className="mt-2 flex-1 space-y-1.5">
               {bookRows.map(({ level, bid }, index) => (
                 <div
                   key={`book-bid-${level}`}
@@ -266,12 +260,12 @@ function MainWindowBookSplitCard({
             </div>
           </div>
 
-          <div className="rounded-lg border border-rose-500/10 bg-rose-500/[0.03] px-3 py-3">
+          <div className="flex h-full flex-col rounded-lg border border-rose-500/10 bg-rose-500/[0.03] px-3 py-3">
             <div className="flex items-center justify-between gap-3 border-b border-rose-500/10 pb-2">
               <div className="text-[10px] uppercase tracking-widest font-mono text-rose-200">Asks</div>
               <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
             </div>
-            <div className="mt-2 space-y-1.5">
+            <div className="mt-2 flex-1 space-y-1.5">
               {bookRows.map(({ level, ask }, index) => (
                 <div
                   key={`book-ask-${level}`}
