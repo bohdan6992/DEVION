@@ -915,6 +915,22 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
   const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
   const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
   const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
+  const _positionBp = toNum(
+    raw?.PositionBp ??
+    raw?.positionBp ??
+    raw?.position_bp ??
+    raw?.posBp ??
+    raw?.PosBp ??
+    meta?.PositionBp ??
+    meta?.positionBp ??
+    meta?.position_bp ??
+    meta?.posBp ??
+    meta?.PosBp ??
+    raw?.PositionBpAbs ??
+    raw?.positionBpAbs ??
+    meta?.PositionBpAbs ??
+    meta?.positionBpAbs
+  );
 
   const canonical = { ...raw, meta };
   const volRel = numVolRel(canonical);
@@ -963,6 +979,8 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     askStock,
     bidBench,
     askBench,
+    PositionBp: _positionBp,
+    positionBp: _positionBp,
 
     country,
     exchange,

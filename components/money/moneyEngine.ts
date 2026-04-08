@@ -387,8 +387,15 @@ function numPositionBp(row: ArbitrageSignal | null | undefined): number | null {
       anyRow?.position_bp ??
       anyRow?.posBp ??
       anyRow?.PosBp ??
+      anyRow?.meta?.PositionBp ??
+      anyRow?.meta?.positionBp ??
+      anyRow?.meta?.position_bp ??
+      anyRow?.meta?.posBp ??
+      anyRow?.meta?.PosBp ??
       anyRow?.positionBpAbs ??
-      anyRow?.PositionBpAbs
+      anyRow?.PositionBpAbs ??
+      anyRow?.meta?.positionBpAbs ??
+      anyRow?.meta?.PositionBpAbs
   );
 }
 
