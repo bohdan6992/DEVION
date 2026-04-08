@@ -1150,6 +1150,7 @@ export function useMoneyEngine({
   const [moneyMainWindowSnapshot, setMoneyMainWindowSnapshot] = useState<MainWindowDataSnapshot | null>(null);
   const [moneyManualExecutionBusy, setMoneyManualExecutionBusy] = useState<boolean>(false);
   const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
+  const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
   const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
   const moneyAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
   const lastBookRefreshAtRef = useRef<number>(0);
@@ -1386,6 +1387,7 @@ export function useMoneyEngine({
     setMoneyPositions([]);
     setMoneyOrderIntents([]);
     dispatchedIntentIdsRef.current.clear();
+    dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
   }, []);
 
@@ -1692,10 +1694,16 @@ export function useMoneyEngine({
         .filter((intent) => intent.status === "QUEUED" && intent.intent !== "CLOSE_ALL_PRINT")
         .map((intent) => intent.id)
     );
+    const activeQueuedHedgeIds = new Set(Array.from(activeQueuedIds, (id) => `${id}|benchmark`));
 
     dispatchedIntentIdsRef.current.forEach((id) => {
       if (!activeQueuedIds.has(id)) {
         dispatchedIntentIdsRef.current.delete(id);
+      }
+    });
+    dispatchedHedgeIntentIdsRef.current.forEach((id) => {
+      if (!activeQueuedHedgeIds.has(id)) {
+        dispatchedHedgeIntentIdsRef.current.delete(id);
       }
     });
 
@@ -1717,11 +1725,10 @@ export function useMoneyEngine({
     const abort = new AbortController();
 
     const sendQueuedIntents = async () => {
-      const sentBatchKeys = new Set<string>();
+      const sentDispatchKeys = new Set<string>();
 
       for (const intent of queued) {
         if (abort.signal.aborted) return;
-        if (dispatchedIntentIdsRef.current.has(intent.id)) continue;
 
         const type =
           intent.intent === "ENTER_LONG_AGGRESSIVE" ? "EnterLongAggressive"
@@ -1732,11 +1739,6 @@ export function useMoneyEngine({
 
         if (!type) continue;
 
-        const batchKey = `${intent.ticker}|${type}`;
-        if (sentBatchKeys.has(batchKey)) continue;
-        const lastAttemptAt = recentDispatchAttemptsRef.current.get(batchKey) ?? 0;
-        if (Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
-
         const isEntryIntent =
           intent.intent === "ENTER_LONG_AGGRESSIVE" ||
           intent.intent === "ENTER_SHORT_AGGRESSIVE";
@@ -1745,10 +1747,27 @@ export function useMoneyEngine({
           intent.intent === "EXIT_SHORT_AGGRESSIVE" ||
           intent.intent === "EXIT_LONG_PRINT" ||
           intent.intent === "EXIT_SHORT_PRINT";
+        const hedgeIntentId = `${intent.id}|benchmark`;
+        const hedgeRequired =
+          (isEntryIntent || isExitIntent) &&
+          automationConfig?.hedgeMode === "hedged" &&
+          intent.benchmark &&
+          intent.benchmark !== "UNKNOWN" &&
+          intent.benchmark !== "PRINT" &&
+          intent.benchmark !== intent.ticker;
+        const primaryAlreadyDispatched = dispatchedIntentIdsRef.current.has(intent.id);
+        const hedgeAlreadyDispatched = dispatchedHedgeIntentIdsRef.current.has(hedgeIntentId);
+        if (primaryAlreadyDispatched && (!hedgeRequired || hedgeAlreadyDispatched)) continue;
+
+        const dispatchKey = intent.id;
+        if (!primaryAlreadyDispatched && sentDispatchKeys.has(dispatchKey)) continue;
+        const lastAttemptAt = recentDispatchAttemptsRef.current.get(dispatchKey) ?? 0;
+        if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
+
         const correspondingDecision = moneyDecisions.find((row) => row.ticker === intent.ticker) ?? null;
         const actualPositionIsActive = (correspondingDecision?.positionBp ?? 0) !== 0;
 
-        if (isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
+        if (!primaryAlreadyDispatched && isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
           dispatchedIntentIdsRef.current.add(intent.id);
           continue;
         }
@@ -1798,23 +1817,19 @@ export function useMoneyEngine({
           throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Failed to queue TradingApp intent."));
         };
 
-        await queueLegWithRetry({
-          intentId: intent.id,
-          ticker: intent.ticker,
-          type,
-          note: intent.reason,
-        });
-        recentDispatchAttemptsRef.current.set(batchKey, Date.now());
-        sentBatchKeys.add(batchKey);
+        if (!primaryAlreadyDispatched) {
+          await queueLegWithRetry({
+            intentId: intent.id,
+            ticker: intent.ticker,
+            type,
+            note: intent.reason,
+          });
+          dispatchedIntentIdsRef.current.add(intent.id);
+          recentDispatchAttemptsRef.current.set(dispatchKey, Date.now());
+          sentDispatchKeys.add(dispatchKey);
+        }
 
-        if (
-          (isEntryIntent || isExitIntent) &&
-          automationConfig?.hedgeMode === "hedged" &&
-          intent.benchmark &&
-          intent.benchmark !== "UNKNOWN" &&
-          intent.benchmark !== "PRINT" &&
-          intent.benchmark !== intent.ticker
-        ) {
+        if (hedgeRequired && !hedgeAlreadyDispatched) {
           const benchmarkType =
             isEntryIntent
               ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
@@ -1822,14 +1837,14 @@ export function useMoneyEngine({
 
           // Hedge leg must follow every entry/add and every exit in hedged mode (1:1), without cooldown suppression.
           await queueLegWithRetry({
-            intentId: `${intent.id}|benchmark`,
+            intentId: hedgeIntentId,
             ticker: intent.benchmark,
             type: benchmarkType,
             note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
           });
+          dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
         }
 
-        dispatchedIntentIdsRef.current.add(intent.id);
         await refreshExecutionStatus();
       }
     };

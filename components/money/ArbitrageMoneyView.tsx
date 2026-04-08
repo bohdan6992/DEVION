@@ -343,7 +343,7 @@ function MoneyDecisionTable({
 }) {
   return (
     <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] px-3 py-2">
+      <div className="flex items-center justify-between gap-3 bg-white/[0.03] px-3 py-2">
         <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
           {title}
         </div>
@@ -352,7 +352,7 @@ function MoneyDecisionTable({
         </div>
       </div>
       <table className="min-w-[880px] w-full text-xs font-mono">
-        <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
+        <thead className="sticky top-0 z-10 bg-black/20 text-zinc-300 backdrop-blur-xl">
           <tr>
             <th className="text-left p-2.5">Ticker</th>
             <th className="text-left p-2.5">Bench</th>
@@ -368,7 +368,7 @@ function MoneyDecisionTable({
             <tr
               key={`${title}|${row.ticker}|${i}`}
               className={clsx(
-                "border-t border-white/5 transition-colors",
+                "border-t border-white/[0.09] transition-colors",
                 i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
                 "hover:bg-white/[0.03]"
               )}
