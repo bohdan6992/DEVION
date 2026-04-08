@@ -563,7 +563,43 @@ export function syncMoneyPositions(
   automationConfig?: MoneyAutomationConfig,
   entryCutoffEnabled = true
 ): MoneyPosition[] {
-  if (!autoEnabled) return prev;
+  if (!autoEnabled) {
+    const now = Date.now();
+    const nowMinutes = currentMinutesLocal();
+    const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+    const minHoldMs = Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 60 * 1000;
+    const prevByTicker = new Map(
+      prev
+        .filter((row) => row.status !== "CLOSED")
+        .map((row) => [row.ticker, row])
+    );
+
+    return allSignals
+      .filter((row) => isActiveByPositionBp(row))
+      .map((row) => {
+        const side = signalSide(row);
+        const currentSignal = signalSigned(row) ?? signalAbs(row);
+        const inPrintWindow = entryCutoffEnabled && nowMinutes >= printStartMinutes;
+        const existing = prevByTicker.get(row.ticker);
+        return {
+          ticker: row.ticker,
+          benchmark: existing?.benchmark ?? String(row.benchmark ?? "UNKNOWN"),
+          side: existing?.side ?? side,
+          entrySignal: existing?.entrySignal ?? currentSignal,
+          lastSignal: currentSignal,
+          lastScaleSignal: existing?.lastScaleSignal ?? existing?.entrySignal ?? currentSignal,
+          spread: signalSpread(row) ?? existing?.spread ?? null,
+          status: inPrintWindow ? "PRINT_PENDING" : (existing?.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN"),
+          reason: inPrintWindow ? "09:20 print exit armed" : "detected active PositionBp",
+          entryCount: Math.max(1, existing?.entryCount ?? 1),
+          lockedForPrint: inPrintWindow,
+          pendingIntent: null,
+          openedAt: existing?.openedAt ?? (now - minHoldMs),
+          updatedAt: now,
+        } satisfies MoneyPosition;
+      })
+      .sort((a, b) => a.ticker.localeCompare(b.ticker));
+  }
 
   if (automationConfig?.strategyModeEnabled) {
     const spreadLimit = parseMoneySpreadLimit(maxSpreadValue);
@@ -1384,7 +1420,7 @@ export function useMoneyEngine({
 
   const resetMoneyAutomationState = useCallback(() => {
     setMoneySignalLatches([]);
-    setMoneyPositions([]);
+    setMoneyPositions((prev) => prev.filter((row) => row.status !== "CLOSED"));
     setMoneyOrderIntents([]);
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();

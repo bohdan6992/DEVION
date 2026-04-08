@@ -338,7 +338,15 @@ function MoneyDecisionTable({
   emptyMessage,
 }: {
   title: string;
-  rows: MoneyDecisionRow[];
+  rows: Array<{
+    ticker: string;
+    benchmark: string;
+    side: "Long" | "Short";
+    signal: number | null;
+    spread: number | null;
+    netEdge: number | null;
+    status: MoneyDecisionRow["status"] | MoneyPosition["status"];
+  }>;
   emptyMessage: string;
 }) {
   return (
@@ -503,11 +511,6 @@ export default function ArbitrageMoneyView({
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [automationStartLocked, setAutomationStartLocked] = useState(false);
-  const entryReadyCount = moneyDecisions.filter((x) => x.status === "ENTRY_READY").length;
-  const openCount = moneyPositions.filter((x) => x.status === "OPEN").length;
-  const exitBlockedCount = moneyPositions.filter((x) => x.status === "EXIT_BLOCKED").length;
-  const closedCount = moneyPositions.filter((x) => x.status === "CLOSED").length;
-  const blockedEdgeCount = moneyDecisions.filter((x) => x.status === "BLOCKED_EDGE").length;
   const queuedIntentsCount = moneyOrderIntents.filter((x) => x.status === "QUEUED").length;
   const boundWindow = executionSnapshot?.boundWindow ?? null;
   const executionQueueCount = executionSnapshot?.queue?.length ?? 0;
@@ -532,8 +535,49 @@ export default function ArbitrageMoneyView({
   const showAutomationWorkspace = isAutoView || (isMoneyAutoTab && tab === "analytics");
   const automationRunning = moneyAutoEnabled && strategyModeEnabled && !panicOff;
   const automationControlAllowed = automationLaunchEnabled && showAutomationWorkspace;
-  const activeDecisionRows = moneyDecisions.filter((row) => (row.positionBp ?? 0) !== 0);
-  const signalDecisionRows = moneyDecisions.filter((row) => (row.positionBp ?? 0) === 0);
+  const decisionByTicker = new Map(moneyDecisions.map((row) => [row.ticker, row]));
+  const activeDecisionRows = (() => {
+    const rows = new Map<string, {
+      ticker: string;
+      benchmark: string;
+      side: "Long" | "Short";
+      signal: number | null;
+      spread: number | null;
+      netEdge: number | null;
+      status: MoneyDecisionRow["status"] | MoneyPosition["status"];
+    }>();
+
+    for (const position of moneyPositions) {
+      if (position.status === "CLOSED") continue;
+      const decision = decisionByTicker.get(position.ticker);
+      const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
+      const spread = decision?.spread ?? position.spread;
+      const netEdge = decision?.netEdge ?? (signal != null ? Math.max(0, Math.abs(signal) - Math.max(0, spread ?? 0)) : null);
+      rows.set(position.ticker, {
+        ticker: position.ticker,
+        benchmark: decision?.benchmark ?? position.benchmark,
+        side: decision?.side ?? position.side,
+        signal,
+        spread,
+        netEdge,
+        status: position.status,
+      });
+    }
+
+    for (const row of moneyDecisions) {
+      if ((row.positionBp ?? 0) === 0 || rows.has(row.ticker)) continue;
+      rows.set(row.ticker, row);
+    }
+
+    return Array.from(rows.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
+  })();
+  const activeTickers = new Set(activeDecisionRows.map((row) => row.ticker));
+  const signalDecisionRows = moneyDecisions.filter((row) => (row.positionBp ?? 0) === 0 && !activeTickers.has(row.ticker));
+  const entryReadyCount = signalDecisionRows.filter((x) => x.status === "ENTRY_READY").length;
+  const openCount = moneyPositions.filter((x) => x.status === "OPEN").length;
+  const exitBlockedCount = moneyPositions.filter((x) => x.status === "EXIT_BLOCKED").length;
+  const closedCount = moneyPositions.filter((x) => x.status === "CLOSED").length;
+  const blockedEdgeCount = signalDecisionRows.filter((x) => x.status === "BLOCKED_EDGE").length;
 
   const toggleAutomationRun = async () => {
     if (!automationControlAllowed) return;
@@ -584,7 +628,7 @@ export default function ArbitrageMoneyView({
       return (
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <MetricCard label="ACTIVE SITUATIONS" value={intn(moneyDecisions.length)} />
+            <MetricCard label="ACTIVE SITUATIONS" value={intn(activeDecisionRows.length)} />
             <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
             <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
             <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
