@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import ArbitrageScanner from "../scanner/ArbitrageScanner";
 import {
@@ -165,6 +165,7 @@ export default function MoneyPageContainer() {
   const [moneyAutoEnabled, setMoneyAutoEnabled] = useState(false);
   const [remoteAutomationReady, setRemoteAutomationReady] = useState(false);
   const [moneyPageClientId] = useState(createMoneyPageClientId);
+  const remoteAutomationGuardUntilRef = useRef(0);
   const [sharedRatingRules, setSharedRatingRules] = useState<MoneyRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
@@ -208,6 +209,16 @@ export default function MoneyPageContainer() {
     }
   }, [automationConfig]);
 
+  const applyLocalAutoEnabled = useCallback((enabled: boolean) => {
+    remoteAutomationGuardUntilRef.current = Date.now() + 4000;
+    setMoneyAutoEnabled(enabled);
+  }, []);
+
+  const applyLocalAutomationConfigPatch = useCallback((patch: Partial<MoneyAutomationConfig>) => {
+    remoteAutomationGuardUntilRef.current = Date.now() + 4000;
+    setAutomationConfig((prev) => ({ ...prev, ...patch }));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -228,10 +239,19 @@ export default function MoneyPageContainer() {
         const json = await response.json().catch(() => ({}));
         if (!response.ok || json?.ok === false || cancelled) return;
         const state = json?.state ?? {};
-        setMoneyAutoEnabled(Boolean(state.autoEnabled));
+        const remoteAutoEnabled = Boolean(state.autoEnabled);
+        const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
+        const guarded = Date.now() < remoteAutomationGuardUntilRef.current;
+        if (
+          guarded &&
+          (remoteAutoEnabled !== moneyAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
+        ) {
+          return;
+        }
+        setMoneyAutoEnabled(remoteAutoEnabled);
         setAutomationConfig((prev) => ({
           ...prev,
-          strategyModeEnabled: Boolean(state.strategyModeEnabled),
+          strategyModeEnabled: remoteStrategyModeEnabled,
         }));
         setRemoteAutomationReady(true);
       } catch {
@@ -248,7 +268,7 @@ export default function MoneyPageContainer() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [moneyPageClientId]);
+  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled, moneyPageClientId]);
 
   useEffect(() => {
     if (!remoteAutomationReady) return;
@@ -292,8 +312,8 @@ export default function MoneyPageContainer() {
       moneyAutoStartEnabledOverride={false}
       moneyAutoEnabledOverride={moneyAutoEnabled}
       moneyViewModeOverride="money-auto-tab"
-      onMoneyAutomationConfigChange={(patch) => setAutomationConfig((prev) => ({ ...prev, ...patch }))}
-      onMoneyAutoEnabledChange={setMoneyAutoEnabled}
+      onMoneyAutomationConfigChange={applyLocalAutomationConfigPatch}
+      onMoneyAutoEnabledChange={applyLocalAutoEnabled}
       headerTitleOverride="ARBITRAGE MONEY"
       headerBadgeValuesOverride={headerBadgeValues}
       headerMetaLabelOverride={headerMetaLabel}

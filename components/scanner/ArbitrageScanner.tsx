@@ -7890,7 +7890,12 @@ export default function ArbitrageScanner({
   const [moneyWindowCaptureBusy, setMoneyWindowCaptureBusy] = useState(false);
   const moneyAutomationLaunchEnabled = moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab";
   const moneyStrategyModeEnabled = effectiveMoneyAutomationConfig.strategyModeEnabled;
-  const moneyAutomationEnabled = moneyAutoEnabled && moneyStrategyModeEnabled;
+  const effectiveMoneyAutoEnabled = typeof moneyAutoEnabledOverride === "boolean" ? moneyAutoEnabledOverride : moneyAutoEnabled;
+  const applyMoneyAutoEnabled = useCallback((enabled: boolean) => {
+    setMoneyAutoEnabled(enabled);
+    onMoneyAutoEnabledChange?.(enabled);
+  }, [onMoneyAutoEnabledChange, setMoneyAutoEnabled]);
+  const moneyAutomationEnabled = effectiveMoneyAutoEnabled && moneyStrategyModeEnabled;
   const moneyAutomationRunning = moneyAutomationTogglePending === "start"
     ? true
     : moneyAutomationTogglePending === "stop"
@@ -7905,10 +7910,6 @@ export default function ArbitrageScanner({
       setMoneyAutoEnabled(moneyAutoEnabledOverride);
     }
   }, [moneyAutoEnabled, moneyAutoEnabledOverride, setMoneyAutoEnabled]);
-
-  useEffect(() => {
-    onMoneyAutoEnabledChange?.(moneyAutoEnabled);
-  }, [moneyAutoEnabled, onMoneyAutoEnabledChange]);
 
   const moneyCountries = useMemo(() => {
     const values = new Set<string>();
@@ -8006,7 +8007,7 @@ export default function ArbitrageScanner({
           // best effort cleanup
         }
         onMoneyAutomationConfigChange?.({ strategyModeEnabled: false });
-        setMoneyAutoEnabled(false);
+        applyMoneyAutoEnabled(false);
         resetMoneyAutomationState();
         setMoneyAutomationTogglePending(null);
       }
@@ -8028,7 +8029,7 @@ export default function ArbitrageScanner({
         throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
       }
       onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
-      setMoneyAutoEnabled(true);
+      applyMoneyAutoEnabled(true);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       await refreshMoneySignals();
     } finally {
@@ -12236,8 +12237,8 @@ export default function ArbitrageScanner({
             moneyDecisions={sortedMoneyDecisions}
             moneyPositions={moneyPositions}
             moneyOrderIntents={moneyOrderIntents}
-            moneyAutoEnabled={moneyAutoEnabled}
-            onSetAutoEnabled={setMoneyAutoEnabled}
+            moneyAutoEnabled={effectiveMoneyAutoEnabled}
+            onSetAutoEnabled={applyMoneyAutoEnabled}
             executionSnapshot={moneyExecutionSnapshot}
             bookSnapshot={moneyBookSnapshot}
             mainWindowSnapshot={moneyMainWindowSnapshot}
