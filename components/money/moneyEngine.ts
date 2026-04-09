@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { applyExactSonarClientFilters, buildSignalsUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
@@ -425,6 +426,38 @@ function signalSpread(row: ArbitrageSignal | null | undefined): number | null {
 
 function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
   return (signalClass ?? "").trim().toLowerCase() === "ark";
+}
+
+function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
+  return rawItems
+    .map((item) => {
+      if (!item) return null;
+      const ticker = String(item?.ticker ?? item?.Ticker ?? "").trim().toUpperCase();
+      if (!ticker) return null;
+      const fields = item?.fields ?? item?.Fields ?? {};
+      const positionBp = toNum(
+        fields?.PositionBp ??
+        fields?.positionBp ??
+        fields?.position_bp ??
+        fields?.posBp ??
+        fields?.PosBp
+      );
+      const fallbackDirection =
+        positionBp == null || positionBp === 0
+          ? undefined
+          : positionBp > 0
+            ? "up"
+            : "down";
+      return normalizeSignal({
+        ...fields,
+        ticker,
+        Ticker: ticker,
+        benchmark: fields?.Benchmark ?? fields?.benchmark ?? fields?.bench ?? "UNKNOWN",
+        direction: fields?.direction ?? fallbackDirection,
+        meta: fields,
+      });
+    })
+    .filter(Boolean) as ArbitrageSignal[];
 }
 
 function syncMoneySignalLatches(
@@ -1569,7 +1602,10 @@ export function useMoneyEngine({
       maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
     });
 
-    const response = await fetch(url, { cache: "no-store" });
+    const [response, activePositionsResponse] = await Promise.all([
+      fetch(url, { cache: "no-store" }),
+      fetch(bridgeUrl("/api/live/snapshot?fields=PositionBp,Benchmark,BenchBidLstCls%CE%94%25,BenchAskLstCls%CE%94%25,bench.Bid,bench.Ask,bench.LstCls,bench.YCls"), { cache: "no-store" }),
+    ]);
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
@@ -1578,15 +1614,33 @@ export function useMoneyEngine({
     const json = await response.json();
     const rawItems: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
     const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+    const normalizedByTicker = new Map(normalized.map((row) => [row.ticker, row]));
+
+    if (activePositionsResponse.ok) {
+      const activePositionsJson = await activePositionsResponse.json().catch(() => ({}));
+      const activeItems: any[] = Array.isArray(activePositionsJson)
+        ? activePositionsJson
+        : Array.isArray(activePositionsJson?.items)
+          ? activePositionsJson.items
+          : [];
+      const activeSignals = normalizeLiveSnapshotItems(activeItems).filter((row) => isActiveByPositionBp(row));
+      for (const row of activeSignals) {
+        if (!normalizedByTicker.has(row.ticker)) {
+          normalizedByTicker.set(row.ticker, row);
+        }
+      }
+    }
+
+    const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
     const filtered = exactSonarFilterSnapshot
-      ? applyExactSonarClientFilters(normalized, exactSonarFilterSnapshot)
-      : applyArbitrageFilters(normalized, filterConfig) as ArbitrageSignal[];
+      ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
+      : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
     const [bookSnapshot] = await Promise.all([
       refreshBookSnapshot(false),
       refreshMainWindowSnapshot(false),
     ]);
     const allDecisionRows = computeMoneyDecisionRows(
-      normalized,
+      normalizedMerged,
       maxSpreadValue,
       automationConfig,
       bookSnapshot ?? moneyBookSnapshot

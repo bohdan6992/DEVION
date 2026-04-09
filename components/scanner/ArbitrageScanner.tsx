@@ -7886,11 +7886,17 @@ export default function ArbitrageScanner({
     onError: (message) => setErr(message),
   });
   const [moneyAutoStartLocked, setMoneyAutoStartLocked] = useState(false);
+  const [moneyAutomationTogglePending, setMoneyAutomationTogglePending] = useState<null | "start" | "stop">(null);
   const [moneyWindowCaptureBusy, setMoneyWindowCaptureBusy] = useState(false);
   const moneyAutomationLaunchEnabled = moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab";
   const moneyStrategyModeEnabled = effectiveMoneyAutomationConfig.strategyModeEnabled;
-  const moneyPanicOff = moneyExecutionSnapshot?.panicOff ?? false;
-  const moneyAutomationRunning = moneyAutoEnabled && moneyStrategyModeEnabled && !moneyPanicOff;
+  const moneyAutomationEnabled = moneyAutoEnabled && moneyStrategyModeEnabled;
+  const moneyAutomationRunning = moneyAutomationTogglePending === "start"
+    ? true
+    : moneyAutomationTogglePending === "stop"
+      ? false
+      : moneyAutomationEnabled;
+  const moneyAutomationToggleBusy = moneyAutomationTogglePending !== null;
   const moneyWindowsBound = Boolean(moneyExecutionSnapshot?.boundWindow?.isBound && moneyExecutionSnapshot?.mainWindow?.isBound);
 
   useEffect(() => {
@@ -7976,9 +7982,11 @@ export default function ArbitrageScanner({
 
   const toggleMoneyAutomationRunFromHeader = async () => {
     if (!moneyAutomationLaunchEnabled) return;
+    if (moneyAutomationToggleBusy) return;
     if (moneyAutoStartLocked && !moneyAutomationRunning) return;
 
     if (moneyAutomationRunning) {
+      setMoneyAutomationTogglePending("stop");
       try {
         const response = await fetch(apiUrl("/api/money/automation/stop"), {
           method: "POST",
@@ -8000,26 +8008,32 @@ export default function ArbitrageScanner({
         onMoneyAutomationConfigChange?.({ strategyModeEnabled: false });
         setMoneyAutoEnabled(false);
         resetMoneyAutomationState();
+        setMoneyAutomationTogglePending(null);
       }
       return;
     }
 
-    resetMoneyAutomationState();
-    const response = await fetch(apiUrl("/api/money/automation/start"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: "scanner-header",
-      }),
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok || json?.ok === false) {
-      throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
+    setMoneyAutomationTogglePending("start");
+    try {
+      resetMoneyAutomationState();
+      const response = await fetch(apiUrl("/api/money/automation/start"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "scanner-header",
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json?.ok === false) {
+        throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
+      }
+      onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
+      setMoneyAutoEnabled(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      await refreshMoneySignals();
+    } finally {
+      setMoneyAutomationTogglePending(null);
     }
-    onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
-    setMoneyAutoEnabled(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-    await refreshMoneySignals();
   };
 
   const captureMoneyWindowsFromHeader = async () => {
@@ -12182,16 +12196,24 @@ export default function ArbitrageScanner({
                 <button
                   type="button"
                   onClick={() => void toggleMoneyAutomationRunFromHeader()}
-                  disabled={moneyAutoStartLocked && !moneyAutomationRunning}
+                  disabled={moneyAutomationToggleBusy || (moneyAutoStartLocked && !moneyAutomationRunning)}
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     moneyAutomationRunning
                       ? autoStopButtonClass
                       : autoStartButtonClass,
-                    moneyAutoStartLocked && !moneyAutomationRunning && "cursor-not-allowed opacity-40"
+                    (moneyAutomationToggleBusy || (moneyAutoStartLocked && !moneyAutomationRunning)) && "cursor-not-allowed opacity-40"
                   )}
                 >
-                  {moneyAutomationRunning ? "STOP AUTO" : moneyAutoStartLocked ? "START LOCKED" : "START AUTO"}
+                  {moneyAutomationTogglePending === "start"
+                    ? "STARTING"
+                    : moneyAutomationTogglePending === "stop"
+                      ? "STOPPING"
+                      : moneyAutomationRunning
+                        ? "STOP AUTO"
+                        : moneyAutoStartLocked
+                          ? "START LOCKED"
+                          : "START AUTO"}
                 </button>
               </>
             ) : (
