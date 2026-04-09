@@ -3127,10 +3127,13 @@ function GlassSelect({
             : "relative flex w-full items-center gap-2.5 h-9 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-300",
           open
             ? compact
-              ? clsx(accent.activeText, "border-transparent bg-transparent shadow-none")
+              ? clsx(isLightTheme ? "text-slate-900" : "text-zinc-300", "border-transparent bg-transparent shadow-none")
               : clsx(accent.activeText, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]", accent.buttonBorder ?? "border-white/20")
             : compact
-              ? clsx(isLightTheme ? "text-slate-900" : accent.activeText, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
+              ? clsx(
+                  isLightTheme ? "text-slate-900 hover:text-slate-900" : "text-zinc-400 hover:text-zinc-200",
+                  "border-transparent bg-transparent shadow-none"
+                )
               : clsx(accent.activeText, SCANNER_CONTROL_SURFACE),
           className
         )}
@@ -6177,8 +6180,10 @@ type ArbitrageScannerProps = {
   moneyExecutionDescriptorOverride?: MoneyExecutionDescriptor;
   moneyAutomationConfigOverride?: MoneyAutomationConfig;
   moneyAutoStartEnabledOverride?: boolean;
+  moneyAutoEnabledOverride?: boolean;
   moneyViewModeOverride?: "money" | "auto" | "money-auto-tab";
   onMoneyAutomationConfigChange?: (patch: Partial<MoneyAutomationConfig>) => void;
+  onMoneyAutoEnabledChange?: (enabled: boolean) => void;
   headerTitleOverride?: string;
   headerBadgeValuesOverride?: string[];
   headerMetaLabelOverride?: string;
@@ -6206,8 +6211,10 @@ export default function ArbitrageScanner({
   moneyExecutionDescriptorOverride,
   moneyAutomationConfigOverride,
   moneyAutoStartEnabledOverride,
+  moneyAutoEnabledOverride,
   moneyViewModeOverride,
   onMoneyAutomationConfigChange,
+  onMoneyAutoEnabledChange,
   headerTitleOverride,
   headerBadgeValuesOverride,
   headerMetaLabelOverride,
@@ -7885,6 +7892,17 @@ export default function ArbitrageScanner({
   const moneyPanicOff = moneyExecutionSnapshot?.panicOff ?? false;
   const moneyAutomationRunning = moneyAutoEnabled && moneyStrategyModeEnabled && !moneyPanicOff;
   const moneyWindowsBound = Boolean(moneyExecutionSnapshot?.boundWindow?.isBound && moneyExecutionSnapshot?.mainWindow?.isBound);
+
+  useEffect(() => {
+    if (typeof moneyAutoEnabledOverride !== "boolean") return;
+    if (moneyAutoEnabled !== moneyAutoEnabledOverride) {
+      setMoneyAutoEnabled(moneyAutoEnabledOverride);
+    }
+  }, [moneyAutoEnabled, moneyAutoEnabledOverride, setMoneyAutoEnabled]);
+
+  useEffect(() => {
+    onMoneyAutoEnabledChange?.(moneyAutoEnabled);
+  }, [moneyAutoEnabled, onMoneyAutoEnabledChange]);
 
   const moneyCountries = useMemo(() => {
     const values = new Set<string>();
@@ -10061,7 +10079,20 @@ export default function ArbitrageScanner({
   const activeTabLabel = isMoneyOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "ACTIVE";
   const episodesTabLabel = isMoneyOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
   const analyticsTabLabel = isMoneyOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "ANALYTICS";
-  const moneyShellActiveClass = isMoneyOnlyShell || primaryPanel === "money" ? MONEY_FIXED_ACTIVE_SOFT : accent.activeSoft;
+  const headerNavGroupClass = isLightTheme
+    ? "flex h-7 items-center gap-2 rounded-lg border border-slate-900/10 bg-white/35"
+    : "flex h-7 items-center gap-2 rounded-lg bg-black/20";
+  const headerNavInactiveClass = isLightTheme
+    ? "border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
+    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
+  const moneyShellActiveClass = headerButtonActiveClass;
+  const autoStartButtonClass = headerButtonActiveClass;
+  const autoStopButtonClass = isLightTheme
+    ? "border-rose-500/35 bg-rose-500/12 text-rose-700 shadow-none"
+    : "border-rose-500/20 bg-rose-500/10 text-rose-300";
+  const autoLockedPillClass = isLightTheme
+    ? "inline-flex h-7 items-center justify-center rounded-lg border border-slate-900/10 bg-white/35 px-3 text-[10px] font-mono font-bold uppercase text-slate-500"
+    : "inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500";
 
   useEffect(() => {
     if (!isMoneyOnlyShell || !onMoneyShellStatsChange) return;
@@ -10124,14 +10155,14 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className={headerNavGroupClass}>
               <Link
                 href="/money/arbitrage"
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   primaryPanel === "money"
-                    ? MONEY_FIXED_ACTIVE_SOFT
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    ? headerButtonActiveClass
+                    : headerNavInactiveClass
                 )}
                 title={primaryPanel === "money" ? "MONEY (current)" : "Open MONEY"}
               >
@@ -10142,8 +10173,8 @@ export default function ArbitrageScanner({
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   primaryPanel === "scanner"
-                    ? accent.activeSoft
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    ? headerButtonActiveClass
+                    : headerNavInactiveClass
                 )}
                 title={primaryPanel === "scanner" ? "SCANNER (current)" : "Open SCANNER"}
               >
@@ -10151,14 +10182,17 @@ export default function ArbitrageScanner({
               </Link>
               <Link
                 href="/signals/arbitrage"
-                className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  headerNavInactiveClass
+                )}
                 title="Open /signals/arbitrage"
               >
                 SONAR
               </Link>
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className={headerNavGroupClass}>
               <button
                 type="button"
                 onClick={() => setTab("active")}
@@ -10166,7 +10200,7 @@ export default function ArbitrageScanner({
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "active"
                     ? moneyShellActiveClass
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    : headerNavInactiveClass
                 )}
               >
                 {activeTabLabel}
@@ -10178,7 +10212,7 @@ export default function ArbitrageScanner({
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "episodes"
                     ? moneyShellActiveClass
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    : headerNavInactiveClass
                 )}
               >
                 {episodesTabLabel}
@@ -10190,7 +10224,7 @@ export default function ArbitrageScanner({
                   "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   tab === "analytics"
                     ? moneyShellActiveClass
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    : headerNavInactiveClass
                 )}
               >
                 {analyticsTabLabel}
@@ -10503,7 +10537,7 @@ export default function ArbitrageScanner({
         )}
 
         <div className="mb-3 flex flex-wrap justify-end gap-3">
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20 px-2">
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
@@ -10512,7 +10546,7 @@ export default function ArbitrageScanner({
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   ratingMode === modeKey
-                    ? accent.activeButton
+                    ? accent.activeSoft
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -10664,7 +10698,7 @@ export default function ArbitrageScanner({
 
         {false && tab === "analytics" && (
           <div className="mb-3 flex flex-wrap justify-end gap-3">
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20 px-2">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
                 <button
                   key={modeKey}
@@ -10673,7 +10707,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     ratingMode === modeKey
-                      ? accent.activeButton
+                      ? accent.activeSoft
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -12132,8 +12166,8 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     moneyAutomationRunning
-                      ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
-                      : MONEY_FIXED_ACTIVE_SOFT,
+                      ? autoStopButtonClass
+                      : autoStartButtonClass,
                     moneyAutoStartLocked && !moneyAutomationRunning && "cursor-not-allowed opacity-40"
                   )}
                 >
@@ -12141,7 +12175,7 @@ export default function ArbitrageScanner({
                 </button>
               </>
             ) : (
-              <span className="inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500">
+              <span className={autoLockedPillClass}>
                 AUTO LOCKED
               </span>
             )

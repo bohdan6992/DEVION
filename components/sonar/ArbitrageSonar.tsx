@@ -588,6 +588,62 @@ const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
   return null;
 };
 
+const getNewYorkMonthDay = (): { month: number; day: number } => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const month = Number(parts.find((part) => part.type === "month")?.value ?? NaN);
+    const day = Number(parts.find((part) => part.type === "day")?.value ?? NaN);
+    if (Number.isFinite(month) && Number.isFinite(day)) return { month, day };
+  } catch {
+  }
+  const now = new Date();
+  return { month: now.getMonth() + 1, day: now.getDate() };
+};
+
+const parseTodayReportFlag = (value: any): boolean | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
+  if (iso) {
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    const today = getNewYorkMonthDay();
+    return month === today.month && day === today.day;
+  }
+
+  const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
+  if (slash) {
+    const left = Number(slash[2]);
+    const right = Number(slash[3]);
+    let day = left;
+    let month = right;
+    if (left <= 12 && right > 12) {
+      month = left;
+      day = right;
+    }
+    const today = getNewYorkMonthDay();
+    return month === today.month && day === today.day;
+  }
+
+  return toBool(value);
+};
+
+const hasTodayReport = (s: ArbitrageSignal): boolean => {
+  const parsed =
+    parseTodayReportFlag((s as any).report) ??
+    parseTodayReportFlag((s as any).Report) ??
+    parseTodayReportFlag((s as any).meta?.report) ??
+    parseTodayReportFlag((s as any).meta?.Report) ??
+    toBool((s as any)._reportBool);
+
+  return parsed === true;
+};
+
 const isSignalGoldActive = (
   s: ArbitrageSignal,
   zapMode: "zap" | "sigma" | "delta" | "off",
@@ -2228,7 +2284,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     }
     if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
     if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
-    if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) continue;
+    if (f.excludeReport && hasTodayReport(s)) continue;
     if (f.excludeETF) {
       if (boolIsETF(s) === true) continue;
       const eqt = strEquityType(s).toLowerCase();
@@ -2251,7 +2307,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
 
     if (f.filterReport !== "ALL") {
-      const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
+      const rep = hasTodayReport(s);
       if (f.filterReport === "YES" && rep !== true) continue;
       if (f.filterReport === "NO" && rep !== false) continue;
     }
@@ -2716,6 +2772,9 @@ export default function ArbitrageSonar() {
   const secondaryButtonBaseClass =
     "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
   const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
+  const secondaryButtonSoftActiveClass = isLightTheme
+    ? "bg-slate-900/10 text-slate-900 border-slate-900/10 shadow-none"
+    : "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]";
   const secondaryIconButtonClass =
     "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
@@ -4845,16 +4904,18 @@ export default function ArbitrageSonar() {
         )}
 
         <div className="mb-3 flex flex-wrap justify-end gap-3">
-          <div className={clsx(secondaryGroupClass, "px-2")}>
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
                 onClick={() => setRatingMode(modeKey)}
-                className={[
-                  secondaryButtonBaseClass,
-                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
-                ].join(" ")}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? secondaryButtonSoftActiveClass
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
               >
                 {modeKey}
               </button>
@@ -5209,16 +5270,18 @@ export default function ArbitrageSonar() {
         )}
 
         <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
-          <div className={clsx(secondaryGroupClass, "px-2")}>
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
                 onClick={() => setRatingMode(modeKey)}
-                className={[
-                  secondaryButtonBaseClass,
-                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
-                ].join(" ")}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? secondaryButtonSoftActiveClass
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
               >
                 {modeKey}
               </button>

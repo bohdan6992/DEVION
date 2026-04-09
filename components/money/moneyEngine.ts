@@ -34,6 +34,7 @@ export type MoneyPosition = {
   entryCount: number;
   lockedForPrint: boolean;
   pendingIntent: MoneyOrderIntentType | null;
+  lastConfirmedActiveAt: number | null;
   openedAt: number;
   updatedAt: number;
 };
@@ -59,6 +60,17 @@ export type MoneyOrderIntent = {
   reason: string;
   createdAt: number;
 };
+
+function isEntryOrderIntent(intent: MoneyOrderIntentType | null | undefined): boolean {
+  return intent === "ENTER_LONG_AGGRESSIVE" || intent === "ENTER_SHORT_AGGRESSIVE";
+}
+
+function isExitOrderIntent(intent: MoneyOrderIntentType | null | undefined): boolean {
+  return intent === "EXIT_LONG_AGGRESSIVE" ||
+    intent === "EXIT_SHORT_AGGRESSIVE" ||
+    intent === "EXIT_LONG_PRINT" ||
+    intent === "EXIT_SHORT_PRINT";
+}
 
 export type TradingAppExecutionStep = {
   step: string;
@@ -601,6 +613,7 @@ export function syncMoneyPositions(
           entryCount: Math.max(1, existing?.entryCount ?? 1),
           lockedForPrint: inPrintWindow,
           pendingIntent: null,
+          lastConfirmedActiveAt: now,
           openedAt: existing?.openedAt ?? (now - minHoldMs),
           updatedAt: now,
         } satisfies MoneyPosition;
@@ -610,7 +623,7 @@ export function syncMoneyPositions(
 
   if (automationConfig?.strategyModeEnabled) {
     const spreadLimit = parseMoneySpreadLimit(maxSpreadValue);
-    const POSITION_ACTIVATION_GRACE_MS = 8_000;
+    const POSITION_ACTIVATION_GRACE_MS = 45_000;
     const now = Date.now();
     const nowMinutes = currentMinutesLocal();
     const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
@@ -627,6 +640,7 @@ export function syncMoneyPositions(
 
     for (const existing of prev) {
       const raw = signalMap.get(existing.ticker);
+      const rawSeen = Boolean(raw);
       const currentAbs = signalAbs(raw);
       const currentSpread = signalSpread(raw) ?? existing.spread;
       const spreadBlocked = spreadLimit != null && currentSpread != null && currentSpread > spreadLimit;
@@ -641,13 +655,38 @@ export function syncMoneyPositions(
 
       let status: MoneyPosition["status"] = existing.status;
       let reason = existing.reason;
-      let pendingIntent: MoneyPosition["pendingIntent"] = null;
+      let pendingIntent: MoneyPosition["pendingIntent"] = existing.pendingIntent;
       let lockedForPrint = existing.lockedForPrint;
       let entryCount = existing.entryCount;
       let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
+      let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       const decision = decisionMap.get(existing.ticker);
 
-      if (!positionIsActive) {
+      if (positionIsActive) {
+        lastConfirmedActiveAt = now;
+      }
+
+      if (!rawSeen) {
+        if (lastConfirmedActiveAt != null) {
+          status = inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN");
+          reason = inPrintWindow ? "09:20 print exit armed" : "active position missing from current signal snapshot";
+          if (inPrintWindow) {
+            if (!existing.lockedForPrint) {
+              pendingIntent = existing.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT";
+              lockedForPrint = true;
+            }
+          } else if (!isExitOrderIntent(pendingIntent)) {
+            pendingIntent = null;
+          }
+        } else if (activationGraceActive) {
+          status = "OPEN";
+          reason = "awaiting PositionBp activation";
+        } else {
+          status = "CLOSED";
+          reason = "ticker missing from live signal snapshot";
+          pendingIntent = null;
+        }
+      } else if (!positionIsActive) {
         if (activationGraceActive) {
           status = "OPEN";
           reason = "awaiting PositionBp activation";
@@ -668,9 +707,11 @@ export function syncMoneyPositions(
         if (spreadBlocked && automationConfig.noSpreadExit !== false) {
           status = "EXIT_BLOCKED";
           reason = "exit blocked by spread";
+          pendingIntent = null;
         } else if (holdBlocked) {
           status = "OPEN";
           reason = `min hold ${automationConfig.minHoldMinutes}m not reached`;
+          pendingIntent = null;
         } else {
           status = "CLOSED";
           reason = `signal below end threshold ${endThreshold.toFixed(2)}`;
@@ -710,7 +751,11 @@ export function syncMoneyPositions(
             lastScaleSignal = filteredSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)}`;
+          } else {
+            pendingIntent = null;
           }
+        } else if (!isExitOrderIntent(pendingIntent)) {
+          pendingIntent = null;
         }
       }
 
@@ -724,6 +769,7 @@ export function syncMoneyPositions(
         entryCount,
         lockedForPrint,
         pendingIntent,
+        lastConfirmedActiveAt,
         updatedAt: now,
       });
       seen.add(existing.ticker);
@@ -760,6 +806,7 @@ export function syncMoneyPositions(
               ? (latch.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
               : null)
           : (latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE"),
+        lastConfirmedActiveAt: positionAlreadyActive ? now : null,
         openedAt: now,
         updatedAt: now,
       });
@@ -788,6 +835,7 @@ export function syncMoneyPositions(
         pendingIntent: entryCutoffEnabled && nowMinutes >= printStartMinutes
           ? (side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
           : null,
+        lastConfirmedActiveAt: now,
         openedAt: now - minHoldMs,
         updatedAt: now,
       });
@@ -894,6 +942,7 @@ export function syncMoneyPositions(
       entryCount: 1,
       lockedForPrint: false,
       pendingIntent: null,
+      lastConfirmedActiveAt: null,
       openedAt: now,
       updatedAt: now,
     });
@@ -922,6 +971,23 @@ export function buildMoneyOrderIntents(
   const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
 
   if (automationConfig?.strategyModeEnabled) {
+    if (entryCutoffEnabled && nowMinutes >= printStartMinutes) {
+      const representativePosition = positions.find((position) => position.status !== "CLOSED") ?? null;
+      if (!representativePosition) return [];
+      return [{
+        id: intentId(["close-all-print", "strategy", "armed"]),
+        ticker: representativePosition.ticker,
+        benchmark: "PRINT",
+        side: representativePosition.side,
+        intent: "CLOSE_ALL_PRINT",
+        sequence: 0,
+        priceRef: "PRINT",
+        status: "QUEUED",
+        reason: `print exit window active | global Ctrl+O at ${automationConfig.printStartTime}`,
+        createdAt: now,
+      }];
+    }
+
     for (const position of positions) {
       if (!position.pendingIntent) continue;
       const isEntryIntent =
@@ -929,7 +995,7 @@ export function buildMoneyOrderIntents(
         position.pendingIntent === "ENTER_SHORT_AGGRESSIVE";
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes && isEntryIntent) continue;
       intents.push({
-        id: intentId([position.ticker, "strategy", position.pendingIntent, position.entryCount, nowMinutes >= printStartMinutes ? "print" : "live"]),
+        id: intentId([position.ticker, "strategy", position.openedAt, position.pendingIntent, position.entryCount, nowMinutes >= printStartMinutes ? "print" : "live"]),
         ticker: position.ticker,
         benchmark: position.benchmark,
         side: position.side,
@@ -1734,7 +1800,7 @@ export function useMoneyEngine({
   useEffect(() => {
     const activeQueuedIds = new Set(
       moneyOrderIntents
-        .filter((intent) => intent.status === "QUEUED" && intent.intent !== "CLOSE_ALL_PRINT")
+        .filter((intent) => intent.status === "QUEUED")
         .map((intent) => intent.id)
     );
     const activeQueuedHedgeIds = new Set(Array.from(activeQueuedIds, (id) => `${id}|benchmark`));
@@ -1762,7 +1828,18 @@ export function useMoneyEngine({
     if (!enabled || !moneyAutoEnabled) return;
     if (moneyExecutionSnapshot?.panicOff) return;
 
-    const queued = moneyOrderIntents.filter((intent) => intent.status === "QUEUED" && intent.intent !== "CLOSE_ALL_PRINT");
+    const nowMinutes = currentMinutesLocal();
+    const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+    const arkPrintLockActive =
+      Boolean(automationConfig?.strategyModeEnabled) &&
+      entryCutoffEnabled &&
+      nowMinutes >= printStartMinutes;
+
+    const queued = moneyOrderIntents.filter((intent) => {
+      if (intent.status !== "QUEUED") return false;
+      if (!arkPrintLockActive) return true;
+      return intent.intent === "CLOSE_ALL_PRINT";
+    });
     if (!queued.length) return;
 
     const abort = new AbortController();
@@ -1777,7 +1854,7 @@ export function useMoneyEngine({
           intent.intent === "ENTER_LONG_AGGRESSIVE" ? "EnterLongAggressive"
             : intent.intent === "ENTER_SHORT_AGGRESSIVE" ? "EnterShortAggressive"
               : intent.intent === "EXIT_LONG_AGGRESSIVE" || intent.intent === "EXIT_SHORT_AGGRESSIVE" ? "ExitActive"
-                : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" ? "ExitPrint"
+                : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT" ? "ExitPrint"
                   : null;
 
         if (!type) continue;
@@ -1808,7 +1885,10 @@ export function useMoneyEngine({
         if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
 
         const correspondingDecision = moneyDecisions.find((row) => row.ticker === intent.ticker) ?? null;
-        const actualPositionIsActive = (correspondingDecision?.positionBp ?? 0) !== 0;
+        const correspondingPosition = moneyPositions.find((row) => row.ticker === intent.ticker) ?? null;
+        const actualPositionIsActive =
+          (correspondingDecision?.positionBp ?? 0) !== 0 ||
+          ((correspondingPosition?.lastConfirmedActiveAt ?? null) != null && correspondingPosition?.status !== "CLOSED");
 
         if (!primaryAlreadyDispatched && isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
           dispatchedIntentIdsRef.current.add(intent.id);
@@ -1899,7 +1979,7 @@ export function useMoneyEngine({
     });
 
     return () => abort.abort();
-  }, [automationConfig, enabled, moneyAutoEnabled, moneyDecisions, moneyExecutionSnapshot, moneyOrderIntents, onError, refreshExecutionStatus]);
+  }, [automationConfig, enabled, entryCutoffEnabled, moneyAutoEnabled, moneyDecisions, moneyExecutionSnapshot, moneyOrderIntents, moneyPositions, onError, refreshExecutionStatus]);
 
   return {
     moneySignals,

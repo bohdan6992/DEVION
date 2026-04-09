@@ -2793,6 +2793,9 @@ export default function OpenDoorSonar() {
   const secondaryButtonBaseClass =
     "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
   const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
+  const secondaryButtonSoftActiveClass = isLightTheme
+    ? "bg-slate-900/10 text-slate-900 border-slate-900/10 shadow-none"
+    : "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]";
   const secondaryIconButtonClass =
     "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
@@ -5180,16 +5183,18 @@ export default function OpenDoorSonar() {
         )}
 
         <div className="mb-3 flex flex-wrap justify-end gap-3">
-          <div className={clsx(secondaryGroupClass, "px-2")}>
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
                 onClick={() => setRatingMode(modeKey)}
-                className={[
-                  secondaryButtonBaseClass,
-                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
-                ].join(" ")}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? secondaryButtonSoftActiveClass
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
               >
                 {modeKey}
               </button>
@@ -5544,16 +5549,18 @@ export default function OpenDoorSonar() {
         )}
 
         <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
-          <div className={clsx(secondaryGroupClass, "px-2")}>
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
                 onClick={() => setRatingMode(modeKey)}
-                className={[
-                  secondaryButtonBaseClass,
-                  ratingMode === modeKey ? accentButtonClass : secondaryButtonInactiveClass,
-                ].join(" ")}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? secondaryButtonSoftActiveClass
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
               >
                 {modeKey}
               </button>

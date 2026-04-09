@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { bridgeUrl } from "../../lib/bridgeBase";
 import ArbitrageScanner from "../scanner/ArbitrageScanner";
 import {
   deriveMoneyExecutionDescriptor,
@@ -17,6 +18,14 @@ const MONEY_TAB_LS_KEY = "money.arbitrage.tab";
 const MONEY_SESSION_LS_KEY = "money.arbitrage.session";
 const MONEY_RULE_BAND_LS_KEY = "money.arbitrage.rule-band";
 const MONEY_AUTOMATION_LS_KEY = "money.arbitrage.automation";
+const MONEY_AUTOMATION_SYNC_INTERVAL_MS = 5000;
+
+function createMoneyPageClientId(): string {
+  if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `money-page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function ruleBandFromSession(session: MoneySession): MoneyRuleBand {
   switch (session) {
@@ -153,6 +162,9 @@ export default function MoneyPageContainer() {
   const [tab, setTab] = useState<MoneyTabKey>(readInitialMoneyTab);
   const [session, setSession] = useState<MoneySession>(readInitialMoneySession);
   const [automationConfig, setAutomationConfig] = useState<MoneyAutomationConfig>(readInitialAutomationConfig);
+  const [moneyAutoEnabled, setMoneyAutoEnabled] = useState(false);
+  const [remoteAutomationReady, setRemoteAutomationReady] = useState(false);
+  const [moneyPageClientId] = useState(createMoneyPageClientId);
   const [sharedRatingRules, setSharedRatingRules] = useState<MoneyRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
@@ -166,7 +178,7 @@ export default function MoneyPageContainer() {
     signals: 0,
     ready: 0,
     open: 0,
-    autoEnabled: true,
+    autoEnabled: false,
   });
 
   useEffect(() => {
@@ -196,6 +208,68 @@ export default function MoneyPageContainer() {
     }
   }, [automationConfig]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const pullRemoteState = async () => {
+      try {
+        await fetch(bridgeUrl("/api/money/automation/heartbeat"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientId: moneyPageClientId,
+            source: "money-page",
+          }),
+        }).catch(() => {
+          // heartbeat is best-effort
+        });
+
+        const response = await fetch(bridgeUrl("/api/money/automation/state"), { cache: "no-store" });
+        const json = await response.json().catch(() => ({}));
+        if (!response.ok || json?.ok === false || cancelled) return;
+        const state = json?.state ?? {};
+        setMoneyAutoEnabled(Boolean(state.autoEnabled));
+        setAutomationConfig((prev) => ({
+          ...prev,
+          strategyModeEnabled: Boolean(state.strategyModeEnabled),
+        }));
+        setRemoteAutomationReady(true);
+      } catch {
+        // keep local state if remote sync is unavailable
+      }
+    };
+
+    void pullRemoteState();
+    const timer = window.setInterval(() => {
+      void pullRemoteState();
+    }, MONEY_AUTOMATION_SYNC_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [moneyPageClientId]);
+
+  useEffect(() => {
+    if (!remoteAutomationReady) return;
+
+    const controller = new AbortController();
+    void fetch(bridgeUrl("/api/money/automation/state"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        autoEnabled: moneyAutoEnabled,
+        strategyModeEnabled: automationConfig.strategyModeEnabled,
+        source: "money-page",
+      }),
+      signal: controller.signal,
+    }).catch(() => {
+      // keep local UX responsive even if backend sync temporarily fails
+    });
+
+    return () => controller.abort();
+  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled, remoteAutomationReady]);
+
   const headerBadgeValues = ["EXECUTION", "FILTERED", shellStats.autoEnabled ? "AUTO ON" : "AUTO OFF"];
   const headerMetaLabel = `signals ${shellStats.signals.toLocaleString("en-US")} | ready ${shellStats.ready.toLocaleString("en-US")} | open ${shellStats.open.toLocaleString("en-US")}`;
   const moneyExecutionDescriptor: MoneyExecutionDescriptor = useMemo(
@@ -216,8 +290,10 @@ export default function MoneyPageContainer() {
       moneyExecutionDescriptorOverride={moneyExecutionDescriptor}
       moneyAutomationConfigOverride={automationConfig}
       moneyAutoStartEnabledOverride={false}
+      moneyAutoEnabledOverride={moneyAutoEnabled}
       moneyViewModeOverride="money-auto-tab"
       onMoneyAutomationConfigChange={(patch) => setAutomationConfig((prev) => ({ ...prev, ...patch }))}
+      onMoneyAutoEnabledChange={setMoneyAutoEnabled}
       headerTitleOverride="ARBITRAGE MONEY"
       headerBadgeValuesOverride={headerBadgeValues}
       headerMetaLabelOverride={headerMetaLabel}
