@@ -35,6 +35,7 @@ export type MoneyPosition = {
   entryCount: number;
   lockedForPrint: boolean;
   pendingIntent: MoneyOrderIntentType | null;
+  entryDispatchedAt: number | null;
   lastConfirmedActiveAt: number | null;
   openedAt: number;
   updatedAt: number;
@@ -460,6 +461,69 @@ function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
     .filter(Boolean) as ArbitrageSignal[];
 }
 
+function moneyPositionsStorageKey(signalClass: string | undefined): string {
+  const suffix = (signalClass ?? "global").trim().toLowerCase() || "global";
+  return `money.arbitrage.positions.${suffix}`;
+}
+
+function shouldPersistMoneyPosition(row: MoneyPosition): boolean {
+  if (row.status === "CLOSED") return false;
+  if (row.entryDispatchedAt != null) return true;
+  if (row.lastConfirmedActiveAt != null) return true;
+  return !isEntryOrderIntent(row.pendingIntent);
+}
+
+function readPersistedMoneyPositions(storageKey: string): MoneyPosition[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const row = item as Partial<MoneyPosition>;
+        const ticker = String(row.ticker ?? "").trim().toUpperCase();
+        if (!ticker) return null;
+        const side = row.side === "Short" ? "Short" : "Long";
+        const status = row.status === "EXIT_BLOCKED" || row.status === "PRINT_PENDING" || row.status === "CLOSED" ? row.status : "OPEN";
+        return {
+          ticker,
+          benchmark: String(row.benchmark ?? "UNKNOWN").trim().toUpperCase() || "UNKNOWN",
+          side,
+          entrySignal: toNum(row.entrySignal),
+          lastSignal: toNum(row.lastSignal),
+          lastScaleSignal: toNum(row.lastScaleSignal),
+          spread: toNum(row.spread),
+          status,
+          reason: String(row.reason ?? "").trim() || "restored persisted MONEY position",
+          entryCount: Math.max(1, Math.trunc(toNum(row.entryCount) ?? 1)),
+          lockedForPrint: Boolean(row.lockedForPrint),
+          pendingIntent:
+            row.pendingIntent === "ENTER_LONG_AGGRESSIVE" ||
+            row.pendingIntent === "ENTER_SHORT_AGGRESSIVE" ||
+            row.pendingIntent === "EXIT_LONG_AGGRESSIVE" ||
+            row.pendingIntent === "EXIT_SHORT_AGGRESSIVE" ||
+            row.pendingIntent === "EXIT_LONG_PRINT" ||
+            row.pendingIntent === "EXIT_SHORT_PRINT" ||
+            row.pendingIntent === "CLOSE_ALL_PRINT"
+              ? row.pendingIntent
+              : null,
+          entryDispatchedAt: toNum(row.entryDispatchedAt),
+          lastConfirmedActiveAt: toNum(row.lastConfirmedActiveAt),
+          openedAt: Math.max(0, Math.trunc(toNum(row.openedAt) ?? Date.now())),
+          updatedAt: Math.max(0, Math.trunc(toNum(row.updatedAt) ?? Date.now())),
+        } satisfies MoneyPosition;
+      })
+      .filter((row): row is MoneyPosition => row !== null)
+      .filter(shouldPersistMoneyPosition)
+      .sort((a, b) => a.ticker.localeCompare(b.ticker));
+  } catch {
+    return [];
+  }
+}
+
 function syncMoneySignalLatches(
   prev: MoneySignalLatch[],
   decisions: MoneyDecisionRow[],
@@ -646,6 +710,7 @@ export function syncMoneyPositions(
           entryCount: Math.max(1, existing?.entryCount ?? 1),
           lockedForPrint: inPrintWindow,
           pendingIntent: null,
+          entryDispatchedAt: existing?.entryDispatchedAt ?? now,
           lastConfirmedActiveAt: now,
           openedAt: existing?.openedAt ?? (now - minHoldMs),
           updatedAt: now,
@@ -692,11 +757,15 @@ export function syncMoneyPositions(
       let lockedForPrint = existing.lockedForPrint;
       let entryCount = existing.entryCount;
       let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
+      let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       const decision = decisionMap.get(existing.ticker);
 
       if (positionIsActive) {
         lastConfirmedActiveAt = now;
+        if (entryDispatchedAt == null) {
+          entryDispatchedAt = now;
+        }
       }
 
       if (!rawSeen) {
@@ -802,6 +871,7 @@ export function syncMoneyPositions(
         entryCount,
         lockedForPrint,
         pendingIntent,
+        entryDispatchedAt,
         lastConfirmedActiveAt,
         updatedAt: now,
       });
@@ -839,6 +909,7 @@ export function syncMoneyPositions(
               ? (latch.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
               : null)
           : (latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE"),
+        entryDispatchedAt: positionAlreadyActive ? now : null,
         lastConfirmedActiveAt: positionAlreadyActive ? now : null,
         openedAt: now,
         updatedAt: now,
@@ -868,6 +939,7 @@ export function syncMoneyPositions(
         pendingIntent: entryCutoffEnabled && nowMinutes >= printStartMinutes
           ? (side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
           : null,
+        entryDispatchedAt: now,
         lastConfirmedActiveAt: now,
         openedAt: now - minHoldMs,
         updatedAt: now,
@@ -902,6 +974,7 @@ export function syncMoneyPositions(
           openedAt: existing.openedAt,
           status: nowMinutes >= printStartMinutes ? "PRINT_PENDING" : "OPEN",
           reason: nowMinutes >= printStartMinutes ? "print order armed" : "holding for print window",
+          entryDispatchedAt: existing.entryDispatchedAt,
           updatedAt: now,
         });
         seen.add(existing.ticker);
@@ -913,6 +986,7 @@ export function syncMoneyPositions(
         openedAt: existing.openedAt,
         status: blocked && automationConfig?.noSpreadExit !== false ? "EXIT_BLOCKED" : "CLOSED",
         reason: blocked && automationConfig?.noSpreadExit !== false ? "exit blocked by spread" : "signal cleared",
+        entryDispatchedAt: existing.entryDispatchedAt,
         updatedAt: now,
       });
       seen.add(existing.ticker);
@@ -951,6 +1025,7 @@ export function syncMoneyPositions(
       entryCount: existing.entryCount,
       lockedForPrint: existing.lockedForPrint,
       pendingIntent: null,
+      entryDispatchedAt: existing.entryDispatchedAt,
       updatedAt: now,
     });
     seen.add(existing.ticker);
@@ -975,6 +1050,7 @@ export function syncMoneyPositions(
       entryCount: 1,
       lockedForPrint: false,
       pendingIntent: null,
+      entryDispatchedAt: now,
       lastConfirmedActiveAt: null,
       openedAt: now,
       updatedAt: now,
@@ -1281,9 +1357,10 @@ export function useMoneyEngine({
   const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
+  const positionsStorageKey = moneyPositionsStorageKey(signalClass);
   const [moneySignals, setMoneySignals] = useState<ArbitrageSignal[]>([]);
   const [moneyDecisions, setMoneyDecisions] = useState<MoneyDecisionRow[]>([]);
-  const [moneyPositions, setMoneyPositions] = useState<MoneyPosition[]>([]);
+  const [moneyPositions, setMoneyPositions] = useState<MoneyPosition[]>(() => readPersistedMoneyPositions(positionsStorageKey));
   const [moneyOrderIntents, setMoneyOrderIntents] = useState<MoneyOrderIntent[]>([]);
   const [moneySignalLatches, setMoneySignalLatches] = useState<MoneySignalLatch[]>([]);
   const [moneyAutoEnabled, setMoneyAutoEnabledState] = useState<boolean>(initialAutoEnabled);
@@ -1311,6 +1388,29 @@ export function useMoneyEngine({
     moneyAutoEnabledRef.current = resolved;
     setMoneyAutoEnabledState(resolved);
   }, []);
+
+  useEffect(() => {
+    setMoneyPositions(readPersistedMoneyPositions(positionsStorageKey));
+    setMoneySignalLatches([]);
+    setMoneyOrderIntents([]);
+    dispatchedIntentIdsRef.current.clear();
+    dispatchedHedgeIntentIdsRef.current.clear();
+    recentDispatchAttemptsRef.current.clear();
+  }, [positionsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const next = moneyPositions.filter(shouldPersistMoneyPosition);
+      if (!next.length) {
+        window.localStorage.removeItem(positionsStorageKey);
+        return;
+      }
+      window.localStorage.setItem(positionsStorageKey, JSON.stringify(next));
+    } catch {
+      // ignore storage issues
+    }
+  }, [moneyPositions, positionsStorageKey]);
 
   const refreshExecutionStatus = useCallback(async (): Promise<TradingAppExecutionSnapshot | null> => {
     try {
@@ -2001,6 +2101,17 @@ export function useMoneyEngine({
             type,
             note: intent.reason,
           });
+          setMoneyPositions((prev) => prev.map((row) => {
+            if (row.ticker !== intent.ticker) return row;
+            return {
+              ...row,
+              entryDispatchedAt: row.entryDispatchedAt ?? Date.now(),
+              reason: isEntryIntent && row.lastConfirmedActiveAt == null
+                ? "entry queued | awaiting PositionBp activation"
+                : row.reason,
+              updatedAt: Date.now(),
+            };
+          }));
           dispatchedIntentIdsRef.current.add(intent.id);
           recentDispatchAttemptsRef.current.set(dispatchKey, Date.now());
           sentDispatchKeys.add(dispatchKey);

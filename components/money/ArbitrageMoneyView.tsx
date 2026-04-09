@@ -549,6 +549,11 @@ export default function ArbitrageMoneyView({
 
     for (const position of moneyPositions) {
       if (position.status === "CLOSED") continue;
+      const isPendingUnsentEntry =
+        position.entryDispatchedAt == null &&
+        position.lastConfirmedActiveAt == null &&
+        (position.pendingIntent === "ENTER_LONG_AGGRESSIVE" || position.pendingIntent === "ENTER_SHORT_AGGRESSIVE");
+      if (isPendingUnsentEntry) continue;
       const decision = decisionByTicker.get(position.ticker);
       const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
       const spread = decision?.spread ?? position.spread;
@@ -566,7 +571,10 @@ export default function ArbitrageMoneyView({
 
     for (const row of moneyDecisions) {
       if ((row.positionBp ?? 0) === 0 || rows.has(row.ticker)) continue;
-      rows.set(row.ticker, row);
+      rows.set(row.ticker, {
+        ...row,
+        status: "OPEN",
+      });
     }
 
     return Array.from(rows.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
@@ -574,7 +582,14 @@ export default function ArbitrageMoneyView({
   const activeTickers = new Set(activeDecisionRows.map((row) => row.ticker));
   const signalDecisionRows = moneyDecisions.filter((row) => (row.positionBp ?? 0) === 0 && !activeTickers.has(row.ticker));
   const entryReadyCount = signalDecisionRows.filter((x) => x.status === "ENTRY_READY").length;
-  const openCount = moneyPositions.filter((x) => x.status === "OPEN").length;
+  const openCount = moneyPositions.filter((x) =>
+    x.status === "OPEN" &&
+    (
+      x.entryDispatchedAt != null ||
+      x.lastConfirmedActiveAt != null ||
+      (x.pendingIntent !== "ENTER_LONG_AGGRESSIVE" && x.pendingIntent !== "ENTER_SHORT_AGGRESSIVE")
+    )
+  ).length;
   const exitBlockedCount = moneyPositions.filter((x) => x.status === "EXIT_BLOCKED").length;
   const closedCount = moneyPositions.filter((x) => x.status === "CLOSED").length;
   const blockedEdgeCount = signalDecisionRows.filter((x) => x.status === "BLOCKED_EDGE").length;

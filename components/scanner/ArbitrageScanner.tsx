@@ -10097,7 +10097,14 @@ export default function ArbitrageScanner({
   const moneyStats = useMemo(() => ({
     signals: moneySignals.length,
     ready: moneyDecisions.filter((x) => x.status === "ENTRY_READY").length,
-    open: moneyPositions.filter((x) => x.status === "OPEN").length,
+    open: moneyPositions.filter((x) =>
+      x.status === "OPEN" &&
+      (
+        x.entryDispatchedAt != null ||
+        x.lastConfirmedActiveAt != null ||
+        (x.pendingIntent !== "ENTER_LONG_AGGRESSIVE" && x.pendingIntent !== "ENTER_SHORT_AGGRESSIVE")
+      )
+    ).length,
     autoEnabled: moneyAutoEnabled,
   }), [moneyDecisions, moneyPositions, moneySignals.length, moneyAutoEnabled]);
   const scannerShellTitle = isMoneyOnlyShell
