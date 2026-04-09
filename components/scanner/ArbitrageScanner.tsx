@@ -7980,7 +7980,17 @@ export default function ArbitrageScanner({
 
     if (moneyAutomationRunning) {
       try {
-        await toggleMoneyPanicOff(true);
+        const response = await fetch(apiUrl("/api/money/automation/stop"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: "scanner-header",
+          }),
+        });
+        const json = await response.json().catch(() => ({}));
+        if (!response.ok || json?.ok === false) {
+          throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
+        }
       } finally {
         try {
           await clearMoneyExecutionQueue();
@@ -7995,7 +8005,17 @@ export default function ArbitrageScanner({
     }
 
     resetMoneyAutomationState();
-    await toggleMoneyPanicOff(false);
+    const response = await fetch(apiUrl("/api/money/automation/start"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "scanner-header",
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.ok === false) {
+      throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
+    }
     onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
     setMoneyAutoEnabled(true);
     await new Promise((resolve) => window.setTimeout(resolve, 0));
