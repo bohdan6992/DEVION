@@ -1,8 +1,9 @@
 "use client";
 
 import clsx from "clsx";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type {
+  MoneyActionLogEntry,
   MainWindowDataSnapshot,
   MarketMakerBookSnapshot,
   MoneyAutomationConfig,
@@ -21,8 +22,12 @@ type ArbitrageMoneyViewProps = {
   moneySignalsCount: number;
   moneyDecisions: MoneyDecisionRow[];
   moneyPositions: MoneyPosition[];
+  moneyActionLog: MoneyActionLogEntry[];
   moneyOrderIntents: MoneyOrderIntent[];
   moneyAutoEnabled: boolean;
+  moneySessionStartedAt: number | null;
+  moneySessionStoppedAt: number | null;
+  moneySentOrdersCount: number;
   onSetAutoEnabled: (enabled: boolean) => void;
   executionSnapshot: TradingAppExecutionSnapshot | null;
   bookSnapshot: MarketMakerBookSnapshot | null;
@@ -229,11 +234,11 @@ function MainWindowBookSplitCard({
         </div>
       </div>
 
-      <div className="flex h-full flex-col rounded-xl border border-white/10 bg-black/20 p-3">
-        <div className="grid flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
+      <div className="flex h-full flex-col rounded-xl border border-white/10 bg-black/20">
+        <div className="grid h-full flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
           <div
-            className="flex h-full flex-col rounded-lg px-3 py-3"
-            style={{ border: `1px solid ${MONEY_BID_MINT_SOFT}`, backgroundColor: MONEY_BID_MINT_PANEL }}
+            className="flex h-full flex-col rounded-xl px-4 py-4"
+            style={{ border: `1px solid rgba(126, 247, 212, 0.09)`, backgroundColor: "rgba(126, 247, 212, 0.036)" }}
           >
             <div
               className="flex items-center justify-between gap-3 pb-2"
@@ -260,7 +265,7 @@ function MainWindowBookSplitCard({
             </div>
           </div>
 
-          <div className="flex h-full flex-col rounded-lg border border-rose-500/10 bg-rose-500/[0.03] px-3 py-3">
+          <div className="flex h-full flex-col rounded-xl border border-[rgba(244,63,94,0.09)] bg-[rgba(244,63,94,0.027)] px-4 py-4">
             <div className="flex items-center justify-between gap-3 border-b border-rose-500/10 pb-2">
               <div className="text-[10px] uppercase tracking-widest font-mono text-rose-200">Asks</div>
               <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
@@ -309,6 +314,27 @@ function timeToMinutes(value: string | undefined, fallback: number): number {
   const mm = Number(match[2]);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return fallback;
   return Math.max(0, Math.min(23 * 60 + 59, hh * 60 + mm));
+}
+
+function formatActionLogTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return "-";
+  return new Date(timestamp).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatRuntime(startedAt: number | null, stoppedAt: number | null): string {
+  if (!startedAt || !Number.isFinite(startedAt)) return "-";
+  const end = stoppedAt && Number.isFinite(stoppedAt) ? stoppedAt : Date.now();
+  const elapsedMs = Math.max(0, end - startedAt);
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
 }
 
 function MetricCard({
@@ -403,6 +429,75 @@ function MoneyDecisionTable({
   );
 }
 
+function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
+  return (
+    <div className="scanner-panel-surface flex h-[284px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="flex items-start justify-between gap-4 px-3 py-3">
+        <div>
+          <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+            Log
+          </div>
+        </div>
+        <div className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400">
+          {intn(rows.length)} rows
+        </div>
+      </div>
+      <div className="border-t border-white/[0.06]" />
+      <div className="flex-1 overflow-y-auto overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <table className="min-w-[880px] w-full text-xs font-mono">
+        <thead className="sticky top-0 z-10 bg-[#0a0a0a]/45 text-zinc-300 backdrop-blur-xl">
+          <tr>
+            <th className="text-left p-2.5">Time</th>
+            <th className="text-left p-2.5">Ticker</th>
+            <th className="text-left p-2.5">Bench</th>
+            <th className="text-left p-2.5">Side</th>
+            <th className="text-left p-2.5">Action</th>
+            <th className="text-right p-2.5">Deviation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr
+              key={row.id}
+              className={clsx(
+                "transition-colors",
+                i % 2 === 0 ? "bg-white/[0.015]" : "bg-transparent",
+                "hover:bg-white/[0.03]"
+              )}
+            >
+              <td className="p-2.5 text-zinc-400">{formatActionLogTime(row.at)}</td>
+              <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
+              <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
+              <td className="p-2.5"><SideBadge side={row.side} /></td>
+              <td className="p-2.5">
+                <span className={clsx(
+                  "inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border",
+                  row.kind === "CLOSE"
+                    ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                    : row.kind === "ADD"
+                      ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+                      : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                )}>
+                  {row.kind}
+                </span>
+              </td>
+              <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.deviation, 2)}</td>
+            </tr>
+          ))}
+          {!rows.length && (
+            <tr>
+              <td colSpan={6} className="p-8 text-center text-zinc-500">
+                No MONEY actions recorded for today yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function SideBadge({ side }: { side: "Long" | "Short" }) {
   const colorClass = side === "Long"
     ? "bg-[#6ee7b7]/10 text-[#6ee7b7] border-[#6ee7b7]/20"
@@ -482,8 +577,12 @@ export default function ArbitrageMoneyView({
   moneySignalsCount,
   moneyDecisions,
   moneyPositions,
+  moneyActionLog,
   moneyOrderIntents,
   moneyAutoEnabled,
+  moneySessionStartedAt,
+  moneySessionStoppedAt,
+  moneySentOrdersCount,
   onSetAutoEnabled,
   executionSnapshot,
   bookSnapshot,
@@ -569,18 +668,10 @@ export default function ArbitrageMoneyView({
       });
     }
 
-    for (const row of moneyDecisions) {
-      if ((row.positionBp ?? 0) === 0 || rows.has(row.ticker)) continue;
-      rows.set(row.ticker, {
-        ...row,
-        status: "OPEN",
-      });
-    }
-
     return Array.from(rows.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
   })();
   const activeTickers = new Set(activeDecisionRows.map((row) => row.ticker));
-  const signalDecisionRows = moneyDecisions.filter((row) => (row.positionBp ?? 0) === 0 && !activeTickers.has(row.ticker));
+  const signalDecisionRows = moneyDecisions.filter((row) => !activeTickers.has(row.ticker));
   const entryReadyCount = signalDecisionRows.filter((x) => x.status === "ENTRY_READY").length;
   const openCount = moneyPositions.filter((x) =>
     x.status === "OPEN" &&
@@ -593,6 +684,10 @@ export default function ArbitrageMoneyView({
   const exitBlockedCount = moneyPositions.filter((x) => x.status === "EXIT_BLOCKED").length;
   const closedCount = moneyPositions.filter((x) => x.status === "CLOSED").length;
   const blockedEdgeCount = signalDecisionRows.filter((x) => x.status === "BLOCKED_EDGE").length;
+  const runtimeLabel = useMemo(
+    () => formatRuntime(moneySessionStartedAt, moneySessionStoppedAt),
+    [moneySessionStartedAt, moneySessionStoppedAt, updatedLabel]
+  );
 
   const toggleAutomationRun = async () => {
     if (!automationControlAllowed) return;
@@ -642,14 +737,6 @@ export default function ArbitrageMoneyView({
     if (showAutomationWorkspace) {
       return (
         <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <MetricCard label="ACTIVE SITUATIONS" value={intn(activeDecisionRows.length)} />
-            <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
-            <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
-            <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
-            <MetricCard label="LIST MODE" value={listModeLabel} />
-            <MetricCard label="UPDATED" value={updatedLabel ?? "-"} />
-          </div>
           {!hideAutomationButtons && (
             <div className="flex items-center gap-2">
               {automationControlAllowed ? (
@@ -694,6 +781,23 @@ export default function ArbitrageMoneyView({
             executionMessage={executionCurrent?.message}
             bookSnapshot={bookSnapshot}
           />
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <MetricCard label="ACTIVE SITUATIONS" value={intn(activeDecisionRows.length)} />
+              <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+              <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
+              <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
+              <MetricCard label="LIST MODE" value={listModeLabel} />
+              <MetricCard label="UPDATED" value={updatedLabel ?? "-"} />
+              <MetricCard label="SENT ORDERS" value={intn(moneySentOrdersCount)} />
+              <MetricCard label="RUN TIME" value={runtimeLabel} />
+              <MetricCard label="AUTO MODE" value={automationRunning ? "ON" : "OFF"} valueClassName={automationRunning ? accentActiveTextClass : "text-zinc-400"} />
+              <MetricCard label="BLOCKED EDGE" value={intn(blockedEdgeCount)} valueClassName="text-amber-200" />
+              <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-amber-200" />
+              <MetricCard label="CLOSED" value={intn(closedCount)} />
+            </div>
+            <MoneyActionLogTable rows={moneyActionLog} />
+          </div>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <MoneyDecisionTable
               title="ACTIVE"

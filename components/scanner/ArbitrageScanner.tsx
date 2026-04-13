@@ -7847,8 +7847,12 @@ export default function ArbitrageScanner({
     moneySignals,
     moneyDecisions,
     moneyPositions,
+    moneyActionLog,
     moneyOrderIntents,
     moneyAutoEnabled,
+    moneySessionStartedAt,
+    moneySessionStoppedAt,
+    moneySentOrdersCount,
     setMoneyAutoEnabled,
     moneyExecutionSnapshot,
     moneyBookSnapshot,
@@ -12243,8 +12247,12 @@ export default function ArbitrageScanner({
             moneySignalsCount={moneySignals.length}
             moneyDecisions={sortedMoneyDecisions}
             moneyPositions={moneyPositions}
+            moneyActionLog={moneyActionLog}
             moneyOrderIntents={moneyOrderIntents}
             moneyAutoEnabled={effectiveMoneyAutoEnabled}
+            moneySessionStartedAt={moneySessionStartedAt}
+            moneySessionStoppedAt={moneySessionStoppedAt}
+            moneySentOrdersCount={moneySentOrdersCount}
             onSetAutoEnabled={applyMoneyAutoEnabled}
             executionSnapshot={moneyExecutionSnapshot}
             bookSnapshot={moneyBookSnapshot}
