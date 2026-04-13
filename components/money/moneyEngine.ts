@@ -30,7 +30,7 @@ export type MoneyPosition = {
   lastSignal: number | null;
   lastScaleSignal: number | null;
   spread: number | null;
-  status: "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
+  status: "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
   reason: string;
   entryCount: number;
   lockedForPrint: boolean;
@@ -764,7 +764,7 @@ export function syncMoneyPositions(
 
   if (!autoEnabled) {
     return prev
-      .filter((row) => row.status !== "CLOSED")
+      .filter((row) => row.status !== "CLOSED" && row.entryDispatchedAt != null)
       .map((existing) => {
         const raw = filteredSignalMap.get(existing.ticker) ?? signalMap.get(existing.ticker);
         const currentSignal = signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
@@ -834,7 +834,7 @@ export function syncMoneyPositions(
           continue;
         }
 
-        status = "OPEN";
+        status = "PENDING_ENTRY";
         reason = "awaiting entry dispatch";
         pendingIntent = isEntryOrderIntent(existing.pendingIntent)
           ? existing.pendingIntent
@@ -976,7 +976,7 @@ export function syncMoneyPositions(
         lastSignal: currentSigned,
         lastScaleSignal: currentSigned,
         spread: currentSpread,
-        status: "OPEN",
+        status: "PENDING_ENTRY",
         reason: `entered after hold ${automationConfig.minHoldMinutes}s`,
         entryCount: 1,
         lockedForPrint: false,
@@ -1118,7 +1118,10 @@ export function buildMoneyOrderIntents(
 
   if (automationConfig?.strategyModeEnabled) {
     if (entryCutoffEnabled && nowMinutes >= printStartMinutes) {
-      const representativePosition = positions.find((position) => position.status !== "CLOSED") ?? null;
+      const representativePosition = positions.find((position) =>
+        position.status !== "CLOSED" &&
+        position.status !== "PENDING_ENTRY"
+      ) ?? null;
       if (!representativePosition) return [];
       return [{
         id: intentId(["close-all-print", "strategy", "armed"]),
@@ -1836,9 +1839,10 @@ export function useMoneyEngine({
         })
       : null;
 
-    const [response, activeTrackedSignalsResponse] = await Promise.all([
+    const [response, activeTrackedSignalsResponse, executionSnapshot] = await Promise.all([
       fetch(url, { cache: "no-store" }),
       activeTrackedSignalsUrl ? fetch(activeTrackedSignalsUrl, { cache: "no-store" }) : Promise.resolve(null),
+      refreshExecutionStatus(false),
     ]);
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -1878,7 +1882,7 @@ export function useMoneyEngine({
       bookSnapshot ?? moneyBookSnapshot
     );
 
-    const autoEnabledNow = moneyAutoEnabledRef.current;
+    const autoEnabledNow = moneyAutoEnabledRef.current && !(executionSnapshot?.panicOff ?? false);
     const currentCount = filtered.length;
     const prevCount = prevFilteredCountRef.current;
     prevFilteredCountRef.current = currentCount;
@@ -1951,7 +1955,6 @@ export function useMoneyEngine({
     setMoneySignalLatches(nextLatches);
     setMoneyPositions(nextPositions);
     setMoneyOrderIntents(intents);
-    await refreshExecutionStatus(false);
     onUpdated?.();
     onError?.(null);
     } finally {
@@ -2198,6 +2201,7 @@ export function useMoneyEngine({
         };
 
         if (!primaryAlreadyDispatched) {
+          const dispatchAt = Date.now();
           await queueLegWithRetry({
             intentId: intent.id,
             ticker: intent.ticker,
@@ -2209,25 +2213,31 @@ export function useMoneyEngine({
             if (row.ticker !== intent.ticker) return row;
             return {
               ...row,
-              entryDispatchedAt: row.entryDispatchedAt ?? Date.now(),
+              status: isEntryIntent
+                ? "OPEN"
+                : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT"
+                  ? "PRINT_PENDING"
+                  : row.status,
+              pendingIntent: isEntryIntent ? null : row.pendingIntent,
+              entryDispatchedAt: row.entryDispatchedAt ?? dispatchAt,
               reason: isEntryIntent && row.lastConfirmedActiveAt == null
                 ? "entry queued | recorded in action log"
                 : row.reason,
-              updatedAt: Date.now(),
+              updatedAt: dispatchAt,
             };
           }));
           if (intent.intent === "CLOSE_ALL_PRINT") {
             appendMoneyActionLogEntries(
               openLoggedPositions
                 .map((row) => ({
-                  id: `${row.ticker}|CLOSE|${Date.now()}`,
+                  id: `${row.ticker}|CLOSE|${dispatchAt}`,
                   dayKey: localDayKey(),
                   ticker: row.ticker,
                   benchmark: row.benchmark,
                   side: row.side,
                   kind: "CLOSE" as const,
                   deviation: row.lastSignal ?? row.entrySignal,
-                  at: Date.now(),
+                  at: dispatchAt,
                   intent: "CLOSE_ALL_PRINT" as const,
                 }))
             );
@@ -2237,26 +2247,26 @@ export function useMoneyEngine({
               ? (correspondingPosition.lastScaleSignal ?? correspondingPosition.lastSignal ?? correspondingPosition.entrySignal)
               : (correspondingPosition.entrySignal ?? correspondingPosition.lastSignal);
             appendMoneyActionLogEntries([{
-              id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${Date.now()}`,
+              id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
               benchmark: intent.benchmark,
               side: intent.side,
               kind: isAdd ? "ADD" : "ENTRY",
               deviation,
-              at: Date.now(),
+              at: dispatchAt,
               intent: intent.intent,
             }]);
           } else if (isExitIntent && correspondingPosition) {
             appendMoneyActionLogEntries([{
-              id: `${intent.ticker}|CLOSE|${Date.now()}`,
+              id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
               benchmark: intent.benchmark,
               side: intent.side,
               kind: "CLOSE",
               deviation: correspondingPosition.lastSignal ?? correspondingPosition.entrySignal,
-              at: Date.now(),
+              at: dispatchAt,
               intent: intent.intent,
             }]);
           }

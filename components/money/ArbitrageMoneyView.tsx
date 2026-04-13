@@ -515,6 +515,8 @@ function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | Mon
   const className =
     isGreenStatus
       ? ""
+      : status === "PENDING_ENTRY"
+        ? "border-white/10 bg-white/[0.04] text-zinc-400"
       : status === "BLOCKED_SPREAD"
         ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
         : status === "BLOCKED_EDGE"
@@ -647,12 +649,7 @@ export default function ArbitrageMoneyView({
     }>();
 
     for (const position of moneyPositions) {
-      if (position.status === "CLOSED") continue;
-      const isPendingUnsentEntry =
-        position.entryDispatchedAt == null &&
-        position.lastConfirmedActiveAt == null &&
-        (position.pendingIntent === "ENTER_LONG_AGGRESSIVE" || position.pendingIntent === "ENTER_SHORT_AGGRESSIVE");
-      if (isPendingUnsentEntry) continue;
+      if (position.status === "CLOSED" || position.status === "PENDING_ENTRY") continue;
       const decision = decisionByTicker.get(position.ticker);
       const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
       const spread = decision?.spread ?? position.spread;
@@ -674,7 +671,7 @@ export default function ArbitrageMoneyView({
   const signalDecisionRows = moneyDecisions.filter((row) => !activeTickers.has(row.ticker));
   const entryReadyCount = signalDecisionRows.filter((x) => x.status === "ENTRY_READY").length;
   const openCount = moneyPositions.filter((x) =>
-    x.status === "OPEN" &&
+    (x.status === "OPEN" || x.status === "PRINT_PENDING" || x.status === "EXIT_BLOCKED") &&
     (
       x.entryDispatchedAt != null ||
       x.lastConfirmedActiveAt != null ||
