@@ -535,7 +535,7 @@ function syncMoneySignalLatches(
   if (!autoEnabled || !automationConfig?.strategyModeEnabled) return [];
 
   const now = Date.now();
-  const minHoldMs = Math.max(0, automationConfig.minHoldMinutes ?? 0) * 60 * 1000;
+  const minHoldMs = Math.max(0, automationConfig.minHoldMinutes ?? 0) * 1000;
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return [];
@@ -683,7 +683,7 @@ export function syncMoneyPositions(
     const now = Date.now();
     const nowMinutes = currentMinutesLocal();
     const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
-    const minHoldMs = Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 60 * 1000;
+    const minHoldMs = Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 1000;
     const prevByTicker = new Map(
       prev
         .filter((row) => row.status !== "CLOSED")
@@ -731,7 +731,7 @@ export function syncMoneyPositions(
     const next: MoneyPosition[] = [];
     const seen = new Set<string>();
     const endThreshold = Math.max(0, automationConfig.endSignalThreshold ?? 0);
-    const minHoldMs = Math.max(0, automationConfig.minHoldMinutes ?? 0) * 60 * 1000;
+    const minHoldMs = Math.max(0, automationConfig.minHoldMinutes ?? 0) * 1000;
     const maxOpenAllowed = entryCutoffEnabled
       ? (automationConfig.maxOpenPositions ?? Number.MAX_SAFE_INTEGER)
       : Number.MAX_SAFE_INTEGER;
@@ -812,7 +812,7 @@ export function syncMoneyPositions(
           pendingIntent = null;
         } else if (holdBlocked) {
           status = "OPEN";
-          reason = `min hold ${automationConfig.minHoldMinutes}m not reached`;
+          reason = `min hold ${automationConfig.minHoldMinutes}s not reached`;
           pendingIntent = null;
         } else {
           status = "CLOSED";
@@ -901,7 +901,7 @@ export function syncMoneyPositions(
         status: positionAlreadyActive && entryCutoffEnabled && nowMinutes >= printStartMinutes ? "PRINT_PENDING" : "OPEN",
         reason: positionAlreadyActive
           ? "detected active PositionBp"
-          : `entered after hold ${automationConfig.minHoldMinutes}m`,
+          : `entered after hold ${automationConfig.minHoldMinutes}s`,
         entryCount: 1,
         lockedForPrint: positionAlreadyActive && entryCutoffEnabled && nowMinutes >= printStartMinutes,
         pendingIntent: positionAlreadyActive
@@ -1196,7 +1196,7 @@ export function buildMoneyOrderIntents(
     }
 
     if (!decision || (decision.status !== "ENTRY_READY" && !printWindowEnabled)) {
-      const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 60 * 1000;
+      const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 1000;
       intents.push({
         id: intentId([position.ticker, "normalize-exit", position.side]),
         ticker: position.ticker,
@@ -1206,7 +1206,7 @@ export function buildMoneyOrderIntents(
         sequence: position.entryCount,
         priceRef: automationConfig?.exitExecutionMode === "passive" ? (position.side === "Long" ? "ASK" : "BID") : (position.side === "Long" ? "BID" : "ASK"),
         status: holdBlocked ? "BLOCKED" : "QUEUED",
-        reason: holdBlocked ? `min hold ${automationConfig?.minHoldMinutes}m not reached` : `normalization exit | ${automationConfig?.exitExecutionMode === "passive" ? "passive" : "active"}`,
+        reason: holdBlocked ? `min hold ${automationConfig?.minHoldMinutes}s not reached` : `normalization exit | ${automationConfig?.exitExecutionMode === "passive" ? "passive" : "active"}`,
         createdAt: now,
       });
     }
@@ -1700,11 +1700,39 @@ export function useMoneyEngine({
       maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
       minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
       maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
+      includeAll: true,
     });
 
-    const [response, activePositionsResponse] = await Promise.all([
+    const activeTrackedTickers = Array.from(new Set(
+      moneyPositions
+        .filter((row) => row.status !== "CLOSED" && shouldPersistMoneyPosition(row))
+        .map((row) => row.ticker)
+        .filter(Boolean)
+    ));
+    const activeTrackedSignalsUrl = activeTrackedTickers.length
+      ? buildSignalsUrl({
+          cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
+          type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
+          mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
+          ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+          zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
+          minRate: 0,
+          minTotal: 1,
+          tickers: activeTrackedTickers.join(","),
+          minCorr: undefined,
+          maxCorr: undefined,
+          minBeta: undefined,
+          maxBeta: undefined,
+          minSigma: undefined,
+          maxSigma: undefined,
+          includeAll: true,
+        })
+      : null;
+
+    const [response, activePositionsResponse, activeTrackedSignalsResponse] = await Promise.all([
       fetch(url, { cache: "no-store" }),
       fetch(bridgeUrl("/api/live/snapshot?fields=PositionBp,Benchmark,BenchBidLstCls%CE%94%25,BenchAskLstCls%CE%94%25,bench.Bid,bench.Ask,bench.LstCls,bench.YCls"), { cache: "no-store" }),
+      activeTrackedSignalsUrl ? fetch(activeTrackedSignalsUrl, { cache: "no-store" }) : Promise.resolve(null),
     ]);
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -1715,6 +1743,19 @@ export function useMoneyEngine({
     const rawItems: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
     const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
     const normalizedByTicker = new Map(normalized.map((row) => [row.ticker, row]));
+
+    if (activeTrackedSignalsResponse?.ok) {
+      const activeTrackedSignalsJson = await activeTrackedSignalsResponse.json().catch(() => ({}));
+      const activeTrackedItems: any[] = Array.isArray(activeTrackedSignalsJson)
+        ? activeTrackedSignalsJson
+        : Array.isArray(activeTrackedSignalsJson?.items)
+          ? activeTrackedSignalsJson.items
+          : [];
+      const activeTrackedSignals = activeTrackedItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+      for (const row of activeTrackedSignals) {
+        normalizedByTicker.set(row.ticker, row);
+      }
+    }
 
     if (activePositionsResponse.ok) {
       const activePositionsJson = await activePositionsResponse.json().catch(() => ({}));

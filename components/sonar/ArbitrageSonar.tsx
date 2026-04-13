@@ -840,6 +840,7 @@ export function buildSignalsUrl(args: {
   maxBeta?: number | null;
   minSigma?: number | null;
   maxSigma?: number | null;
+  includeAll?: boolean;
 }) {
   const {
     cls,
@@ -856,6 +857,7 @@ export function buildSignalsUrl(args: {
     maxBeta,
     minSigma,
     maxSigma,
+    includeAll,
   } = args;
 
   const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
@@ -887,6 +889,9 @@ export function buildSignalsUrl(args: {
   setOptional("maxBeta", maxBeta);
   setOptional("minSigma", minSigma);
   setOptional("maxSigma", maxSigma);
+  if (includeAll) {
+    u.searchParams.set("includeAll", "true");
+  }
 
   return u.toString();
 }

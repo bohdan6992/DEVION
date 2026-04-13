@@ -844,7 +844,7 @@ export default function ArbitrageMoneyView({
         </div>
         <div className="mt-2 text-[11px] font-mono text-zinc-500">
           {strategyModeEnabled
-            ? `SONAR mode watches live SONAR situations, enters after MINHOLD, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and prints everything at ${automationConfig.printStartTime}.`
+            ? `SONAR mode watches live SONAR situations, enters after MINHOLD seconds, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and prints everything at ${automationConfig.printStartTime}.`
             : "SONAR mode is off. AUTO keeps using the legacy MONEY intent builder."}
         </div>
         {isAutoView && (
