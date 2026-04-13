@@ -896,6 +896,12 @@ export function buildSignalsUrl(args: {
   return u.toString();
 }
 
+export function buildSignalsStreamUrl(args: Parameters<typeof buildSignalsUrl>[0]) {
+  const snapshotUrl = new URL(buildSignalsUrl(args));
+  snapshotUrl.pathname = snapshotUrl.pathname.replace("/api/arbitrage/signals/", "/api/arbitrage/signals-stream/");
+  return snapshotUrl.toString();
+}
+
 /* =========================
    API NORMALIZER
 ========================= */
@@ -1094,7 +1100,6 @@ type MinMaxProps = {
   onToggleMode?: (key: RangeBoundKey) => void;
   minPh?: string;
   maxPh?: string;
-  dataAvailable?: boolean;
   startEditing: () => void;
   stopEditing: () => void;
 };
@@ -1118,20 +1123,17 @@ const createDefaultRangeModes = (): RangeFilterModes =>
 export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
   const hasValue = Boolean(props.min || props.max);
   const isOff = props.mode === "off";
-  const hasData = props.dataAvailable !== false;
-  const showUnavailable = hasValue && !isOff && !hasData;
 
   return (
     <div
-      className={`group flex flex-col gap-1 rounded-xl border p-2 transition-all ${
+      className={clsx(
+        "group flex flex-col gap-1 rounded-xl border p-2 transition-all",
         hasValue
           ? isOff
             ? "border-rose-500/30 bg-rose-500/[0.05]"
-            : showUnavailable
-              ? "border-amber-400/30 bg-amber-400/[0.06]"
             : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
           : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
-      }`}
+      )}
       onFocusCapture={props.startEditing}
       onBlurCapture={(e) => {
         const next = e.relatedTarget as Node | null;
@@ -1142,26 +1144,19 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
       <div className="flex items-center justify-between">
         <div className="mr-1 truncate text-[10px] font-mono uppercase tracking-widest text-zinc-500">{props.label}</div>
         <div className="flex items-center gap-2">
-          {hasValue && props.filterKey && props.onToggleMode &&
-            (showUnavailable ? (
-              <span
-                className="text-[10px] font-mono uppercase text-amber-300"
-                title="No values in the current batch; this filter is temporarily ignored"
-              >
-                N/D
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => props.onToggleMode?.(props.filterKey!)}
-                className={`text-[10px] font-mono transition-colors uppercase ${
-                  isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
-                }`}
-                title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
-              >
-                {isOff ? "OFF" : "ON"}
-              </button>
-            ))}
+          {hasValue && props.filterKey && props.onToggleMode && (
+            <button
+              type="button"
+              onClick={() => props.onToggleMode?.(props.filterKey!)}
+              className={clsx(
+                "text-[10px] font-mono transition-colors uppercase",
+                isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
+              )}
+              title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
+            >
+              {isOff ? "OFF" : "ON"}
+            </button>
+          )}
           {hasValue && (
             <button
               type="button"
@@ -2773,6 +2768,15 @@ export default function ArbitrageSonar() {
   const accentLineClass = sonarAccent.line;
   const accentTextClass = sonarAccent.text;
   const accentTextSoftClass = sonarAccent.textSoft;
+  const sonarActiveFilterStripClass = "flex items-center gap-1.5 self-start";
+  const sonarActiveFilterButtonBaseClass =
+    "inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[11px] font-mono font-bold uppercase leading-none transition-all";
+  const sonarActiveFilterButtonActiveClass = accentButtonClass;
+  const sonarActiveFilterButtonInactiveClass = isLightTheme
+    ? "border border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
+    : "border border-transparent text-[#8b8d97] hover:text-[#cfd1d8] hover:bg-white/[0.03]";
+  const sonarActiveFilterIconClass = isLightTheme ? "text-slate-400" : "text-[#8f919b]";
+  const sonarActiveFilterActiveIconClass = "text-current";
   const secondaryGroupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
   const secondaryButtonBaseClass =
     "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
@@ -2815,6 +2819,69 @@ export default function ArbitrageSonar() {
     { label: "minRate", val: minRate, set: setMinRate, ph: "0.3", step: 0.1, min: 0.0 },
     { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1", step: 1, min: 1, integer: true },
   ];
+
+  const renderSonarActiveFilterIcon = useCallback(
+    (kind: "active" | "inactive" | "all", active: boolean) => {
+      const iconClassName = clsx("shrink-0", active ? sonarActiveFilterActiveIconClass : sonarActiveFilterIconClass);
+      switch (kind) {
+        case "active":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" />
+            </svg>
+          );
+        case "inactive":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 4l16 16" />
+              <path d="M10.6 10.6A2 2 0 0 0 14 12V7a3 3 0 0 0-6 0v10a3 3 0 0 0 5.1 2.1" />
+            </svg>
+          );
+        case "all":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M5 20V10" />
+              <path d="M12 20V4" />
+              <path d="M19 20v-7" />
+            </svg>
+          );
+      }
+    },
+    [sonarActiveFilterActiveIconClass, sonarActiveFilterIconClass]
+  );
 
   const bumpNumField = useCallback((field: NumField, delta: number) => {
     let next = Number.isFinite(field.val) ? field.val + delta : field.min;
@@ -3005,8 +3072,8 @@ export default function ArbitrageSonar() {
   /* ===== Active ticker panel ===== */
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
   const [activePanelVisible, setActivePanelVisible] = useState<boolean>(true);
-  const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(false);
-  const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("expanded");
+  const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(true);
+  const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("mini");
   const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
   const [activeLoading, setActiveLoading] = useState(false);
@@ -3077,8 +3144,8 @@ export default function ArbitrageSonar() {
 
       const tk = typeof s?.activeTicker === "string" ? normalizeTicker(s.activeTicker) : null;
       const vis = typeof s?.visible === "boolean" ? s.visible : true;
-      const col = typeof s?.collapsed === "boolean" ? s.collapsed : false;
-      const mode = s?.mode === "mini" || s?.mode === "expanded" ? s.mode : "expanded";
+      const col = typeof s?.collapsed === "boolean" ? s.collapsed : true;
+      const mode = s?.mode === "mini" || s?.mode === "expanded" ? s.mode : "mini";
 
       setActiveTicker(tk);
       setActivePanelVisible(vis);
@@ -4019,122 +4086,96 @@ export default function ArbitrageSonar() {
   const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
     return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
   }, []);
+  const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
-  /* =========================
-    Fetch signals (stable, race-safe)
-  ========================= */
-
-  const reqIdRef = useRef(0);
-  const inFlightUrlRef = useRef<string | null>(null);
-  const fetchSignals = useCallback(async () => {
-    const f = filtersRef.current;
-    const url = buildSignalsUrl({
-      cls: f.cls,
-      type: f.type,
-      mode: f.mode,
-      ratingMode: f.ratingMode,
-      zapMode: f.zapMode,
-      minRate: f.minRate,
-      minTotal: f.minTotal,
-      tickers: f.tickersFilterNorm || undefined,
-      minCorr: toNum(f.corrMin),
-      maxCorr: toNum(f.corrMax),
-      minBeta: toNum(f.betaMin),
-      maxBeta: toNum(f.betaMax),
-      minSigma: toNum(f.sigmaMin),
-      maxSigma: toNum(f.sigmaMax),
-    });
-    if (inFlightUrlRef.current === url) return;
-    inFlightUrlRef.current = url;
-    const myId = ++reqIdRef.current;
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      const r = await fetch(url, { cache: "no-store" });
-
-      // ignore if a newer request was fired
-      if (myId !== reqIdRef.current) return;
-
-      if (!r.ok) {
-        const txt = await r.text().catch(() => "");
-        setAllItems([]);
-        setItems([]);
-        setError(`HTTP ${r.status}: ${txt || r.statusText}`);
-        return;
-      }
-
-      const j = await r.json();
-      const rawItems: any[] = Array.isArray(j)
-        ? j
-        : Array.isArray(j?.items)
-        ? j.items
+  const applySignalsPayload = useCallback((payload: any, f: typeof snapshot) => {
+    const rawItems: any[] = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
         : [];
 
-      const normalized = rawItems
-        .map(normalizeSignal)
-        .filter(Boolean) as ArbitrageSignal[];
+    const normalized = rawItems
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
 
-      const filtered = applyAllClientFilters(normalized, f);
-      setAllItems(normalized);
-      setItems(filtered);
-      setUpdatedAt(Date.now());
-    } catch (e: any) {
-      if (myId !== reqIdRef.current) return;
-      setAllItems([]);
-      setItems([]);
-      setError(e?.message ?? "Unknown error");
-    } finally {
-      if (inFlightUrlRef.current === url) inFlightUrlRef.current = null;
-      if (myId === reqIdRef.current) setLoading(false);
-    }
+    const filtered = applyAllClientFilters(normalized, f);
+    setAllItems(normalized);
+    setItems(filtered);
+    setUpdatedAt(Date.now());
   }, [applyAllClientFilters]);
 
-  // auto refresh (no stale closure)
+  const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
+    cls: snapshot.cls,
+    type: snapshot.type,
+    mode: snapshot.mode,
+    ratingMode: snapshot.ratingMode,
+    zapMode: snapshot.zapMode,
+    minRate: snapshot.minRate,
+    minTotal: snapshot.minTotal,
+    tickers: snapshot.tickersFilterNorm || undefined,
+    minCorr: toNum(snapshot.corrMin),
+    maxCorr: toNum(snapshot.corrMax),
+    minBeta: toNum(snapshot.betaMin),
+    maxBeta: toNum(snapshot.betaMax),
+    minSigma: toNum(snapshot.sigmaMin),
+    maxSigma: toNum(snapshot.sigmaMax),
+  }), [
+    snapshot.betaMax,
+    snapshot.betaMin,
+    snapshot.cls,
+    snapshot.corrMax,
+    snapshot.corrMin,
+    snapshot.minRate,
+    snapshot.minTotal,
+    snapshot.mode,
+    snapshot.ratingMode,
+    snapshot.sigmaMax,
+    snapshot.sigmaMin,
+    snapshot.tickersFilterNorm,
+    snapshot.type,
+    snapshot.zapMode,
+  ]);
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (isEditingRef.current) return;
-      fetchSignals();
-    }, 2500);
+    if (typeof window === "undefined") return;
+    let cancelled = false;
 
-    return () => clearInterval(timer);
-  }, [fetchSignals]);
+    setLoading(true);
+    setError(null);
 
-  // refetch on snapshot changes (stable dep)
-  const snapshotKey = useMemo(() => {
-    // Prefer a single stable field if present.
-    if (!snapshot) return "";
-    const s: any = snapshot as any;
+    const source = new EventSource(streamSignalsUrl);
 
-    const v = s.updatedAt ?? s.ts ?? s.seq ?? s.version;
-    if (typeof v === "number" || typeof v === "string") return String(v);
-
-    // Fallback: cheap shallow signature (avoids JSON.stringify on large snapshots)
-    try {
-      const keys = Object.keys(s).sort();
-      const parts: string[] = [];
-      const cap = 40;
-
-      for (let i = 0; i < keys.length && i < cap; i++) {
-        const k = keys[i];
-        const val = s[k];
-        if (val == null) parts.push(k);
-        else if (typeof val === "number" || typeof val === "string" || typeof val === "boolean") parts.push(`${k}:${val}`);
-        else if (Array.isArray(val)) parts.push(`${k}[${val.length}]`);
-        else parts.push(`${k}{}`);
+    const handlePayload = (event: MessageEvent<string>) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(event.data);
+        applySignalsPayload(payload, filtersRef.current);
+        setError(null);
+      } catch (error: any) {
+        if (!cancelled) {
+          setError(error?.message ?? "Failed to parse stream payload");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
+    };
 
-      parts.push(`k:${keys.length}`);
-      return parts.join("|");
-    } catch {
-      return "snapshot";
-    }
-  }, [snapshot]);
-  useEffect(() => {
-    if (isEditingRef.current) return;
-    fetchSignals();
-  }, [snapshotKey, fetchSignals]);
+    source.onmessage = handlePayload;
+    source.addEventListener("snapshot", handlePayload as EventListener);
+    source.onerror = () => {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [applySignalsPayload, streamReconnectVersion, streamSignalsUrl]);
 
   // Re-apply client filters immediately on any local filter change.
   useEffect(() => {
@@ -4427,13 +4468,6 @@ export default function ArbitrageSonar() {
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
-  const rangeDataAvailability = useMemo(() => {
-    const keys = Object.keys(RANGE_VALUE_GETTERS) as RangeBoundKey[];
-    return Object.fromEntries(
-      keys.map((key) => [key, allItems.some((s) => RANGE_VALUE_GETTERS[key](s) != null)])
-    ) as Record<RangeBoundKey, boolean>;
-  }, [allItems]);
-
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
   const rawSignalCount = allItems.length;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
@@ -4669,50 +4703,6 @@ export default function ArbitrageSonar() {
               </button>
             </div>
 
-            {/* Group 2: ACTIVE / INACTIVE / ALL */}
-            <div className={secondaryGroupClass}>
-              <button
-                type="button"
-                onClick={() => setActiveMode("onlyActive")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "onlyActive"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show only ACTIVE positions (PositionBp != 0)"
-              >
-                ACTIVE
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveMode("onlyInactive")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "onlyInactive"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show only INACTIVE positions (PositionBp == 0)"
-              >
-                INACTIVE
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveMode("off")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "off"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show ALL positions"
-              >
-                ALL
-              </button>
-            </div>
           </div>
 
 
@@ -4865,9 +4855,9 @@ export default function ArbitrageSonar() {
               {/* REFRESH */}
               <button
                 type="button"
-                onClick={fetchSignals}
+                onClick={() => setStreamReconnectVersion((v) => v + 1)}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95 ${accentOutlineButtonClass}`}
-                title="Refresh"
+                title="Reconnect stream"
               >
                 <svg
                   width="15"
@@ -4908,7 +4898,55 @@ export default function ArbitrageSonar() {
           </div>
         )}
 
-        <div className="mb-3 flex flex-wrap justify-end gap-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className={sonarActiveFilterStripClass}>
+            <button
+              type="button"
+              onClick={() => setActiveMode("onlyActive")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "onlyActive"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show only ACTIVE positions (PositionBp != 0)"
+            >
+              {renderSonarActiveFilterIcon("active", activeMode === "onlyActive")}
+              ACTIVE
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveMode("onlyInactive")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "onlyInactive"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show only INACTIVE positions (PositionBp == 0)"
+            >
+              {renderSonarActiveFilterIcon("inactive", activeMode === "onlyInactive")}
+              INACTIVE
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveMode("off")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "off"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show ALL positions"
+            >
+              {renderSonarActiveFilterIcon("all", activeMode === "off")}
+              ALL
+            </button>
+          </div>
+
+          <div className="ml-auto flex flex-wrap justify-end gap-3">
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
               <button
@@ -4978,6 +5016,7 @@ export default function ArbitrageSonar() {
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         {/* ========================= CONTROLS ========================= */}
@@ -4996,8 +5035,9 @@ export default function ArbitrageSonar() {
           <div className="h-7 w-px self-center bg-white/5" />
 
           <div className="flex h-7 items-center gap-2">
-            <FilterButton active={mode === "all"} label="ALL" onClick={() => setMode("all")} />
-            <FilterButton active={mode === "top"} label="TOP" onClick={() => setMode("top")} />
+            {(["all", "top"] as const).map((m) => (
+              <FilterButton key={m} active={mode === m} label={m.toUpperCase()} onClick={() => setMode(m)} />
+            ))}
           </div>
 
           <div className="h-7 w-px self-center bg-white/5" />
@@ -5228,49 +5268,48 @@ export default function ArbitrageSonar() {
                 )}
               </button>
 
-          </div>
         </div>
 
         {/* ========================= THRESHOLDS GRID ========================= */}
         {!filtersCollapsed && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} dataAvailable={rangeDataAvailability.ADV20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} dataAvailable={rangeDataAvailability.ADV20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} dataAvailable={rangeDataAvailability.ADV90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} dataAvailable={rangeDataAvailability.ADV90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} dataAvailable={rangeDataAvailability.AvPreMhv} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} dataAvailable={rangeDataAvailability.RoundLot} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} dataAvailable={rangeDataAvailability.VWAP} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} dataAvailable={rangeDataAvailability.Spread} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} dataAvailable={rangeDataAvailability.LstPrcL} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
-            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} dataAvailable={rangeDataAvailability.LstCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} dataAvailable={rangeDataAvailability.YCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} dataAvailable={rangeDataAvailability.TCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} dataAvailable={rangeDataAvailability.ClsToClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} dataAvailable={rangeDataAvailability.Lo} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} dataAvailable={rangeDataAvailability.LstClsNewsCnt} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} dataAvailable={rangeDataAvailability.MarketCapM} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} dataAvailable={rangeDataAvailability.PreMhVolNF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} dataAvailable={rangeDataAvailability.VolNFfromLstCls} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} dataAvailable={rangeDataAvailability.AvPostMhVol90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} dataAvailable={rangeDataAvailability.AvPreMhVol90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} dataAvailable={rangeDataAvailability.AvPreMhValue20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} dataAvailable={rangeDataAvailability.AvPreMhValue90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} dataAvailable={rangeDataAvailability.AvgDailyValue20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} dataAvailable={rangeDataAvailability.AvgDailyValue90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} dataAvailable={rangeDataAvailability.Volatility20} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} dataAvailable={rangeDataAvailability.Volatility90} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} dataAvailable={rangeDataAvailability.PreMhMDV20NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} dataAvailable={rangeDataAvailability.PreMhMDV90NF} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} dataAvailable={rangeDataAvailability.VolRel} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} dataAvailable={rangeDataAvailability.PreMhBidLstPrcPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} dataAvailable={rangeDataAvailability.PreMhLoLstPrcPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} dataAvailable={rangeDataAvailability.PreMhHiLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} dataAvailable={rangeDataAvailability.PreMhLoLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} dataAvailable={rangeDataAvailability.LstPrcLstClsPct} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} dataAvailable={rangeDataAvailability.ImbExch925} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} dataAvailable={rangeDataAvailability.ImbExch1555} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
           </div>
         )}
 
@@ -5405,15 +5444,10 @@ export default function ArbitrageSonar() {
             </div>
           ))}
         </div>
+        </div>
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          <span className="flex h-[40px] items-center text-zinc-500 text-sm">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-            </svg>
-          </span>
-
+        <div className="flex flex-wrap items-center gap-3">
           {/* RED GROUP */}
           <div className={`${SONAR_FILTER_GROUP_BASE} border-rose-500/20 bg-rose-500/[0.06]`}>
             {[
@@ -6678,6 +6712,7 @@ export default function ArbitrageSonar() {
             --tw-gradient-from: #111827 var(--tw-gradient-from-position) !important;
             --tw-gradient-to: rgb(17 24 39 / 0.62) var(--tw-gradient-to-position) !important;
           }
+
         `}</style>
       </div>
     </div>

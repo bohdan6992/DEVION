@@ -14,6 +14,9 @@ import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, get
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import ArbitrageMoneyView from "../money/ArbitrageMoneyView";
+import { useMoneyExecutionSnapshot } from "../money/moneyExecutionStore";
+import { useMoneyPositionMeta } from "../money/moneyPositionStore";
+import { useMoneySignalMeta } from "../money/moneySignalStore";
 import { buildMoneyFilterConfig, type MoneyAutomationConfig, type MoneyExecutionDescriptor, useMoneyEngine } from "../money/moneyEngine";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import clsx from "clsx";
@@ -7844,19 +7847,12 @@ export default function ArbitrageScanner({
   ]);
 
   const {
-    moneySignals,
-    moneyDecisions,
-    moneyPositions,
-    moneyActionLog,
-    moneyOrderIntents,
+    moneyEntryReadyCount,
     moneyAutoEnabled,
     moneySessionStartedAt,
     moneySessionStoppedAt,
     moneySentOrdersCount,
     setMoneyAutoEnabled,
-    moneyExecutionSnapshot,
-    moneyBookSnapshot,
-    moneyMainWindowSnapshot,
     moneyManualExecutionBusy,
     bindMoneyWindows,
     clearMoneyBoundWindow,
@@ -7889,6 +7885,8 @@ export default function ArbitrageScanner({
     onUpdated: () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
+  const moneySignalMeta = useMoneySignalMeta();
+  const moneyPositionMeta = useMoneyPositionMeta();
   const [moneyAutoStartLocked, setMoneyAutoStartLocked] = useState(false);
   const [moneyAutomationTogglePending, setMoneyAutomationTogglePending] = useState<null | "start" | "stop">(null);
   const [moneyWindowCaptureBusy, setMoneyWindowCaptureBusy] = useState(false);
@@ -7906,6 +7904,7 @@ export default function ArbitrageScanner({
       ? false
       : moneyAutomationEnabled;
   const moneyAutomationToggleBusy = moneyAutomationTogglePending !== null;
+  const moneyExecutionSnapshot = useMoneyExecutionSnapshot();
   const moneyWindowsBound = Boolean(moneyExecutionSnapshot?.boundWindow?.isBound && moneyExecutionSnapshot?.mainWindow?.isBound);
 
   useEffect(() => {
@@ -7915,54 +7914,9 @@ export default function ArbitrageScanner({
     }
   }, [moneyAutoEnabled, moneyAutoEnabledOverride, setMoneyAutoEnabled]);
 
-  const moneyCountries = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of moneySignals) {
-      const raw =
-        (row as any)?.country ??
-        (row as any)?.Country ??
-        (row as any)?.meta?.country ??
-        (row as any)?.meta?.Country ??
-        "";
-      const value = String(raw ?? "").trim().toUpperCase();
-      if (value) values.add(value);
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [moneySignals]);
-
-  const moneyExchanges = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of moneySignals) {
-      const raw =
-        (row as any)?.exchange ??
-        (row as any)?.Exchange ??
-        (row as any)?.meta?.exchange ??
-        (row as any)?.meta?.Exchange ??
-        "";
-      const value = String(raw ?? "").trim().toUpperCase();
-      if (value) values.add(value);
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [moneySignals]);
-
-  const moneySectors = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of moneySignals) {
-      const raw =
-        (row as any)?.sectorL3 ??
-        (row as any)?.SectorL3 ??
-        (row as any)?.sector ??
-        (row as any)?.Sector ??
-        (row as any)?.meta?.sectorL3 ??
-        (row as any)?.meta?.SectorL3 ??
-        (row as any)?.meta?.sector ??
-        (row as any)?.meta?.Sector ??
-        "";
-      const value = String(raw ?? "").trim().toUpperCase();
-      if (value) values.add(value);
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [moneySignals]);
+  const moneyCountries = moneySignalMeta.countries;
+  const moneyExchanges = moneySignalMeta.exchanges;
+  const moneySectors = moneySignalMeta.sectors;
 
   const moneyCountryValue = useMemo(() => splitListUpper(countriesText)[0] ?? "", [countriesText]);
   const moneyExchangeValue = useMemo(() => splitListUpper(exchangesText)[0] ?? "", [exchangesText]);
@@ -7970,20 +7924,6 @@ export default function ArbitrageScanner({
   const moneyCountryCount = moneyCountryValue ? 1 : 0;
   const moneyExchangeCount = moneyExchangeValue ? 1 : 0;
   const moneySectorCount = moneySectorValue ? 1 : 0;
-
-  const sortedMoneyDecisions = useMemo(() => {
-    const rows = [...moneyDecisions];
-    if (moneySortKey === "sigma") {
-      rows.sort((a, b) => Math.abs(b.signal ?? 0) - Math.abs(a.signal ?? 0) || a.ticker.localeCompare(b.ticker));
-      return rows;
-    }
-    if (moneySortKey === "netEdge") {
-      rows.sort((a, b) => (b.netEdge ?? -Infinity) - (a.netEdge ?? -Infinity) || a.ticker.localeCompare(b.ticker));
-      return rows;
-    }
-    rows.sort((a, b) => a.ticker.localeCompare(b.ticker));
-    return rows;
-  }, [moneyDecisions, moneySortKey]);
 
   const toggleMoneyAutomationRunFromHeader = async () => {
     if (!moneyAutomationLaunchEnabled) return;
@@ -8034,8 +7974,6 @@ export default function ArbitrageScanner({
       }
       onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
       applyMoneyAutoEnabled(true);
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      await refreshMoneySignals();
     } finally {
       setMoneyAutomationTogglePending(null);
     }
@@ -10099,18 +10037,11 @@ export default function ArbitrageScanner({
   };
   const sortMark = (active: boolean, dir: SortDir) => (active ? (dir === "asc" ? " ↑" : " ↓") : "");
   const moneyStats = useMemo(() => ({
-    signals: moneySignals.length,
-    ready: moneyDecisions.filter((x) => x.status === "ENTRY_READY").length,
-    open: moneyPositions.filter((x) =>
-      x.status === "OPEN" &&
-      (
-        x.entryDispatchedAt != null ||
-        x.lastConfirmedActiveAt != null ||
-        (x.pendingIntent !== "ENTER_LONG_AGGRESSIVE" && x.pendingIntent !== "ENTER_SHORT_AGGRESSIVE")
-      )
-    ).length,
+    signals: moneySignalMeta.totalCount,
+    ready: moneyEntryReadyCount,
+    open: moneyPositionMeta.openCount,
     autoEnabled: moneyAutoEnabled,
-  }), [moneyDecisions, moneyPositions, moneySignals.length, moneyAutoEnabled]);
+  }), [moneyEntryReadyCount, moneyPositionMeta.openCount, moneySignalMeta.totalCount, moneyAutoEnabled]);
   const scannerShellTitle = isMoneyOnlyShell
     ? (headerTitleOverride ?? "ARBITRAGE MONEY")
     : primaryPanel === "money"
@@ -10132,6 +10063,15 @@ export default function ArbitrageScanner({
     ? "border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
   const moneyShellActiveClass = headerButtonActiveClass;
+  const shellTabStripClass = "flex items-center gap-1.5 self-start";
+  const shellTabButtonBaseClass =
+    "inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[11px] font-mono font-bold uppercase leading-none transition-all";
+  const shellTabButtonActiveClass = headerButtonActiveClass;
+  const shellTabButtonInactiveClass = isLightTheme
+    ? "border border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
+    : "border border-transparent text-[#8b8d97] hover:text-[#cfd1d8] hover:bg-white/[0.03]";
+  const shellTabIconClass = isLightTheme ? "text-slate-400" : "text-[#8f919b]";
+  const shellTabActiveIconClass = "text-current";
   const autoStartButtonClass = headerButtonActiveClass;
   const autoStopButtonClass = isLightTheme
     ? "border-rose-500/35 bg-rose-500/12 text-rose-700 shadow-none"
@@ -10171,6 +10111,67 @@ export default function ArbitrageScanner({
       // ignore URL sync issues
     }
   }, [primaryPanel, routeLocksPrimaryPanel]);
+
+  const renderShellTabIcon = useCallback((tabKey: TabKey, active: boolean) => {
+    const iconClassName = clsx("shrink-0", active ? shellTabActiveIconClass : shellTabIconClass);
+    switch (tabKey) {
+      case "active":
+        return (
+          <svg
+            aria-hidden="true"
+            className={iconClassName}
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+          </svg>
+        );
+      case "episodes":
+        return (
+          <svg
+            aria-hidden="true"
+            className={iconClassName}
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z" />
+          </svg>
+        );
+      case "analytics":
+      default:
+        return (
+          <svg
+            aria-hidden="true"
+            className={iconClassName}
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 20V10" />
+            <path d="M10 20V4" />
+            <path d="M16 20v-7" />
+            <path d="M22 20v-12" />
+          </svg>
+        );
+    }
+  }, [shellTabActiveIconClass, shellTabIconClass]);
 
   // ========= UI
   return (
@@ -10236,45 +10237,6 @@ export default function ArbitrageScanner({
               >
                 SONAR
               </Link>
-            </div>
-
-            <div className={headerNavGroupClass}>
-              <button
-                type="button"
-                onClick={() => setTab("active")}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  tab === "active"
-                    ? moneyShellActiveClass
-                    : headerNavInactiveClass
-                )}
-              >
-                {activeTabLabel}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("episodes")}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  tab === "episodes"
-                    ? moneyShellActiveClass
-                    : headerNavInactiveClass
-                )}
-              >
-                {episodesTabLabel}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("analytics")}
-                className={clsx(
-                  "px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  tab === "analytics"
-                    ? moneyShellActiveClass
-                    : headerNavInactiveClass
-                )}
-              >
-                {analyticsTabLabel}
-              </button>
             </div>
 
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
@@ -10582,7 +10544,50 @@ export default function ArbitrageScanner({
           </GlassCard>
         )}
 
-        <div className="mb-3 flex flex-wrap justify-end gap-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className={shellTabStripClass}>
+            <button
+              type="button"
+              onClick={() => setTab("active")}
+              className={clsx(
+                shellTabButtonBaseClass,
+                tab === "active"
+                  ? shellTabButtonActiveClass
+                  : shellTabButtonInactiveClass
+              )}
+            >
+              {renderShellTabIcon("active", tab === "active")}
+              {activeTabLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("episodes")}
+              className={clsx(
+                shellTabButtonBaseClass,
+                tab === "episodes"
+                  ? shellTabButtonActiveClass
+                  : shellTabButtonInactiveClass
+              )}
+            >
+              {renderShellTabIcon("episodes", tab === "episodes")}
+              {episodesTabLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("analytics")}
+              className={clsx(
+                shellTabButtonBaseClass,
+                tab === "analytics"
+                  ? shellTabButtonActiveClass
+                  : shellTabButtonInactiveClass
+              )}
+            >
+              {renderShellTabIcon("analytics", tab === "analytics")}
+              {analyticsTabLabel}
+            </button>
+          </div>
+
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
               <button
@@ -10670,6 +10675,7 @@ export default function ArbitrageScanner({
               </div>
             </div>
           </div>
+        </div>
 
           {[
             { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
@@ -11235,7 +11241,8 @@ export default function ArbitrageScanner({
             </div>
           )}
 
-        <GlassCard className="p-3">
+        <div className="flex flex-col gap-3">
+        <GlassCard className="order-2 p-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               {[
@@ -11785,14 +11792,7 @@ export default function ArbitrageScanner({
           </div>
         </GlassCard>
 
-        <GlassCard className="p-3">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="flex h-[40px] items-center text-zinc-500 text-sm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-              </svg>
-            </span>
-
+        <div className="order-1 flex flex-wrap items-center gap-4">
             <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-900/30 bg-rose-900/10 p-1.5">
               {[
                 {
@@ -11882,8 +11882,6 @@ export default function ArbitrageScanner({
                 </button>
               ))}
             </div>
-
-            <div className="h-7 w-px bg-white/5" />
 
             <div className="inline-flex items-center gap-2 rounded-xl border border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)] p-1.5">
               {[
@@ -12152,8 +12150,8 @@ export default function ArbitrageScanner({
               </div>
 
             </div>
-          </div>
-        </GlassCard>
+        </div>
+        </div>
 
         {/* Error */}
         {err && (
@@ -12244,19 +12242,12 @@ export default function ArbitrageScanner({
         {primaryPanel === "money" && (
           <ArbitrageMoneyView
             tab={tab}
-            moneySignalsCount={moneySignals.length}
-            moneyDecisions={sortedMoneyDecisions}
-            moneyPositions={moneyPositions}
-            moneyActionLog={moneyActionLog}
-            moneyOrderIntents={moneyOrderIntents}
+            moneySignalsCount={moneySignalMeta.totalCount}
             moneyAutoEnabled={effectiveMoneyAutoEnabled}
             moneySessionStartedAt={moneySessionStartedAt}
             moneySessionStoppedAt={moneySessionStoppedAt}
             moneySentOrdersCount={moneySentOrdersCount}
             onSetAutoEnabled={applyMoneyAutoEnabled}
-            executionSnapshot={moneyExecutionSnapshot}
-            bookSnapshot={moneyBookSnapshot}
-            mainWindowSnapshot={moneyMainWindowSnapshot}
             manualExecutionBusy={moneyManualExecutionBusy}
             onSubmitManualOrders={submitManualMoneyOrders}
             onCaptureTickerPoint={captureMoneyTickerPoint}

@@ -1,10 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { applyExactSonarClientFilters, buildSignalsUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { applyExactSonarClientFilters, buildSignalsStreamUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { moneyActionLogStore } from "./moneyActionLogStore";
+import { getMoneyDecisionRow, moneyDecisionStore } from "./moneyDecisionStore";
+import { moneyExecutionStore } from "./moneyExecutionStore";
+import { connectMoneyOcrStream } from "./moneyOcrStream";
+import { moneyOrderIntentStore } from "./moneyOrderIntentStore";
+import { moneyBookStore, resetMoneyOcrStores } from "./moneyOcrStores";
+import { moneyPositionStore } from "./moneyPositionStore";
+import { moneySignalStore } from "./moneySignalStore";
 
 export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -180,49 +188,6 @@ export type MainWindowDataSnapshot = {
   ocrText: string;
 };
 
-function sanitizeBookSnapshot(snapshot: MarketMakerBookSnapshot): MarketMakerBookSnapshot {
-  return {
-    windowTitle: snapshot.windowTitle,
-    capturedAtUtc: snapshot.capturedAtUtc,
-    bestBid: snapshot.bestBid ?? null,
-    bestAsk: snapshot.bestAsk ?? null,
-    bidLevels: Array.isArray(snapshot.bidLevels) ? snapshot.bidLevels.slice(0, 5) : [],
-    askLevels: Array.isArray(snapshot.askLevels) ? snapshot.askLevels.slice(0, 5) : [],
-    ocrLines: [],
-    ocrText: "",
-  };
-}
-
-function sanitizeMainWindowSnapshot(snapshot: MainWindowDataSnapshot): MainWindowDataSnapshot {
-  return {
-    windowTitle: snapshot.windowTitle,
-    capturedAtUtc: snapshot.capturedAtUtc,
-    fields: Array.isArray(snapshot.fields)
-      ? snapshot.fields
-          .filter((field) => field && (field.heading || field.value))
-          .map((field) => ({
-            heading: String(field.heading ?? "").trim(),
-            value: String(field.value ?? "").trim(),
-            rawLine: String(field.rawLine ?? "").trim(),
-          }))
-      : [],
-    controls: Array.isArray(snapshot.controls)
-      ? snapshot.controls
-          .filter((control) => control && control.label)
-          .map((control) => ({
-            label: String(control.label ?? "").trim().toUpperCase(),
-            state: control.state === "GREEN" || control.state === "RED" ? control.state : "UNKNOWN",
-          }))
-      : [],
-    ocrLines: Array.isArray(snapshot.ocrLines)
-      ? snapshot.ocrLines
-          .map((line) => String(line ?? "").trim())
-          .filter((line) => line.length > 0)
-      : [],
-    ocrText: String(snapshot.ocrText ?? "").trim(),
-  };
-}
-
 export type MoneyRatingBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 export type MoneyRatingRule = {
   band: MoneyRatingBand;
@@ -355,6 +320,11 @@ function toBool(value: unknown): boolean | null {
     if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
   }
   return null;
+}
+
+function sameNullableNumber(a: number | null | undefined, b: number | null | undefined): boolean {
+  if (a == null && b == null) return true;
+  return a === b;
 }
 
 function parseTimeToMinutes(value: string | undefined, fallbackMinutes: number): number {
@@ -597,6 +567,98 @@ function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey
   return Array.from(openByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
+function buildOpenTickersFromActionLog(entries: MoneyActionLogEntry[], dayKey = localDayKey()): Set<string> {
+  return new Set(buildMoneyPositionsFromActionLog(entries, dayKey).map((row) => row.ticker));
+}
+
+function hasExecutionDispatchConfirmation(
+  snapshot: TradingAppExecutionSnapshot | null | undefined,
+  intentId: string,
+): boolean {
+  if (!snapshot || !intentId) return false;
+  const matchesIntent = (item: TradingAppQueueItem | null | undefined) =>
+    item != null &&
+    item.intentId === intentId &&
+    (item.status === "Sent" || item.status === "Completed");
+
+  if (matchesIntent(snapshot.current ?? null)) {
+    return true;
+  }
+
+  return snapshot.queue.some(matchesIntent) || snapshot.history.some(matchesIntent);
+}
+
+function mergeMoneyPositionsWithActionLog(
+  prev: MoneyPosition[],
+  entries: MoneyActionLogEntry[],
+  dayKey = localDayKey()
+): MoneyPosition[] {
+  const restored = buildMoneyPositionsFromActionLog(entries, dayKey);
+  const restoredByTicker = new Map(restored.map((row) => [row.ticker, row]));
+  const prevByTicker = new Map(prev.map((row) => [row.ticker, row]));
+  const transient = prev.filter((row) =>
+    row.status !== "CLOSED" &&
+    row.entryDispatchedAt == null &&
+    isEntryOrderIntent(row.pendingIntent)
+  );
+  const transientByTicker = new Map(transient.map((row) => [row.ticker, row]));
+  const merged = new Map<string, MoneyPosition>();
+
+  for (const [ticker, row] of restoredByTicker) {
+    const existing = prevByTicker.get(ticker) ?? null;
+    merged.set(ticker, existing ? {
+      ...row,
+      spread: existing.spread ?? row.spread,
+      status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
+      reason: existing.reason || row.reason,
+      pendingIntent: isExitOrderIntent(existing.pendingIntent) ? existing.pendingIntent : null,
+      lockedForPrint: existing.lockedForPrint,
+      lastSignal: existing.lastSignal ?? row.lastSignal,
+      updatedAt: Math.max(existing.updatedAt, row.updatedAt),
+    } : row);
+  }
+
+  for (const [ticker, row] of transientByTicker) {
+    if (!merged.has(ticker)) {
+      merged.set(ticker, row);
+    }
+  }
+
+  return Array.from(merged.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
+function sameSignalList(a: ArbitrageSignal[], b: ArbitrageSignal[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function sameDecisionRows(a: MoneyDecisionRow[], b: MoneyDecisionRow[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.ticker !== right.ticker ||
+      left.benchmark !== right.benchmark ||
+      left.side !== right.side ||
+      left.signal !== right.signal ||
+      left.spread !== right.spread ||
+      left.netEdge !== right.netEdge ||
+      left.positionBp !== right.positionBp ||
+      left.status !== right.status ||
+      left.reason !== right.reason
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function syncMoneySignalLatches(
   prev: MoneySignalLatch[],
   decisions: MoneyDecisionRow[],
@@ -750,7 +812,8 @@ export function syncMoneyPositions(
   autoEnabled: boolean,
   maxSpreadValue: unknown,
   automationConfig?: MoneyAutomationConfig,
-  entryCutoffEnabled = true
+  entryCutoffEnabled = true,
+  loggedOpenTickers: ReadonlySet<string> = new Set()
 ): MoneyPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
@@ -764,7 +827,11 @@ export function syncMoneyPositions(
 
   if (!autoEnabled) {
     return prev
-      .filter((row) => row.status !== "CLOSED" && row.entryDispatchedAt != null)
+      .filter((row) =>
+        row.status !== "CLOSED" &&
+        row.entryDispatchedAt != null &&
+        loggedOpenTickers.has(row.ticker)
+      )
       .map((existing) => {
         const raw = filteredSignalMap.get(existing.ticker) ?? signalMap.get(existing.ticker);
         const currentSignal = signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
@@ -797,6 +864,7 @@ export function syncMoneyPositions(
       : Number.MAX_SAFE_INTEGER;
 
     for (const existing of prev) {
+      const existsInActionLog = loggedOpenTickers.has(existing.ticker);
       const raw = signalMap.get(existing.ticker);
       const rawSeen = Boolean(raw);
       const filteredRaw = filteredSignalMap.get(existing.ticker);
@@ -824,6 +892,10 @@ export function syncMoneyPositions(
       const hasUndispatchedEntry =
         entryDispatchedAt == null &&
         (isEntryOrderIntent(existing.pendingIntent) || existing.entryCount <= 1);
+
+      if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
+        continue;
+      }
 
       if (entryDispatchedAt != null) {
         lastConfirmedActiveAt = now;
@@ -1004,6 +1076,9 @@ export function syncMoneyPositions(
   const seen = new Set<string>();
 
   for (const existing of prev) {
+    if (existing.entryDispatchedAt != null && !loggedOpenTickers.has(existing.ticker)) {
+      continue;
+    }
     const current = decisionMap.get(existing.ticker);
     if (!current) {
       if (printWindowEnabled && nowMinutes < printCloseMinutes) {
@@ -1069,32 +1144,6 @@ export function syncMoneyPositions(
   }
 
   let openCount = next.filter((row) => row.status === "OPEN").length;
-  for (const row of decisions) {
-    if (seen.has(row.ticker) || row.status !== "ENTRY_READY") continue;
-    if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
-    if (openCount >= maxOpenAllowed) continue;
-    next.push({
-      ticker: row.ticker,
-      benchmark: row.benchmark,
-      side: row.side,
-      entrySignal: row.signal,
-      lastSignal: row.signal,
-      lastScaleSignal: row.signal,
-      spread: row.spread,
-      status: "OPEN",
-      reason:
-        `${automationConfig?.hedgeMode === "hedged" ? "auto-enter hedged" : "auto-enter unhedged"} | ${automationConfig?.sizingMode === "TIER" ? `tiers ${automationConfig?.sizeValue}` : `usd ${automationConfig?.sizeValue}`}${automationConfig?.scaleMode === "scale_in" ? ` | step ${automationConfig?.dilutionStep}` : ""}`,
-      entryCount: 1,
-      lockedForPrint: false,
-      pendingIntent: null,
-      entryDispatchedAt: now,
-      lastConfirmedActiveAt: null,
-      openedAt: now,
-      updatedAt: now,
-    });
-    openCount += 1;
-  }
-
   return next
     .filter((row) => row.status !== "CLOSED" || now - row.updatedAt < 15000)
     .sort((a, b) => a.ticker.localeCompare(b.ticker));
@@ -1298,18 +1347,6 @@ type UseMoneyEngineArgs = {
   onError?: (message: string | null) => void;
 };
 
-type TradingAppBookResponse = {
-  ok?: boolean;
-  snapshot?: MarketMakerBookSnapshot;
-  error?: string;
-};
-
-type TradingAppMainWindowResponse = {
-  ok?: boolean;
-  snapshot?: MainWindowDataSnapshot;
-  error?: string;
-};
-
 type TradingAppBoundWindowResponse = {
   ok?: boolean;
   bound?: TradingAppBoundWindowInfo | null;
@@ -1396,7 +1433,6 @@ export function useMoneyEngine({
   onUpdated,
   onError,
 }: UseMoneyEngineArgs) {
-  const BOOK_REFRESH_INTERVAL_MS = 2500;
   const STATUS_REFRESH_INTERVAL_MS = 2500;
   const AUTO_DISPATCH_COOLDOWN_MS = 15000;
   const SIGNAL_SURGE_GUARD_MIN_COUNT = 24;
@@ -1406,36 +1442,39 @@ export function useMoneyEngine({
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
   const actionLogStorageKey = moneyActionLogStorageKey(signalClass);
   const currentDayKey = localDayKey();
-  const [moneySignals, setMoneySignals] = useState<ArbitrageSignal[]>([]);
-  const [moneyDecisions, setMoneyDecisions] = useState<MoneyDecisionRow[]>([]);
   const [moneyActionLog, setMoneyActionLog] = useState<MoneyActionLogEntry[]>(() => readMoneyActionLog(actionLogStorageKey));
   const [moneyPositions, setMoneyPositions] = useState<MoneyPosition[]>(() => buildMoneyPositionsFromActionLog(readMoneyActionLog(actionLogStorageKey), currentDayKey));
   const [moneyOrderIntents, setMoneyOrderIntents] = useState<MoneyOrderIntent[]>([]);
   const [moneySignalLatches, setMoneySignalLatches] = useState<MoneySignalLatch[]>([]);
   const [moneyAutoEnabled, setMoneyAutoEnabledState] = useState<boolean>(initialAutoEnabled);
+  const [moneyEntryReadyCount, setMoneyEntryReadyCount] = useState<number>(0);
   const [moneySessionStartedAt, setMoneySessionStartedAt] = useState<number | null>(null);
   const [moneySessionStoppedAt, setMoneySessionStoppedAt] = useState<number | null>(null);
   const [moneySentOrdersCount, setMoneySentOrdersCount] = useState<number>(0);
-  const [moneyExecutionSnapshot, setMoneyExecutionSnapshot] = useState<TradingAppExecutionSnapshot | null>(null);
-  const [moneyBookSnapshot, setMoneyBookSnapshot] = useState<MarketMakerBookSnapshot | null>(null);
-  const [moneyMainWindowSnapshot, setMoneyMainWindowSnapshot] = useState<MainWindowDataSnapshot | null>(null);
   const [moneyManualExecutionBusy, setMoneyManualExecutionBusy] = useState<boolean>(false);
+  const [executionRevision, setExecutionRevision] = useState(0);
   const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
   const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
   const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
+  const pendingActionLogEntriesRef = useRef<Map<string, MoneyActionLogEntry[]>>(new Map());
   const moneyAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
-  const lastBookRefreshAtRef = useRef<number>(0);
-  const lastMainWindowRefreshAtRef = useRef<number>(0);
+  const primaryStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
+  const trackedStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
+  const moneyActionLogRef = useRef<MoneyActionLogEntry[]>(moneyActionLog);
+  const localRefreshTimerRef = useRef<number | null>(null);
+  const moneyExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(moneyExecutionStore.getSnapshot());
+  const executionSnapshotSignatureRef = useRef<string>("");
+  const actionLogVersionRef = useRef(0);
   const lastStatusRefreshAtRef = useRef<number>(0);
   const refreshInFlightRef = useRef(false);
-  const bookRefreshInFlightRef = useRef(false);
-  const mainWindowRefreshInFlightRef = useRef(false);
   const statusRefreshInFlightRef = useRef(false);
   const prevFilteredCountRef = useRef<number>(0);
   const surgeGuardUntilRef = useRef<number>(0);
   const surgeGuardStableTicksRef = useRef<number>(0);
   const strategyAutoWasRunningRef = useRef<boolean>(false);
   const primeImmediateEntriesRef = useRef<boolean>(false);
+  const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
+  const onErrorRef = useRef<typeof onError>(onError);
 
   const setMoneyAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
     const resolved = typeof nextValue === "function" ? nextValue(moneyAutoEnabledRef.current) : nextValue;
@@ -1445,15 +1484,167 @@ export function useMoneyEngine({
 
   const appendMoneyActionLogEntries = useCallback((entries: MoneyActionLogEntry[]) => {
     if (!entries.length) return;
-    setMoneyActionLog((prev) => pruneMoneyActionLog([...prev, ...entries], Date.now()));
+    const nextLog = pruneMoneyActionLog([...moneyActionLogRef.current, ...entries], Date.now());
+    const entryLoggedTickers = new Set(
+      entries
+        .filter((row) => row.kind === "ENTRY" || row.kind === "ADD")
+        .map((row) => row.ticker)
+    );
+    const closeLoggedTickers = new Set(
+      entries
+        .filter((row) => row.kind === "CLOSE")
+        .map((row) => row.ticker)
+    );
+    actionLogVersionRef.current += 1;
+    moneyActionLogRef.current = nextLog;
+    setMoneyActionLog(nextLog);
+    setMoneyPositions((prev) => mergeMoneyPositionsWithActionLog(prev, nextLog, localDayKey()));
+    setMoneyOrderIntents((prev) => prev.filter((intent) => {
+      if (
+        entryLoggedTickers.has(intent.ticker) &&
+        (intent.intent === "ENTER_LONG_AGGRESSIVE" || intent.intent === "ENTER_SHORT_AGGRESSIVE")
+      ) {
+        return false;
+      }
+      if (
+        closeLoggedTickers.has(intent.ticker) &&
+        (
+          intent.intent === "EXIT_LONG_AGGRESSIVE" ||
+          intent.intent === "EXIT_SHORT_AGGRESSIVE" ||
+          intent.intent === "EXIT_LONG_PRINT" ||
+          intent.intent === "EXIT_SHORT_PRINT"
+        )
+      ) {
+        return false;
+      }
+      if (intent.intent === "CLOSE_ALL_PRINT" && closeLoggedTickers.size > 0) {
+        return false;
+      }
+      return true;
+    }));
+    queueMicrotask(() => {
+      void refreshRef.current?.({ refreshBridge: false }).catch(() => {
+        // best-effort local recompute after action log append
+      });
+    });
   }, []);
+
+  const flushConfirmedPendingActionLogEntries = useCallback((snapshot: TradingAppExecutionSnapshot | null) => {
+    if (!snapshot || pendingActionLogEntriesRef.current.size === 0) return;
+
+    const confirmedEntries: MoneyActionLogEntry[] = [];
+    const confirmedIntentIds: string[] = [];
+
+    pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
+      if (!hasExecutionDispatchConfirmation(snapshot, intentId)) return;
+      confirmedEntries.push(...entries);
+      confirmedIntentIds.push(intentId);
+    });
+
+    if (!confirmedIntentIds.length) return;
+
+    for (const intentId of confirmedIntentIds) {
+      pendingActionLogEntriesRef.current.delete(intentId);
+    }
+
+    appendMoneyActionLogEntries(confirmedEntries);
+  }, [appendMoneyActionLogEntries]);
+
+  const queuePendingActionLogEntries = useCallback((intentId: string, entries: MoneyActionLogEntry[]) => {
+    if (!intentId || !entries.length) return;
+    pendingActionLogEntriesRef.current.set(intentId, entries);
+    flushConfirmedPendingActionLogEntries(moneyExecutionSnapshotRef.current);
+  }, [flushConfirmedPendingActionLogEntries]);
+
+  useEffect(() => {
+    return moneyExecutionStore.subscribe(() => {
+      const snapshot = moneyExecutionStore.getSnapshot();
+      moneyExecutionSnapshotRef.current = snapshot;
+      flushConfirmedPendingActionLogEntries(snapshot);
+      setExecutionRevision((prev) => prev + 1);
+    });
+  }, [flushConfirmedPendingActionLogEntries]);
+
+  const openLoggedTickers = useMemo(
+    () => buildOpenTickersFromActionLog(moneyActionLog, currentDayKey),
+    [currentDayKey, moneyActionLog]
+  );
+
+  const snapshotTickers = exactSonarFilterSnapshot?.tickersFilterNorm?.trim() ?? "";
+  const primarySignalsStreamUrl = useMemo(() => buildSignalsStreamUrl({
+    cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
+    type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
+    mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
+    ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+    zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
+    minRate: toNum(exactSonarFilterSnapshot?.minRate) ?? ratingRule.minRate,
+    minTotal: toNum(exactSonarFilterSnapshot?.minTotal) ?? ratingRule.minTotal,
+    tickers: snapshotTickers || tickersCsv || undefined,
+    minCorr: toNum(exactSonarFilterSnapshot?.corrMin) ?? minCorr ?? undefined,
+    maxCorr: toNum(exactSonarFilterSnapshot?.corrMax) ?? maxCorr ?? undefined,
+    minBeta: toNum(exactSonarFilterSnapshot?.betaMin) ?? minBeta ?? undefined,
+    maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
+    minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
+    maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
+    includeAll: true,
+  }), [
+    exactSonarFilterSnapshot,
+    maxBeta,
+    maxCorr,
+    maxSigma,
+    metric,
+    minBeta,
+    minCorr,
+    minSigma,
+    ratingRule.minRate,
+    ratingRule.minTotal,
+    ratingType,
+    signalClass,
+    snapshotTickers,
+    tickersCsv,
+  ]);
+
+  const trackedSignalsStreamUrl = useMemo(() => {
+    const activeTrackedTickers = Array.from(openLoggedTickers);
+    if (!activeTrackedTickers.length) return null;
+    return buildSignalsStreamUrl({
+      cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
+      type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
+      mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
+      ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+      zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
+      minRate: 0,
+      minTotal: 1,
+      tickers: activeTrackedTickers.join(","),
+      minCorr: undefined,
+      maxCorr: undefined,
+      minBeta: undefined,
+      maxBeta: undefined,
+      minSigma: undefined,
+      maxSigma: undefined,
+      includeAll: true,
+    });
+  }, [
+    exactSonarFilterSnapshot,
+    metric,
+    openLoggedTickers,
+    ratingType,
+    signalClass,
+  ]);
 
   useEffect(() => {
     const restoredLog = readMoneyActionLog(actionLogStorageKey);
+    moneyActionLogStore.clear();
+    moneyDecisionStore.clear();
+    moneyOrderIntentStore.clear();
+    moneyPositionStore.clear();
+    moneySignalStore.clear();
+    actionLogVersionRef.current += 1;
     setMoneyActionLog(restoredLog);
     setMoneyPositions(buildMoneyPositionsFromActionLog(restoredLog, localDayKey()));
     setMoneySignalLatches([]);
     setMoneyOrderIntents([]);
+    setMoneyEntryReadyCount(0);
     setMoneySessionStartedAt(null);
     setMoneySessionStoppedAt(null);
     setMoneySentOrdersCount(0);
@@ -1476,47 +1667,91 @@ export function useMoneyEngine({
     }
   }, [actionLogStorageKey, moneyActionLog]);
 
+  const scheduleLocalRefresh = useCallback(() => {
+    if (!enabled || typeof window === "undefined") return;
+    if (localRefreshTimerRef.current != null) return;
+    localRefreshTimerRef.current = window.setTimeout(() => {
+      localRefreshTimerRef.current = null;
+      void refreshRef.current?.({ refreshBridge: false }).catch((error: any) => {
+        onErrorRef.current?.(error?.message ?? String(error));
+      });
+    }, 48);
+  }, [enabled]);
+
+  const applyPrimaryStreamPayload = useCallback((payload: any) => {
+    const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+    const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+    primaryStreamSignalsRef.current = normalized;
+    scheduleLocalRefresh();
+  }, [scheduleLocalRefresh]);
+
+  const applyTrackedStreamPayload = useCallback((payload: any) => {
+    const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+    const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+    trackedStreamSignalsRef.current = normalized;
+    scheduleLocalRefresh();
+  }, [scheduleLocalRefresh]);
+
+  useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+
+    const source = new EventSource(primarySignalsStreamUrl);
+    const handlePayload = (event: MessageEvent<string>) => {
+      try {
+        applyPrimaryStreamPayload(JSON.parse(event.data));
+      } catch {
+        // ignore malformed stream payloads and keep previous snapshot
+      }
+    };
+
+    source.onmessage = handlePayload;
+    source.addEventListener("snapshot", handlePayload as EventListener);
+
+    return () => {
+      source.close();
+    };
+  }, [applyPrimaryStreamPayload, enabled, primarySignalsStreamUrl]);
+
+  useEffect(() => {
+    if (!enabled || !trackedSignalsStreamUrl || typeof window === "undefined") {
+      if (trackedStreamSignalsRef.current.length) {
+        trackedStreamSignalsRef.current = [];
+        scheduleLocalRefresh();
+      }
+      return;
+    }
+
+    const source = new EventSource(trackedSignalsStreamUrl);
+    const handlePayload = (event: MessageEvent<string>) => {
+      try {
+        applyTrackedStreamPayload(JSON.parse(event.data));
+      } catch {
+        // ignore malformed stream payloads and keep previous snapshot
+      }
+    };
+
+    source.onmessage = handlePayload;
+    source.addEventListener("snapshot", handlePayload as EventListener);
+
+    return () => {
+      source.close();
+    };
+  }, [applyTrackedStreamPayload, enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
+
   useEffect(() => {
     setMoneyPositions((prev) => {
-      const restored = buildMoneyPositionsFromActionLog(moneyActionLog, currentDayKey);
-      const restoredByTicker = new Map(restored.map((row) => [row.ticker, row]));
-      const prevByTicker = new Map(prev.map((row) => [row.ticker, row]));
-      const transient = prev.filter((row) =>
-        row.status !== "CLOSED" &&
-        row.entryDispatchedAt == null &&
-        isEntryOrderIntent(row.pendingIntent)
-      );
-      const transientByTicker = new Map(transient.map((row) => [row.ticker, row]));
-      const merged = new Map<string, MoneyPosition>();
-      for (const [ticker, row] of restoredByTicker) {
-        const existing = prevByTicker.get(ticker) ?? null;
-        merged.set(ticker, existing ? {
-          ...row,
-          spread: existing.spread ?? row.spread,
-          status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
-          reason: existing.reason || row.reason,
-          pendingIntent: existing.pendingIntent,
-          lockedForPrint: existing.lockedForPrint,
-          lastSignal: existing.lastSignal ?? row.lastSignal,
-          updatedAt: Math.max(existing.updatedAt, row.updatedAt),
-        } : row);
-      }
-      for (const [ticker, row] of transientByTicker) {
-        if (!merged.has(ticker)) {
-          merged.set(ticker, row);
-        }
-      }
-      return Array.from(merged.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
+      return mergeMoneyPositionsWithActionLog(prev, moneyActionLog, currentDayKey);
     });
   }, [currentDayKey, moneyActionLog]);
 
   const refreshExecutionStatus = useCallback(async (force = false): Promise<TradingAppExecutionSnapshot | null> => {
     const now = Date.now();
-    if (!force && moneyExecutionSnapshot && now - lastStatusRefreshAtRef.current < STATUS_REFRESH_INTERVAL_MS) {
-      return moneyExecutionSnapshot;
+    const currentExecutionSnapshot = moneyExecutionSnapshotRef.current;
+    if (!force && currentExecutionSnapshot && now - lastStatusRefreshAtRef.current < STATUS_REFRESH_INTERVAL_MS) {
+      return currentExecutionSnapshot;
     }
     if (!force && statusRefreshInFlightRef.current) {
-      return moneyExecutionSnapshot;
+      return currentExecutionSnapshot;
     }
     try {
       statusRefreshInFlightRef.current = true;
@@ -1525,7 +1760,12 @@ export function useMoneyEngine({
       const json = await response.json();
       const snapshot = json as TradingAppExecutionSnapshot;
       lastStatusRefreshAtRef.current = now;
-      setMoneyExecutionSnapshot(snapshot);
+      const signature = JSON.stringify(snapshot);
+      if (signature !== executionSnapshotSignatureRef.current) {
+        executionSnapshotSignatureRef.current = signature;
+        moneyExecutionSnapshotRef.current = snapshot;
+        moneyExecutionStore.applySnapshot(snapshot);
+      }
       return snapshot;
     } catch {
       // backend may be unavailable during frontend work
@@ -1533,64 +1773,7 @@ export function useMoneyEngine({
     } finally {
       statusRefreshInFlightRef.current = false;
     }
-  }, [moneyExecutionSnapshot]);
-
-  const refreshBookSnapshot = useCallback(async (force = false): Promise<MarketMakerBookSnapshot | null> => {
-    if (!force && !moneyExecutionSnapshot?.boundWindow?.isBound) {
-      return null;
-    }
-    const now = Date.now();
-    if (!force && moneyBookSnapshot && now - lastBookRefreshAtRef.current < BOOK_REFRESH_INTERVAL_MS) {
-      return moneyBookSnapshot;
-    }
-    if (bookRefreshInFlightRef.current) {
-      return moneyBookSnapshot;
-    }
-
-    try {
-      bookRefreshInFlightRef.current = true;
-      const response = await fetch(tradingAppBridgeUrl("/book"), { cache: "no-store" });
-      const json = await response.json().catch(() => ({} as TradingAppBookResponse));
-      if (!response.ok || json?.ok === false || !json?.snapshot) return null;
-      const sanitized = sanitizeBookSnapshot(json.snapshot);
-      lastBookRefreshAtRef.current = now;
-      setMoneyBookSnapshot(sanitized);
-      return sanitized;
-    } catch {
-      // backend may be unavailable during frontend work
-      return null;
-    } finally {
-      bookRefreshInFlightRef.current = false;
-    }
-  }, [moneyBookSnapshot, moneyExecutionSnapshot?.boundWindow?.isBound]);
-
-  const refreshMainWindowSnapshot = useCallback(async (force = false): Promise<MainWindowDataSnapshot | null> => {
-    if (!force && !moneyExecutionSnapshot?.mainWindow?.isBound) {
-      return null;
-    }
-    const now = Date.now();
-    if (!force && moneyMainWindowSnapshot && now - lastMainWindowRefreshAtRef.current < BOOK_REFRESH_INTERVAL_MS) {
-      return moneyMainWindowSnapshot;
-    }
-    if (mainWindowRefreshInFlightRef.current) {
-      return moneyMainWindowSnapshot;
-    }
-
-    try {
-      mainWindowRefreshInFlightRef.current = true;
-      const response = await fetch(tradingAppBridgeUrl("/main-window-data"), { cache: "no-store" });
-      const json = await response.json().catch(() => ({} as TradingAppMainWindowResponse));
-      if (!response.ok || json?.ok === false || !json?.snapshot) return null;
-      const sanitized = sanitizeMainWindowSnapshot(json.snapshot);
-      lastMainWindowRefreshAtRef.current = now;
-      setMoneyMainWindowSnapshot(sanitized);
-      return sanitized;
-    } catch {
-      return null;
-    } finally {
-      mainWindowRefreshInFlightRef.current = false;
-    }
-  }, [moneyExecutionSnapshot?.mainWindow?.isBound, moneyMainWindowSnapshot]);
+  }, []);
 
   const bindMoneyActiveWindow = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
@@ -1624,26 +1807,7 @@ export function useMoneyEngine({
     }
 
     await refreshExecutionStatus(true);
-
-    let nextBookSnapshot: MarketMakerBookSnapshot | null = null;
-    let nextMainWindowSnapshot: MainWindowDataSnapshot | null = null;
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (attempt > 0) {
-        await delay(180);
-      }
-      const [book, main] = await Promise.all([
-        refreshBookSnapshot(true),
-        refreshMainWindowSnapshot(true),
-      ]);
-      nextBookSnapshot = nextBookSnapshot ?? book;
-      nextMainWindowSnapshot = nextMainWindowSnapshot ?? main;
-      if (nextBookSnapshot && nextMainWindowSnapshot) {
-        break;
-      }
-    }
-
-  }, [refreshBookSnapshot, refreshExecutionStatus, refreshMainWindowSnapshot]);
+  }, [refreshExecutionStatus]);
 
   const bindMoneyActiveWindowDelayed = useCallback(async (delayMs = 3000) => {
     const response = await fetch(`${tradingAppBridgeUrl("/bind-active-window-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
@@ -1663,10 +1827,7 @@ export function useMoneyEngine({
       headers: { "Content-Type": "application/json" },
     });
     const json = await response.json().catch(() => ({}));
-    setMoneyBookSnapshot(null);
-    setMoneyMainWindowSnapshot(null);
-    lastBookRefreshAtRef.current = 0;
-    lastMainWindowRefreshAtRef.current = 0;
+    resetMoneyOcrStores();
     await refreshExecutionStatus(true);
     if (!response.ok || json?.ok === false) {
       throw new Error(json?.error || `Failed to clear bound window (${response.status})`);
@@ -1789,100 +1950,42 @@ export function useMoneyEngine({
     }
   }, [automationConfig?.queueDelayMaxSeconds, automationConfig?.queueDelayMinSeconds, refreshExecutionStatus]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { refreshBridge?: boolean }) => {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
 
     try {
-    const snapshotTickers = exactSonarFilterSnapshot?.tickersFilterNorm?.trim() ?? "";
-    const url = buildSignalsUrl({
-      cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
-      type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
-      mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-      ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-      zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-      minRate: toNum(exactSonarFilterSnapshot?.minRate) ?? ratingRule.minRate,
-      minTotal: toNum(exactSonarFilterSnapshot?.minTotal) ?? ratingRule.minTotal,
-      tickers: snapshotTickers || tickersCsv || undefined,
-      minCorr: toNum(exactSonarFilterSnapshot?.corrMin) ?? minCorr ?? undefined,
-      maxCorr: toNum(exactSonarFilterSnapshot?.corrMax) ?? maxCorr ?? undefined,
-      minBeta: toNum(exactSonarFilterSnapshot?.betaMin) ?? minBeta ?? undefined,
-      maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
-      minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
-      maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
-      includeAll: true,
-    });
+    const refreshActionLogVersion = actionLogVersionRef.current;
+    const refreshBridge = options?.refreshBridge !== false;
+    const normalizedByTicker = new Map(
+      primaryStreamSignalsRef.current.map((row) => [row.ticker, row] as const)
+    );
 
-    const activeTrackedTickers = Array.from(new Set(
-      moneyPositions
-        .filter((row) => row.status !== "CLOSED" && row.entryDispatchedAt != null)
-        .map((row) => row.ticker)
-        .filter(Boolean)
-    ));
-    const activeTrackedSignalsUrl = activeTrackedTickers.length
-      ? buildSignalsUrl({
-          cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
-          type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
-          mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-          ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-          zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-          minRate: 0,
-          minTotal: 1,
-          tickers: activeTrackedTickers.join(","),
-          minCorr: undefined,
-          maxCorr: undefined,
-          minBeta: undefined,
-          maxBeta: undefined,
-          minSigma: undefined,
-          maxSigma: undefined,
-          includeAll: true,
-        })
-      : null;
-
-    const [response, activeTrackedSignalsResponse, executionSnapshot] = await Promise.all([
-      fetch(url, { cache: "no-store" }),
-      activeTrackedSignalsUrl ? fetch(activeTrackedSignalsUrl, { cache: "no-store" }) : Promise.resolve(null),
-      refreshExecutionStatus(false),
-    ]);
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+    for (const row of trackedStreamSignalsRef.current) {
+      normalizedByTicker.set(row.ticker, row);
     }
 
-    const json = await response.json();
-    const rawItems: any[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
-    const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-    const normalizedByTicker = new Map(normalized.map((row) => [row.ticker, row]));
-
-    if (activeTrackedSignalsResponse?.ok) {
-      const activeTrackedSignalsJson = await activeTrackedSignalsResponse.json().catch(() => ({}));
-      const activeTrackedItems: any[] = Array.isArray(activeTrackedSignalsJson)
-        ? activeTrackedSignalsJson
-        : Array.isArray(activeTrackedSignalsJson?.items)
-          ? activeTrackedSignalsJson.items
-          : [];
-      const activeTrackedSignals = activeTrackedItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-      for (const row of activeTrackedSignals) {
-        normalizedByTicker.set(row.ticker, row);
-      }
-    }
+    const normalized = primaryStreamSignalsRef.current;
+    const executionSnapshot = refreshBridge
+      ? await refreshExecutionStatus(false)
+      : moneyExecutionSnapshotRef.current;
 
     const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
     const filtered = exactSonarFilterSnapshot
       ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
       : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
-    const [bookSnapshot] = await Promise.all([
-      refreshBookSnapshot(false),
-      refreshMainWindowSnapshot(false),
-    ]);
+    const bookSnapshot = moneyBookStore.getState().snapshot;
     const decisions = computeMoneyDecisionRows(
       filtered,
       maxSpreadValue,
       automationConfig,
-      bookSnapshot ?? moneyBookSnapshot
+      bookSnapshot
     );
 
-    const autoEnabledNow = moneyAutoEnabledRef.current && !(executionSnapshot?.panicOff ?? false);
+    const autoEnabledNow =
+      moneyAutoEnabledRef.current &&
+      Boolean(automationConfig?.strategyModeEnabled) &&
+      !(executionSnapshot?.panicOff ?? false);
     const currentCount = filtered.length;
     const prevCount = prevFilteredCountRef.current;
     prevFilteredCountRef.current = currentCount;
@@ -1946,15 +2049,22 @@ export function useMoneyEngine({
       entryCutoffEnabled,
       primeImmediateEntriesRef.current
     );
-    const nextPositions = syncMoneyPositions(moneyPositions, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled);
+    const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
+    const nextPositions = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
     const intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
     primeImmediateEntriesRef.current = false;
 
-    setMoneySignals(filtered);
-    setMoneyDecisions(displayDecisions);
-    setMoneySignalLatches(nextLatches);
-    setMoneyPositions(nextPositions);
-    setMoneyOrderIntents(intents);
+    moneyDecisionStore.applySnapshot(displayDecisions);
+    moneySignalStore.applySnapshot(filtered);
+
+    startTransition(() => {
+      setMoneyEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
+      setMoneySignalLatches(nextLatches);
+      if (actionLogVersionRef.current === refreshActionLogVersion) {
+        setMoneyPositions(nextPositions);
+        setMoneyOrderIntents(intents);
+      }
+    });
     onUpdated?.();
     onError?.(null);
     } finally {
@@ -1973,14 +2083,14 @@ export function useMoneyEngine({
     minBeta,
     minCorr,
     minSigma,
+    moneyActionLog,
     moneyPositions,
     moneySignalLatches,
     moneyAutoEnabled,
-    moneyBookSnapshot,
-    refreshMainWindowSnapshot,
+    currentDayKey,
+    openLoggedTickers,
     onError,
     onUpdated,
-    refreshBookSnapshot,
     refreshExecutionStatus,
     ratingRule.minRate,
     ratingRule.minTotal,
@@ -1990,45 +2100,68 @@ export function useMoneyEngine({
   ]);
 
   useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled) return;
-      try {
-        await refresh();
-      } catch (error: any) {
-        if (!cancelled) onError?.(error?.message ?? String(error));
-      }
-    };
-    void tick();
-    const timer = window.setInterval(() => {
-      void tick();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [enabled, onError, refresh]);
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => () => {
+    if (localRefreshTimerRef.current != null) {
+      window.clearTimeout(localRefreshTimerRef.current);
+      localRefreshTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    moneyActionLogRef.current = moneyActionLog;
+  }, [moneyActionLog]);
 
   useEffect(() => {
     if (!enabled) return;
+    let cancelled = false;
+    const bootstrapBridgeState = async () => {
+      if (cancelled) return;
+      try {
+        await refreshRef.current?.({ refreshBridge: true });
+      } catch (error: any) {
+        if (!cancelled) onErrorRef.current?.(error?.message ?? String(error));
+      }
+    };
+    void bootstrapBridgeState();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
 
-    if (!moneyExecutionSnapshot?.boundWindow?.isBound && moneyBookSnapshot) {
-      setMoneyBookSnapshot(null);
-      lastBookRefreshAtRef.current = 0;
-    }
+  useEffect(() => {
+    if (enabled) return;
+    moneyExecutionSnapshotRef.current = null;
+    executionSnapshotSignatureRef.current = "";
+    lastStatusRefreshAtRef.current = 0;
+    pendingActionLogEntriesRef.current.clear();
+    moneyExecutionStore.clear();
+    resetMoneyOcrStores();
+    moneyActionLogStore.clear();
+    moneyDecisionStore.clear();
+    moneyOrderIntentStore.clear();
+    moneyPositionStore.clear();
+    moneySignalStore.clear();
+  }, [enabled]);
 
-    if (!moneyExecutionSnapshot?.mainWindow?.isBound && moneyMainWindowSnapshot) {
-      setMoneyMainWindowSnapshot(null);
-      lastMainWindowRefreshAtRef.current = 0;
-    }
-  }, [
-    enabled,
-    moneyBookSnapshot,
-    moneyExecutionSnapshot?.boundWindow?.isBound,
-    moneyExecutionSnapshot?.mainWindow?.isBound,
-    moneyMainWindowSnapshot,
-  ]);
+  useEffect(() => {
+    if (!enabled) return;
+    return connectMoneyOcrStream();
+  }, [enabled]);
+
+  useEffect(() => {
+    moneyPositionStore.applySnapshot(moneyPositions);
+  }, [moneyPositions]);
+
+  useEffect(() => {
+    moneyOrderIntentStore.applySnapshot(moneyOrderIntents);
+  }, [moneyOrderIntents]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -2049,10 +2182,10 @@ export function useMoneyEngine({
     }
     strategyAutoWasRunningRef.current = true;
 
-    void refresh().catch((error: any) => {
-      onError?.(error?.message ?? String(error));
+    void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
+      onErrorRef.current?.(error?.message ?? String(error));
     });
-  }, [automationConfig?.strategyModeEnabled, enabled, moneyAutoEnabled, onError, refresh]);
+  }, [automationConfig?.minHoldMinutes, automationConfig?.strategyModeEnabled, enabled, moneyAutoEnabled]);
 
   useEffect(() => {
     const activeQueuedIds = new Set(
@@ -2083,7 +2216,7 @@ export function useMoneyEngine({
 
   useEffect(() => {
     if (!enabled || !moneyAutoEnabled) return;
-    if (moneyExecutionSnapshot?.panicOff) return;
+    if (moneyExecutionSnapshotRef.current?.panicOff) return;
 
     const nowMinutes = currentMinutesLocal();
     const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
@@ -2100,9 +2233,12 @@ export function useMoneyEngine({
     if (!queued.length) return;
 
     const abort = new AbortController();
-    const decisionByTicker = new Map(moneyDecisions.map((row) => [row.ticker, row]));
     const positionByTicker = new Map(moneyPositions.map((row) => [row.ticker, row]));
-    const openLoggedPositions = moneyPositions.filter((row) => row.status !== "CLOSED" && row.entryDispatchedAt != null);
+    const openLoggedPositions = moneyPositions.filter((row) =>
+      row.status !== "CLOSED" &&
+      row.entryDispatchedAt != null &&
+      openLoggedTickers.has(row.ticker)
+    );
 
     const sendQueuedIntents = async () => {
       const sentDispatchKeys = new Set<string>();
@@ -2144,11 +2280,9 @@ export function useMoneyEngine({
         const lastAttemptAt = recentDispatchAttemptsRef.current.get(dispatchKey) ?? 0;
         if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
 
-        const correspondingDecision = decisionByTicker.get(intent.ticker) ?? null;
+        const correspondingDecision = getMoneyDecisionRow(intent.ticker);
         const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
-        const actualPositionIsActive =
-          correspondingPosition?.status !== "CLOSED" &&
-          ((correspondingPosition?.entryDispatchedAt ?? null) != null || (correspondingPosition?.lastConfirmedActiveAt ?? null) != null);
+        const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
 
         if (!primaryAlreadyDispatched && isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
           dispatchedIntentIdsRef.current.add(intent.id);
@@ -2227,7 +2361,7 @@ export function useMoneyEngine({
             };
           }));
           if (intent.intent === "CLOSE_ALL_PRINT") {
-            appendMoneyActionLogEntries(
+            queuePendingActionLogEntries(intent.id,
               openLoggedPositions
                 .map((row) => ({
                   id: `${row.ticker}|CLOSE|${dispatchAt}`,
@@ -2246,7 +2380,7 @@ export function useMoneyEngine({
             const deviation = isAdd
               ? (correspondingPosition.lastScaleSignal ?? correspondingPosition.lastSignal ?? correspondingPosition.entrySignal)
               : (correspondingPosition.entrySignal ?? correspondingPosition.lastSignal);
-            appendMoneyActionLogEntries([{
+            queuePendingActionLogEntries(intent.id, [{
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
@@ -2258,7 +2392,7 @@ export function useMoneyEngine({
               intent: intent.intent,
             }]);
           } else if (isExitIntent && correspondingPosition) {
-            appendMoneyActionLogEntries([{
+            queuePendingActionLogEntries(intent.id, [{
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
@@ -2303,7 +2437,7 @@ export function useMoneyEngine({
     });
 
     return () => abort.abort();
-  }, [appendMoneyActionLogEntries, automationConfig, enabled, entryCutoffEnabled, moneyAutoEnabled, moneyDecisions, moneyExecutionSnapshot, moneyOrderIntents, moneyPositions, onError, refreshExecutionStatus]);
+  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, moneyAutoEnabled, moneyOrderIntents, moneyPositions, onError, openLoggedTickers, queuePendingActionLogEntries, refreshExecutionStatus]);
 
   const todaysMoneyActionLog = useMemo(() => (
     moneyActionLog
@@ -2311,9 +2445,12 @@ export function useMoneyEngine({
       .sort((a, b) => b.at - a.at)
   ), [currentDayKey, moneyActionLog]);
 
+  useEffect(() => {
+    moneyActionLogStore.applySnapshot(todaysMoneyActionLog);
+  }, [todaysMoneyActionLog]);
+
   return {
-    moneySignals,
-    moneyDecisions,
+    moneyEntryReadyCount,
     moneyPositions,
     moneyActionLog: todaysMoneyActionLog,
     moneyOrderIntents,
@@ -2322,9 +2459,6 @@ export function useMoneyEngine({
     moneySessionStoppedAt,
     moneySentOrdersCount,
     setMoneyAutoEnabled,
-    moneyExecutionSnapshot,
-    moneyBookSnapshot,
-    moneyMainWindowSnapshot,
     moneyManualExecutionBusy,
     bindMoneyWindows,
     bindMoneyActiveWindow,

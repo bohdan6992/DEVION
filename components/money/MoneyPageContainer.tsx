@@ -18,7 +18,7 @@ const MONEY_TAB_LS_KEY = "money.arbitrage.tab";
 const MONEY_SESSION_LS_KEY = "money.arbitrage.session";
 const MONEY_RULE_BAND_LS_KEY = "money.arbitrage.rule-band";
 const MONEY_AUTOMATION_LS_KEY = "money.arbitrage.automation";
-const MONEY_AUTOMATION_SYNC_INTERVAL_MS = 5000;
+const MONEY_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
 
 function createMoneyPageClientId(): string {
   if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
@@ -86,6 +86,61 @@ function defaultAutomationConfig(): MoneyAutomationConfig {
     printCloseTime: "09:20",
     noSpreadExit: true,
   };
+}
+
+function sameMoneyAutomationConfig(
+  left: MoneyAutomationConfig,
+  right: MoneyAutomationConfig,
+): boolean {
+  return (
+    left.strategyModeEnabled === right.strategyModeEnabled &&
+    left.minNetEdge === right.minNetEdge &&
+    left.endSignalThreshold === right.endSignalThreshold &&
+    left.maxOpenPositions === right.maxOpenPositions &&
+    left.maxAdds === right.maxAdds &&
+    left.queueDelayMinSeconds === right.queueDelayMinSeconds &&
+    left.queueDelayMaxSeconds === right.queueDelayMaxSeconds &&
+    left.exitExecutionMode === right.exitExecutionMode &&
+    left.hedgeMode === right.hedgeMode &&
+    left.scaleMode === right.scaleMode &&
+    left.sizingMode === right.sizingMode &&
+    left.sizeValue === right.sizeValue &&
+    left.dilutionStep === right.dilutionStep &&
+    left.minHoldMinutes === right.minHoldMinutes &&
+    left.exitMode === right.exitMode &&
+    left.printStartTime === right.printStartTime &&
+    left.printCloseTime === right.printCloseTime &&
+    left.noSpreadExit === right.noSpreadExit
+  );
+}
+
+function sameShellStats(
+  left: { signals: number; ready: number; open: number; autoEnabled: boolean },
+  right: { signals: number; ready: number; open: number; autoEnabled: boolean },
+): boolean {
+  return (
+    left.signals === right.signals &&
+    left.ready === right.ready &&
+    left.open === right.open &&
+    left.autoEnabled === right.autoEnabled
+  );
+}
+
+function sameSharedRatingRules(
+  left: MoneyRatingRule[],
+  right: MoneyRatingRule[],
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (
+      left[index].band !== right[index].band ||
+      left[index].minRate !== right[index].minRate ||
+      left[index].minTotal !== right[index].minTotal
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function readInitialMoneyTab(): MoneyTabKey {
@@ -219,56 +274,79 @@ export default function MoneyPageContainer() {
     setAutomationConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const pullRemoteState = async () => {
-      try {
-        await fetch(bridgeUrl("/api/money/automation/heartbeat"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clientId: moneyPageClientId,
-            source: "money-page",
-          }),
-        }).catch(() => {
-          // heartbeat is best-effort
-        });
-
-        const response = await fetch(bridgeUrl("/api/money/automation/state"), { cache: "no-store" });
-        const json = await response.json().catch(() => ({}));
-        if (!response.ok || json?.ok === false || cancelled) return;
-        const state = json?.state ?? {};
-        const remoteAutoEnabled = Boolean(state.autoEnabled);
-        const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
-        const guarded = Date.now() < remoteAutomationGuardUntilRef.current;
-        if (
-          guarded &&
-          (remoteAutoEnabled !== moneyAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
-        ) {
-          return;
-        }
-        setMoneyAutoEnabled(remoteAutoEnabled);
-        setAutomationConfig((prev) => ({
+  const pullRemoteState = useCallback(async () => {
+    try {
+      const response = await fetch(bridgeUrl("/api/money/automation/state"), { cache: "no-store" });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json?.ok === false) return;
+      const state = json?.state ?? {};
+      const remoteAutoEnabled = Boolean(state.autoEnabled);
+      const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
+      const guarded = Date.now() < remoteAutomationGuardUntilRef.current;
+      if (
+        guarded &&
+        (remoteAutoEnabled !== moneyAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
+      ) {
+        return;
+      }
+      setMoneyAutoEnabled((prev) => (prev === remoteAutoEnabled ? prev : remoteAutoEnabled));
+      setAutomationConfig((prev) => {
+        const next = {
           ...prev,
           strategyModeEnabled: remoteStrategyModeEnabled,
-        }));
-        setRemoteAutomationReady(true);
-      } catch {
-        // keep local state if remote sync is unavailable
+        };
+        return sameMoneyAutomationConfig(prev, next) ? prev : next;
+      });
+      setRemoteAutomationReady(true);
+    } catch {
+      // keep local state if remote sync is unavailable
+    }
+  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled]);
+
+  const sendHeartbeat = useCallback(async () => {
+    try {
+      await fetch(bridgeUrl("/api/money/automation/heartbeat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: moneyPageClientId,
+          source: "money-page",
+        }),
+      });
+    } catch {
+      // heartbeat is best-effort
+    }
+  }, [moneyPageClientId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const syncNow = async () => {
+      await sendHeartbeat();
+      if (!cancelled) {
+        await pullRemoteState();
       }
     };
 
-    void pullRemoteState();
-    const timer = window.setInterval(() => {
-      void pullRemoteState();
-    }, MONEY_AUTOMATION_SYNC_INTERVAL_MS);
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        void syncNow();
+      }
+    };
+
+    void syncNow();
+    const heartbeatTimer = window.setInterval(() => {
+      void sendHeartbeat();
+    }, MONEY_AUTOMATION_HEARTBEAT_INTERVAL_MS);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearInterval(heartbeatTimer);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
-  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled, moneyPageClientId]);
+  }, [pullRemoteState, sendHeartbeat]);
 
   useEffect(() => {
     if (!remoteAutomationReady) return;
@@ -296,6 +374,17 @@ export default function MoneyPageContainer() {
     () => deriveMoneyExecutionDescriptor(ruleBand, sharedRatingRules),
     [ruleBand, sharedRatingRules]
   );
+  const handleMoneyShellStatsChange = useCallback((stats: {
+    signals: number;
+    ready: number;
+    open: number;
+    autoEnabled: boolean;
+  }) => {
+    setShellStats((prev) => sameShellStats(prev, stats) ? prev : stats);
+  }, []);
+  const handleSharedRatingRulesChange = useCallback((rules: MoneyRatingRule[]) => {
+    setSharedRatingRules((prev) => sameSharedRatingRules(prev, rules) ? prev : rules);
+  }, []);
 
   return (
     <ArbitrageScanner
@@ -320,8 +409,8 @@ export default function MoneyPageContainer() {
       activeTabLabelOverride="CANDIDATES"
       episodesTabLabelOverride="POSITIONS"
       analyticsTabLabelOverride="AUTO"
-      onMoneyShellStatsChange={setShellStats}
-      onSharedRatingRulesChange={(rules) => setSharedRatingRules(rules)}
+      onMoneyShellStatsChange={handleMoneyShellStatsChange}
+      onSharedRatingRulesChange={handleSharedRatingRulesChange}
     />
   );
 }

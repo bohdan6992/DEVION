@@ -1,7 +1,15 @@
 "use client";
 
 import clsx from "clsx";
-import { useMemo, useState } from "react";
+import AutoSizer from "react-virtualized-auto-sizer";
+import { List, type RowComponentProps } from "react-window";
+import { memo, useDeferredValue, useMemo, useState } from "react";
+import { useMoneyActionLogRows } from "./moneyActionLogStore";
+import { getMoneyDecisionRow, useMoneyDecisionIds, useMoneyDecisionRow, useMoneyDecisionVersion } from "./moneyDecisionStore";
+import { useMoneyExecutionSnapshot } from "./moneyExecutionStore";
+import { useMoneyOrderIntentMeta, useMoneyOrderIntentRows } from "./moneyOrderIntentStore";
+import { useMoneyBookSnapshotState, useMoneyMainWindowSnapshotState } from "./moneyOcrStores";
+import { useMoneyActiveDecisionRows, useMoneyPositionMeta, useMoneyPositionRows } from "./moneyPositionStore";
 import type {
   MoneyActionLogEntry,
   MainWindowDataSnapshot,
@@ -9,29 +17,30 @@ import type {
   MoneyAutomationConfig,
   MoneyDecisionRow,
   MoneyManualOrderAction,
-  MoneyOrderIntent,
-  MoneyPosition,
   TradingAppExecutionSnapshot,
 } from "./moneyEngine";
 
 type MoneyTabKey = "active" | "episodes" | "analytics";
 type MoneyViewMode = "money" | "auto" | "money-auto-tab";
 
+type MoneyDecisionTableRow = {
+  ticker: string;
+  benchmark: string;
+  side: "Long" | "Short";
+  signal: number | null;
+  spread: number | null;
+  netEdge: number | null;
+  status: MoneyDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
+};
+
 type ArbitrageMoneyViewProps = {
   tab: MoneyTabKey;
   moneySignalsCount: number;
-  moneyDecisions: MoneyDecisionRow[];
-  moneyPositions: MoneyPosition[];
-  moneyActionLog: MoneyActionLogEntry[];
-  moneyOrderIntents: MoneyOrderIntent[];
   moneyAutoEnabled: boolean;
   moneySessionStartedAt: number | null;
   moneySessionStoppedAt: number | null;
   moneySentOrdersCount: number;
   onSetAutoEnabled: (enabled: boolean) => void;
-  executionSnapshot: TradingAppExecutionSnapshot | null;
-  bookSnapshot: MarketMakerBookSnapshot | null;
-  mainWindowSnapshot: MainWindowDataSnapshot | null;
   manualExecutionBusy: boolean;
   onSubmitManualOrders: (tickersText: string, action: MoneyManualOrderAction) => Promise<void>;
   onCaptureTickerPoint: () => Promise<void>;
@@ -358,23 +367,82 @@ function MetricCard({
   );
 }
 
-function MoneyDecisionTable({
+const MONEY_DECISION_TABLE_MIN_WIDTH = 880;
+const MONEY_DECISION_ROW_HEIGHT = 57;
+const MONEY_DECISION_VIRTUAL_THRESHOLD = 240;
+
+function MoneyDecisionVirtualRow({
+  ariaAttributes,
+  index,
+  style,
+  rows,
+}: RowComponentProps<{ rows: MoneyDecisionTableRow[] }>) {
+  const row = rows[index];
+  if (!row) return <div style={style} />;
+
+  return (
+    <div
+      {...ariaAttributes}
+      style={style}
+      className={clsx(
+        "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+        "hover:bg-white/[0.03]"
+      )}
+    >
+      <div className="px-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2.5"><SideBadge side={row.side} /></div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2.5"><MoneyStatusBadge status={row.status} /></div>
+    </div>
+  );
+}
+
+function MoneyDecisionStoreVirtualRow({
+  ariaAttributes,
+  index,
+  style,
+  rowIds,
+}: RowComponentProps<{ rowIds: string[] }>) {
+  const rowId = rowIds[index];
+  const row = useMoneyDecisionRow(rowId);
+  if (!row) return <div style={style} />;
+
+  return (
+    <div
+      {...ariaAttributes}
+      style={style}
+      className={clsx(
+        "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+        "hover:bg-white/[0.03]"
+      )}
+    >
+      <div className="px-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2.5"><SideBadge side={row.side} /></div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2.5"><MoneyStatusBadge status={row.status} /></div>
+    </div>
+  );
+}
+
+const MoneyDecisionTable = memo(function MoneyDecisionTable({
   title,
   rows,
   emptyMessage,
 }: {
   title: string;
-  rows: Array<{
-    ticker: string;
-    benchmark: string;
-    side: "Long" | "Short";
-    signal: number | null;
-    spread: number | null;
-    netEdge: number | null;
-    status: MoneyDecisionRow["status"] | MoneyPosition["status"];
-  }>;
+  rows: MoneyDecisionTableRow[];
   emptyMessage: string;
 }) {
+  const useVirtualRows = rows.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
+
   return (
     <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
       <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
@@ -385,51 +453,157 @@ function MoneyDecisionTable({
           {intn(rows.length)}
         </div>
       </div>
-      <table className="min-w-[880px] w-full text-xs font-mono">
-        <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-zinc-300 backdrop-blur-xl">
-          <tr>
-            <th className="text-left p-2.5">Ticker</th>
-            <th className="text-left p-2.5">Bench</th>
-            <th className="text-left p-2.5">Side</th>
-            <th className="text-right p-2.5">Signal</th>
-            <th className="text-right p-2.5">Spread</th>
-            <th className="text-right p-2.5">Net Edge</th>
-            <th className="text-left p-2.5">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={`${title}|${row.ticker}|${i}`}
-              className={clsx(
-                "transition-colors",
-                i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                "hover:bg-white/[0.03]"
-              )}
-            >
-              <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
-              <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
-              <td className="p-2.5"><SideBadge side={row.side} /></td>
-              <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</td>
-              <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</td>
-              <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
-              <td className="p-2.5"><MoneyStatusBadge status={row.status} /></td>
-            </tr>
-          ))}
-          {!rows.length && (
-            <tr>
-              <td colSpan={7} className="p-8 text-center text-zinc-500">
-                {emptyMessage}
-              </td>
-            </tr>
+      <div className="overflow-x-auto">
+        <div
+          className="min-w-[880px]"
+          style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
+        >
+          <div className="sticky top-0 z-10 grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            <div className="p-2.5 text-left">Ticker</div>
+            <div className="p-2.5 text-left">Bench</div>
+            <div className="p-2.5 text-left">Side</div>
+            <div className="p-2.5 text-right">Signal</div>
+            <div className="p-2.5 text-right">Spread</div>
+            <div className="p-2.5 text-right">Net Edge</div>
+            <div className="p-2.5 text-left">Status</div>
+          </div>
+
+          {!rows.length ? (
+            <div className="p-8 text-center text-xs font-mono text-zinc-500">
+              {emptyMessage}
+            </div>
+          ) : useVirtualRows ? (
+            <div className="h-[540px]">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    rowComponent={MoneyDecisionVirtualRow}
+                    rowCount={rows.length}
+                    rowHeight={MONEY_DECISION_ROW_HEIGHT}
+                    rowProps={{ rows }}
+                    overscanCount={8}
+                    style={{ width: Math.max(width, MONEY_DECISION_TABLE_MIN_WIDTH), height }}
+                  />
+                )}
+              </AutoSizer>
+            </div>
+          ) : (
+            <div className="text-xs font-mono">
+              {rows.map((row, i) => (
+                <div
+                  key={`${title}|${row.ticker}|${i}`}
+                  className={clsx(
+                    "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center border-t border-white/5 transition-colors",
+                    i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                    "hover:bg-white/[0.03]"
+                  )}
+                >
+                  <div className="px-2.5 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                  <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
+                  <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                  <div className="px-2.5 py-2.5"><MoneyStatusBadge status={row.status} /></div>
+                </div>
+              ))}
+            </div>
           )}
-        </tbody>
-      </table>
+        </div>
+      </div>
     </div>
   );
-}
+});
 
-function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
+const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
+  title,
+  rowIds,
+  emptyMessage,
+}: {
+  title: string;
+  rowIds: string[];
+  emptyMessage: string;
+}) {
+  const deferredRowIds = useDeferredValue(rowIds);
+  const useVirtualRows = deferredRowIds.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
+
+  return (
+    <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          {title}
+        </div>
+        <div className="text-[10px] font-mono uppercase text-zinc-500">
+          {intn(deferredRowIds.length)}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <div
+          className="min-w-[880px]"
+          style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
+        >
+          <div className="sticky top-0 z-10 grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            <div className="p-2.5 text-left">Ticker</div>
+            <div className="p-2.5 text-left">Bench</div>
+            <div className="p-2.5 text-left">Side</div>
+            <div className="p-2.5 text-right">Signal</div>
+            <div className="p-2.5 text-right">Spread</div>
+            <div className="p-2.5 text-right">Net Edge</div>
+            <div className="p-2.5 text-left">Status</div>
+          </div>
+
+          {!deferredRowIds.length ? (
+            <div className="p-8 text-center text-xs font-mono text-zinc-500">
+              {emptyMessage}
+            </div>
+          ) : useVirtualRows ? (
+            <div className="h-[540px]">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    rowComponent={MoneyDecisionStoreVirtualRow}
+                    rowCount={deferredRowIds.length}
+                    rowHeight={MONEY_DECISION_ROW_HEIGHT}
+                    rowProps={{ rowIds: deferredRowIds }}
+                    overscanCount={8}
+                    style={{ width: Math.max(width, MONEY_DECISION_TABLE_MIN_WIDTH), height }}
+                  />
+                )}
+              </AutoSizer>
+            </div>
+          ) : (
+            <div className="text-xs font-mono">
+              {deferredRowIds.map((id, i) => {
+                const row = getMoneyDecisionRow(id);
+                if (!row) return null;
+                return (
+                  <div
+                    key={`${title}|${row.ticker}|${i}`}
+                    className={clsx(
+                      "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center border-t border-white/5 transition-colors",
+                      i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                      "hover:bg-white/[0.03]"
+                    )}
+                  >
+                    <div className="px-2.5 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                    <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
+                    <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
+                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                    <div className="px-2.5 py-2.5"><MoneyStatusBadge status={row.status} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
   return (
     <div className="scanner-panel-surface flex h-[284px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
       <div className="flex items-start justify-between gap-4 px-3 py-3">
@@ -496,7 +670,7 @@ function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
       </div>
     </div>
   );
-}
+});
 
 function SideBadge({ side }: { side: "Long" | "Short" }) {
   const colorClass = side === "Long"
@@ -510,7 +684,7 @@ function SideBadge({ side }: { side: "Long" | "Short" }) {
   );
 }
 
-function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | MoneyPosition["status"] }) {
+function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING" }) {
   const isGreenStatus = status === "ENTRY_READY" || status === "OPEN";
   const className =
     isGreenStatus
@@ -577,18 +751,11 @@ function LockToggleIcon({ open, className }: { open: boolean; className?: string
 export default function ArbitrageMoneyView({
   tab,
   moneySignalsCount,
-  moneyDecisions,
-  moneyPositions,
-  moneyActionLog,
-  moneyOrderIntents,
   moneyAutoEnabled,
   moneySessionStartedAt,
   moneySessionStoppedAt,
   moneySentOrdersCount,
   onSetAutoEnabled,
-  executionSnapshot,
-  bookSnapshot,
-  mainWindowSnapshot,
   manualExecutionBusy,
   onSubmitManualOrders,
   onCaptureTickerPoint,
@@ -612,7 +779,18 @@ export default function ArbitrageMoneyView({
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [automationStartLocked, setAutomationStartLocked] = useState(false);
-  const queuedIntentsCount = moneyOrderIntents.filter((x) => x.status === "QUEUED").length;
+  const moneyActionLog = useMoneyActionLogRows();
+  const moneyOrderIntents = useMoneyOrderIntentRows();
+  const moneyOrderIntentMeta = useMoneyOrderIntentMeta();
+  const executionSnapshot = useMoneyExecutionSnapshot();
+  const moneyPositions = useMoneyPositionRows();
+  const activeDecisionRows = useMoneyActiveDecisionRows();
+  const moneyPositionMeta = useMoneyPositionMeta();
+  const bookSnapshotState = useMoneyBookSnapshotState();
+  const mainWindowSnapshotState = useMoneyMainWindowSnapshotState();
+  const bookSnapshot = bookSnapshotState.snapshot;
+  const mainWindowSnapshot = mainWindowSnapshotState.snapshot;
+  const queuedIntentsCount = moneyOrderIntentMeta.queuedCount;
   const boundWindow = executionSnapshot?.boundWindow ?? null;
   const executionQueueCount = executionSnapshot?.queue?.length ?? 0;
   const executionCurrent = executionSnapshot?.current ?? null;
@@ -636,51 +814,37 @@ export default function ArbitrageMoneyView({
   const showAutomationWorkspace = isAutoView || (isMoneyAutoTab && tab === "analytics");
   const automationRunning = moneyAutoEnabled && strategyModeEnabled && !panicOff;
   const automationControlAllowed = automationLaunchEnabled && showAutomationWorkspace;
-  const decisionByTicker = new Map(moneyDecisions.map((row) => [row.ticker, row]));
-  const activeDecisionRows = (() => {
-    const rows = new Map<string, {
-      ticker: string;
-      benchmark: string;
-      side: "Long" | "Short";
-      signal: number | null;
-      spread: number | null;
-      netEdge: number | null;
-      status: MoneyDecisionRow["status"] | MoneyPosition["status"];
-    }>();
-
-    for (const position of moneyPositions) {
-      if (position.status === "CLOSED" || position.status === "PENDING_ENTRY") continue;
-      const decision = decisionByTicker.get(position.ticker);
-      const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
-      const spread = decision?.spread ?? position.spread;
-      const netEdge = decision?.netEdge ?? (signal != null ? Math.max(0, Math.abs(signal) - Math.max(0, spread ?? 0)) : null);
-      rows.set(position.ticker, {
-        ticker: position.ticker,
-        benchmark: decision?.benchmark ?? position.benchmark,
-        side: decision?.side ?? position.side,
-        signal,
-        spread,
-        netEdge,
-        status: position.status,
-      });
-    }
-
-    return Array.from(rows.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
-  })();
-  const activeTickers = new Set(activeDecisionRows.map((row) => row.ticker));
-  const signalDecisionRows = moneyDecisions.filter((row) => !activeTickers.has(row.ticker));
-  const entryReadyCount = signalDecisionRows.filter((x) => x.status === "ENTRY_READY").length;
-  const openCount = moneyPositions.filter((x) =>
-    (x.status === "OPEN" || x.status === "PRINT_PENDING" || x.status === "EXIT_BLOCKED") &&
-    (
-      x.entryDispatchedAt != null ||
-      x.lastConfirmedActiveAt != null ||
-      (x.pendingIntent !== "ENTER_LONG_AGGRESSIVE" && x.pendingIntent !== "ENTER_SHORT_AGGRESSIVE")
-    )
-  ).length;
-  const exitBlockedCount = moneyPositions.filter((x) => x.status === "EXIT_BLOCKED").length;
-  const closedCount = moneyPositions.filter((x) => x.status === "CLOSED").length;
-  const blockedEdgeCount = signalDecisionRows.filter((x) => x.status === "BLOCKED_EDGE").length;
+  const moneyDecisionIds = useMoneyDecisionIds();
+  const moneyDecisionVersion = useMoneyDecisionVersion();
+  const moneyDecisionRowsSnapshot = useMemo(
+    () => moneyDecisionIds
+      .map((id) => getMoneyDecisionRow(id))
+      .filter((row): row is NonNullable<typeof row> => row !== null),
+    [moneyDecisionIds, moneyDecisionVersion]
+  );
+  const activeTickers = useMemo(
+    () => new Set(activeDecisionRows.map((row) => row.ticker)),
+    [activeDecisionRows]
+  );
+  const signalDecisionIds = useMemo(
+    () => moneyDecisionIds.filter((id) => !activeTickers.has(id)),
+    [activeTickers, moneyDecisionIds]
+  );
+  const entryReadyCount = useMemo(
+    () => signalDecisionIds.reduce((count, id) => {
+      return getMoneyDecisionRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
+    }, 0),
+    [moneyDecisionVersion, signalDecisionIds]
+  );
+  const openCount = moneyPositionMeta.openCount;
+  const exitBlockedCount = moneyPositionMeta.exitBlockedCount;
+  const closedCount = moneyPositionMeta.closedCount;
+  const blockedEdgeCount = useMemo(
+    () => signalDecisionIds.reduce((count, id) => {
+      return getMoneyDecisionRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
+    }, 0),
+    [moneyDecisionVersion, signalDecisionIds]
+  );
   const runtimeLabel = useMemo(
     () => formatRuntime(moneySessionStartedAt, moneySessionStoppedAt),
     [moneySessionStartedAt, moneySessionStoppedAt, updatedLabel]
@@ -801,9 +965,9 @@ export default function ArbitrageMoneyView({
               rows={activeDecisionRows}
               emptyMessage="No active MONEY situations yet."
             />
-            <MoneyDecisionTable
+            <MoneySignalsDecisionTable
               title="SIGNALS"
-              rows={signalDecisionRows}
+              rowIds={signalDecisionIds}
               emptyMessage="No filtered signals waiting in MONEY."
             />
           </div>
@@ -1229,7 +1393,7 @@ export default function ArbitrageMoneyView({
             </tr>
           </thead>
           <tbody>
-            {moneyDecisions.map((row, i) => (
+            {moneyDecisionRowsSnapshot.map((row, i) => (
               <tr key={`${row.ticker}|money|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
                 <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
                 <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
@@ -1242,7 +1406,7 @@ export default function ArbitrageMoneyView({
                 <td className="p-2.5 text-zinc-400">{row.reason}</td>
               </tr>
             ))}
-            {!moneyDecisions.length && (
+            {!moneyDecisionRowsSnapshot.length && (
               <tr>
                 <td colSpan={9} className="p-8 text-center text-zinc-500">
                   No MONEY candidates yet. Current MONEY filters are applied to live SONAR signals.
