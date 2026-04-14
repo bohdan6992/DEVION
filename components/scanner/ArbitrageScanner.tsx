@@ -7846,6 +7846,14 @@ export default function ArbitrageScanner({
     sizingMode,
   ]);
 
+  const moneyTrackedSignalsEnabled =
+    !isMoneyOnlyShell ||
+    tab !== "active" ||
+    moneyViewModeOverride === "auto" ||
+    Boolean(moneyAutoEnabledOverride) ||
+    Boolean(moneyAutoStartEnabledOverride) ||
+    Boolean(effectiveMoneyAutomationConfig.strategyModeEnabled);
+
   const {
     moneyEntryReadyCount,
     moneyAutoEnabled,
@@ -7866,6 +7874,8 @@ export default function ArbitrageScanner({
     refresh: refreshMoneySignals,
   } = useMoneyEngine({
     enabled: primaryPanel === "money",
+    ocrEnabled: moneyViewModeOverride === "auto" || (moneyViewModeOverride === "money-auto-tab" && tab === "analytics"),
+    trackedSignalsEnabled: moneyTrackedSignalsEnabled,
     initialAutoEnabled: moneyAutoStartEnabledOverride ?? (moneyViewModeOverride === "auto"),
     signalClass: moneySignalClass,
     ratingType,
@@ -7882,7 +7892,7 @@ export default function ArbitrageScanner({
     exactSonarFilterSnapshot: moneyExactSonarFilterSnapshot,
     maxSpreadValue: maxSpread,
     automationConfig: effectiveMoneyAutomationConfig,
-    onUpdated: () => setUpdatedAt(new Date()),
+    onUpdated: isMoneyOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
   const moneySignalMeta = useMoneySignalMeta();
@@ -12257,7 +12267,6 @@ export default function ArbitrageScanner({
             onClearExecutionQueue={clearMoneyExecutionQueue}
             onResetAutomationState={resetMoneyAutomationState}
             onForceRefresh={refreshMoneySignals}
-            updatedLabel={updatedLabel ?? null}
             listModeLabel={listMode.toUpperCase()}
             automationConfig={effectiveMoneyAutomationConfig}
             onAutomationConfigChange={(patch) => onMoneyAutomationConfigChange?.(patch)}

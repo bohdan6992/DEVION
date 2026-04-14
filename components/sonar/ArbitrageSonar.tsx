@@ -833,6 +833,7 @@ export function buildSignalsUrl(args: {
   zapMode: "zap" | "sigma" | "delta" | "off";
   minRate: number;
   minTotal: number;
+  limit?: number;
   tickers?: string;
   minCorr?: number | null;
   maxCorr?: number | null;
@@ -850,6 +851,7 @@ export function buildSignalsUrl(args: {
     zapMode,
     minRate,
     minTotal,
+    limit,
     tickers,
     minCorr,
     maxCorr,
@@ -872,7 +874,7 @@ export function buildSignalsUrl(args: {
 
   u.searchParams.set("minRate", String(safeMinRate));
   u.searchParams.set("minTotal", String(safeMinTotal));
-  u.searchParams.set("limit", "5000");
+  u.searchParams.set("limit", String(Number.isFinite(limit as number) ? Math.max(1, Math.trunc(limit as number)) : 5000));
 
   const t = (tickers ?? "").trim();
   if (t) u.searchParams.set("tickers", t);
@@ -899,6 +901,8 @@ export function buildSignalsUrl(args: {
 export function buildSignalsStreamUrl(args: Parameters<typeof buildSignalsUrl>[0]) {
   const snapshotUrl = new URL(buildSignalsUrl(args));
   snapshotUrl.pathname = snapshotUrl.pathname.replace("/api/arbitrage/signals/", "/api/arbitrage/signals-stream/");
+  // Stream payloads stay intentionally smaller than one-shot snapshots.
+  snapshotUrl.searchParams.set("limit", String(Number.isFinite(args.limit as number) ? Math.max(1, Math.trunc(args.limit as number)) : 500));
   return snapshotUrl.toString();
 }
 
@@ -4102,7 +4106,49 @@ export default function ArbitrageSonar() {
     const filtered = applyAllClientFilters(normalized, f);
     setAllItems(normalized);
     setItems(filtered);
-    setUpdatedAt(Date.now());
+    setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
+  }, [applyAllClientFilters]);
+
+  const applySignalsDiff = useCallback((payload: any, f: typeof snapshot) => {
+    const added = Array.isArray(payload?.added) ? payload.added : [];
+    const updated = Array.isArray(payload?.updated) ? payload.updated : [];
+    const removed = Array.isArray(payload?.removed) ? payload.removed : [];
+
+    const normalizedAdded = added
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
+
+    const normalizedUpdated = updated
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
+
+    const removedTickers = new Set<string>(
+      removed
+        .map((ticker: any) => normalizeTicker(String(ticker ?? "")))
+        .filter((ticker): ticker is string => Boolean(ticker))
+    );
+
+    setAllItems((prev) => {
+      const nextMap = new Map(prev.map((item) => [item.ticker, item] as const));
+
+      for (const ticker of removedTickers) {
+        nextMap.delete(ticker);
+      }
+
+      for (const item of normalizedAdded) {
+        nextMap.set(item.ticker, item);
+      }
+
+      for (const item of normalizedUpdated) {
+        nextMap.set(item.ticker, item);
+      }
+
+      const next = Array.from(nextMap.values());
+      setItems(applyAllClientFilters(next, f));
+      return next;
+    });
+
+    setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
   }, [applyAllClientFilters]);
 
   const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
@@ -4149,7 +4195,7 @@ export default function ArbitrageSonar() {
     const handlePayload = (event: MessageEvent<string>) => {
       if (cancelled) return;
       try {
-        const payload = JSON.parse(event.data);
+        const payload = JSON.parse(String(event.data));
         applySignalsPayload(payload, filtersRef.current);
         setError(null);
       } catch (error: any) {
@@ -4163,8 +4209,26 @@ export default function ArbitrageSonar() {
       }
     };
 
+    const handleDiff = (event: MessageEvent<string>) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(String(event.data));
+        applySignalsDiff(payload, filtersRef.current);
+        setError(null);
+      } catch (error: any) {
+        if (!cancelled) {
+          setError(error?.message ?? "Failed to parse stream diff payload");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
     source.onmessage = handlePayload;
     source.addEventListener("snapshot", handlePayload as EventListener);
+    source.addEventListener("diff", handleDiff as EventListener);
     source.onerror = () => {
       if (!cancelled) {
         setLoading(false);

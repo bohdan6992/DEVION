@@ -13,6 +13,7 @@ import { moneyOrderIntentStore } from "./moneyOrderIntentStore";
 import { moneyBookStore, resetMoneyOcrStores } from "./moneyOcrStores";
 import { moneyPositionStore } from "./moneyPositionStore";
 import { moneySignalStore } from "./moneySignalStore";
+import { moneyUpdatedAtStore } from "./moneyUpdatedAtStore";
 
 export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -1327,6 +1328,8 @@ export function buildMoneyOrderIntents(
 
 type UseMoneyEngineArgs = {
   enabled: boolean;
+  ocrEnabled?: boolean;
+  trackedSignalsEnabled?: boolean;
   initialAutoEnabled?: boolean;
   signalClass: string;
   ratingType: string | null | undefined;
@@ -1414,6 +1417,8 @@ const tradingAppBridgeUrl = (path: string) => {
 
 export function useMoneyEngine({
   enabled,
+  ocrEnabled = false,
+  trackedSignalsEnabled = true,
   initialAutoEnabled = true,
   signalClass,
   ratingType,
@@ -1586,7 +1591,11 @@ export function useMoneyEngine({
     maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
     minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
     maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
-    includeAll: true,
+    // Keep MONEY candidate coverage aligned with SONAR. Shared stream paging
+    // happens before local client-only filters, so a smaller upstream limit
+    // can hide otherwise matching rows.
+    limit: 500,
+    includeAll: false,
   }), [
     exactSonarFilterSnapshot,
     maxBeta,
@@ -1605,6 +1614,7 @@ export function useMoneyEngine({
   ]);
 
   const trackedSignalsStreamUrl = useMemo(() => {
+    if (!trackedSignalsEnabled) return null;
     const activeTrackedTickers = Array.from(openLoggedTickers);
     if (!activeTrackedTickers.length) return null;
     return buildSignalsStreamUrl({
@@ -1622,6 +1632,7 @@ export function useMoneyEngine({
       maxBeta: undefined,
       minSigma: undefined,
       maxSigma: undefined,
+      limit: Math.max(20, Math.min(80, activeTrackedTickers.length * 2)),
       includeAll: true,
     });
   }, [
@@ -1630,6 +1641,7 @@ export function useMoneyEngine({
     openLoggedTickers,
     ratingType,
     signalClass,
+    trackedSignalsEnabled,
   ]);
 
   useEffect(() => {
@@ -1639,6 +1651,7 @@ export function useMoneyEngine({
     moneyOrderIntentStore.clear();
     moneyPositionStore.clear();
     moneySignalStore.clear();
+    moneyUpdatedAtStore.clear();
     actionLogVersionRef.current += 1;
     setMoneyActionLog(restoredLog);
     setMoneyPositions(buildMoneyPositionsFromActionLog(restoredLog, localDayKey()));
@@ -1675,13 +1688,49 @@ export function useMoneyEngine({
       void refreshRef.current?.({ refreshBridge: false }).catch((error: any) => {
         onErrorRef.current?.(error?.message ?? String(error));
       });
-    }, 48);
+    }, 180);
   }, [enabled]);
 
   const applyPrimaryStreamPayload = useCallback((payload: any) => {
     const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
     primaryStreamSignalsRef.current = normalized;
+    scheduleLocalRefresh();
+  }, [scheduleLocalRefresh]);
+
+  const applyStreamDiffToRef = useCallback((
+    targetRef: { current: ArbitrageSignal[] },
+    payload: any
+  ) => {
+    const added = Array.isArray(payload?.added) ? payload.added : [];
+    const updated = Array.isArray(payload?.updated) ? payload.updated : [];
+    const removed = Array.isArray(payload?.removed) ? payload.removed : [];
+
+    const normalizedAdded = added.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+    const normalizedUpdated = updated.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+    const removedTickers = new Set<string>(
+      removed
+        .map((ticker: any) => String(ticker ?? "").trim().toUpperCase())
+        .filter((ticker): ticker is string => ticker.length > 0)
+    );
+
+    const nextMap = new Map(
+      targetRef.current.map((row) => [row.ticker, row] as const)
+    );
+
+    for (const ticker of removedTickers) {
+      nextMap.delete(ticker);
+    }
+
+    for (const row of normalizedAdded) {
+      nextMap.set(row.ticker, row);
+    }
+
+    for (const row of normalizedUpdated) {
+      nextMap.set(row.ticker, row);
+    }
+
+    targetRef.current = Array.from(nextMap.values());
     scheduleLocalRefresh();
   }, [scheduleLocalRefresh]);
 
@@ -1698,7 +1747,14 @@ export function useMoneyEngine({
     const source = new EventSource(primarySignalsStreamUrl);
     const handlePayload = (event: MessageEvent<string>) => {
       try {
-        applyPrimaryStreamPayload(JSON.parse(event.data));
+        applyPrimaryStreamPayload(JSON.parse(String(event.data)));
+      } catch {
+        // ignore malformed stream payloads and keep previous snapshot
+      }
+    };
+    const handleDiff = (event: MessageEvent<string>) => {
+      try {
+        applyStreamDiffToRef(primaryStreamSignalsRef, JSON.parse(String(event.data)));
       } catch {
         // ignore malformed stream payloads and keep previous snapshot
       }
@@ -1706,11 +1762,12 @@ export function useMoneyEngine({
 
     source.onmessage = handlePayload;
     source.addEventListener("snapshot", handlePayload as EventListener);
+    source.addEventListener("diff", handleDiff as EventListener);
 
     return () => {
       source.close();
     };
-  }, [applyPrimaryStreamPayload, enabled, primarySignalsStreamUrl]);
+  }, [applyPrimaryStreamPayload, applyStreamDiffToRef, enabled, primarySignalsStreamUrl]);
 
   useEffect(() => {
     if (!enabled || !trackedSignalsStreamUrl || typeof window === "undefined") {
@@ -1724,7 +1781,14 @@ export function useMoneyEngine({
     const source = new EventSource(trackedSignalsStreamUrl);
     const handlePayload = (event: MessageEvent<string>) => {
       try {
-        applyTrackedStreamPayload(JSON.parse(event.data));
+        applyTrackedStreamPayload(JSON.parse(String(event.data)));
+      } catch {
+        // ignore malformed stream payloads and keep previous snapshot
+      }
+    };
+    const handleDiff = (event: MessageEvent<string>) => {
+      try {
+        applyStreamDiffToRef(trackedStreamSignalsRef, JSON.parse(String(event.data)));
       } catch {
         // ignore malformed stream payloads and keep previous snapshot
       }
@@ -1732,11 +1796,12 @@ export function useMoneyEngine({
 
     source.onmessage = handlePayload;
     source.addEventListener("snapshot", handlePayload as EventListener);
+    source.addEventListener("diff", handleDiff as EventListener);
 
     return () => {
       source.close();
     };
-  }, [applyTrackedStreamPayload, enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
+  }, [applyStreamDiffToRef, applyTrackedStreamPayload, enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
 
   useEffect(() => {
     setMoneyPositions((prev) => {
@@ -1965,12 +2030,11 @@ export function useMoneyEngine({
       normalizedByTicker.set(row.ticker, row);
     }
 
-    const normalized = primaryStreamSignalsRef.current;
+    const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
+    const normalized = normalizedMerged;
     const executionSnapshot = refreshBridge
       ? await refreshExecutionStatus(false)
       : moneyExecutionSnapshotRef.current;
-
-    const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
     const filtered = exactSonarFilterSnapshot
       ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
       : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
@@ -2056,6 +2120,7 @@ export function useMoneyEngine({
 
     moneyDecisionStore.applySnapshot(displayDecisions);
     moneySignalStore.applySnapshot(filtered);
+    moneyUpdatedAtStore.setValue(Date.now());
 
     startTransition(() => {
       setMoneyEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
@@ -2148,12 +2213,18 @@ export function useMoneyEngine({
     moneyOrderIntentStore.clear();
     moneyPositionStore.clear();
     moneySignalStore.clear();
+    moneyUpdatedAtStore.clear();
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !ocrEnabled) return;
     return connectMoneyOcrStream();
-  }, [enabled]);
+  }, [enabled, ocrEnabled]);
+
+  useEffect(() => {
+    if (!enabled || ocrEnabled) return;
+    resetMoneyOcrStores();
+  }, [enabled, ocrEnabled]);
 
   useEffect(() => {
     moneyPositionStore.applySnapshot(moneyPositions);

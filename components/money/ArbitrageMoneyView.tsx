@@ -10,6 +10,7 @@ import { useMoneyExecutionSnapshot } from "./moneyExecutionStore";
 import { useMoneyOrderIntentMeta, useMoneyOrderIntentRows } from "./moneyOrderIntentStore";
 import { useMoneyBookSnapshotState, useMoneyMainWindowSnapshotState } from "./moneyOcrStores";
 import { useMoneyActiveDecisionRows, useMoneyPositionMeta, useMoneyPositionRows } from "./moneyPositionStore";
+import { useMoneyUpdatedAt } from "./moneyUpdatedAtStore";
 import type {
   MoneyActionLogEntry,
   MainWindowDataSnapshot,
@@ -50,7 +51,6 @@ type ArbitrageMoneyViewProps = {
   onClearExecutionQueue: () => Promise<void>;
   onResetAutomationState: () => void;
   onForceRefresh: () => Promise<void>;
-  updatedLabel: string | null;
   listModeLabel: string;
   automationConfig: MoneyAutomationConfig;
   onAutomationConfigChange: (patch: Partial<MoneyAutomationConfig>) => void;
@@ -765,7 +765,6 @@ export default function ArbitrageMoneyView({
   onClearExecutionQueue,
   onResetAutomationState,
   onForceRefresh,
-  updatedLabel,
   listModeLabel,
   automationConfig,
   onAutomationConfigChange,
@@ -779,6 +778,8 @@ export default function ArbitrageMoneyView({
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [automationStartLocked, setAutomationStartLocked] = useState(false);
+  const moneyUpdatedAt = useMoneyUpdatedAt();
+  const updatedLabel = moneyUpdatedAt ? new Date(moneyUpdatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
   const moneyActionLog = useMoneyActionLogRows();
   const moneyOrderIntents = useMoneyOrderIntentRows();
   const moneyOrderIntentMeta = useMoneyOrderIntentMeta();
