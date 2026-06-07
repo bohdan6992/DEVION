@@ -80,7 +80,7 @@ const INTERVALS = [
 
 export default function TradingCenter() {
   const [sym,      setSym]      = useState("SPY");
-  const [interval, setInterval] = useState("5");
+  const [interval, setIntervalVal] = useState("5");
   const [quotes,   setQuotes]   = useState<Quote[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [ts,       setTs]       = useState("");
@@ -97,7 +97,7 @@ export default function TradingCenter() {
       } catch {} finally { setLoading(false); }
     };
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 15000);
     return () => clearInterval(id);
   }, []);
 
@@ -151,7 +151,7 @@ export default function TradingCenter() {
             {INTERVALS.map(({ label, val }) => (
               <button
                 key={val}
-                onClick={() => setInterval(val)}
+                onClick={() => setIntervalVal(val)}
                 className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold transition-all"
                 style={{
                   background: interval === val ? "rgba(255,255,255,0.1)" : "transparent",
