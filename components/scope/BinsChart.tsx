@@ -166,7 +166,7 @@ export default function BinsChart({ data }: { data: any }) {
               {chartData.map((entry, idx) => (
                 <Cell
                   key={idx}
-                  fill={entry[yKey as keyof typeof entry] >= 0 ? "#3b82f6" : "#ef4444"}
+                  fill={Number(entry[yKey as keyof typeof entry]) >= 0 ? "#3b82f6" : "#ef4444"}
                 />
               ))}
             </Bar>
