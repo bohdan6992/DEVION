@@ -182,14 +182,16 @@ function MainWindowBookSplitCard({
       heading: canonicalMainWindowHeading(field.heading),
     }));
     const used = new Set<number>();
-    const sorted = MAIN_WINDOW_FIELD_ORDER.map((label) => {
-      const matchIndex = canonicalFields.findIndex((field, index) => !used.has(index) && normalizeMainWindowFieldKey(field.heading) === normalizeMainWindowFieldKey(label));
-      if (matchIndex < 0) return null;
-      used.add(matchIndex);
-      return canonicalFields[matchIndex];
-    }).filter((field): field is NonNullable<typeof field> => field !== null);
-    const remainder = canonicalFields.filter((_, index) => !used.has(index));
-    return [...sorted, ...remainder];
+    return MAIN_WINDOW_FIELD_ORDER.map((label) => {
+      const matchIndex = canonicalFields.findIndex(
+        (field, index) => !used.has(index) && normalizeMainWindowFieldKey(field.heading) === normalizeMainWindowFieldKey(label),
+      );
+      if (matchIndex >= 0) {
+        used.add(matchIndex);
+        return { heading: label, value: canonicalFields[matchIndex].value, rawLine: canonicalFields[matchIndex].rawLine };
+      }
+      return { heading: label, value: null as string | null, rawLine: "" };
+    });
   })();
   const mainWindowControls = extractMainWindowControls(mainWindowSnapshot);
   const bookRows = Array.from({ length: 5 }, (_, index) => ({
@@ -208,11 +210,13 @@ function MainWindowBookSplitCard({
               <div
                 key={control.label}
                 className="flex h-7 w-7 items-center justify-center rounded-md font-mono text-[10px] font-bold uppercase leading-none"
-                style={{
-                  color: control.state === "RED" ? MONEY_ALERT_RED : MONEY_READY_GREEN,
-                  border: `1px solid ${control.state === "RED" ? MONEY_ALERT_RED_BORDER : MONEY_READY_GREEN_BORDER}`,
-                  backgroundColor: control.state === "RED" ? MONEY_ALERT_RED_SOFT : MONEY_READY_GREEN_SOFT,
-                }}
+                style={
+                  control.state === "RED"
+                    ? { color: MONEY_ALERT_RED, border: `1px solid ${MONEY_ALERT_RED_BORDER}`, backgroundColor: MONEY_ALERT_RED_SOFT }
+                    : control.state === "GREEN"
+                      ? { color: MONEY_READY_GREEN, border: `1px solid ${MONEY_READY_GREEN}`, backgroundColor: "rgba(99,230,190,0.22)", boxShadow: `0 0 8px rgba(99,230,190,0.35)` }
+                      : { color: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.06)", backgroundColor: "rgba(0,0,0,0.3)" }
+                }
               >
                 {control.label}
               </div>
@@ -220,26 +224,22 @@ function MainWindowBookSplitCard({
           </div>
         </div>
         <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
-          {orderedFields.length ? (
-            <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
-              {orderedFields.map((field, index) => (
-                <div
-                  key={`${field.heading}|${field.value}|${index}`}
-                  className={clsx(
-                    "flex items-center justify-between gap-3 border-b border-white/5 py-1.5 font-mono",
-                    index % 2 === 0 ? "text-zinc-200" : "text-zinc-300",
-                  )}
-                >
-                  <div className="truncate text-[11px] leading-none text-emerald-300">{field.heading || "-"}</div>
-                  <div className="shrink-0 text-right text-[14px] leading-none text-zinc-100">{field.value || "0"}</div>
+          <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
+            {orderedFields.map((field, index) => (
+              <div
+                key={`${field.heading}|${index}`}
+                className={clsx(
+                  "flex items-center justify-between gap-3 border-b border-white/5 py-1.5 font-mono",
+                  index % 2 === 0 ? "text-zinc-200" : "text-zinc-300",
+                )}
+              >
+                <div className="truncate text-[11px] leading-none text-emerald-300">{field.heading}</div>
+                <div className={clsx("shrink-0 text-right text-[14px] leading-none", field.value ? "text-zinc-100" : "text-zinc-600")}>
+                  {field.value ?? "—"}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="p-8 text-center text-[11px] font-mono text-zinc-500">
-              {executionMessage || "No main window data captured yet."}
-            </div>
-          )}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

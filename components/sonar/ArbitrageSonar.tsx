@@ -78,6 +78,9 @@ export type ArbitrageSignal = {
   report?: any;
   Report?: any;
 
+  isStaticFallback?: boolean;
+  IsStaticFallback?: boolean;
+
   active?: any;
   Active?: any;
   isActive?: any;
@@ -110,7 +113,12 @@ export type ArbitrageSignal = {
 };
 
 type Mode = "top" | "all";
-type RatingMode = "SESSION" | "BIN";
+type RatingMode = "SESSION" | "BIN" | "BINS";
+type TriMode = "off" | "include" | "exclude";
+type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
+type TopWindowTime = { band: string; rate: number; total: number } | null;
+type TopWindowEntry = { sigma: TopWindow; bench: TopWindow; time: TopWindowTime };
+type TopWindows = Partial<Record<string, Partial<Record<"pos" | "neg", TopWindowEntry>>>>;
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
@@ -822,6 +830,103 @@ function passesSonarBinRating(args: {
   );
 }
 
+function getSigmaBinParams(signal: ArbitrageSignal): { min: number; max: number; step: number } {
+  const root = safeRecord(getBestParams(signal));
+  const bwAny = safeRecord(root?.best_windows_any ?? root?.BestWindowsAny);
+  const p = safeRecord(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
+  return {
+    min: toNum(p?.min) ?? 0.5,
+    max: toNum(p?.max) ?? 10.0,
+    step: toNum(p?.step) ?? 0.5,
+  };
+}
+
+function computeSigmaBinKey(absVal: number, step: number, min: number, max: number): string | null {
+  if (!Number.isFinite(absVal) || step <= 0) return null;
+  const v = Math.max(min, Math.min(max, absVal));
+  const b = Math.floor(v / step) * step;
+  return b.toFixed(1);
+}
+
+function getSessionBinRating(
+  signal: ArbitrageSignal,
+  cls: ArbClass
+): { rate: number; total: number } | null {
+  const signKey = sonarBinSignKey(signal);
+  const sigmaAbs = getSignalSigmaAbs(signal);
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
+  const { min, max, step } = getSigmaBinParams(signal);
+  const binKey = computeSigmaBinKey(sigmaAbs, step, min, max);
+  if (!binKey) return null;
+  const root = safeRecord(getBestParams(signal));
+  const bwAny = safeRecord(root?.best_windows_any ?? root?.BestWindowsAny);
+  const stitched = safeRecord(bwAny?.stitched ?? bwAny?.Stitched);
+  const allStats = safeRecord(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
+  const clsStats = safeRecord(allStats?.[sonarClassToBinClassKey(cls)]);
+  const signStats = safeRecord(clsStats?.[signKey]);
+  const entry = safeRecord(signStats?.[binKey]);
+  if (!entry) return null;
+  const rate = toNum(entry.r ?? entry.rate ?? entry.Rate);
+  const total = toNum(entry.t ?? entry.total ?? entry.Total);
+  if (rate == null || total == null) return null;
+  return { rate, total };
+}
+
+function getTopWindows(signal: ArbitrageSignal, cls: ArbClass): TopWindows[string] | null {
+  const root = safeRecord(getBestParams(signal));
+  const tw = safeRecord(root?.top_windows ?? root?.TopWindows);
+  return safeRecord(tw?.[sonarClassToBinClassKey(cls)]) ?? null;
+}
+
+function getSignalBenchPct(signal: ArbitrageSignal): number | null {
+  const bid = toNum(signal?.bidBench);
+  const ask = toNum(signal?.askBench);
+  if (bid != null && ask != null) return (bid + ask) / 2;
+  return bid ?? ask ?? null;
+}
+
+function currentMarketTimeBand(bandMinutes: number): string | null {
+  // Approximate US Eastern time: UTC-4 (EDT) or UTC-5 (EST)
+  // Use UTC-4 as default (EDT covers most trading season Apr-Oct)
+  const now = new Date();
+  const etMs = now.getTime() - 4 * 60 * 60 * 1000;
+  const et = new Date(etMs);
+  const h = et.getUTCHours();
+  const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function passesTopWindowFilter(
+  signal: ArbitrageSignal,
+  cls: ArbClass,
+  topSigmaOn: boolean,
+  topBenchOn: boolean,
+  topTimeOn: boolean
+): boolean {
+  if (!topSigmaOn && !topBenchOn && !topTimeOn) return true;
+  const signKey = sonarBinSignKey(signal);
+  if (!signKey) return true;
+  const tw = getTopWindows(signal, cls);
+  const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
+  if (!entry) return true; // no data — don't filter
+
+  if (topSigmaOn && entry.sigma) {
+    const sa = getSignalSigmaAbs(signal);
+    if (sa == null) return false;
+    if (sa < entry.sigma.lo || sa > entry.sigma.hi) return false;
+  }
+  if (topBenchOn && entry.bench) {
+    const bp = getSignalBenchPct(signal);
+    if (bp == null) return false;
+    if (bp < entry.bench.lo || bp > entry.bench.hi) return false;
+  }
+  if (topTimeOn && entry.time) {
+    const band = currentMarketTimeBand(30);
+    if (!band || band !== entry.time.band) return false;
+  }
+  return true;
+}
+
 /* =========================
    URL builder
 ========================= */
@@ -864,7 +969,7 @@ export function buildSignalsUrl(args: {
 
   const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
 
-  const useBinRatingFilter = ratingMode === "BIN" && zapMode === "sigma";
+  const useBinRatingFilter = (ratingMode === "BIN" || ratingMode === "BINS") && zapMode === "sigma";
   const safeMinRate = useBinRatingFilter
     ? BIN_SERVER_MIN_RATE
     : Number.isFinite(minRate) ? Math.max(0, minRate) : BIN_SERVER_MIN_RATE;
@@ -1087,6 +1192,7 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     _isPTP,
     _isSSR,
     _isActive,
+    isStaticFallback: !!(raw.isStaticFallback ?? raw.IsStaticFallback ?? false),
   };
 }
 
@@ -1410,7 +1516,7 @@ const MultiSelectFilter = ({
   options: string[];
   selected: Set<string>;
   setSelected: (s: Set<string>) => void;
-  enabled: boolean;
+  enabled: TriMode;
   toggleEnabled: () => void;
   color?: MsColor;
   hideArrow?: boolean;
@@ -1510,14 +1616,22 @@ const MultiSelectFilter = ({
         <button
           type="button"
           onClick={toggleEnabled}
-          className={`inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
-            enabled ? C.chipActive : C.chipInactive
-          }`}
+          className={clsx(
+            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
+            enabled === "off" && C.chipInactive,
+            enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+            enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+          )}
         >
           <span>{label}</span>
           {selected.size > 0 && (
             <span
-              className={`ml-2 inline-flex min-w-5 items-center justify-center rounded-full border border-yellow-200/35 bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none ${getSonarAccent(theme).text}`}
+              className={clsx(
+                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
+                enabled === "off" && `border-yellow-200/35 ${getSonarAccent(theme).text}`,
+                enabled === "include" && "border-emerald-400/50 text-emerald-400",
+                enabled === "exclude" && "border-red-400/50 text-red-400",
+              )}
             >
               {selected.size}
             </span>
@@ -2157,11 +2271,15 @@ export type SonarExactFilterSnapshot = {
   cls: string;
   type: string;
   mode: string;
-  ratingMode: "BIN" | "SESSION";
+  ratingMode: "SESSION" | "BIN" | "BINS";
   minRate: number | string;
   minTotal: number | string;
   tickersFilterNorm: string;
   listMode: ListMode;
+  topMode: boolean;
+  topSigmaOn: boolean;
+  topBenchOn: boolean;
+  topTimeOn: boolean;
   ignoreSet: Set<string>;
   applySet: Set<string>;
   pinMap: Record<string, string>;
@@ -2177,11 +2295,11 @@ export type SonarExactFilterSnapshot = {
   includeUSA: boolean;
   includeChina: boolean;
   selCountries: Set<string>;
-  countryEnabled: boolean;
+  countryEnabled: TriMode;
   selExchanges: Set<string>;
-  exchangeEnabled: boolean;
+  exchangeEnabled: TriMode;
   selSectors: Set<string>;
-  sectorEnabled: boolean;
+  sectorEnabled: TriMode;
   filterReport: "ALL" | "YES" | "NO";
   equityType: string;
   corrMin: string;
@@ -2210,6 +2328,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
   const mr = toNum(f.minRate);
   const mt = toNum(f.minTotal);
   const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
+  const useSigBinFilter = f.ratingMode === "BINS" && f.zapMode === "sigma";
 
   const base = Number(f.zapShowAbs ?? 0);
   const zapThr = Math.max(0.3, base);
@@ -2270,6 +2389,15 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
 
     if (useBinRatingFilter) {
       if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
+    } else if (useSigBinFilter) {
+      const binStats = getSessionBinRating(s, f.cls as ArbClass);
+      if (binStats !== null) {
+        if (mr != null && binStats.rate < mr) continue;
+        if (mt != null && binStats.total < mt) continue;
+      } else {
+        if (mr != null) { const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null; if (r == null || r < mr) continue; }
+        if (mt != null) { const t = getBestTotalByType(s, f.type as any); if (t == null || t < mt) continue; }
+      }
     } else {
       if (mr != null) {
         const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
@@ -2280,6 +2408,8 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
         if (t == null || t < mt) continue;
       }
     }
+
+    if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
 
     if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
     if (f.excludeNews) {
@@ -2306,9 +2436,18 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
     }
 
-    if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) continue;
-    if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) continue;
-    if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
+    if (f.selCountries.size > 0) {
+      if (f.countryEnabled === "include" && !f.selCountries.has(getCountry(s))) continue;
+      if (f.countryEnabled === "exclude" && f.selCountries.has(getCountry(s))) continue;
+    }
+    if (f.selExchanges.size > 0) {
+      if (f.exchangeEnabled === "include" && !f.selExchanges.has(getExchange(s))) continue;
+      if (f.exchangeEnabled === "exclude" && f.selExchanges.has(getExchange(s))) continue;
+    }
+    if (f.selSectors.size > 0) {
+      if (f.sectorEnabled === "include" && !f.selSectors.has(getSector(s))) continue;
+      if (f.sectorEnabled === "exclude" && f.selSectors.has(getSector(s))) continue;
+    }
 
     if (f.filterReport !== "ALL") {
       const rep = hasTodayReport(s);
@@ -2321,7 +2460,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (!et.includes(eqNeedle)) continue;
     }
 
-    if (f.zapMode !== "off") {
+    if (f.zapMode !== "off" && !s.isStaticFallback) {
       const dir = s.direction;
       const isShort = dir === "down";
       const isLong = dir === "up";
@@ -2808,6 +2947,10 @@ export default function ArbitrageSonar() {
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
   const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
+  const [topMode, setTopMode] = useState(false);
+  const [topSigmaOn, setTopSigmaOn] = useState(true);
+  const [topBenchOn, setTopBenchOn] = useState(false);
+  const [topTimeOn, setTopTimeOn] = useState(false);
 
   type NumField = {
     label: string;
@@ -3022,13 +3165,13 @@ export default function ArbitrageSonar() {
 
   /* ===== Multi-select ===== */
   const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
-  const [countryEnabled, setCountryEnabled] = useState(false);
+  const [countryEnabled, setCountryEnabled] = useState<TriMode>("off");
 
   const [selExchanges, setSelExchanges] = useState<Set<string>>(new Set());
-  const [exchangeEnabled, setExchangeEnabled] = useState(false);
+  const [exchangeEnabled, setExchangeEnabled] = useState<TriMode>("off");
 
   const [selSectors, setSelSectors] = useState<Set<string>>(new Set());
-  const [sectorEnabled, setSectorEnabled] = useState(false);
+  const [sectorEnabled, setSectorEnabled] = useState<TriMode>("off");
 
   const [filterReport, setFilterReport] = useState<"ALL" | "YES" | "NO">("ALL");
   const [accountNonEmptyFirst, setAccountNonEmptyFirst] = useState(false);
@@ -3364,10 +3507,14 @@ export default function ArbitrageSonar() {
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
-        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN") setRatingMode(s.ratingMode);
+        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
+        if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
+        if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
+        if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
+        if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.filtersCollapsed === "boolean") setFiltersCollapsed(s.filtersCollapsed);
 
@@ -3402,11 +3549,15 @@ export default function ArbitrageSonar() {
         if (typeof s?.sigmaMax === 'string') setSigmaMax(s.sigmaMax);
 
         // multi-select
-        if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled);
+        const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
+        if (validTriMode(s?.countryEnabled)) setCountryEnabled(s.countryEnabled);
+        else if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled ? "include" : "off");
         if (Array.isArray(s?.selCountries)) setSelCountries(new Set(s.selCountries.filter(Boolean)));
-        if (typeof s?.exchangeEnabled === 'boolean') setExchangeEnabled(s.exchangeEnabled);
+        if (validTriMode(s?.exchangeEnabled)) setExchangeEnabled(s.exchangeEnabled);
+        else if (typeof s?.exchangeEnabled === 'boolean') setExchangeEnabled(s.exchangeEnabled ? "include" : "off");
         if (Array.isArray(s?.selExchanges)) setSelExchanges(new Set(s.selExchanges.filter(Boolean)));
-        if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled);
+        if (validTriMode(s?.sectorEnabled)) setSectorEnabled(s.sectorEnabled);
+        else if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled ? "include" : "off");
         if (Array.isArray(s?.selSectors)) setSelSectors(new Set(s.selSectors.filter(Boolean)));
 
         if (s?.rangeModes && typeof s.rangeModes === "object") {
@@ -3537,6 +3688,7 @@ export default function ArbitrageSonar() {
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+          topMode, topSigmaOn, topBenchOn, topTimeOn,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -4057,6 +4209,11 @@ export default function ArbitrageSonar() {
       zapSilverAbs,
       zapGoldAbs,
 
+      topMode,
+      topSigmaOn,
+      topBenchOn,
+      topTimeOn,
+
     };
   }, [
     cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
@@ -4069,6 +4226,7 @@ export default function ArbitrageSonar() {
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
+    topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
 
@@ -4563,9 +4721,9 @@ export default function ArbitrageSonar() {
     if (excludeCrap) hints.push("ex < $5");
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
-    if (countryEnabled && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
-    if (exchangeEnabled && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
-    if (sectorEnabled && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
+    if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
+    if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
+    if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
     if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
     return hints.slice(0, 8);
@@ -5011,8 +5169,55 @@ export default function ArbitrageSonar() {
           </div>
 
           <div className="ml-auto flex flex-wrap justify-end gap-3">
+
+          {/* TOP mode toggle */}
+          <div className="flex h-7 items-center gap-1.5">
+            <div className="flex h-7 items-center rounded-lg bg-black/20">
+              {([false, true] as const).map((isTop) => (
+                <button
+                  key={String(isTop)}
+                  type="button"
+                  onClick={() => setTopMode(isTop)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    topMode === isTop
+                      ? isTop
+                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                        : secondaryButtonSoftActiveClass
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {isTop ? "TOP" : "ALL"}
+                </button>
+              ))}
+            </div>
+            {topMode && (
+              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+                {([
+                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
+                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
+                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
+                ] as const).map(({ key, label, on, set }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => set((v) => !v)}
+                    className={clsx(
+                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
+                      on
+                        ? "bg-emerald-500/80 text-white"
+                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
@@ -5379,7 +5584,7 @@ export default function ArbitrageSonar() {
 
         <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
@@ -5562,7 +5767,7 @@ export default function ArbitrageSonar() {
               selected={selCountries}
               setSelected={setSelCountries}
               enabled={countryEnabled}
-              toggleEnabled={() => setCountryEnabled(!countryEnabled)}
+              toggleEnabled={() => setCountryEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
             <MultiSelectFilter
@@ -5571,7 +5776,7 @@ export default function ArbitrageSonar() {
               selected={selExchanges}
               setSelected={setSelExchanges}
               enabled={exchangeEnabled}
-              toggleEnabled={() => setExchangeEnabled(!exchangeEnabled)}
+              toggleEnabled={() => setExchangeEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
             <MultiSelectFilter
@@ -5580,7 +5785,7 @@ export default function ArbitrageSonar() {
               selected={selSectors}
               setSelected={setSelSectors}
               enabled={sectorEnabled}
-              toggleEnabled={() => setSectorEnabled(!sectorEnabled)}
+              toggleEnabled={() => setSectorEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
           </div>

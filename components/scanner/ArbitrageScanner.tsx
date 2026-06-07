@@ -65,7 +65,8 @@ type PaperArbDilutionMode = "Undiluted" | "Diluted";
 // rating (best_params gates)
 type PaperArbRatingBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 type PaperArbRatingType = "any" | "hard" | "soft";
-type PaperArbRatingMode = "SESSION" | "BIN";
+type PaperArbRatingMode = "SESSION" | "BIN" | "BINS";
+type TriMode = "off" | "include" | "exclude";
 type PaperArbRatingRule = {
   band: PaperArbRatingBand;
   minRate: number;
@@ -306,6 +307,9 @@ type PaperArbClosedDto = {
   imbExch1555?: number | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
+  sectorL3?: string | null;
+  sectorL4?: string | null;
+  sectorL5?: string | null;
 };
 
 // Big request: Analytics + EpisodesSearch
@@ -342,6 +346,9 @@ type PaperArbAnalyticsRequest = {
   exchanges?: string[] | null;
   countries?: string[] | null;
   sectorsL3?: string[] | null;
+  excludeExchanges?: string[] | null;
+  excludeCountries?: string[] | null;
+  excludeSectorsL3?: string[] | null;
 
   // ranges
   minTierBp?: number | null;
@@ -640,7 +647,7 @@ type OptimizerImpactRow = {
   winRate: number;
 };
 
-type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score";
+type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score" | "tailDamage";
 type OptimizerRangeGroupKey = "RATING GATES" | "ZAP THRESHOLDS" | "TAPE FILTERS";
 type OptimizerRangeGroupStatus = { loading: boolean; error: string | null; partial: boolean };
 type ScopeParameterDefinition = {
@@ -649,6 +656,8 @@ type ScopeParameterDefinition = {
   group: OptimizerRangeGroupKey;
   scenarioParameter?: string | null;
   optimizerApiKey?: string | null;
+  // categorical = client-side grouping (sector/bench), no API range call
+  kind?: "numeric" | "categorical";
 };
 
 type ScopeResearchChartType =
@@ -1183,6 +1192,70 @@ function scannerBinFilterEnabled(args: {
   return args.ratingMode === "BIN" && args.metric === "SigmaZap";
 }
 
+function scannerSigBinSnapshot(args: {
+  row: any;
+  session: PaperArbSession;
+  side: TapeArbSide;
+  sigmaAbs: number | null | undefined;
+}): { rate: number; total: number } | null {
+  const { row, session, side, sigmaAbs } = args;
+  const signKey = binSignKeyForSide(side);
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
+  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
+  const root = safeObjRecord(scannerBestParams(row));
+  const bwAny = safeObjRecord(root?.best_windows_any ?? root?.BestWindowsAny);
+  const stitched = safeObjRecord(bwAny?.stitched ?? bwAny?.Stitched);
+  const allStats = safeObjRecord(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
+  const clsStats = safeObjRecord(allStats?.[classKey]);
+  const signStats = safeObjRecord(clsStats?.[signKey]);
+  // compute bin key matching Python: floor(abs / step) * step formatted to 1 decimal
+  const sigBinParams = safeObjRecord(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
+  const step = Number(sigBinParams?.step ?? 0.5);
+  const min = Number(sigBinParams?.min ?? 0.5);
+  const max = Number(sigBinParams?.max ?? 10.0);
+  const v = Math.max(min, Math.min(max, Math.abs(sigmaAbs)));
+  const binKey = (Math.floor(v / step) * step).toFixed(1);
+  const entry = safeObjRecord(signStats?.[binKey]);
+  if (!entry) return null;
+  const rate = optNumOrNull(entry.r ?? entry.rate ?? entry.Rate);
+  const total = optNumOrNull(entry.t ?? entry.total ?? entry.Total);
+  if (rate == null || total == null) return null;
+  return { rate, total };
+}
+
+function scannerTopWindowSnapshot(args: {
+  row: any;
+  session: PaperArbSession;
+  side: TapeArbSide;
+  sigmaAbs: number | null | undefined;
+}): { sigma: { lo: number; hi: number } | null; time: { band: string } | null } | null {
+  const { row, session, side, sigmaAbs } = args;
+  const signKey = binSignKeyForSide(side);
+  if (!signKey) return null;
+  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
+  const root = safeObjRecord(scannerBestParams(row));
+  const tw = safeObjRecord(safeObjRecord(root?.top_windows ?? root?.TopWindows)?.[classKey]);
+  const entry = safeObjRecord(tw?.[signKey]);
+  if (!entry) return null;
+  const sigmaTw = safeObjRecord(entry.sigma);
+  const timeTw = safeObjRecord(entry.time);
+  return {
+    sigma: sigmaTw && optNumOrNull(sigmaTw.lo) != null && optNumOrNull(sigmaTw.hi) != null
+      ? { lo: Number(sigmaTw.lo), hi: Number(sigmaTw.hi) }
+      : null,
+    time: timeTw && typeof timeTw.band === "string" ? { band: timeTw.band } : null,
+  };
+}
+
+function scannerCurrentTimeBand(bandMinutes: number): string {
+  const now = new Date();
+  const etMs = now.getTime() - 4 * 60 * 60 * 1000;
+  const et = new Date(etMs);
+  const h = et.getUTCHours();
+  const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 function passesScannerBinRatingFilter(args: {
   enabled: boolean;
   row: any;
@@ -1480,6 +1553,10 @@ const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "corr", label: "CORR", group: "RATING GATES", scenarioParameter: "CORR", optimizerApiKey: "CORR" },
   { key: "beta", label: "BETA", group: "RATING GATES", scenarioParameter: "BETA", optimizerApiKey: "BETA" },
   { key: "sigma", label: "SIGMA", group: "RATING GATES", scenarioParameter: "SIGMA", optimizerApiKey: "SIGMA" },
+  { key: "sector", label: "SECTOR L3", group: "RATING GATES", kind: "categorical" },
+  { key: "sectorL4", label: "SECTOR L4", group: "RATING GATES", kind: "categorical" },
+  { key: "sectorL5", label: "SECTOR L5", group: "RATING GATES", kind: "categorical" },
+  { key: "bench", label: "BENCH", group: "RATING GATES", kind: "categorical" },
   { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
   { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
   { key: "adv20", label: "ADV20", group: "TAPE FILTERS", scenarioParameter: "ADV20" },
@@ -2245,6 +2322,91 @@ function buildFallbackScopeOptimizerParameter(
   };
 }
 
+// Builds a categorical PaperArbOptimizerParameterDto by grouping episodes on a string key.
+// Each unique value (sector / benchTicker) becomes one "bucket".
+function buildCategoricalOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  key: string,
+  label: string,
+  group: OptimizerRangeGroupKey,
+  getValue: (row: PaperArbClosedDto) => string | null | undefined
+): PaperArbOptimizerParameterDto | null {
+  // Group rows by category value
+  const groups = new Map<string, PaperArbClosedDto[]>();
+  for (const row of rows) {
+    const val = getValue(row);
+    const k = val?.trim() || "(none)";
+    const list = groups.get(k) ?? [];
+    list.push(row);
+    groups.set(k, list);
+  }
+  if (!groups.size) return null;
+
+  const summarize = (rs: PaperArbClosedDto[]) => {
+    const trades = rs.length;
+    const wins = rs.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
+    const losses = trades - wins;
+    const totalPnlUsd = rs.reduce((s, r) => s + (r.totalPnlUsd ?? 0), 0);
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
+    const winRate = trades > 0 ? wins / trades : 0;
+    const coveragePct = rows.length > 0 ? trades / rows.length : 0;
+    const score = winRate * Math.sign(avgPnlUsd) * Math.abs(avgPnlUsd);
+    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, coveragePct, score };
+  };
+
+  const base = summarize(rows);
+  // Sort by totalPnlUsd descending for display
+  const buckets: PaperArbOptimizerRangeBucketDto[] = Array.from(groups.entries())
+    .sort((a, b) => {
+      const sa = summarize(a[1]);
+      const sb = summarize(b[1]);
+      return sb.totalPnlUsd - sa.totalPnlUsd;
+    })
+    .map(([catVal, rs]) => {
+      const s = summarize(rs);
+      return {
+        bucketId: `${key}-cat-${catVal}`,
+        label: catVal,
+        fromValue: null,
+        toValue: null,
+        ...s,
+      };
+    });
+
+  // Tail buckets: worst N (most negative) at each end — for categorical, "lower tail" = worst performers
+  const sorted = [...buckets].sort((a, b) => a.totalPnlUsd - b.totalPnlUsd);
+  const tailK = Math.max(1, Math.ceil(sorted.length * 0.3));
+  const lowerTailBuckets = sorted.slice(0, tailK);
+  const upperTailBuckets = sorted.slice(-tailK);
+
+  return {
+    key,
+    group,
+    label,
+    observedMin: null,
+    observedMax: null,
+    valueCount: rows.length,
+    baseTrades: base.trades,
+    baseWins: base.wins,
+    baseLosses: base.losses,
+    baseTotalPnlUsd: base.totalPnlUsd,
+    baseAvgPnlUsd: base.avgPnlUsd,
+    baseWinRate: base.winRate,
+    buckets,
+    lowerTailBuckets,
+    upperTailBuckets,
+  };
+}
+
+function scoreTailDamage(param: PaperArbOptimizerParameterDto, minTrades: number): number {
+  // Sum of losses from both tail regions — measures how much can be recovered by trimming extremes
+  const tailLoss = (buckets: PaperArbOptimizerRangeBucketDto[]) =>
+    buckets
+      .filter((b) => b.trades >= minTrades && b.totalPnlUsd < 0)
+      .reduce((s, b) => s + Math.abs(b.totalPnlUsd), 0);
+  return tailLoss(param.lowerTailBuckets ?? []) + tailLoss(param.upperTailBuckets ?? []);
+}
+
 function scopeResearchResultValue(row: PaperArbClosedDto, key: ScopeResearchResultKey): number | null {
   switch (key) {
     case "avgPnlUsd":
@@ -2862,13 +3024,36 @@ async function apiPostWithTimeout<T>(path: string, body: any, timeoutMs: number)
   }
 }
 
-// Accept either:
-// - { ok, days: string[] }
-// - string[]
+function normalizeDaysPayload(j: any): string[] {
+  if (Array.isArray(j)) return j.filter((d): d is string => typeof d === "string");
+  if (j && Array.isArray(j.days)) return j.days.filter((d: unknown): d is string => typeof d === "string");
+  if (j && Array.isArray(j.value)) return j.value.filter((d: unknown): d is string => typeof d === "string");
+  return [];
+}
+
+// Release-style priority:
+// 1. non-empty tape days
+// 2. all tape days
+// 3. legacy paper arbitrage days
 async function loadDaysApi(): Promise<string[]> {
-  const j = await apiGet<any>("/api/paper/arbitrage/days");
-  if (Array.isArray(j)) return j as string[];
-  if (j && Array.isArray(j.days)) return j.days as string[];
+  const endpoints = [
+    "/api/tape/available-nonempty-days",
+    "/api/tape/available-days",
+    "/api/paper/arbitrage/days",
+  ];
+
+  let lastError: unknown = null;
+  for (const endpoint of endpoints) {
+    try {
+      const payload = await apiGet<any>(endpoint);
+      const days = normalizeDaysPayload(payload);
+      if (days.length) return days;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (lastError) throw lastError;
   return [];
 }
 
@@ -3266,6 +3451,7 @@ function MinMaxRow({
   clearable = false,
   placeholderMin = "min",
   placeholderMax = "max",
+  zeroCoverage = false,
 }: {
   label: string;
   filterKey?: SharedRangeFilterKey;
@@ -3279,6 +3465,7 @@ function MinMaxRow({
   clearable?: boolean;
   placeholderMin?: string;
   placeholderMax?: string;
+  zeroCoverage?: boolean;
 }) {
   const hasValue = Boolean((minValue ?? "").trim() || (maxValue ?? "").trim());
   const isOff = mode === "off";
@@ -3291,13 +3478,20 @@ function MinMaxRow({
           hasValue
             ? isOff
               ? "border-rose-500/30 bg-rose-500/[0.05]"
+              : zeroCoverage
+                ? "border-yellow-200/35 bg-yellow-200/[0.06]"
               : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
             : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
         )}
       >
         <div className="flex items-center justify-between">
-          <div className="mr-1 truncate text-[10px] font-mono uppercase tracking-widest text-zinc-500">{label}</div>
+          <div className={clsx("mr-1 truncate text-[10px] font-mono uppercase tracking-widest", zeroCoverage && hasValue && !isOff ? "text-yellow-200" : "text-zinc-500")}>{label}</div>
           <div className="flex items-center gap-2">
+            {zeroCoverage && hasValue && !isOff && (
+              <span className="text-[10px] font-mono uppercase text-yellow-200/90" title="Current rows have 0% coverage for this field">
+                0%
+              </span>
+            )}
             {clearable && filterKey && hasValue && onToggleMode && (
               <button
                 type="button"
@@ -3924,9 +4118,11 @@ function OptimizerParameterRangeCard({
       if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
       return b.trades - a.trades;
     });
+  const isCategorical = (parameter.buckets ?? []).some((b) => b.fromValue == null && b.toValue == null && b.label && b.label !== "");
   const buckets = [...(parameter.buckets ?? [])]
     .filter((bucket) => bucket.trades >= minTradesFilter)
     .sort((a, b) => {
+    if (isCategorical) return b.totalPnlUsd - a.totalPnlUsd; // categorical: sort by PnL
     const av = a.fromValue ?? Number.NEGATIVE_INFINITY;
     const bv = b.fromValue ?? Number.NEGATIVE_INFINITY;
     return av - bv;
@@ -3969,8 +4165,16 @@ function OptimizerParameterRangeCard({
     <GlassCard className="p-0 overflow-hidden border border-white/5 bg-black/20 shadow-none">
       <div className="border-b border-white/5 bg-black/10 px-2.5 py-2">
         <div className="flex items-center justify-between gap-2.5">
-          <div className="min-w-0">
+          <div className="min-w-0 flex items-center gap-2">
             <div className={clsx("text-[12px] uppercase tracking-[0.18em] font-mono", accent.activeText)}>{parameter.label}</div>
+            {rankMetric === "tailDamage" && (() => {
+              const td = scoreTailDamage(parameter, minTradesFilter);
+              return td > 0 ? (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 uppercase tracking-wide">
+                  -{num(td, 0)}
+                </span>
+              ) : null;
+            })()}
           </div>
           <div className="flex shrink-0 items-center gap-1 text-right whitespace-nowrap">
             <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
@@ -6354,6 +6558,10 @@ export default function ArbitrageScanner({
   // ===== Advanced filters (ALL switches)
   // rating
   const [ratingMode, setRatingMode] = useState<PaperArbRatingMode>("SESSION");
+  const [topMode, setTopMode] = useState(false);
+  const [topSigmaOn, setTopSigmaOn] = useState(true);
+  const [topBenchOn, setTopBenchOn] = useState(false);
+  const [topTimeOn, setTopTimeOn] = useState(false);
   const [ratingType, setRatingType] = useState<PaperArbRatingType>("any");
   const [ratingRules, setRatingRules] = useState<PaperArbRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
@@ -6393,6 +6601,10 @@ export default function ArbitrageScanner({
   const [exchangesText, setExchangesText] = useState<string>("");
   const [countriesText, setCountriesText] = useState<string>("");
   const [sectorsL3Text, setSectorsL3Text] = useState<string>("");
+  const [countryEnabled, setCountryEnabled] = useState<TriMode>("off");
+  const [exchangeEnabled, setExchangeEnabled] = useState<TriMode>("off");
+  const [sectorEnabled, setSectorEnabled] = useState<TriMode>("off");
+  const [scopeBenchText, setScopeBenchText] = useState<string>("");
 
   const [imbExchsText, setImbExchsText] = useState<string>("");
 
@@ -6536,6 +6748,37 @@ export default function ArbitrageScanner({
   const [sharedRangeFilterModes, setSharedRangeFilterModes] = useState<Record<SharedRangeFilterKey, SharedRangeFilterMode>>(
     DEFAULT_SHARED_RANGE_FILTER_MODES
   );
+  const zeroCoverageFilterKeys = useMemo(() => {
+    if (!episodesRows.length) return new Set<SharedRangeFilterKey>();
+
+    const fieldCoverageChecks: Array<[SharedRangeFilterKey, keyof PaperArbClosedDto]> = [
+      ["volnffromlstcls", "volNFfromLstCls"],
+      ["avpremhvalue20nf", "avPreMhValue20NF"],
+      ["avpremhvalue90nf", "avPreMhValue90NF"],
+      ["avgdailyvalue20", "avgDailyValue20"],
+      ["avgdailyvalue90", "avgDailyValue90"],
+      ["volatility20", "volatility20"],
+      ["volatility90", "volatility90"],
+      ["premhmdv20nf", "preMhMDV20NF"],
+      ["premhmdv90nf", "preMhMDV90NF"],
+      ["volrel", "volRel"],
+      ["premhbidlstprc", "preMhBidLstPrcPct"],
+      ["premhlolstprc", "preMhLoLstPrcPct"],
+      ["premhhilstcls", "preMhHiLstClsPct"],
+      ["premhlolstcls", "preMhLoLstClsPct"],
+      ["lstprclstcls", "lstPrcLstClsPct"],
+      ["imbexch925", "imbExch925"],
+      ["imbexch1555", "imbExch1555"],
+    ];
+
+    const next = new Set<SharedRangeFilterKey>();
+    for (const [filterKey, field] of fieldCoverageChecks) {
+      if (sharedRangeFilterModes[filterKey] !== "on") continue;
+      const hasCoverage = episodesRows.some((row) => row[field] != null);
+      if (!hasCoverage) next.add(filterKey);
+    }
+    return next;
+  }, [episodesRows, sharedRangeFilterModes]);
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
   const optimizerBucketReloadRef = useRef<number | null>(null);
@@ -6589,7 +6832,7 @@ export default function ArbitrageScanner({
     right: { extra: false, parallel: false },
   });
   const [arbitrageTickerMetaByTicker, setArbitrageTickerMetaByTicker] = useState<
-    Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
+    Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null; sectorL3?: string | null; benchTicker?: string | null }>
   >({});
   const [arbitrageTickerMetaLoading, setArbitrageTickerMetaLoading] = useState(false);
   const arbitrageTickerMetaLoadedRef = useRef(false);
@@ -6897,7 +7140,7 @@ export default function ArbitrageScanner({
         if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
         if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
         if (typeof s.maxAdds === "number") setMaxAdds(normalizeMaxAddsValue(s.maxAdds));
-        if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score") {
+        if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score" || s.optimizerRangeRankMetric === "tailDamage") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
         if (typeof s.optimizerRangeMinTrades === "number") setOptimizerRangeMinTrades(Math.max(0, Math.trunc(s.optimizerRangeMinTrades)));
@@ -6931,7 +7174,11 @@ export default function ArbitrageScanner({
         if (typeof s.episodesUseSearch === "boolean") setEpisodesUseSearch(s.episodesUseSearch);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
-        if (s.ratingMode === "SESSION" || s.ratingMode === "BIN") setRatingMode(s.ratingMode);
+        if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
+        if (typeof s.topMode === "boolean") setTopMode(s.topMode);
+        if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
+        if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
+        if (typeof s.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -6974,6 +7221,11 @@ export default function ArbitrageScanner({
         if (typeof s.exchangesText === "string") setExchangesText(s.exchangesText);
         if (typeof s.countriesText === "string") setCountriesText(s.countriesText);
         if (typeof s.sectorsL3Text === "string") setSectorsL3Text(s.sectorsL3Text);
+        const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
+        if (validTriMode(s.countryEnabled)) setCountryEnabled(s.countryEnabled);
+        if (validTriMode(s.exchangeEnabled)) setExchangeEnabled(s.exchangeEnabled);
+        if (validTriMode(s.sectorEnabled)) setSectorEnabled(s.sectorEnabled);
+        if (typeof s.scopeBenchText === "string") setScopeBenchText(s.scopeBenchText);
         if (typeof s.imbExchsText === "string") setImbExchsText(s.imbExchsText);
 
         const applyStr = (v: any, setter: (x: string) => void) => {
@@ -7099,6 +7351,7 @@ export default function ArbitrageScanner({
       episodesUseSearch,
       showAdvanced,
       ratingMode,
+      topMode, topSigmaOn, topBenchOn, topTimeOn,
       ratingType,
       ratingRules,
       ratingEnabledBands,
@@ -7109,6 +7362,10 @@ export default function ArbitrageScanner({
       exchangesText,
       countriesText,
       sectorsL3Text,
+      countryEnabled,
+      exchangeEnabled,
+      sectorEnabled,
+      scopeBenchText,
       imbExchsText,
       minTierBp,
       maxTierBp,
@@ -7230,7 +7487,7 @@ export default function ArbitrageScanner({
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
-      exchangesText, countriesText, sectorsL3Text, imbExchsText, minTierBp, maxTierBp,
+      exchangesText, countriesText, sectorsL3Text, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
@@ -7692,11 +7949,11 @@ export default function ArbitrageScanner({
       includeUSA: includeUSA,
       includeChina: includeChina,
       selCountries: new Set(splitListUpper(countriesText)),
-      countryEnabled: splitListUpper(countriesText).length > 0,
+      countryEnabled,
       selExchanges: new Set(splitListUpper(exchangesText)),
-      exchangeEnabled: splitListUpper(exchangesText).length > 0,
+      exchangeEnabled,
       selSectors: new Set(splitList(sectorsL3Text).map((value) => value.trim().toUpperCase()).filter(Boolean)),
-      sectorEnabled: splitList(sectorsL3Text).length > 0,
+      sectorEnabled,
       filterReport: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
       equityType: "",
       corrMin: minCorr,
@@ -7709,13 +7966,19 @@ export default function ArbitrageScanner({
       zapShowAbs: startAbs,
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
+      topMode,
+      topSigmaOn,
+      topBenchOn,
+      topTimeOn,
     };
   }, [
       benchTickersText,
-      countriesText,
+      topMode, topSigmaOn, topBenchOn, topTimeOn,
+      countriesText, countryEnabled,
+      exchangesText, exchangeEnabled,
+      sectorsL3Text, sectorEnabled,
       endAbs,
       excludeDividend,
-      exchangesText,
       excludeCrap,
       excludeETF,
       excludeHasNews,
@@ -7808,7 +8071,6 @@ export default function ArbitrageScanner({
       moneyRatingRule.minTotal,
       moneySignalClass,
       ratingType,
-      sectorsL3Text,
       startAbs,
       tickersText,
       zapUiMode,
@@ -8031,7 +8293,7 @@ export default function ArbitrageScanner({
       ratingType: ratingType ?? "any",
 
       tickers: reqTickers.length ? reqTickers : null,
-      benchTickers: null,
+      benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
       exchanges: splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
@@ -8161,8 +8423,6 @@ export default function ArbitrageScanner({
       minRate: Math.max(0, Number(sessionRule.minRate) || 0),
       minTotal: Math.max(0, clampInt(sessionRule.minTotal, 0)),
     }];
-    const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
-
     const req: PaperArbAnalyticsRequest = {
       dateFrom: from,
       dateTo: to,
@@ -8183,15 +8443,18 @@ export default function ArbitrageScanner({
       maxAdds,
 
       ratingType: ratingType ?? "any",
-      ratingRules: useBinRatingFilter ? null : rrForRequest,
+      ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
 
       tickers: reqTickers.length ? reqTickers : null,
-      benchTickers: null,
+      benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
-      exchanges: splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
-      countries: splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
-      sectorsL3: splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
+      exchanges: exchangeEnabled === "include" && splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
+      countries: countryEnabled === "include" && splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
+      sectorsL3: sectorEnabled === "include" && splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
+      excludeExchanges: exchangeEnabled === "exclude" && splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
+      excludeCountries: countryEnabled === "exclude" && splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
+      excludeSectorsL3: sectorEnabled === "exclude" && splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
@@ -9180,6 +9443,7 @@ export default function ArbitrageScanner({
   const filteredActive = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
+    const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return activeRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker)) return false;
@@ -9205,14 +9469,33 @@ export default function ArbitrageScanner({
         minRate: activeBinRule.minRate,
         minTotal: activeBinRule.minTotal,
       })) return false;
+      if (useSigBinFilter) {
+        const snap = scannerSigBinSnapshot({ row: r, session, side: r.side, sigmaAbs: r.last?.metricAbs ?? r.start?.metricAbs });
+        if (!snap) return false;
+        const effRate = Math.max(0, Number(activeBinRule.minRate) || 0);
+        const effTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
+        if (snap.rate < effRate || snap.total < effTotal) return false;
+      }
+      if (topMode) {
+        const sigmaAbs = r.last?.metricAbs ?? r.start?.metricAbs;
+        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
+        if (!tw) return false;
+        if (topSigmaOn && tw.sigma) {
+          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
+        } else if (topSigmaOn && !tw.sigma) return false;
+        if (topTimeOn && tw.time) {
+          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
+        } else if (topTimeOn && !tw.time) return false;
+      }
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
+    const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return episodesRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker)) return false;
@@ -9238,10 +9521,28 @@ export default function ArbitrageScanner({
         minRate: episodeBinRule.minRate,
         minTotal: episodeBinRule.minTotal,
       })) return false;
+      if (useSigBinFilter) {
+        const snap = scannerSigBinSnapshot({ row: r, session, side: r.side, sigmaAbs: r.peakMetricAbs ?? r.startMetricAbs });
+        if (!snap) return false;
+        const effRate = Math.max(0, Number(episodeBinRule.minRate) || 0);
+        const effTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
+        if (snap.rate < effRate || snap.total < effTotal) return false;
+      }
+      if (topMode) {
+        const sigmaAbs = r.peakMetricAbs ?? r.startMetricAbs;
+        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
+        if (!tw) return false;
+        if (topSigmaOn && tw.sigma) {
+          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
+        } else if (topSigmaOn && !tw.sigma) return false;
+        if (topTimeOn && tw.time) {
+          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
+        } else if (topTimeOn && !tw.time) return false;
+      }
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -9254,7 +9555,7 @@ export default function ArbitrageScanner({
       optNumOrNull(maxSigma) != null;
     const needsStaticMetricMeta =
       hasStaticMetricBounds ||
-      scopeSelectedParameterKeys.some((key) => key === "corr" || key === "beta" || key === "sigma");
+      scopeSelectedParameterKeys.some((key) => key === "corr" || key === "beta" || key === "sigma" || key === "sector" || key === "bench");
     if (!needsStaticMetricMeta) return;
 
     const sourceRows = [...episodesRows, ...(activeRows as any[])];
@@ -9276,14 +9577,18 @@ export default function ArbitrageScanner({
     setArbitrageTickerMetaLoading(true);
     getArbitrageList()
       .then((rows) => {
-        const next: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }> = {};
+        const next: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null; sectorL3?: string | null; benchTicker?: string | null }> = {};
         for (const row of rows ?? []) {
           const ticker = String(row?.ticker ?? "").trim().toUpperCase();
           if (!ticker) continue;
+          const rawSector = row?.sectorL3 ?? row?.SectorL3 ?? row?.sector ?? row?.Sector ?? null;
+          const rawBench = row?.bench ?? row?.Bench ?? row?.benchTicker ?? row?.BenchTicker ?? null;
           next[ticker] = {
             corr: numOrNull(row?.corr),
             beta: numOrNull(row?.beta),
             sigma: numOrNull(row?.sig ?? row?.sigma),
+            sectorL3: rawSector ? String(rawSector).trim() || null : null,
+            benchTicker: rawBench ? String(rawBench).trim().toUpperCase() || null : null,
           };
         }
         setArbitrageTickerMetaByTicker(next);
@@ -9644,9 +9949,30 @@ export default function ArbitrageScanner({
     if (useBinRatingFilter) {
       const selectedKeySet = new Set(scopeSelectedParameterKeys);
       const includeAllParameters = selectedKeySet.size === 0;
-      return SCOPE_PARAMETER_DEFINITIONS
+      const catResults: PaperArbOptimizerParameterDto[] = [];
+      const numericResults = SCOPE_PARAMETER_DEFINITIONS
         .filter((definition) => includeAllParameters || selectedKeySet.has(definition.key))
         .map((definition) => {
+          if (definition.kind === "categorical") {
+            // build categorical inline here too
+            let catParam: PaperArbOptimizerParameterDto | null = null;
+            if (definition.key === "sector") {
+              catParam = buildCategoricalOptimizerParameter(
+                filteredEpisodes, "sector", "SECTOR", definition.group,
+                (row) => {
+                  const ticker = String(row.ticker ?? "").trim().toUpperCase();
+                  return arbitrageTickerMetaByTicker[ticker]?.sectorL3 ?? null;
+                }
+              );
+            } else if (definition.key === "bench") {
+              catParam = buildCategoricalOptimizerParameter(
+                filteredEpisodes, "bench", "BENCH", definition.group,
+                (row) => row.benchTicker?.trim().toUpperCase() ?? null
+              );
+            }
+            if (catParam) catResults.push(catParam);
+            return null;
+          }
           if (definition.key === "minrate" || definition.key === "mintotal") {
             return buildFallbackBinRatingOptimizerParameter(
               filteredEpisodes,
@@ -9660,6 +9986,7 @@ export default function ArbitrageScanner({
           return buildFallbackScopeOptimizerParameter(filteredEpisodes, definition, optimizerBucketCount);
         })
         .filter((parameter): parameter is PaperArbOptimizerParameterDto => parameter != null);
+      return [...numericResults, ...catResults];
     }
 
     const serverParameters = optimizerRanges?.parameters ?? [];
@@ -9668,9 +9995,43 @@ export default function ArbitrageScanner({
     const includeAllParameters = selectedKeySet.size === 0;
 
     for (const definition of SCOPE_PARAMETER_DEFINITIONS) {
-      if (!["corr", "beta", "sigma"].includes(definition.key)) continue;
       if (!includeAllParameters && !selectedKeySet.has(definition.key)) continue;
       if (parameterMap.has(definition.key)) continue;
+
+      // Categorical parameters: sector and bench — computed fully client-side
+      if (definition.kind === "categorical") {
+        let catParam: PaperArbOptimizerParameterDto | null = null;
+        if (definition.key === "sector") {
+          catParam = buildCategoricalOptimizerParameter(
+            filteredEpisodes, "sector", "SECTOR L3", definition.group,
+            (row) => {
+              const direct = row.sectorL3?.trim() || null;
+              if (direct) return direct;
+              const ticker = String(row.ticker ?? "").trim().toUpperCase();
+              return arbitrageTickerMetaByTicker[ticker]?.sectorL3 ?? null;
+            }
+          );
+        } else if (definition.key === "sectorL4") {
+          catParam = buildCategoricalOptimizerParameter(
+            filteredEpisodes, "sectorL4", "SECTOR L4", definition.group,
+            (row) => row.sectorL4?.trim() || null
+          );
+        } else if (definition.key === "sectorL5") {
+          catParam = buildCategoricalOptimizerParameter(
+            filteredEpisodes, "sectorL5", "SECTOR L5", definition.group,
+            (row) => row.sectorL5?.trim() || null
+          );
+        } else if (definition.key === "bench") {
+          catParam = buildCategoricalOptimizerParameter(
+            filteredEpisodes, "bench", "BENCH", definition.group,
+            (row) => row.benchTicker?.trim().toUpperCase() ?? null
+          );
+        }
+        if (catParam) parameterMap.set(definition.key, catParam);
+        continue;
+      }
+
+      if (!["corr", "beta", "sigma"].includes(definition.key)) continue;
 
       const fallbackParameter = buildFallbackOptimizerParameter(
         filteredEpisodes,
@@ -9695,8 +10056,19 @@ export default function ArbitrageScanner({
         ? bucket.totalPnlUsd
         : optimizerRangeRankMetric === "score"
           ? bucket.score
-          : bucket.avgPnlUsd;
+          : optimizerRangeRankMetric === "tailDamage"
+            ? bucket.totalPnlUsd  // for individual bucket ranking fall back to totalPnlUsd
+            : bucket.avgPnlUsd;
   const optimizerRangeParametersSorted = useMemo(() => {
+    // tailDamage sort: parameters where tail regions have the most concentrated losses come first
+    if (optimizerRangeRankMetric === "tailDamage") {
+      return [...optimizerRangeParameters].sort((a, b) => {
+        const da = scoreTailDamage(a, optimizerRangeMinTrades);
+        const db = scoreTailDamage(b, optimizerRangeMinTrades);
+        if (db !== da) return db - da;
+        return (b.baseTrades ?? 0) - (a.baseTrades ?? 0);
+      });
+    }
     return [...optimizerRangeParameters].sort((a, b) => {
       const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
         .filter((x) => x.trades >= optimizerRangeMinTrades)
@@ -10598,8 +10970,54 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+          {/* TOP mode toggle */}
+          <div className="flex h-7 items-center gap-1.5">
+            <div className="flex h-7 items-center rounded-lg bg-black/20">
+              {([false, true] as const).map((isTop) => (
+                <button
+                  key={String(isTop)}
+                  type="button"
+                  onClick={() => setTopMode(isTop)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    topMode === isTop
+                      ? isTop
+                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                        : accent.activeSoft
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {isTop ? "TOP" : "ALL"}
+                </button>
+              ))}
+            </div>
+            {topMode && (
+              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+                {([
+                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
+                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
+                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
+                ] as const).map(({ key, label, on, set }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => set((v) => !v)}
+                    className={clsx(
+                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
+                      on
+                        ? "bg-emerald-500/80 text-white"
+                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
+            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
@@ -10761,7 +11179,7 @@ export default function ArbitrageScanner({
         {false && tab === "analytics" && (
           <div className="mb-3 flex flex-wrap justify-end gap-3">
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {(["SESSION", "BIN"] as PaperArbRatingMode[]).map((modeKey) => (
+              {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
                 <button
                   key={modeKey}
                   type="button"
@@ -11229,25 +11647,26 @@ export default function ArbitrageScanner({
                 setMax={setMaxVolNFfromLstCls}
                 card
                 clearable
+                zeroCoverage={zeroCoverageFilterKeys.has("volnffromlstcls")}
               />
               <MinMaxRow label="AvPostMhVol90NF" filterKey="avpostmhvol90nf" mode={sharedRangeFilterModes.avpostmhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPostMhVol90NF} maxValue={maxAvPostMhVol90NF} setMin={setMinAvPostMhVol90NF} setMax={setMaxAvPostMhVol90NF} card clearable />
               <MinMaxRow label="AvPreMhVol90NF" filterKey="avpremhvol90nf" mode={sharedRangeFilterModes.avpremhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhVol90NF} maxValue={maxAvPreMhVol90NF} setMin={setMinAvPreMhVol90NF} setMax={setMaxAvPreMhVol90NF} card clearable />
-              <MinMaxRow label="AvPreMhValue20NF" filterKey="avpremhvalue20nf" mode={sharedRangeFilterModes.avpremhvalue20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue20NF} maxValue={maxAvPreMhValue20NF} setMin={setMinAvPreMhValue20NF} setMax={setMaxAvPreMhValue20NF} card clearable />
-              <MinMaxRow label="AvPreMhValue90NF" filterKey="avpremhvalue90nf" mode={sharedRangeFilterModes.avpremhvalue90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue90NF} maxValue={maxAvPreMhValue90NF} setMin={setMinAvPreMhValue90NF} setMax={setMaxAvPreMhValue90NF} card clearable />
-              <MinMaxRow label="AvgDailyValue20" filterKey="avgdailyvalue20" mode={sharedRangeFilterModes.avgdailyvalue20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue20} maxValue={maxAvgDailyValue20} setMin={setMinAvgDailyValue20} setMax={setMaxAvgDailyValue20} card clearable />
-              <MinMaxRow label="AvgDailyValue90" filterKey="avgdailyvalue90" mode={sharedRangeFilterModes.avgdailyvalue90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue90} maxValue={maxAvgDailyValue90} setMin={setMinAvgDailyValue90} setMax={setMaxAvgDailyValue90} card clearable />
-              <MinMaxRow label="Volatility20" filterKey="volatility20" mode={sharedRangeFilterModes.volatility20} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility20} maxValue={maxVolatility20} setMin={setMinVolatility20} setMax={setMaxVolatility20} card clearable />
-              <MinMaxRow label="Volatility90" filterKey="volatility90" mode={sharedRangeFilterModes.volatility90} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility90} maxValue={maxVolatility90} setMin={setMinVolatility90} setMax={setMaxVolatility90} card clearable />
-              <MinMaxRow label="PreMhMDV20NF" filterKey="premhmdv20nf" mode={sharedRangeFilterModes.premhmdv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV20NF} maxValue={maxPreMhMDV20NF} setMin={setMinPreMhMDV20NF} setMax={setMaxPreMhMDV20NF} card clearable />
-              <MinMaxRow label="PreMhMDV90NF" filterKey="premhmdv90nf" mode={sharedRangeFilterModes.premhmdv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV90NF} maxValue={maxPreMhMDV90NF} setMin={setMinPreMhMDV90NF} setMax={setMaxPreMhMDV90NF} card clearable />
-              <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable />
-              <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable />
-              <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable />
-              <MinMaxRow label="PreMhHiLstCls%" filterKey="premhhilstcls" mode={sharedRangeFilterModes.premhhilstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhHiLstClsPct} maxValue={maxPreMhHiLstClsPct} setMin={setMinPreMhHiLstClsPct} setMax={setMaxPreMhHiLstClsPct} card clearable />
-              <MinMaxRow label="PreMhLoLstCls%" filterKey="premhlolstcls" mode={sharedRangeFilterModes.premhlolstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstClsPct} maxValue={maxPreMhLoLstClsPct} setMin={setMinPreMhLoLstClsPct} setMax={setMaxPreMhLoLstClsPct} card clearable />
-              <MinMaxRow label="LstPrcLstCls%" filterKey="lstprclstcls" mode={sharedRangeFilterModes.lstprclstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcLstClsPct} maxValue={maxLstPrcLstClsPct} setMin={setMinLstPrcLstClsPct} setMax={setMaxLstPrcLstClsPct} card clearable />
-              <MinMaxRow label="ImbExch9:25" filterKey="imbexch925" mode={sharedRangeFilterModes.imbexch925} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch925} maxValue={maxImbExch925} setMin={setMinImbExch925} setMax={setMaxImbExch925} card clearable />
-              <MinMaxRow label="ImbExch15:55" filterKey="imbexch1555" mode={sharedRangeFilterModes.imbexch1555} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch1555} maxValue={maxImbExch1555} setMin={setMinImbExch1555} setMax={setMaxImbExch1555} card clearable />
+              <MinMaxRow label="AvPreMhValue20NF" filterKey="avpremhvalue20nf" mode={sharedRangeFilterModes.avpremhvalue20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue20NF} maxValue={maxAvPreMhValue20NF} setMin={setMinAvPreMhValue20NF} setMax={setMaxAvPreMhValue20NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avpremhvalue20nf")} />
+              <MinMaxRow label="AvPreMhValue90NF" filterKey="avpremhvalue90nf" mode={sharedRangeFilterModes.avpremhvalue90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue90NF} maxValue={maxAvPreMhValue90NF} setMin={setMinAvPreMhValue90NF} setMax={setMaxAvPreMhValue90NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avpremhvalue90nf")} />
+              <MinMaxRow label="AvgDailyValue20" filterKey="avgdailyvalue20" mode={sharedRangeFilterModes.avgdailyvalue20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue20} maxValue={maxAvgDailyValue20} setMin={setMinAvgDailyValue20} setMax={setMaxAvgDailyValue20} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avgdailyvalue20")} />
+              <MinMaxRow label="AvgDailyValue90" filterKey="avgdailyvalue90" mode={sharedRangeFilterModes.avgdailyvalue90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue90} maxValue={maxAvgDailyValue90} setMin={setMinAvgDailyValue90} setMax={setMaxAvgDailyValue90} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avgdailyvalue90")} />
+              <MinMaxRow label="Volatility20" filterKey="volatility20" mode={sharedRangeFilterModes.volatility20} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility20} maxValue={maxVolatility20} setMin={setMinVolatility20} setMax={setMaxVolatility20} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volatility20")} />
+              <MinMaxRow label="Volatility90" filterKey="volatility90" mode={sharedRangeFilterModes.volatility90} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility90} maxValue={maxVolatility90} setMin={setMinVolatility90} setMax={setMaxVolatility90} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volatility90")} />
+              <MinMaxRow label="PreMhMDV20NF" filterKey="premhmdv20nf" mode={sharedRangeFilterModes.premhmdv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV20NF} maxValue={maxPreMhMDV20NF} setMin={setMinPreMhMDV20NF} setMax={setMaxPreMhMDV20NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhmdv20nf")} />
+              <MinMaxRow label="PreMhMDV90NF" filterKey="premhmdv90nf" mode={sharedRangeFilterModes.premhmdv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV90NF} maxValue={maxPreMhMDV90NF} setMin={setMinPreMhMDV90NF} setMax={setMaxPreMhMDV90NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhmdv90nf")} />
+              <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volrel")} />
+              <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhbidlstprc")} />
+              <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhlolstprc")} />
+              <MinMaxRow label="PreMhHiLstCls%" filterKey="premhhilstcls" mode={sharedRangeFilterModes.premhhilstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhHiLstClsPct} maxValue={maxPreMhHiLstClsPct} setMin={setMinPreMhHiLstClsPct} setMax={setMaxPreMhHiLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhhilstcls")} />
+              <MinMaxRow label="PreMhLoLstCls%" filterKey="premhlolstcls" mode={sharedRangeFilterModes.premhlolstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstClsPct} maxValue={maxPreMhLoLstClsPct} setMin={setMinPreMhLoLstClsPct} setMax={setMaxPreMhLoLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhlolstcls")} />
+              <MinMaxRow label="LstPrcLstCls%" filterKey="lstprclstcls" mode={sharedRangeFilterModes.lstprclstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcLstClsPct} maxValue={maxLstPrcLstClsPct} setMin={setMinLstPrcLstClsPct} setMax={setMaxLstPrcLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("lstprclstcls")} />
+              <MinMaxRow label="ImbExch9:25" filterKey="imbexch925" mode={sharedRangeFilterModes.imbexch925} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch925} maxValue={maxImbExch925} setMin={setMinImbExch925} setMax={setMaxImbExch925} card clearable zeroCoverage={zeroCoverageFilterKeys.has("imbexch925")} />
+              <MinMaxRow label="ImbExch15:55" filterKey="imbexch1555" mode={sharedRangeFilterModes.imbexch1555} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch1555} maxValue={maxImbExch1555} setMin={setMinImbExch1555} setMax={setMaxImbExch1555} card clearable zeroCoverage={zeroCoverageFilterKeys.has("imbexch1555")} />
             </div>
           )}
 
@@ -11916,9 +12335,20 @@ export default function ArbitrageScanner({
 
             <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
               <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">COUNTRY</span>
+                <button
+                  type="button"
+                  title={countryEnabled === "off" ? "Click to include" : countryEnabled === "include" ? "Click to exclude" : "Click to disable"}
+                  onClick={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  className={clsx(
+                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
+                    countryEnabled === "include" ? "text-emerald-400" : countryEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
+                  )}
+                >
+                  COUNTRY
+                </button>
                 {moneyCountryCount > 0 ? (
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
+                    countryEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : countryEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
                     {moneyCountryCount}
                   </span>
                 ) : null}
@@ -11937,9 +12367,20 @@ export default function ArbitrageScanner({
                 />
               </div>
               <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">EXCHANGE</span>
+                <button
+                  type="button"
+                  title={exchangeEnabled === "off" ? "Click to include" : exchangeEnabled === "include" ? "Click to exclude" : "Click to disable"}
+                  onClick={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  className={clsx(
+                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
+                    exchangeEnabled === "include" ? "text-emerald-400" : exchangeEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
+                  )}
+                >
+                  EXCHANGE
+                </button>
                 {moneyExchangeCount > 0 ? (
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
+                    exchangeEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : exchangeEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
                     {moneyExchangeCount}
                   </span>
                 ) : null}
@@ -11958,9 +12399,20 @@ export default function ArbitrageScanner({
                 />
               </div>
               <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <span className="inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-yellow-200/90">SECTOR</span>
+                <button
+                  type="button"
+                  title={sectorEnabled === "off" ? "Click to include" : sectorEnabled === "include" ? "Click to exclude" : "Click to disable"}
+                  onClick={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  className={clsx(
+                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
+                    sectorEnabled === "include" ? "text-emerald-400" : sectorEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
+                  )}
+                >
+                  SECTOR
+                </button>
                 {moneySectorCount > 0 ? (
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-yellow-200/30 bg-yellow-200/10 px-1 text-[9px] font-mono font-bold text-yellow-100">
+                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
+                    sectorEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : sectorEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
                     {moneySectorCount}
                   </span>
                 ) : null}
@@ -12789,6 +13241,7 @@ export default function ArbitrageScanner({
                         </div>
                       </div>
                     </div>
+
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2 text-[10px] font-mono text-zinc-600 shrink-0 self-center">
@@ -12938,6 +13391,7 @@ export default function ArbitrageScanner({
                               { value: "totalPnlUsd", label: "TotalPnL" },
                               { value: "winRate", label: "WinRate" },
                               { value: "score", label: "Score" },
+                              { value: "tailDamage", label: "Tail Dmg ↓" },
                             ]}
                             className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                           />
@@ -13159,6 +13613,7 @@ export default function ArbitrageScanner({
                                   { value: "totalPnlUsd", label: "TotalPnL" },
                                   { value: "winRate", label: "WinRate" },
                                   { value: "score", label: "Score" },
+                                  { value: "tailDamage", label: "Tail Dmg ↓" },
                                 ]}
                                 className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                               />

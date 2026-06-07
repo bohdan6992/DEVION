@@ -1,4 +1,4 @@
-﻿// pages/_app.tsx
+// pages/_app.tsx
 import type { AppProps, AppContext } from "next/app";
 import App from "next/app";
 import Script from "next/script";
@@ -11,14 +11,12 @@ import "@/styles/globals.css";
 
 import { useAutoScale } from "@/hooks/useAutoScale";
 import UiProvider from "@/components/UiProvider";
-import TopBarMaybe from "@/components/TopBar";
 import AppThemeBackground from "@/components/theme/AppThemeBackground";
 
-// Added: Sifter
 import { SifterProvider } from "@/components/sifter/SifterProvider";
 import { SifterDock } from "@/components/sifter/SifterDock";
-
-const SafeTopBar = (TopBarMaybe as any) ?? (() => null);
+import dynamic from "next/dynamic";
+const PageScrollbar = dynamic(() => import("@/components/mainPage/PageScrollbar"), { ssr: false });
 
 type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
@@ -43,7 +41,7 @@ export default function MyApp({
   useAutoScale({
     baseWidth: 1920,
     targetId: "app-scale",
-    headerSelector: ".tt-topbar",
+    headerSelector: ".tt-topbar", // kept for compat; no topbar present → offset = 0
   });
 
   useEffect(() => {
@@ -116,13 +114,13 @@ export default function MyApp({
           <AppThemeBackground />
           <SifterProvider>
             <div style={{ position: "relative", zIndex: 1 }}>
-              <SafeTopBar />
-              <div id="tt-offset" aria-hidden="true" />
               <div id="app-scale">
                 <Component {...pageProps} />
               </div>
               <SifterDock />
             </div>
+            {/* Outside #app-scale so position:fixed is viewport-relative */}
+            <PageScrollbar />
           </SifterProvider>
         </UiProvider>
       )}

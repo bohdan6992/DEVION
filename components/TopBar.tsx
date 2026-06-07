@@ -353,13 +353,10 @@ export default function TopBar() {
   })();
 
   const nav = [
+    { href: "/main", label: "Main" },
     { href: "/signals", label: "Strategies" },
     { href: "/news", label: "Market" },
     { href: "/guide", label: "Explorer" },
-    { href: "/insider", label: "Insider" },
-    { href: "/dune", label: "Dune" },
-    { href: "/hyperliquid", label: "Hyperliquid" },
-    { href: "/hyperliquid-trader", label: "HL Trader" },
   ];
 
   const isActive = (href: string) =>

@@ -136,14 +136,24 @@ function includesNeedle(hay: string | undefined | null, needle: string | undefin
   return h.includes(n);
 }
 
+function getField(row: AnyRow, key: string): any {
+  const v = row[key];
+  if (v !== undefined && v !== null && v !== "") return v;
+  return row.meta?.[key];
+}
+
 function getBoundValue(row: AnyRow, key: string): any {
   const aliases = BOUND_ALIASES[key];
-  if (!aliases || aliases.length === 0) return row[key];
-  for (const alias of aliases) {
+  const sources = aliases && aliases.length > 0 ? aliases : [key];
+  for (const alias of sources) {
     const value = row[alias];
     if (value !== undefined && value !== null && value !== "") return value;
   }
-  return row[key];
+  for (const alias of sources) {
+    const value = row.meta?.[alias];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
 }
 
 /**
@@ -188,34 +198,44 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
     if (listMode === "pin" && pinnedSet.size > 0 && !pinnedSet.has(t)) return false;
 
     // activeMode (PositionBp != 0)
-    const posBp = Number(r.PositionBp ?? r.positionBp ?? 0);
+    const posBp = Number(getField(r, "PositionBp") ?? getField(r, "positionBp") ?? 0);
     const isActive = posBp !== 0;
     if (activeMode === "onlyActive" && !isActive) return false;
     if (activeMode === "onlyInactive" && isActive) return false;
 
     // include flags
     if (include.usaOnly) {
-      const c = String(r.Country ?? r.country ?? "").trim().toUpperCase();
-      // in the terminal it was "USA" check — keep same semantics
-      if (c !== "USA") return false;
+      const c = getField(r, "Country") ?? getField(r, "country");
+      if (c != null) {
+        const cu = String(c).trim().toUpperCase();
+        const isUsa = cu === "USA" || cu === "US" || cu.startsWith("UNITED STATES");
+        if (!isUsa) return false;
+      }
     }
     if (include.chinaOnly) {
-      const c = String(r.Country ?? r.country ?? "").trim().toUpperCase();
-      // heuristic: your terminal checks "China/Hong Kong". Keep flexible:
-      if (!(c.includes("CHINA") || c.includes("HONG"))) return false;
+      const c = getField(r, "Country") ?? getField(r, "country");
+      if (c != null) {
+        const cu = String(c).trim().toUpperCase();
+        if (!(cu.includes("CHINA") || cu.includes("HONG"))) return false;
+      }
     }
 
     // multi selects
     if (countryEnabled && selCountries.size > 0) {
-      const c = String(r.Country ?? r.country ?? "").trim().toUpperCase();
-      if (!selCountries.has(c)) return false;
+      const cv = getField(r, "Country") ?? getField(r, "country");
+      if (cv != null) {
+        const c = String(cv).trim().toUpperCase();
+        // Normalize "UNITED STATES" → "USA" for matching
+        const cn = (c === "UNITED STATES" || c.startsWith("UNITED STATES ")) ? "USA" : c;
+        if (!selCountries.has(cn) && !selCountries.has(c)) return false;
+      }
     }
     if (exchangeEnabled && selExchanges.size > 0) {
-      const e = String(r.Exchange ?? r.exchange ?? "").trim().toUpperCase();
+      const e = String(r.exchange ?? r.Exchange ?? "").trim().toUpperCase();
       if (!selExchanges.has(e)) return false;
     }
     if (sectorEnabled && selSectors.size > 0) {
-      const s = String(r.SectorL3 ?? r.sectorL3 ?? r.Sector ?? r.sector ?? "").trim().toUpperCase();
+      const s = String(getField(r, "SectorL3") ?? getField(r, "sectorL3") ?? getField(r, "Sector") ?? getField(r, "sector") ?? "").trim().toUpperCase();
       if (!selSectors.has(s)) return false;
     }
 
@@ -225,28 +245,28 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       if (hasDiv) return false;
     }
     if (exclude.news) {
-      const cnt = Number(r.LstClsNewsCnt ?? r.newsCount ?? r.NewsCount ?? 0);
+      const cnt = Number(getField(r, "LstClsNewsCnt") ?? getField(r, "newsCount") ?? getField(r, "NewsCount") ?? 0);
       if (cnt > 0) return false;
     }
     if (exclude.ptp) {
-      const isPTP = !!(r.IsPTP ?? r.isPTP);
-      if (isPTP) return false;
+      const isPtp = !!(r.isPtp ?? r.IsPTP ?? r.isPTP);
+      if (isPtp) return false;
     }
     if (exclude.ssr) {
-      const isSSR = !!(r.IsSSR ?? r.isSSR);
-      if (isSSR) return false;
+      const isSsr = !!(r.isSsr ?? r.IsSSR ?? r.isSSR);
+      if (isSsr) return false;
     }
     if (exclude.report) {
       const hasRep = readTodayReportBool(r);
       if (hasRep) return false;
     }
     if (exclude.etf) {
-      const isEtf = !!(r.IsETF ?? r.isETF);
+      const isEtf = !!(r.isEtf ?? r.IsETF ?? r.isETF);
       if (isEtf) return false;
     }
     if (exclude.crap) {
-      const lastClose = Number(r.LstCls ?? r.LastClose ?? r.lastClose ?? 0);
-      if (lastClose < 5) return false;
+      const lastClose = Number(getField(r, "LstCls") ?? getField(r, "LastClose") ?? getField(r, "lastClose") ?? NaN);
+      if (isFinite(lastClose) && lastClose < 5) return false;
     }
 
     // report tri-state
@@ -257,7 +277,7 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
 
     // equity type substring
     if (equityNeedle) {
-      const et = String(r.EquityType ?? r.equityType ?? "").trim();
+      const et = String(getField(r, "EquityType") ?? getField(r, "equityType") ?? "").trim();
       if (!includesNeedle(et, equityNeedle)) return false;
     }
 

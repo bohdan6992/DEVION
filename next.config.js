@@ -36,12 +36,6 @@ const nextConfig = {
         destination: `${AXI}/api/sifter/:path*`,
       },
 
-      // Backward-compat aliases (old front paths)
-      {
-        source: "/api/full-quotes",
-        destination: `${AXI}/api/live/full-quotes`,
-      },
-
       // Fallback: everything else under /api -> AXI
       {
         source: "/api/:path*",

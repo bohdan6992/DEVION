@@ -42,6 +42,7 @@ export default function ScopePage() {
           { id: "perf", kind: "Performance", field: "trade" },
           { id: "dist", kind: "Distribution", field: "trade" },
           { id: "cs", kind: "Cumsum", field: "trade" },
+          { id: "sector", kind: "Sector", field: "trade" },
           {
             id: "bins",
             kind: "Bins",

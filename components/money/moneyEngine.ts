@@ -2407,12 +2407,26 @@ export function useMoneyEngine({
 
         if (!primaryAlreadyDispatched) {
           const dispatchAt = Date.now();
-          await queueLegWithRetry({
-            intentId: intent.id,
-            ticker: intent.ticker,
-            type,
-            note: intent.reason,
-          });
+          // Mark as dispatched and record attempt BEFORE the await so that
+          // concurrent effect re-runs see this intent as already in-flight
+          // and do not send it a second time.
+          dispatchedIntentIdsRef.current.add(intent.id);
+          recentDispatchAttemptsRef.current.set(dispatchKey, dispatchAt);
+          sentDispatchKeys.add(dispatchKey);
+          try {
+            await queueLegWithRetry({
+              intentId: intent.id,
+              ticker: intent.ticker,
+              type,
+              note: intent.reason,
+            });
+          } catch (err) {
+            // Dispatch failed — roll back so it can be retried next cycle.
+            dispatchedIntentIdsRef.current.delete(intent.id);
+            recentDispatchAttemptsRef.current.delete(dispatchKey);
+            sentDispatchKeys.delete(dispatchKey);
+            throw err;
+          }
           setMoneySentOrdersCount((prev) => prev + 1);
           setMoneyPositions((prev) => prev.map((row) => {
             if (row.ticker !== intent.ticker) return row;
@@ -2475,9 +2489,6 @@ export function useMoneyEngine({
               intent: intent.intent,
             }]);
           }
-          dispatchedIntentIdsRef.current.add(intent.id);
-          recentDispatchAttemptsRef.current.set(dispatchKey, Date.now());
-          sentDispatchKeys.add(dispatchKey);
         }
 
         if (hedgeRequired && !hedgeAlreadyDispatched) {
@@ -2487,14 +2498,19 @@ export function useMoneyEngine({
               : type;
 
           // Hedge leg must follow every entry/add and every exit in hedged mode (1:1), without cooldown suppression.
-          await queueLegWithRetry({
-            intentId: hedgeIntentId,
-            ticker: intent.benchmark,
-            type: benchmarkType,
-            note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
-          });
-          setMoneySentOrdersCount((prev) => prev + 1);
           dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
+          try {
+            await queueLegWithRetry({
+              intentId: hedgeIntentId,
+              ticker: intent.benchmark,
+              type: benchmarkType,
+              note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
+            });
+          } catch (err) {
+            dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);
+            throw err;
+          }
+          setMoneySentOrdersCount((prev) => prev + 1);
         }
 
         await refreshExecutionStatus(true);

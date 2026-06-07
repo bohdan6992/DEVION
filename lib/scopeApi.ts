@@ -18,6 +18,7 @@ export type ScopeChartsRequest = {
     | { id: string; kind: "Performance"; field: string }
     | { id: string; kind: "Distribution"; field: string }
     | { id: string; kind: "Cumsum"; field: string }
+    | { id: string; kind: "Sector"; field: string }
     | {
         id: string;
         kind: "Bins";
@@ -42,6 +43,7 @@ export type ScopeEventRow = {
   entryPct: number;
   exitPct: number;
   trade: number;
+  sectorL3?: string;
   features?: Record<string, number>;
 };
 
