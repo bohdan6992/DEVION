@@ -189,7 +189,7 @@ export type MainWindowDataSnapshot = {
   ocrText: string;
 };
 
-export type MoneyRatingBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+export type MoneyRatingBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 export type MoneyRatingRule = {
   band: MoneyRatingBand;
   minRate: number;
@@ -625,6 +625,16 @@ function mergeMoneyPositionsWithActionLog(
     }
   }
 
+  // Keep positions that have been dispatched but not yet confirmed in the action log.
+  // Without this they'd be dropped from positionsBaseline, fall out of `seen` in
+  // syncMoneyPositions, and the latch would recreate them with a new openedAt →
+  // different intentId → duplicate dispatch.
+  for (const [ticker, row] of prevByTicker) {
+    if (!merged.has(ticker) && row.status !== "CLOSED" && row.entryDispatchedAt != null) {
+      merged.set(ticker, row);
+    }
+  }
+
   return Array.from(merged.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
@@ -698,7 +708,7 @@ export function parseMoneySpreadLimit(value: unknown): number | null {
   return toNum(value);
 }
 
-export function deriveMoneySignalClass(ruleBand: "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
+export function deriveMoneySignalClass(ruleBand: "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
   return ruleBand === "GLOBAL" ? "global" : ruleBand.toLowerCase();
 }
 
@@ -835,7 +845,10 @@ export function syncMoneyPositions(
       )
       .map((existing) => {
         const raw = filteredSignalMap.get(existing.ticker) ?? signalMap.get(existing.ticker);
-        const currentSignal = signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
+        const zapSigma = existing.side === "Long"
+          ? toNum(raw?.zapLsigma)
+          : toNum(raw?.zapSsigma);
+        const currentSignal = zapSigma ?? signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
         const inPrintWindow = entryCutoffEnabled && nowMinutes >= printStartMinutes;
         return {
           ...existing,
@@ -869,7 +882,14 @@ export function syncMoneyPositions(
       const raw = signalMap.get(existing.ticker);
       const rawSeen = Boolean(raw);
       const filteredRaw = filteredSignalMap.get(existing.ticker);
-      const currentSigned = signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
+      // Use direction-specific ZAP sigma field: zapLsigma for Long, zapSsigma for Short.
+      // This matches the entry filter (applyExactSonarClientFilters σ ZAP mode) and
+      // ensures exit threshold comparison uses the same metric as what the user sees.
+      const anyRaw = filteredRaw ?? raw;
+      const zapSigma = existing.side === "Long"
+        ? (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma))
+        : (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma));
+      const currentSigned = zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
       const currentAbs = currentSigned == null ? signalAbs(raw) : Math.abs(currentSigned);
       const currentSpread = signalSpread(raw) ?? existing.spread;
       const spreadBlocked = spreadLimit != null && currentSpread != null && currentSpread > spreadLimit;
@@ -895,6 +915,7 @@ export function syncMoneyPositions(
         (isEntryOrderIntent(existing.pendingIntent) || existing.entryCount <= 1);
 
       if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
+        seen.add(existing.ticker); // block latch from recreating with new openedAt → duplicate dispatch
         continue;
       }
 
@@ -903,7 +924,14 @@ export function syncMoneyPositions(
       }
 
       if (hasUndispatchedEntry) {
-        if (inPrintWindow || !entryStillReady) {
+        // Keep the PENDING_ENTRY alive for a brief window even if the signal
+        // momentarily drops out of ENTRY_READY (e.g. brief spread spike between
+        // the prime tick and the actual POST). Without this the position is
+        // dropped before sendQueuedIntents can fire, so only the first ticker
+        // in the batch ever dispatches.
+        const pendingEntryAgeMs = now - (existing.openedAt ?? now);
+        const withinGrace = pendingEntryAgeMs < 30000;
+        if (inPrintWindow || (!entryStillReady && !withinGrace)) {
           continue;
         }
 
@@ -986,7 +1014,10 @@ export function syncMoneyPositions(
           entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0)
         ) {
           const filteredSignal = filteredRaw;
-          const filteredSigned = signalSigned(filteredSignal) ?? signalSigned(raw);
+          const filteredSignedZap = existing.side === "Long"
+            ? (toNum(filteredSignal?.zapLsigma) ?? toNum(raw?.zapLsigma))
+            : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
+          const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
           const triggerBaseSigned = lastScaleSignal ?? existing.entrySignal ?? 0;
           const triggerBaseAbs = Math.abs(triggerBaseSigned);
@@ -1007,7 +1038,12 @@ export function syncMoneyPositions(
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)}`;
           } else {
-            pendingIntent = null;
+            // Keep a triggered add's pendingIntent alive until the POST actually
+            // completes. Without this, a flat signal causes the add to be cancelled
+            // in the very next refresh before the fetch can dispatch it.
+            if (!isEntryOrderIntent(existing.pendingIntent)) {
+              pendingIntent = null;
+            }
           }
         } else if (!isExitOrderIntent(pendingIntent)) {
           pendingIntent = null;
@@ -1947,6 +1983,19 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
+  const startMoneyAutomation = useCallback(async () => {
+    const response = await fetch(bridgeUrl("/api/money/automation/start"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "workspace" }),
+    });
+    const json = await response.json().catch(() => ({}));
+    await refreshExecutionStatus(true);
+    if (!response.ok || json?.ok === false) {
+      throw new Error(json?.error || `Failed to start automation (${response.status})`);
+    }
+  }, [refreshExecutionStatus]);
+
   const clearMoneyExecutionQueue = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/queue"), {
       method: "DELETE",
@@ -2105,18 +2154,25 @@ export function useMoneyEngine({
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
     const decisionsForAutomation = decisionsWithWindowGuard;
+    const wantsPrime = primeImmediateEntriesRef.current;
     const nextLatches = syncMoneySignalLatches(
       moneySignalLatches,
       decisionsForAutomation,
       autoEnabledNow,
       automationConfig,
       entryCutoffEnabled,
-      primeImmediateEntriesRef.current
+      wantsPrime
     );
+    // Consume the prime flag only when automation is running AND there were signals
+    // to immediately qualify. If the stream wasn't ready yet (no ENTRY_READY decisions
+    // → no latches), keep the flag so the next refresh that finds signals will still prime.
+    // Also reset if automation is disabled — prime shouldn't outlive the enabled window.
+    if (!wantsPrime || !autoEnabledNow || nextLatches.length > 0) {
+      primeImmediateEntriesRef.current = false;
+    }
     const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
     const nextPositions = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
     const intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
-    primeImmediateEntriesRef.current = false;
 
     moneyDecisionStore.applySnapshot(displayDecisions);
     moneySignalStore.applySnapshot(filtered);
@@ -2246,7 +2302,7 @@ export function useMoneyEngine({
     }
 
     if (!strategyAutoWasRunningRef.current) {
-      primeImmediateEntriesRef.current = Math.max(0, automationConfig?.minHoldMinutes ?? 0) === 0;
+      primeImmediateEntriesRef.current = true;
       setMoneySessionStartedAt(Date.now());
       setMoneySessionStoppedAt(null);
       setMoneySentOrdersCount(0);
@@ -2432,15 +2488,18 @@ export function useMoneyEngine({
             if (row.ticker !== intent.ticker) return row;
             return {
               ...row,
+              // Entry orders: keep PENDING_ENTRY until the backend execution is confirmed
+              // via the action log flush (hasExecutionDispatchConfirmation). Only exit/print
+              // transitions happen immediately since they have no log-confirmation gate.
               status: isEntryIntent
-                ? "OPEN"
+                ? row.status
                 : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT"
                   ? "PRINT_PENDING"
                   : row.status,
               pendingIntent: isEntryIntent ? null : row.pendingIntent,
               entryDispatchedAt: row.entryDispatchedAt ?? dispatchAt,
               reason: isEntryIntent && row.lastConfirmedActiveAt == null
-                ? "entry queued | recorded in action log"
+                ? "order queued | waiting for execution confirmation"
                 : row.reason,
               updatedAt: dispatchAt,
             };
@@ -2555,6 +2614,7 @@ export function useMoneyEngine({
     captureMoneyTickerPointDelayed,
     clearMoneyTickerPoint,
     toggleMoneyPanicOff,
+    startMoneyAutomation,
     clearMoneyExecutionQueue,
     resetMoneyAutomationState,
     submitManualMoneyOrders,

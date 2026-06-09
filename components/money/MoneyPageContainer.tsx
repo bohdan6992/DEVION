@@ -12,7 +12,7 @@ import {
 
 type MoneyTabKey = "active" | "episodes" | "analytics";
 type MoneyRuleBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
-type MoneySession = "BLUE" | "ARK" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
+type MoneySession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 
 const MONEY_TAB_LS_KEY = "money.arbitrage.tab";
 const MONEY_SESSION_LS_KEY = "money.arbitrage.session";

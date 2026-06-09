@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { bridgeUrl } from "../../lib/bridgeBase";
 import { deriveMoneyExecutionDescriptor, type MoneyAutomationConfig, type MoneyExecutionDescriptor, type MoneyRatingRule } from "../money/moneyEngine";
 import ArbitrageScanner from "../scanner/ArbitrageScanner";
 
 type AutoTabKey = "active" | "episodes" | "analytics";
-type AutoRuleBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+type AutoRuleBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 
 const AUTO_TAB_LS_KEY = "auto.arbitrage.tab";
 const AUTO_RULE_BAND_LS_KEY = "auto.arbitrage.rule-band";
@@ -95,6 +96,8 @@ export default function AutoPageContainer() {
   const [tab, setTab] = useState<AutoTabKey>(readInitialAutoTab);
   const [ruleBand, setRuleBand] = useState<AutoRuleBand>(readInitialAutoRuleBand);
   const [automationConfig, setAutomationConfig] = useState<MoneyAutomationConfig>(readInitialAutomationConfig);
+  const [moneyAutoEnabled, setMoneyAutoEnabled] = useState(false);
+  const localChangeGuardRef = useRef(0);
   const [sharedRatingRules, setSharedRatingRules] = useState<MoneyRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
@@ -108,8 +111,42 @@ export default function AutoPageContainer() {
     signals: 0,
     ready: 0,
     open: 0,
-    autoEnabled: true,
+    autoEnabled: false,
   });
+
+  const applyLocalAutoEnabled = useCallback((enabled: boolean) => {
+    localChangeGuardRef.current = Date.now() + 4000;
+    setMoneyAutoEnabled(enabled);
+  }, []);
+
+  const applyLocalAutomationConfigPatch = useCallback((patch: Partial<MoneyAutomationConfig>) => {
+    localChangeGuardRef.current = Date.now() + 4000;
+    setAutomationConfig((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pullRemoteState = async () => {
+      try {
+        const response = await fetch(bridgeUrl("/api/money/automation/state"), { cache: "no-store" });
+        const json = await response.json().catch(() => ({}));
+        if (cancelled || !response.ok || json?.ok === false) return;
+        const state = json?.state ?? {};
+        const remoteAutoEnabled = Boolean(state.autoEnabled);
+        const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
+        if (Date.now() < localChangeGuardRef.current) return;
+        setMoneyAutoEnabled((prev) => prev === remoteAutoEnabled ? prev : remoteAutoEnabled);
+        setAutomationConfig((prev) => {
+          const next = { ...prev, strategyModeEnabled: remoteStrategyModeEnabled };
+          return prev.strategyModeEnabled === remoteStrategyModeEnabled ? prev : next;
+        });
+      } catch {
+        // keep local state if remote sync is unavailable
+      }
+    };
+    void pullRemoteState();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     try {
@@ -152,9 +189,11 @@ export default function AutoPageContainer() {
       onControlledRuleBandChange={setRuleBand}
       moneyExecutionDescriptorOverride={moneyExecutionDescriptor}
       moneyAutomationConfigOverride={automationConfig}
+      moneyAutoEnabledOverride={moneyAutoEnabled}
       moneyAutoStartEnabledOverride={true}
       moneyViewModeOverride="auto"
-      onMoneyAutomationConfigChange={(patch) => setAutomationConfig((prev) => ({ ...prev, ...patch }))}
+      onMoneyAutomationConfigChange={applyLocalAutomationConfigPatch}
+      onMoneyAutoEnabledChange={applyLocalAutoEnabled}
       headerTitleOverride="ARBITRAGE AUTO"
       headerBadgeValuesOverride={headerBadgeValues}
       headerMetaLabelOverride={headerMetaLabel}

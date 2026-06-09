@@ -19,6 +19,7 @@ import { useMoneyPositionMeta } from "../money/moneyPositionStore";
 import { useMoneySignalMeta } from "../money/moneySignalStore";
 import { buildMoneyFilterConfig, type MoneyAutomationConfig, type MoneyExecutionDescriptor, useMoneyEngine } from "../money/moneyEngine";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { useTapeMeta } from "./tapeMetaStore";
 import clsx from "clsx";
 
 // =========================
@@ -56,14 +57,14 @@ type EpisodeSortKey =
   | "minHold";
 
 type PaperArbMetric = "SigmaZap" | "ZapPct";
-type PaperArbSession = "BLUE" | "ARK" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
+type PaperArbSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 type PaperArbCloseMode = "Active" | "Passive";
 type PaperArbPnlMode = "RawOnly" | "Hedged";
 type PaperArbSizingMode = "Tier" | "Notional";
 type PaperArbDilutionMode = "Undiluted" | "Diluted";
 
 // rating (best_params gates)
-type PaperArbRatingBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+type PaperArbRatingBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 type PaperArbRatingType = "any" | "hard" | "soft";
 type PaperArbRatingMode = "SESSION" | "BIN" | "BINS";
 type TriMode = "off" | "include" | "exclude";
@@ -307,6 +308,8 @@ type PaperArbClosedDto = {
   imbExch1555?: number | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
+  country?: string | null;
+  exchange?: string | null;
   sectorL3?: string | null;
   sectorL4?: string | null;
   sectorL5?: string | null;
@@ -963,6 +966,17 @@ function minuteIdxToClockLabel(x: number | null | undefined): string {
   const mm = ((((totalMin % 1440) + 1440) % 1440) % 60).toString().padStart(2, "0");
   return `${hh}:${mm}`;
 }
+function sessionTimeChartRange(session: PaperArbSession): { from: number; to: number } {
+  switch (session) {
+    case "BLUE":  return { from: 0, to: 239 };
+    case "PRE":   return { from: 0, to: 570 };
+    case "ARK":   return { from: 241, to: 570 };
+    case "OPEN":  return { from: 570, to: 600 };
+    case "INTRA": return { from: 600, to: 959 };
+    case "POST":  return { from: 960, to: 1199 };
+    default:      return { from: 0, to: 1199 };
+  }
+}
 function clampInt(x: any, def = 0) {
   const v = Number(x);
   if (!Number.isFinite(v)) return def;
@@ -1083,6 +1097,7 @@ function ratingBandToBinClassKey(band: PaperArbRatingBand): string {
     case "BLUE":
       return "blue";
     case "ARK":
+    case "PRE":
       return "ark";
     case "OPEN":
       return "open";
@@ -1253,7 +1268,10 @@ function scannerCurrentTimeBand(bandMinutes: number): string {
   const et = new Date(etMs);
   const h = et.getUTCHours();
   const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const totalEnd = h * 60 + m + bandMinutes;
+  const eh = Math.floor(totalEnd / 60) % 24;
+  const em = totalEnd % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
 }
 
 function passesScannerBinRatingFilter(args: {
@@ -1673,6 +1691,8 @@ function ratingBandFromSession(session: PaperArbSession): PaperArbRatingBand {
       return "BLUE";
     case "ARK":
       return "ARK";
+    case "PRE":
+      return "PRE";
     case "OPEN":
       return "OPEN";
     case "INTRA":
@@ -3438,6 +3458,249 @@ const ChevronIcon = ({ open }: { open: boolean }) => (
   </svg>
 );
 
+const slug = (s: string) =>
+  String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+
+type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
+
+const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
+  if (theme === "sparkle") return "amber";
+  if (theme === "asher") return "zinc";
+  if (theme === "rain") return "zinc";
+  if (theme === "inferno") return "amber";
+  if (theme === "light") return "fuchsia";
+  if (theme === "neon") return "fuchsia";
+  if (theme === "space") return "cyan";
+  return "emerald";
+};
+
+const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor): MsColor =>
+  color === "emerald" ? getSonarPrimaryMsColor(theme) : color;
+
+const MSF = {
+  amber: {
+    activeItem: "bg-yellow-300/20 text-yellow-100",
+    inactiveItem: "text-yellow-200/80 hover:bg-yellow-200/10 hover:text-yellow-100",
+    chipActive: "bg-yellow-300 text-[#221400] border-transparent shadow-[0_0_16px_rgba(253,224,71,0.38)]",
+    chipInactive: "text-yellow-200 border-yellow-200/0 hover:bg-yellow-200/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-yellow-200/30",
+    boxChecked: "bg-yellow-300 border-transparent",
+  },
+  zinc: {
+    activeItem: "bg-zinc-200/16 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-zinc-200 text-[#111111] border-transparent shadow-[0_0_16px_rgba(212,212,216,0.24)]",
+    chipInactive: "text-zinc-200 border-zinc-200/0 hover:bg-zinc-200/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-zinc-200/20",
+    boxChecked: "bg-zinc-200 border-transparent",
+  },
+  emerald: {
+    activeItem: "bg-emerald-500/20 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-emerald-500 text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]",
+    chipInactive: "text-emerald-500 border-emerald-500/0 hover:bg-emerald-500/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-emerald-500/20",
+    boxChecked: "bg-emerald-500 border-transparent",
+  },
+  rose: {
+    activeItem: "bg-rose-500/20 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-rose-500 text-white border-transparent shadow-[0_0_16px_rgba(244,63,94,0.42)]",
+    chipInactive: "text-rose-500 border-rose-500/0 hover:bg-rose-500/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-rose-500/20",
+    boxChecked: "bg-rose-500 border-transparent",
+  },
+  cyan: {
+    activeItem: "bg-sky-500/15 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-sky-400 text-white border-transparent shadow-[0_0_16px_rgba(56,189,248,0.34)]",
+    chipInactive: "text-sky-300 border-sky-400/0 hover:bg-sky-400/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-sky-400/20",
+    boxChecked: "bg-sky-400 border-transparent",
+  },
+  fuchsia: {
+    activeItem: "bg-fuchsia-500/15 text-white",
+    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+    chipActive: "bg-fuchsia-400 text-white border-transparent shadow-[0_0_16px_rgba(232,121,249,0.34)]",
+    chipInactive: "text-fuchsia-300 border-fuchsia-400/0 hover:bg-fuchsia-400/10",
+    arrow: "text-zinc-500 hover:text-zinc-300",
+    divider: "bg-fuchsia-400/20",
+    boxChecked: "bg-fuchsia-400 border-transparent",
+  },
+} as const;
+
+const getSonarAccent = (theme?: string | null) => {
+  if (theme === "inferno") {
+    return { text: "text-orange-100" };
+  }
+  const primary = getSonarPrimaryMsColor(theme);
+  if (primary === "amber") return { text: "text-yellow-200" };
+  if (primary === "zinc") return { text: "text-zinc-200" };
+  if (primary === "fuchsia") return { text: "text-fuchsia-300" };
+  if (primary === "cyan") return { text: "text-sky-300" };
+  return { text: "text-zinc-200" };
+};
+
+const MultiSelectFilter = ({
+  label,
+  options,
+  selected,
+  setSelected,
+  enabled,
+  toggleEnabled,
+  color = "amber",
+  hideArrow = false,
+  onMainClick,
+}: {
+  label: string;
+  options: string[];
+  selected: Set<string>;
+  setSelected: (s: Set<string>) => void;
+  enabled: TriMode;
+  toggleEnabled: () => void;
+  color?: MsColor;
+  hideArrow?: boolean;
+  onMainClick?: () => void;
+}) => {
+  const { theme } = useUi();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const id = useMemo(() => `msf-scanner-${slug(label)}`, [label]);
+  const C = MSF[resolveAccentMsColor(theme, color)];
+
+  const toggleOption = (val: string) => {
+    const next = new Set(selected);
+    if (next.has(val)) next.delete(val);
+    else next.add(val);
+    setSelected(next);
+  };
+
+  const recomputePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ left: r.left, top: r.bottom + 8, width: Math.max(220, r.width) });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    recomputePos();
+
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideWrap = !!wrapRef.current?.contains(target);
+      const menuEl = document.getElementById(id);
+      const insideMenu = !!menuEl?.contains(target);
+      if (!insideWrap && !insideMenu) setOpen(false);
+    };
+
+    const onScroll = () => recomputePos();
+    const onResize = () => recomputePos();
+
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open, id]);
+
+  const menu =
+    open && pos
+      ? createPortal(
+          <div
+            id={id}
+            style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
+            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar"
+          >
+            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
+              {options.map((opt, i) => (
+                <button
+                  key={opt || `na-${i}`}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => toggleOption(opt)}
+                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-2 ${
+                    selected.has(opt) ? C.activeItem : C.inactiveItem
+                  }`}
+                >
+                  <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                    {selected.has(opt) ? (
+                      <div className={`w-3 h-3 rounded ${C.boxChecked}`} />
+                    ) : (
+                      <div className="w-3 h-3 rounded border border-white/20" />
+                    )}
+                  </div>
+                  <span className="truncate">{opt}</span>
+                </button>
+              ))}
+              {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <>
+      <div className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
+        <button
+          type="button"
+          onClick={toggleEnabled}
+          className={clsx(
+            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
+            enabled === "off" && C.chipInactive,
+            enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+            enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+          )}
+        >
+          <span>{label}</span>
+          {selected.size > 0 && (
+            <span
+              className={clsx(
+                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
+                enabled === "off" && `border-yellow-200/35 ${getSonarAccent(theme).text}`,
+                enabled === "include" && "border-emerald-400/50 text-emerald-400",
+                enabled === "exclude" && "border-red-400/50 text-red-400",
+              )}
+            >
+              {selected.size}
+            </span>
+          )}
+        </button>
+
+        <div className={`w-px h-4 ${C.divider}`} />
+
+        <button
+          type="button"
+          onClick={() => {
+            onMainClick?.();
+            if (!hideArrow) setOpen((v) => !v);
+          }}
+          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-full ${C.arrow}`}
+        >
+          <ChevronIcon open={open} />
+        </button>
+      </div>
+
+      {menu}
+    </>
+  );
+};
+
 function MinMaxRow({
   label,
   filterKey,
@@ -4340,11 +4603,15 @@ function StartsByTimeChart({
   title,
   meta,
   fullscreen = false,
+  xFrom,
+  xTo,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
   fullscreen?: boolean;
+  xFrom?: number | null;
+  xTo?: number | null;
 }) {
   const w = fullscreen ? 2800 : 1100;
   const h = 320;
@@ -4356,6 +4623,9 @@ function StartsByTimeChart({
 
   const bins = useMemo(() => {
     const m = new Map<number, { ok: number; bad: number }>();
+    if (xFrom != null && xTo != null) {
+      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { ok: 0, bad: 0 });
+    }
     for (const r of rows) {
       const idx = Number(r.startMinuteIdx);
       if (!Number.isFinite(idx)) continue;
@@ -4366,7 +4636,7 @@ function StartsByTimeChart({
       m.set(b, prev);
     }
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows]);
+  }, [rows, xFrom, xTo]);
 
   if (!bins.length) {
     return (
@@ -4403,8 +4673,9 @@ function StartsByTimeChart({
   const totalBad = bins.reduce((s, [, v]) => s + v.bad, 0);
   const total = totalOk + totalBad;
   const hit = total > 0 ? totalOk / total : 0;
-  const avgOkBin = bins.length ? totalOk / bins.length : 0;
-  const avgBadBin = bins.length ? totalBad / bins.length : 0;
+  const nonEmptyBins = bins.filter(([, v]) => v.ok + v.bad > 0).length;
+  const avgOkBin = nonEmptyBins ? totalOk / nonEmptyBins : 0;
+  const avgBadBin = nonEmptyBins ? totalBad / nonEmptyBins : 0;
   const bestOk = bins.reduce((best, cur) => (cur[1].ok > best[1].ok ? cur : best), bins[0]);
   const bestBad = bins.reduce((best, cur) => (cur[1].bad > best[1].bad ? cur : best), bins[0]);
 
@@ -4501,11 +4772,15 @@ function StartsEndsByTimeChart({
   title,
   meta,
   fullscreen = false,
+  xFrom,
+  xTo,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
   fullscreen?: boolean;
+  xFrom?: number | null;
+  xTo?: number | null;
 }) {
   const w = fullscreen ? 2800 : 1100;
   const h = 360;
@@ -4516,6 +4791,9 @@ function StartsEndsByTimeChart({
 
   const bins = useMemo(() => {
     const m = new Map<number, { starts: number; ends: number }>();
+    if (xFrom != null && xTo != null) {
+      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { starts: 0, ends: 0 });
+    }
     for (const r of rows) {
       const s = Number(r.startMinuteIdx);
       const e = Number(r.endMinuteIdx);
@@ -4534,7 +4812,7 @@ function StartsEndsByTimeChart({
       }
     }
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows]);
+  }, [rows, xFrom, xTo]);
 
   if (!bins.length) {
     return (
@@ -4633,11 +4911,15 @@ function PeakStrengthByTimeChart({
   title,
   meta,
   fullscreen = false,
+  xFrom,
+  xTo,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
   fullscreen?: boolean;
+  xFrom?: number | null;
+  xTo?: number | null;
 }) {
   const w = fullscreen ? 2800 : 1100;
   const h = 320;
@@ -4649,6 +4931,9 @@ function PeakStrengthByTimeChart({
 
   const bins = useMemo(() => {
     const m = new Map<number, { count: number; sumAbs: number }>();
+    if (xFrom != null && xTo != null) {
+      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { count: 0, sumAbs: 0 });
+    }
     for (const r of rows) {
       const p = Number(r.peakMinuteIdx);
       if (!Number.isFinite(p)) continue;
@@ -4662,7 +4947,7 @@ function PeakStrengthByTimeChart({
     return [...m.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([idx, v]) => ({ idx, count: v.count, avgAbs: v.count ? v.sumAbs / v.count : 0 }));
-  }, [rows]);
+  }, [rows, xFrom, xTo]);
 
   if (!bins.length) {
     return (
@@ -4685,7 +4970,7 @@ function PeakStrengthByTimeChart({
   const lineD = bins
     .map((b, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toYAbs(b.avgAbs).toFixed(2)}`)
     .join(" ");
-  const peakVals = bins.map((b) => b.avgAbs);
+  const peakVals = bins.filter((b) => b.count > 0).map((b) => b.avgAbs);
   const avgPeak = peakVals.length ? peakVals.reduce((s, v) => s + v, 0) / peakVals.length : 0;
   const sortedPeak = [...peakVals].sort((a, b) => a - b);
   const medPeak = sortedPeak.length ? sortedPeak[Math.floor((sortedPeak.length - 1) * 0.5)] : 0;
@@ -4820,11 +5105,15 @@ function PeakReversionTwoThirdsChart({
   title,
   meta,
   fullscreen = false,
+  xFrom,
+  xTo,
 }: {
   rows: PaperArbClosedDto[];
   title?: string;
   meta?: string;
   fullscreen?: boolean;
+  xFrom?: number | null;
+  xTo?: number | null;
 }) {
   const w = fullscreen ? 2800 : 1100;
   const h = 320;
@@ -4836,6 +5125,9 @@ function PeakReversionTwoThirdsChart({
 
   const bins = useMemo(() => {
     const m = new Map<number, { yes: number; no: number }>();
+    if (xFrom != null && xTo != null) {
+      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { yes: 0, no: 0 });
+    }
     for (const r of rows) {
       const t = Number(r.peakMinuteIdx);
       if (!Number.isFinite(t)) continue;
@@ -4852,7 +5144,7 @@ function PeakReversionTwoThirdsChart({
       m.set(b, prev);
     }
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows]);
+  }, [rows, xFrom, xTo]);
 
   const stats = useMemo(() => {
     const valsAll: number[] = [];
@@ -6575,6 +6867,7 @@ export default function ArbitrageScanner({
   const [ratingEnabledBands, setRatingEnabledBands] = useState<Record<PaperArbRatingBand, boolean>>({
     BLUE: false,
     ARK: false,
+    PRE: false,
     OPEN: false,
     INTRA: false,
     PRINT: false,
@@ -6598,9 +6891,9 @@ export default function ArbitrageScanner({
     }
   }, [sideFilter]);
 
-  const [exchangesText, setExchangesText] = useState<string>("");
-  const [countriesText, setCountriesText] = useState<string>("");
-  const [sectorsL3Text, setSectorsL3Text] = useState<string>("");
+  const [selExchanges, setSelExchanges] = useState<Set<string>>(new Set());
+  const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
+  const [selSectors, setSelSectors] = useState<Set<string>>(new Set());
   const [countryEnabled, setCountryEnabled] = useState<TriMode>("off");
   const [exchangeEnabled, setExchangeEnabled] = useState<TriMode>("off");
   const [sectorEnabled, setSectorEnabled] = useState<TriMode>("off");
@@ -6836,6 +7129,7 @@ export default function ArbitrageScanner({
   >({});
   const [arbitrageTickerMetaLoading, setArbitrageTickerMetaLoading] = useState(false);
   const arbitrageTickerMetaLoadedRef = useRef(false);
+
   const episodesSearchCacheRef = useRef<Map<string, { ts: number; rows: PaperArbClosedDto[] }>>(new Map());
   const episodesSearchInFlightRef = useRef<Map<string, Promise<PaperArbClosedDto[]>>>(new Map());
 
@@ -7197,6 +7491,7 @@ export default function ArbitrageScanner({
               ...prev,
               BLUE: Boolean(s.ratingEnabledBands.BLUE),
               ARK: Boolean(s.ratingEnabledBands.ARK),
+              PRE: Boolean(s.ratingEnabledBands.PRE),
               OPEN: Boolean(s.ratingEnabledBands.OPEN),
               INTRA: Boolean(s.ratingEnabledBands.INTRA),
               PRINT: Boolean(s.ratingEnabledBands.PRINT),
@@ -7218,9 +7513,12 @@ export default function ArbitrageScanner({
         if (typeof s.tickersText === "string") setTickersText(s.tickersText);
         if (typeof s.benchTickersText === "string") setBenchTickersText(s.benchTickersText);
         if (s.sideFilter === "" || s.sideFilter === "Long" || s.sideFilter === "Short") setSideFilter(s.sideFilter);
-        if (typeof s.exchangesText === "string") setExchangesText(s.exchangesText);
-        if (typeof s.countriesText === "string") setCountriesText(s.countriesText);
-        if (typeof s.sectorsL3Text === "string") setSectorsL3Text(s.sectorsL3Text);
+        if (Array.isArray(s.exchangesText)) setSelExchanges(new Set(s.exchangesText));
+        else if (typeof s.exchangesText === "string") setSelExchanges(new Set(splitListUpper(s.exchangesText)));
+        if (Array.isArray(s.countriesText)) setSelCountries(new Set(s.countriesText));
+        else if (typeof s.countriesText === "string") setSelCountries(new Set(splitListUpper(s.countriesText)));
+        if (Array.isArray(s.sectorsL3Text)) setSelSectors(new Set(s.sectorsL3Text));
+        else if (typeof s.sectorsL3Text === "string") setSelSectors(new Set(splitListUpper(s.sectorsL3Text)));
         const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
         if (validTriMode(s.countryEnabled)) setCountryEnabled(s.countryEnabled);
         if (validTriMode(s.exchangeEnabled)) setExchangeEnabled(s.exchangeEnabled);
@@ -7359,9 +7657,9 @@ export default function ArbitrageScanner({
       tickersText,
       benchTickersText,
       sideFilter,
-      exchangesText,
-      countriesText,
-      sectorsL3Text,
+      exchangesText: Array.from(selExchanges),
+      countriesText: Array.from(selCountries),
+      sectorsL3Text: Array.from(selSectors),
       countryEnabled,
       exchangeEnabled,
       sectorEnabled,
@@ -7487,7 +7785,7 @@ export default function ArbitrageScanner({
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
-      exchangesText, countriesText, sectorsL3Text, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
+      selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
@@ -7787,9 +8085,9 @@ export default function ArbitrageScanner({
     const applyTickers = splitListUpper(tickersText);
     const ignoreTickers = splitListUpper(ignoreTickersText);
     const pinnedTickers = splitListUpper(benchTickersText);
-    const countries = splitListUpper(countriesText);
-    const exchanges = splitListUpper(exchangesText);
-    const sectors = splitListUpper(sectorsL3Text);
+    const countries = Array.from(selCountries);
+    const exchanges = Array.from(selExchanges);
+    const sectors = Array.from(selSectors);
 
     return buildMoneyFilterConfig({
       signalClass: moneySignalClass,
@@ -7873,7 +8171,7 @@ export default function ArbitrageScanner({
     minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
     minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
     excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
-    includeUSA, includeChina, countriesText, exchangesText, sectorsL3Text, metric, startAbs,
+    includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
   const moneyExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
@@ -7948,11 +8246,11 @@ export default function ArbitrageScanner({
       activeMode: "off",
       includeUSA: includeUSA,
       includeChina: includeChina,
-      selCountries: new Set(splitListUpper(countriesText)),
+      selCountries: selCountries,
       countryEnabled,
-      selExchanges: new Set(splitListUpper(exchangesText)),
+      selExchanges: selExchanges,
       exchangeEnabled,
-      selSectors: new Set(splitList(sectorsL3Text).map((value) => value.trim().toUpperCase()).filter(Boolean)),
+      selSectors: selSectors,
       sectorEnabled,
       filterReport: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
       equityType: "",
@@ -7974,9 +8272,9 @@ export default function ArbitrageScanner({
   }, [
       benchTickersText,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
-      countriesText, countryEnabled,
-      exchangesText, exchangeEnabled,
-      sectorsL3Text, sectorEnabled,
+      selCountries, countryEnabled,
+      selExchanges, exchangeEnabled,
+      selSectors, sectorEnabled,
       endAbs,
       excludeDividend,
       excludeCrap,
@@ -8130,6 +8428,7 @@ export default function ArbitrageScanner({
     captureMoneyTickerPointDelayed,
     clearMoneyTickerPoint,
     toggleMoneyPanicOff,
+    startMoneyAutomation,
     clearMoneyExecutionQueue,
     resetMoneyAutomationState,
     submitManualMoneyOrders,
@@ -8158,6 +8457,7 @@ export default function ArbitrageScanner({
     onError: (message) => setErr(message),
   });
   const moneySignalMeta = useMoneySignalMeta();
+  const tapeMeta = useTapeMeta();
   const moneyPositionMeta = useMoneyPositionMeta();
   const [moneyAutoStartLocked, setMoneyAutoStartLocked] = useState(false);
   const [moneyAutomationTogglePending, setMoneyAutomationTogglePending] = useState<null | "start" | "stop">(null);
@@ -8186,16 +8486,33 @@ export default function ArbitrageScanner({
     }
   }, [moneyAutoEnabled, moneyAutoEnabledOverride, setMoneyAutoEnabled]);
 
-  const moneyCountries = moneySignalMeta.countries;
-  const moneyExchanges = moneySignalMeta.exchanges;
-  const moneySectors = moneySignalMeta.sectors;
+  const moneyCountries = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.countries, ...moneySignalMeta.countries]);
+    for (const row of episodesRows) {
+      const v = row.country?.trim().toUpperCase();
+      if (v) s.add(v);
+    }
+    return Array.from(s).sort();
+  }, [tapeMeta.countries, moneySignalMeta.countries, episodesRows]);
 
-  const moneyCountryValue = useMemo(() => splitListUpper(countriesText)[0] ?? "", [countriesText]);
-  const moneyExchangeValue = useMemo(() => splitListUpper(exchangesText)[0] ?? "", [exchangesText]);
-  const moneySectorValue = useMemo(() => splitListUpper(sectorsL3Text)[0] ?? "", [sectorsL3Text]);
-  const moneyCountryCount = moneyCountryValue ? 1 : 0;
-  const moneyExchangeCount = moneyExchangeValue ? 1 : 0;
-  const moneySectorCount = moneySectorValue ? 1 : 0;
+  const moneyExchanges = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.exchanges, ...moneySignalMeta.exchanges]);
+    for (const row of episodesRows) {
+      const v = row.exchange?.trim().toUpperCase();
+      if (v) s.add(v);
+    }
+    return Array.from(s).sort();
+  }, [tapeMeta.exchanges, moneySignalMeta.exchanges, episodesRows]);
+
+  const moneySectors = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.sectors, ...moneySignalMeta.sectors]);
+    for (const row of episodesRows) {
+      const v = row.sectorL3?.trim();
+      if (v) s.add(v);
+    }
+    return Array.from(s).sort();
+  }, [tapeMeta.sectors, moneySignalMeta.sectors, episodesRows]);
+
 
   const toggleMoneyAutomationRunFromHeader = async () => {
     if (!moneyAutomationLaunchEnabled) return;
@@ -8296,9 +8613,9 @@ export default function ArbitrageScanner({
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
-      exchanges: splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
-      countries: splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
-      sectorsL3: splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
+      exchanges: selExchanges.size ? Array.from(selExchanges) : null,
+      countries: selCountries.size ? Array.from(selCountries) : null,
+      sectorsL3: selSectors.size ? Array.from(selSectors) : null,
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
@@ -8449,12 +8766,12 @@ export default function ArbitrageScanner({
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
-      exchanges: exchangeEnabled === "include" && splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
-      countries: countryEnabled === "include" && splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
-      sectorsL3: sectorEnabled === "include" && splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
-      excludeExchanges: exchangeEnabled === "exclude" && splitListUpper(exchangesText).length ? splitListUpper(exchangesText) : null,
-      excludeCountries: countryEnabled === "exclude" && splitListUpper(countriesText).length ? splitListUpper(countriesText) : null,
-      excludeSectorsL3: sectorEnabled === "exclude" && splitList(sectorsL3Text).length ? splitList(sectorsL3Text) : null,
+      exchanges: exchangeEnabled === "include" && selExchanges.size ? Array.from(selExchanges) : null,
+      countries: countryEnabled === "include" && selCountries.size ? Array.from(selCountries) : null,
+      sectorsL3: sectorEnabled === "include" && selSectors.size ? Array.from(selSectors) : null,
+      excludeExchanges: exchangeEnabled === "exclude" && selExchanges.size ? Array.from(selExchanges) : null,
+      excludeCountries: countryEnabled === "exclude" && selCountries.size ? Array.from(selCountries) : null,
+      excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
@@ -11344,6 +11661,7 @@ export default function ArbitrageScanner({
               {[
                 { key: "GLOBAL", label: "GLOB" },
                 { key: "BLUE", label: "BLUE" },
+                { key: "PRE", label: "PRE" },
                 { key: "ARK", label: "ARK" },
                 { key: "PRINT", label: "PRINT" },
                 { key: "OPEN", label: "OPEN" },
@@ -11360,7 +11678,8 @@ export default function ArbitrageScanner({
                     }
                     setRatingEnabledBands({
                       BLUE: nextBand === "BLUE",
-                      ARK: nextBand === "ARK",
+                      ARK: nextBand === "ARK" || nextBand === "PRE",
+                      PRE: nextBand === "PRE",
                       OPEN: nextBand === "OPEN",
                       INTRA: nextBand === "INTRA",
                       PRINT: nextBand === "PRINT",
@@ -11369,6 +11688,7 @@ export default function ArbitrageScanner({
                     });
                     if (nextBand === "GLOBAL") setSession("GLOB");
                     if (nextBand === "BLUE") setSession("BLUE");
+                    if (nextBand === "PRE") setSession("PRE");
                     if (nextBand === "ARK") setSession("ARK");
                     if (nextBand === "OPEN") setSession("OPEN");
                     if (nextBand === "INTRA") setSession("INTRA");
@@ -11898,7 +12218,8 @@ export default function ArbitrageScanner({
                   }
                   setRatingEnabledBands({
                     BLUE: band === "BLUE",
-                    ARK: band === "ARK",
+                    ARK: band === "ARK" || band === "PRE",
+                    PRE: band === "PRE",
                     OPEN: band === "OPEN",
                     INTRA: band === "INTRA",
                     PRINT: band === "PRINT",
@@ -11909,6 +12230,7 @@ export default function ArbitrageScanner({
                 options={[
                   { value: "GLOB", label: "GLOB" },
                   { value: "BLUE", label: "BLUE" },
+                  { value: "PRE", label: "PRE" },
                   { value: "ARK", label: "ARK" },
                   { value: "OPEN", label: "OPEN" },
                   { value: "INTRA", label: "INTRA" },
@@ -12334,102 +12656,33 @@ export default function ArbitrageScanner({
             </div>
 
             <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
-              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <button
-                  type="button"
-                  title={countryEnabled === "off" ? "Click to include" : countryEnabled === "include" ? "Click to exclude" : "Click to disable"}
-                  onClick={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                  className={clsx(
-                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
-                    countryEnabled === "include" ? "text-emerald-400" : countryEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
-                  )}
-                >
-                  COUNTRY
-                </button>
-                {moneyCountryCount > 0 ? (
-                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
-                    countryEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : countryEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
-                    {moneyCountryCount}
-                  </span>
-                ) : null}
-                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
-                <GlassSelect
-                  value={moneyCountryValue}
-                  onChange={(e) => setCountriesText(e.target.value)}
-                  options={[
-                    { value: "", label: "-" },
-                    ...(moneyCountryValue && !moneyCountries.includes(moneyCountryValue)
-                      ? [{ value: moneyCountryValue, label: moneyCountryValue }]
-                      : []),
-                    ...moneyCountries.map((value) => ({ value, label: value })),
-                  ]}
-                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
-                />
-              </div>
-              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <button
-                  type="button"
-                  title={exchangeEnabled === "off" ? "Click to include" : exchangeEnabled === "include" ? "Click to exclude" : "Click to disable"}
-                  onClick={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                  className={clsx(
-                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
-                    exchangeEnabled === "include" ? "text-emerald-400" : exchangeEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
-                  )}
-                >
-                  EXCHANGE
-                </button>
-                {moneyExchangeCount > 0 ? (
-                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
-                    exchangeEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : exchangeEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
-                    {moneyExchangeCount}
-                  </span>
-                ) : null}
-                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
-                <GlassSelect
-                  value={moneyExchangeValue}
-                  onChange={(e) => setExchangesText(e.target.value)}
-                  options={[
-                    { value: "", label: "-" },
-                    ...(moneyExchangeValue && !moneyExchanges.includes(moneyExchangeValue)
-                      ? [{ value: moneyExchangeValue, label: moneyExchangeValue }]
-                      : []),
-                    ...moneyExchanges.map((value) => ({ value, label: value })),
-                  ]}
-                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
-                />
-              </div>
-              <div className="relative flex h-7 items-center rounded-full border border-yellow-200/15 bg-[#12110d]/85">
-                <button
-                  type="button"
-                  title={sectorEnabled === "off" ? "Click to include" : sectorEnabled === "include" ? "Click to exclude" : "Click to disable"}
-                  onClick={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                  className={clsx(
-                    "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer select-none",
-                    sectorEnabled === "include" ? "text-emerald-400" : sectorEnabled === "exclude" ? "text-rose-400" : "text-yellow-200/90"
-                  )}
-                >
-                  SECTOR
-                </button>
-                {moneySectorCount > 0 ? (
-                  <span className={clsx("inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[9px] font-mono font-bold",
-                    sectorEnabled === "include" ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : sectorEnabled === "exclude" ? "border-rose-400/40 bg-rose-400/10 text-rose-300" : "border-yellow-200/30 bg-yellow-200/10 text-yellow-100")}>
-                    {moneySectorCount}
-                  </span>
-                ) : null}
-                <div className="mx-2 w-px h-4 bg-yellow-200/20" />
-                <GlassSelect
-                  value={moneySectorValue}
-                  onChange={(e) => setSectorsL3Text(e.target.value)}
-                  options={[
-                    { value: "", label: "-" },
-                    ...(moneySectorValue && !moneySectors.includes(moneySectorValue)
-                      ? [{ value: moneySectorValue, label: moneySectorValue }]
-                      : []),
-                    ...moneySectors.map((value) => ({ value, label: value })),
-                  ]}
-                  className="!h-7 !min-w-[44px] !w-[44px] !py-0 !px-1 !bg-transparent !border-0 !focus:border-0 text-right rounded-r-full"
-                />
-              </div>
+              <MultiSelectFilter
+                label="COUNTRY"
+                options={moneyCountries}
+                selected={selCountries}
+                setSelected={setSelCountries}
+                enabled={countryEnabled}
+                toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
+              <MultiSelectFilter
+                label="EXCHANGE"
+                options={moneyExchanges}
+                selected={selExchanges}
+                setSelected={setSelExchanges}
+                enabled={exchangeEnabled}
+                toggleEnabled={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
+              <MultiSelectFilter
+                label="SECTOR"
+                options={moneySectors}
+                selected={selSectors}
+                setSelected={setSelSectors}
+                enabled={sectorEnabled}
+                toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
             </div>
 
             <div className="inline-flex items-center gap-1 rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-1.5">
@@ -12716,6 +12969,7 @@ export default function ArbitrageScanner({
             onCaptureTickerPointDelayed={captureMoneyTickerPointDelayed}
             onClearTickerPoint={clearMoneyTickerPoint}
             onTogglePanicOff={toggleMoneyPanicOff}
+            onStartAutomation={startMoneyAutomation}
             onClearExecutionQueue={clearMoneyExecutionQueue}
             onResetAutomationState={resetMoneyAutomationState}
             onForceRefresh={refreshMoneySignals}
@@ -12830,6 +13084,8 @@ export default function ArbitrageScanner({
                       rows={activeRealtimeSorted}
                       title="START VS CURRENT BY TIME | 5M"
                       meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                 </div>
@@ -12840,6 +13096,8 @@ export default function ArbitrageScanner({
                       rows={activeRealtimeSorted}
                       title="START EVENTS BY TIME (OK/BAD) | 5M"
                       meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                   <div className="p-0">
@@ -12847,6 +13105,8 @@ export default function ArbitrageScanner({
                       rows={activeRealtimeSorted}
                       title="PEAK STRENGTH BY TIME | 5M"
                       meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                   <div className="p-0">
@@ -12854,6 +13114,8 @@ export default function ArbitrageScanner({
                       rows={activeRealtimeSorted}
                       title="PEAK REVERSION ≥ 2/3 | 5M"
                       meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                 </div>
@@ -14724,6 +14986,8 @@ export default function ArbitrageScanner({
                       rows={analyticsSorted}
                       title="START VS END BY TIME | 5M"
                       meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                 </div>
@@ -14734,6 +14998,8 @@ export default function ArbitrageScanner({
                       rows={analyticsSorted}
                       title="START EVENTS BY TIME (OK/BAD) | 5M"
                       meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                   <div className="p-0">
@@ -14741,6 +15007,8 @@ export default function ArbitrageScanner({
                       rows={analyticsSorted}
                       title="PEAK STRENGTH BY TIME | 5M"
                       meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                   <div className="p-0">
@@ -14748,6 +15016,8 @@ export default function ArbitrageScanner({
                       rows={analyticsSorted}
                       title="PEAK REVERSION ≥ 2/3 | 5M"
                       meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
                     />
                   </div>
                 </div>

@@ -48,6 +48,7 @@ type ArbitrageMoneyViewProps = {
   onCaptureTickerPointDelayed: (delayMs?: number) => Promise<void>;
   onClearTickerPoint: () => Promise<void>;
   onTogglePanicOff: (enabled: boolean) => Promise<void>;
+  onStartAutomation?: () => Promise<void>;
   onClearExecutionQueue: () => Promise<void>;
   onResetAutomationState: () => void;
   onForceRefresh: () => Promise<void>;
@@ -762,6 +763,7 @@ export default function ArbitrageMoneyView({
   onCaptureTickerPointDelayed,
   onClearTickerPoint,
   onTogglePanicOff,
+  onStartAutomation,
   onClearExecutionQueue,
   onResetAutomationState,
   onForceRefresh,
@@ -875,7 +877,11 @@ export default function ArbitrageMoneyView({
     }
 
     onResetAutomationState();
-    await onTogglePanicOff(false);
+    if (onStartAutomation) {
+      await onStartAutomation();
+    } else {
+      await onTogglePanicOff(false);
+    }
     if (!strategyModeEnabled) {
       onAutomationConfigChange({ strategyModeEnabled: true });
     }

@@ -124,7 +124,7 @@ type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
 type BenchBlock = { benchmark: string; buckets: BucketGroup[] };
 
-type ArbClass = "blue" | "ark" | "print" | "open" | "intra" | "post" | "global";
+type ArbClass = "blue" | "ark" | "pre" | "print" | "open" | "intra" | "post" | "global";
 type ArbType = "any" | "hard" | "soft";
 
 /* =========================
@@ -155,7 +155,7 @@ const BENCH_COLORS: Record<string, string> = {
   DEFAULT: "#94a3b8",
 };
 
-const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
+const clsOrder: ArbClass[] = ["global", "blue", "pre", "ark", "print", "open", "intra", "post"];
 const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
@@ -418,7 +418,7 @@ const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
 const numLastClose = (s: any) =>
   getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
 
-const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv"]);
+const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv", "PreMhVol", "preMhVol"]);
 const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
 const PRE_MH_VOL_NF_KEYS = ["preMktVolNF", "PreMktVolNF", "preMhVolNF", "PreMhVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"];
 const VOL_NF_FROM_LST_CLS_KEYS = ["VolNFFromLstCls", "volNFFromLstCls", "volnffromlstcls", "VolNFfromLstCls", "volNFfromLstCls", "vol_nf_from_lst_cls"];
@@ -893,7 +893,10 @@ function currentMarketTimeBand(bandMinutes: number): string | null {
   const et = new Date(etMs);
   const h = et.getUTCHours();
   const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const totalEnd = h * 60 + m + bandMinutes;
+  const eh = Math.floor(totalEnd / 60) % 24;
+  const em = totalEnd % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
 }
 
 function passesTopWindowFilter(
@@ -2192,6 +2195,7 @@ const WINDOW_RATING_LABELS: Record<string, string> = {
   post: "POST",
   print: "PRINT",
   ark: "ARK",
+  pre: "PRE",
   blue: "BLUE",
 };
 
@@ -3226,6 +3230,7 @@ export default function ArbitrageSonar() {
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
   const [activeData, setActiveData] = useState<any>(null);
+  const [liveSnap, setLiveSnap] = useState<Record<string, any> | null>(null);
 
   const toggleRangeMode = useCallback((key: RangeBoundKey) => {
     setRangeModes((prev) => ({
@@ -4488,6 +4493,32 @@ export default function ArbitrageSonar() {
     setActiveData(activeItem);
   }, [activeItem]);
 
+  // Fetch live snapshot fields for the active ticker so static fields
+  // (AvPreMhVol90NF, Volatility20, ImbExch9:25 etc.) always show current values
+  // even when tape rows are stale or missing those fields.
+  useEffect(() => {
+    const tk = normalizeTicker(activeTicker || "");
+    if (!tk) { setLiveSnap(null); return; }
+    let cancelled = false;
+    const LIVE_FIELDS = [
+      "AvPreMhVol90NF","AvPreMhValue20NF","AvPreMhValue90NF",
+      "PreMhMDV90NF","PreMhMDV20NF","AvPostMhVol90NF",
+      "Volatility20","Volatility90","VolRel",
+      "PreMhBidLstPrcΔ%","PreMhLoLstPrcΔ%","PreMhHiLstClsΔ%","PreMhLoLstClsΔ%",
+      "ImbExch9:25","ImbExch15:55",
+      "PreMhVol","PreMhVolNF",
+    ].join(",");
+    fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const item = Array.isArray(data?.items) ? data.items[0] : null;
+        setLiveSnap(item?.Fields ?? item?.fields ?? null);
+      })
+      .catch(() => { if (!cancelled) setLiveSnap(null); });
+    return () => { cancelled = true; };
+  }, [activeTicker]);
+
   const onTickerClick = (tk: string) => {
     const n = normalizeTicker(tk);
     if (!n) return;
@@ -5291,7 +5322,7 @@ export default function ArbitrageSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {(["global", "blue", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+            {(["global", "blue", "pre", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
               <FilterButton
                 key={c}
                 active={cls === c}
@@ -6412,7 +6443,9 @@ export default function ArbitrageSonar() {
             {!activePanelCollapsed && (
               <div className="relative p-4 space-y-4">
                 {(() => {
-                  const s = activeData;
+                  const s = activeData
+                    ? (liveSnap ? { ...activeData, ...liveSnap } : activeData)
+                    : null;
                   const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
                   const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
 
