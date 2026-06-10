@@ -898,7 +898,11 @@ export function syncMoneyPositions(
       const activeExitMode = (automationConfig.exitExecutionMode ?? "active") === "active";
       const belowEndThreshold = currentAbs != null && currentAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
-      const shouldNormalizeExit = activeExitMode && belowEndThreshold;
+      // Require signal to be below threshold for two consecutive refreshes before exiting
+      // (existing.lastSignal is the signal from the previous refresh cycle)
+      const prevAbs = existing.lastSignal == null ? null : Math.abs(existing.lastSignal);
+      const prevBelowThreshold = prevAbs != null && prevAbs < endThreshold;
+      const shouldNormalizeExit = activeExitMode && belowEndThreshold && prevBelowThreshold;
 
       let status: MoneyPosition["status"] = existing.status;
       let reason = existing.reason;
@@ -915,7 +919,20 @@ export function syncMoneyPositions(
         (isEntryOrderIntent(existing.pendingIntent) || existing.entryCount <= 1);
 
       if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
-        seen.add(existing.ticker); // block latch from recreating with new openedAt → duplicate dispatch
+        // Keep in next so the position stays in state across refresh cycles.
+        // Without this, setMoneyPositions removes it → mergeMoneyPositionsWithActionLog
+        // can't restore it → latch recreates a new position with a different openedAt
+        // → duplicate dispatch before action-log confirmation arrives.
+        next.push({
+          ...existing,
+          lastSignal: currentSigned ?? currentAbs ?? existing.lastSignal,
+          spread: currentSpread ?? existing.spread,
+          status: "PENDING_ENTRY",
+          reason: "order dispatched | awaiting execution confirmation",
+          pendingIntent: null,
+          updatedAt: now,
+        });
+        seen.add(existing.ticker); // block latch from recreating
         continue;
       }
 
@@ -1019,19 +1036,19 @@ export function syncMoneyPositions(
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
-          const triggerBaseSigned = lastScaleSignal ?? existing.entrySignal ?? 0;
+          const triggerBaseSigned = lastScaleSignal ?? existing.entrySignal;
+          // Cannot compute a meaningful trigger without a non-zero baseline — skip add
+          if (triggerBaseSigned == null || triggerBaseSigned === 0) {
+            if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
+          } else {
           const triggerBaseAbs = Math.abs(triggerBaseSigned);
           const trigger = triggerBaseAbs + Math.max(0, automationConfig.dilutionStep ?? 0);
-          let sameSign = true;
-          if (
+          const sameSign =
             filteredSigned != null &&
             Number.isFinite(filteredSigned) &&
-            Number.isFinite(triggerBaseSigned) &&
-            filteredSigned !== 0 &&
-            triggerBaseSigned !== 0
-          ) {
-            sameSign = Math.sign(filteredSigned) === Math.sign(triggerBaseSigned);
-          }
+            filteredSigned !== 0
+              ? Math.sign(filteredSigned) === Math.sign(triggerBaseSigned)
+              : true;
           if (filteredAbs != null && filteredAbs >= trigger && sameSign) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
@@ -1044,6 +1061,7 @@ export function syncMoneyPositions(
             if (!isEntryOrderIntent(existing.pendingIntent)) {
               pendingIntent = null;
             }
+          }
           }
         } else if (!isExitOrderIntent(pendingIntent)) {
           pendingIntent = null;
@@ -1067,7 +1085,11 @@ export function syncMoneyPositions(
       seen.add(existing.ticker);
     }
 
-    let openCount = next.filter((row) => row.status === "OPEN" || row.status === "PRINT_PENDING").length;
+    let openCount = next.filter((row) =>
+      row.status === "OPEN" ||
+      row.status === "PRINT_PENDING" ||
+      (row.status === "PENDING_ENTRY" && row.entryDispatchedAt != null)
+    ).length;
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
@@ -1075,7 +1097,11 @@ export function syncMoneyPositions(
       if (now - latch.qualifiedSince < minHoldMs) continue;
 
       const raw = filteredSignalMap.get(latch.ticker) ?? signalMap.get(latch.ticker);
-      const currentSigned = signalSigned(raw) ?? signalAbs(raw);
+      const filteredRawEntry = filteredSignalMap.get(latch.ticker);
+      const zapSigmaEntry = latch.side === "Long"
+        ? (toNum(filteredRawEntry?.zapLsigma) ?? toNum(raw?.zapLsigma))
+        : (toNum(filteredRawEntry?.zapSsigma) ?? toNum(raw?.zapSsigma));
+      const currentSigned = zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
       const currentSpread = signalSpread(raw);
       next.push({
         ticker: latch.ticker,
@@ -2018,6 +2044,29 @@ export function useMoneyEngine({
     recentDispatchAttemptsRef.current.clear();
   }, [moneyActionLog]);
 
+  const dismissMoneyActivePositions = useCallback((tickers: string[]) => {
+    if (!tickers.length) return;
+    const tickerSet = new Set(tickers.map((t) => t.toUpperCase()));
+    const nextLog = pruneMoneyActionLog(
+      moneyActionLogRef.current.filter((entry) => !tickerSet.has(entry.ticker)),
+      Date.now()
+    );
+    actionLogVersionRef.current += 1;
+    moneyActionLogRef.current = nextLog;
+    setMoneyActionLog(nextLog);
+    setMoneyPositions((prev) => prev.filter((pos) => !tickerSet.has(pos.ticker)));
+    setMoneySignalLatches((prev) => prev.filter((latch) => !tickerSet.has(latch.ticker)));
+    setMoneyOrderIntents((prev) => prev.filter((intent) => !tickerSet.has(intent.ticker)));
+    pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
+      if (entries.some((e) => tickerSet.has(e.ticker))) {
+        pendingActionLogEntriesRef.current.delete(intentId);
+      }
+    });
+    queueMicrotask(() => {
+      void refreshRef.current?.({ refreshBridge: false }).catch(() => {});
+    });
+  }, []);
+
   const submitManualMoneyOrders = useCallback(async (tickersText: string, action: MoneyManualOrderAction) => {
     const tickers = Array.from(new Set(
       tickersText
@@ -2617,6 +2666,7 @@ export function useMoneyEngine({
     startMoneyAutomation,
     clearMoneyExecutionQueue,
     resetMoneyAutomationState,
+    dismissMoneyActivePositions,
     submitManualMoneyOrders,
     refresh,
   };

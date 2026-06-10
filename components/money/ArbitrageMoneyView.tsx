@@ -51,6 +51,7 @@ type ArbitrageMoneyViewProps = {
   onStartAutomation?: () => Promise<void>;
   onClearExecutionQueue: () => Promise<void>;
   onResetAutomationState: () => void;
+  onDismissActivePositions?: (tickers: string[]) => void;
   onForceRefresh: () => Promise<void>;
   listModeLabel: string;
   automationConfig: MoneyAutomationConfig;
@@ -437,12 +438,20 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
   title,
   rows,
   emptyMessage,
+  onDismissTicker,
+  onDismissAll,
 }: {
   title: string;
   rows: MoneyDecisionTableRow[];
   emptyMessage: string;
+  onDismissTicker?: (ticker: string) => void;
+  onDismissAll?: () => void;
 }) {
   const useVirtualRows = rows.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
+  const hasDismiss = !!onDismissTicker;
+  const colTemplate = hasDismiss
+    ? "148px_120px_116px_1fr_1fr_1fr_172px_36px"
+    : "148px_120px_116px_1fr_1fr_1fr_172px";
 
   return (
     <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
@@ -450,8 +459,18 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
         <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
           {title}
         </div>
-        <div className="text-[10px] font-mono uppercase text-zinc-500">
-          {intn(rows.length)}
+        <div className="flex items-center gap-2">
+          {onDismissAll && rows.length > 0 && (
+            <button
+              onClick={onDismissAll}
+              className="rounded px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors border border-white/10"
+            >
+              Reset All
+            </button>
+          )}
+          <div className="text-[10px] font-mono uppercase text-zinc-500">
+            {intn(rows.length)}
+          </div>
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -459,7 +478,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
           className="min-w-[880px]"
           style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
         >
-          <div className="sticky top-0 z-10 grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+          <div className={`sticky top-0 z-10 grid grid-cols-[${colTemplate}] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl`}>
             <div className="p-2.5 text-left">Ticker</div>
             <div className="p-2.5 text-left">Bench</div>
             <div className="p-2.5 text-left">Side</div>
@@ -467,6 +486,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
             <div className="p-2.5 text-right">Spread</div>
             <div className="p-2.5 text-right">Net Edge</div>
             <div className="p-2.5 text-left">Status</div>
+            {hasDismiss && <div className="p-2.5" />}
           </div>
 
           {!rows.length ? (
@@ -494,7 +514,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
                 <div
                   key={`${title}|${row.ticker}|${i}`}
                   className={clsx(
-                    "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center border-t border-white/5 transition-colors",
+                    `grid grid-cols-[${colTemplate}] items-center border-t border-white/5 transition-colors`,
                     i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
                     "hover:bg-white/[0.03]"
                   )}
@@ -506,6 +526,17 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
                   <div className="px-2.5 py-2.5"><MoneyStatusBadge status={row.status} /></div>
+                  {hasDismiss && (
+                    <div className="flex items-center justify-center px-1">
+                      <button
+                        onClick={() => onDismissTicker!(row.ticker)}
+                        className="rounded p-1 text-zinc-500 hover:text-zinc-200 hover:bg-white/10 transition-colors leading-none"
+                        title={`Reset ${row.ticker}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -766,6 +797,7 @@ export default function ArbitrageMoneyView({
   onStartAutomation,
   onClearExecutionQueue,
   onResetAutomationState,
+  onDismissActivePositions,
   onForceRefresh,
   listModeLabel,
   automationConfig,
@@ -971,6 +1003,8 @@ export default function ArbitrageMoneyView({
               title="ACTIVE"
               rows={activeDecisionRows}
               emptyMessage="No active MONEY situations yet."
+              onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
+              onDismissAll={onDismissActivePositions && activeDecisionRows.length > 0 ? () => onDismissActivePositions(activeDecisionRows.map((r) => r.ticker)) : undefined}
             />
             <MoneySignalsDecisionTable
               title="SIGNALS"

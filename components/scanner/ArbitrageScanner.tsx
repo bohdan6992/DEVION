@@ -8431,6 +8431,7 @@ export default function ArbitrageScanner({
     startMoneyAutomation,
     clearMoneyExecutionQueue,
     resetMoneyAutomationState,
+    dismissMoneyActivePositions,
     submitManualMoneyOrders,
     refresh: refreshMoneySignals,
   } = useMoneyEngine({
@@ -12972,6 +12973,7 @@ export default function ArbitrageScanner({
             onStartAutomation={startMoneyAutomation}
             onClearExecutionQueue={clearMoneyExecutionQueue}
             onResetAutomationState={resetMoneyAutomationState}
+            onDismissActivePositions={dismissMoneyActivePositions}
             onForceRefresh={refreshMoneySignals}
             listModeLabel={listMode.toUpperCase()}
             automationConfig={effectiveMoneyAutomationConfig}
