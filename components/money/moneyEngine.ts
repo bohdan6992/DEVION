@@ -1553,6 +1553,7 @@ export function useMoneyEngine({
   const strategyAutoWasRunningRef = useRef<boolean>(false);
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
+  const moneyPositionsRef = useRef<MoneyPosition[]>(moneyPositions);
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
 
@@ -2357,6 +2358,7 @@ export function useMoneyEngine({
 
   useEffect(() => {
     moneyPositionStore.applySnapshot(moneyPositions);
+    moneyPositionsRef.current = moneyPositions;
   }, [moneyPositions]);
 
   useEffect(() => {
@@ -2443,8 +2445,11 @@ export function useMoneyEngine({
     if (!queued.length) return;
 
     const abort = new AbortController();
-    const positionByTicker = new Map(moneyPositions.map((row) => [row.ticker, row]));
-    const openLoggedPositions = moneyPositions.filter((row) =>
+    // Use a ref snapshot so setMoneyPositions calls inside the loop don't abort and
+    // restart the effect (moneyPositions is excluded from deps for the same reason).
+    const positionsSnapshot = moneyPositionsRef.current;
+    const positionByTicker = new Map(positionsSnapshot.map((row) => [row.ticker, row]));
+    const openLoggedPositions = positionsSnapshot.filter((row) =>
       row.status !== "CLOSED" &&
       row.entryDispatchedAt != null &&
       openLoggedTickers.has(row.ticker)
@@ -2657,9 +2662,9 @@ export function useMoneyEngine({
           }
           setMoneySentOrdersCount((prev) => prev + 1);
         }
-
-        await refreshExecutionStatus(true);
       }
+      // Single status refresh after the full batch — avoids one round-trip per intent.
+      await refreshExecutionStatus(true);
     };
 
     void sendQueuedIntents().catch((error: any) => {
@@ -2669,7 +2674,7 @@ export function useMoneyEngine({
     });
 
     return () => abort.abort();
-  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, moneyAutoEnabled, moneyOrderIntents, moneyPositions, onError, openLoggedTickers, queuePendingActionLogEntries, refreshExecutionStatus]);
+  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, moneyAutoEnabled, moneyOrderIntents, onError, openLoggedTickers, queuePendingActionLogEntries, refreshExecutionStatus]);
 
   const todaysMoneyActionLog = useMemo(() => (
     moneyActionLog
