@@ -643,6 +643,34 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
 });
 
 const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
+  const handleDownload = () => {
+    const lines: string[] = [
+      "=== MONEY ORDER LOG ===",
+      `Generated: ${new Date().toLocaleString("en-US", { hour12: false })}`,
+      `Total entries: ${rows.length}`,
+      "",
+      ["Time".padEnd(10), "Ticker".padEnd(8), "Bench".padEnd(6), "Side".padEnd(6), "Action".padEnd(7), "Deviation".padEnd(10), "Intent".padEnd(26), "Reason"].join(" | "),
+      "-".repeat(110),
+      ...rows.map((row) => [
+        formatActionLogTime(row.at).padEnd(10),
+        row.ticker.padEnd(8),
+        row.benchmark.padEnd(6),
+        row.side.padEnd(6),
+        row.kind.padEnd(7),
+        (row.deviation != null ? row.deviation.toFixed(4) : "-").padEnd(10),
+        row.intent.padEnd(26),
+        row.reason ?? "-",
+      ].join(" | ")),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `money-log-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="scanner-panel-surface flex h-[284px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
       <div className="flex items-start justify-between gap-4 px-3 py-3">
@@ -651,21 +679,34 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
             Log
           </div>
         </div>
-        <div className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400">
-          {intn(rows.length)} rows
+        <div className="flex items-center gap-2">
+          {rows.length > 0 && (
+            <button
+              onClick={handleDownload}
+              className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors"
+              title="Download log as text file"
+            >
+              Download
+            </button>
+          )}
+          <div className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400">
+            {intn(rows.length)} rows
+          </div>
         </div>
       </div>
       <div className="border-t border-white/[0.06]" />
       <div className="flex-1 overflow-y-auto overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <table className="min-w-[880px] w-full text-xs font-mono">
+        <table className="min-w-[1100px] w-full text-xs font-mono">
         <thead className="sticky top-0 z-10 bg-[#0a0a0a]/45 text-zinc-300 backdrop-blur-xl">
           <tr>
-            <th className="text-left p-2.5">Time</th>
-            <th className="text-left p-2.5">Ticker</th>
-            <th className="text-left p-2.5">Bench</th>
-            <th className="text-left p-2.5">Side</th>
-            <th className="text-left p-2.5">Action</th>
-            <th className="text-right p-2.5">Deviation</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Time</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Ticker</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Bench</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Side</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Action</th>
+            <th className="text-right p-2.5 whitespace-nowrap">Deviation</th>
+            <th className="text-left p-2.5 whitespace-nowrap">Intent</th>
+            <th className="text-left p-2.5 w-full">Reason</th>
           </tr>
         </thead>
         <tbody>
@@ -678,11 +719,11 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
                 "hover:bg-white/[0.03]"
               )}
             >
-              <td className="p-2.5 text-zinc-400">{formatActionLogTime(row.at)}</td>
-              <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
-              <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
-              <td className="p-2.5"><SideBadge side={row.side} /></td>
-              <td className="p-2.5">
+              <td className="p-2.5 text-zinc-400 whitespace-nowrap">{formatActionLogTime(row.at)}</td>
+              <td className="p-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
+              <td className="p-2.5 text-zinc-400 whitespace-nowrap">{row.benchmark}</td>
+              <td className="p-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
+              <td className="p-2.5 whitespace-nowrap">
                 <span className={clsx(
                   "inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border",
                   row.kind === "CLOSE"
@@ -694,12 +735,14 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
                   {row.kind}
                 </span>
               </td>
-              <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.deviation, 2)}</td>
+              <td className="p-2.5 text-right tabular-nums text-zinc-200 whitespace-nowrap">{num(row.deviation, 4)}</td>
+              <td className="p-2.5 text-zinc-500 whitespace-nowrap text-[10px]">{row.intent}</td>
+              <td className="p-2.5 text-zinc-400 max-w-[240px] truncate" title={row.reason}>{row.reason ?? "-"}</td>
             </tr>
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={6} className="p-8 text-center text-zinc-500">
+              <td colSpan={8} className="p-8 text-center text-zinc-500">
                 No MONEY actions recorded for today yet.
               </td>
             </tr>

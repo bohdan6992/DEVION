@@ -62,6 +62,7 @@ export type MoneyActionLogEntry = {
   deviation: number | null;
   at: number;
   intent: MoneyOrderIntentType | "MANUAL";
+  reason?: string;
 };
 
 export type MoneyOrderIntentType =
@@ -496,6 +497,7 @@ function readMoneyActionLog(storageKey: string): MoneyActionLogEntry[] {
           kind: row.kind === "ADD" || row.kind === "CLOSE" ? row.kind : "ENTRY",
           deviation: toNum(row.deviation),
           at: Math.max(0, Math.trunc(toNum(row.at) ?? Date.now())),
+          ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
           intent:
             row.intent === "ENTER_LONG_AGGRESSIVE" ||
             row.intent === "ENTER_SHORT_AGGRESSIVE" ||
@@ -676,7 +678,8 @@ function syncMoneySignalLatches(
   autoEnabled: boolean,
   automationConfig?: MoneyAutomationConfig,
   entryCutoffEnabled = true,
-  primeImmediately = false
+  primeImmediately = false,
+  latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>
 ): MoneySignalLatch[] {
   if (!autoEnabled || !automationConfig?.strategyModeEnabled) return [];
 
@@ -692,11 +695,15 @@ function syncMoneySignalLatches(
   for (const row of decisions) {
     if (row.status !== "ENTRY_READY") continue;
     const existing = prevMap.get(row.ticker);
+    // Recover qualifiedSince from history if the latch briefly dropped (signal bounced
+    // out of ENTRY_READY for one or more ticks). Without this, each bounce resets the
+    // hold timer and the ticker never dispatches.
+    const historic = !existing ? latchHistory?.get(row.ticker) : null;
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
-      qualifiedSince: existing?.qualifiedSince ?? (primeImmediately ? now - minHoldMs : now),
+      qualifiedSince: existing?.qualifiedSince ?? historic?.qualifiedSince ?? (primeImmediately ? now - minHoldMs : now),
       lastSeenAt: now,
     });
   }
@@ -1037,28 +1044,33 @@ export function syncMoneyPositions(
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
           const triggerBaseSigned = lastScaleSignal ?? existing.entrySignal;
-          // Cannot compute a meaningful trigger without a non-zero baseline — skip add
+          // Cannot compute a meaningful trigger without a non-zero baseline — skip add.
           if (triggerBaseSigned == null || triggerBaseSigned === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           } else {
-          const triggerBaseAbs = Math.abs(triggerBaseSigned);
-          const trigger = triggerBaseAbs + Math.max(0, automationConfig.dilutionStep ?? 0);
+          // ADD fires when |current signal| >= |last scale signal| + dilutionStep
+          // AND the sign matches the baseline (must move further in the same direction).
+          const trigger = Math.abs(triggerBaseSigned) + Math.max(0, automationConfig.dilutionStep ?? 0);
           const sameSign =
             filteredSigned != null &&
             Number.isFinite(filteredSigned) &&
-            filteredSigned !== 0
-              ? Math.sign(filteredSigned) === Math.sign(triggerBaseSigned)
-              : true;
+            filteredSigned !== 0 &&
+            Math.sign(filteredSigned) === Math.sign(triggerBaseSigned);
           if (filteredAbs != null && filteredAbs >= trigger && sameSign) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)}`;
           } else {
-            // Keep a triggered add's pendingIntent alive until the POST actually
-            // completes. Without this, a flat signal causes the add to be cancelled
-            // in the very next refresh before the fetch can dispatch it.
-            if (!isEntryOrderIntent(existing.pendingIntent)) {
+            // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
+            // next threshold yet). But if signal reversed sign, clear the intent — the
+            // baseline has shifted and the pending order is no longer valid.
+            const signalReversed =
+              filteredSigned != null &&
+              Number.isFinite(filteredSigned) &&
+              filteredSigned !== 0 &&
+              Math.sign(filteredSigned) !== Math.sign(triggerBaseSigned);
+            if (!isEntryOrderIntent(existing.pendingIntent) || signalReversed) {
               pendingIntent = null;
             }
           }
@@ -1540,6 +1552,7 @@ export function useMoneyEngine({
   const surgeGuardStableTicksRef = useRef<number>(0);
   const strategyAutoWasRunningRef = useRef<boolean>(false);
   const primeImmediateEntriesRef = useRef<boolean>(false);
+  const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
 
@@ -1723,6 +1736,7 @@ export function useMoneyEngine({
     setMoneySessionStartedAt(null);
     setMoneySessionStoppedAt(null);
     setMoneySentOrdersCount(0);
+    latchQualifiedSinceHistoryRef.current.clear();
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
@@ -2210,7 +2224,8 @@ export function useMoneyEngine({
       autoEnabledNow,
       automationConfig,
       entryCutoffEnabled,
-      wantsPrime
+      wantsPrime,
+      latchQualifiedSinceHistoryRef.current
     );
     // Consume the prime flag only when automation is running AND there were signals
     // to immediately qualify. If the stream wasn't ready yet (no ENTRY_READY decisions
@@ -2219,6 +2234,15 @@ export function useMoneyEngine({
     if (!wantsPrime || !autoEnabledNow || nextLatches.length > 0) {
       primeImmediateEntriesRef.current = false;
     }
+    // Update latch history so qualifiedSince survives brief signal bounces (> 1 tick).
+    // Entries expire after max(5min, minHoldMs) to avoid growing unboundedly.
+    const latchHistoryTTL = Math.max(300_000, Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 1000);
+    for (const latch of nextLatches) {
+      latchQualifiedSinceHistoryRef.current.set(latch.ticker, { qualifiedSince: latch.qualifiedSince, lastSeenAt: latch.lastSeenAt });
+    }
+    latchQualifiedSinceHistoryRef.current.forEach((v, k) => {
+      if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
+    });
     const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
     const nextPositions = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
     const intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
@@ -2371,18 +2395,28 @@ export function useMoneyEngine({
     );
     const activeQueuedHedgeIds = new Set(Array.from(activeQueuedIds, (id) => `${id}|benchmark`));
 
+    const now = Date.now();
+
+    // Do not evict an ID while it is still within the dispatch cooldown window.
+    // Evicting early creates a race where entryCount resets via mergeMoneyPositionsWithActionLog
+    // (before the action log confirms the ADD) and the same intent re-dispatches.
     dispatchedIntentIdsRef.current.forEach((id) => {
       if (!activeQueuedIds.has(id)) {
-        dispatchedIntentIdsRef.current.delete(id);
+        const lastAttemptAt = recentDispatchAttemptsRef.current.get(id) ?? 0;
+        if (now - lastAttemptAt >= AUTO_DISPATCH_COOLDOWN_MS) {
+          dispatchedIntentIdsRef.current.delete(id);
+        }
       }
     });
     dispatchedHedgeIntentIdsRef.current.forEach((id) => {
       if (!activeQueuedHedgeIds.has(id)) {
-        dispatchedHedgeIntentIdsRef.current.delete(id);
+        const lastAttemptAt = recentDispatchAttemptsRef.current.get(id) ?? 0;
+        if (now - lastAttemptAt >= AUTO_DISPATCH_COOLDOWN_MS) {
+          dispatchedHedgeIntentIdsRef.current.delete(id);
+        }
       }
     });
 
-    const now = Date.now();
     recentDispatchAttemptsRef.current.forEach((timestamp, key) => {
       if (now - timestamp >= AUTO_DISPATCH_COOLDOWN_MS) {
         recentDispatchAttemptsRef.current.delete(key);
@@ -2566,6 +2600,7 @@ export function useMoneyEngine({
                   deviation: row.lastSignal ?? row.entrySignal,
                   at: dispatchAt,
                   intent: "CLOSE_ALL_PRINT" as const,
+                  reason: "print window close all",
                 }))
             );
           } else if (isEntryIntent && correspondingPosition) {
@@ -2583,6 +2618,7 @@ export function useMoneyEngine({
               deviation,
               at: dispatchAt,
               intent: intent.intent,
+              reason: correspondingPosition.reason || undefined,
             }]);
           } else if (isExitIntent && correspondingPosition) {
             queuePendingActionLogEntries(intent.id, [{
@@ -2595,6 +2631,7 @@ export function useMoneyEngine({
               deviation: correspondingPosition.lastSignal ?? correspondingPosition.entrySignal,
               at: dispatchAt,
               intent: intent.intent,
+              reason: correspondingPosition.reason || undefined,
             }]);
           }
         }
