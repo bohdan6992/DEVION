@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import AutoSizer from "react-virtualized-auto-sizer";
 import { List, type RowComponentProps } from "react-window";
-import { memo, useDeferredValue, useMemo, useState } from "react";
+import React, { memo, useDeferredValue, useMemo, useState } from "react";
 import { useMoneyActionLogRows } from "./moneyActionLogStore";
 import { getMoneyDecisionRow, useMoneyDecisionIds, useMoneyDecisionRow, useMoneyDecisionVersion } from "./moneyDecisionStore";
 import { useMoneyExecutionSnapshot } from "./moneyExecutionStore";
@@ -449,9 +449,12 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
 }) {
   const useVirtualRows = rows.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
   const hasDismiss = !!onDismissTicker;
-  const colTemplate = hasDismiss
-    ? "148px_120px_116px_1fr_1fr_1fr_172px_36px"
-    : "148px_120px_116px_1fr_1fr_1fr_172px";
+  const gridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: hasDismiss
+      ? "148px 120px 116px 1fr 1fr 1fr 172px 36px"
+      : "148px 120px 116px 1fr 1fr 1fr 172px",
+  };
 
   return (
     <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
@@ -478,7 +481,10 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
           className="min-w-[880px]"
           style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
         >
-          <div className={`sticky top-0 z-10 grid grid-cols-[${colTemplate}] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl`}>
+          <div
+            className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl"
+            style={gridStyle}
+          >
             <div className="p-2.5 text-left">Ticker</div>
             <div className="p-2.5 text-left">Bench</div>
             <div className="p-2.5 text-left">Side</div>
@@ -514,10 +520,11 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
                 <div
                   key={`${title}|${row.ticker}|${i}`}
                   className={clsx(
-                    `grid grid-cols-[${colTemplate}] items-center border-t border-white/5 transition-colors`,
+                    "items-center border-t border-white/5 transition-colors",
                     i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
                     "hover:bg-white/[0.03]"
                   )}
+                  style={gridStyle}
                 >
                   <div className="px-2.5 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
                   <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
