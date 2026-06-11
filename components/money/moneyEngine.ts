@@ -577,6 +577,7 @@ function buildOpenTickersFromActionLog(entries: MoneyActionLogEntry[], dayKey = 
 function hasExecutionDispatchConfirmation(
   snapshot: TradingAppExecutionSnapshot | null | undefined,
   intentId: string,
+  entries: MoneyActionLogEntry[] = [],
 ): boolean {
   if (!snapshot || !intentId) return false;
   const matchesIntent = (item: TradingAppQueueItem | null | undefined) =>
@@ -588,7 +589,84 @@ function hasExecutionDispatchConfirmation(
     return true;
   }
 
-  return snapshot.queue.some(matchesIntent) || snapshot.history.some(matchesIntent);
+  if (snapshot.queue.some(matchesIntent) || snapshot.history.some(matchesIntent)) {
+    return true;
+  }
+
+  if (!entries.length) return false;
+
+  const fallbackMatch = (item: TradingAppQueueItem | null | undefined) =>
+    item != null &&
+    queueItemMatchesPendingActionLogEntry(item, entries[0]);
+
+  return fallbackMatch(snapshot.current ?? null) ||
+    snapshot.queue.some(fallbackMatch) ||
+    snapshot.history.some(fallbackMatch);
+}
+
+function mapActionLogIntentToExecutionType(intent: MoneyActionLogEntry["intent"]): TradingAppQueueItem["type"] | null {
+  switch (intent) {
+    case "ENTER_LONG_AGGRESSIVE":
+      return "EnterLongAggressive";
+    case "ENTER_SHORT_AGGRESSIVE":
+      return "EnterShortAggressive";
+    case "EXIT_LONG_AGGRESSIVE":
+    case "EXIT_SHORT_AGGRESSIVE":
+      return "ExitActive";
+    case "EXIT_LONG_PRINT":
+    case "EXIT_SHORT_PRINT":
+    case "CLOSE_ALL_PRINT":
+      return "ExitPrint";
+    default:
+      return null;
+  }
+}
+
+function queueItemMatchesPendingActionLogEntry(
+  item: TradingAppQueueItem,
+  entry: MoneyActionLogEntry | undefined,
+): boolean {
+  if (!entry) return false;
+  if (item.status !== "Sent" && item.status !== "Completed") return false;
+  if (item.ticker !== entry.ticker) return false;
+
+  const expectedType = mapActionLogIntentToExecutionType(entry.intent);
+  if (expectedType && item.type !== expectedType) return false;
+
+  const itemTimestamp = Date.parse(item.finishedAtUtc ?? item.startedAtUtc ?? item.createdAtUtc);
+  if (!Number.isFinite(itemTimestamp)) return false;
+
+  // Allow a small backward window because the local log entry is created
+  // immediately after enqueue, while backend timestamps are captured inside
+  // the queue worker lifecycle.
+  return itemTimestamp >= entry.at - 60_000;
+}
+
+function normalizeConfirmedActionLogReason(entry: MoneyActionLogEntry): string | undefined {
+  const reason = entry.reason?.trim();
+  if (
+    reason &&
+    reason !== "awaiting entry dispatch" &&
+    reason !== "order queued | waiting for execution confirmation" &&
+    reason !== "order dispatched | awaiting execution confirmation"
+  ) {
+    return reason;
+  }
+
+  if (entry.kind === "CLOSE") {
+    return "execution confirmed";
+  }
+  if (entry.kind === "ADD") {
+    return "add confirmed";
+  }
+  return "entry confirmed";
+}
+
+function normalizeConfirmedActionLogEntries(entries: MoneyActionLogEntry[]): MoneyActionLogEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    reason: normalizeConfirmedActionLogReason(entry),
+  }));
 }
 
 function mergeMoneyPositionsWithActionLog(
@@ -1013,7 +1091,7 @@ export function syncMoneyPositions(
           pendingIntent = null;
         } else if (holdBlocked) {
           status = "OPEN";
-          reason = `min hold ${automationConfig.minHoldMinutes}s not reached`;
+          reason = `min hold ${automationConfig.minHoldMinutes}min not reached`;
           pendingIntent = null;
         } else {
           status = "CLOSED";
@@ -1043,33 +1121,34 @@ export function syncMoneyPositions(
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
-          const triggerBaseSigned = lastScaleSignal ?? existing.entrySignal;
-          // Cannot compute a meaningful trigger without a non-zero baseline — skip add.
-          if (triggerBaseSigned == null || triggerBaseSigned === 0) {
+          // Trigger base is always the original entry signal so that each add threshold
+          // is: |entrySignal| + addNumber × dilutionStep.
+          // Example: entry=0.5σ, step=0.5 → add#1 at 1.0σ, add#2 at 1.5σ, add#3 at 2.0σ.
+          const entryBase = existing.entrySignal ?? lastScaleSignal;
+          if (entryBase == null || entryBase === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           } else {
-          // ADD fires when |current signal| >= |last scale signal| + dilutionStep
-          // AND the sign matches the baseline (must move further in the same direction).
-          const trigger = Math.abs(triggerBaseSigned) + Math.max(0, automationConfig.dilutionStep ?? 0);
+          const addNumber = entryCount; // entryCount=1 before first add, =2 before second, etc.
+          const trigger = Math.abs(entryBase) + Math.max(0, automationConfig.dilutionStep ?? 0) * addNumber;
           const sameSign =
             filteredSigned != null &&
             Number.isFinite(filteredSigned) &&
             filteredSigned !== 0 &&
-            Math.sign(filteredSigned) === Math.sign(triggerBaseSigned);
+            Math.sign(filteredSigned) === Math.sign(entryBase);
           if (filteredAbs != null && filteredAbs >= trigger && sameSign) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
-            reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)}`;
+            reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
           } else {
             // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
             // next threshold yet). But if signal reversed sign, clear the intent — the
-            // baseline has shifted and the pending order is no longer valid.
+            // position has moved against entry and the pending order is no longer valid.
             const signalReversed =
               filteredSigned != null &&
               Number.isFinite(filteredSigned) &&
               filteredSigned !== 0 &&
-              Math.sign(filteredSigned) !== Math.sign(triggerBaseSigned);
+              Math.sign(filteredSigned) !== Math.sign(entryBase);
             if (!isEntryOrderIntent(existing.pendingIntent) || signalReversed) {
               pendingIntent = null;
             }
@@ -1144,9 +1223,6 @@ export function syncMoneyPositions(
 
   const printCloseMinutes = parseTimeToMinutes(automationConfig?.printCloseTime, 9 * 60 + 30);
   const printWindowEnabled = entryCutoffEnabled && automationConfig?.exitMode === "print";
-  const maxOpenAllowed = entryCutoffEnabled
-    ? (automationConfig?.maxOpenPositions ?? Number.MAX_SAFE_INTEGER)
-      : Number.MAX_SAFE_INTEGER;
   const next: MoneyPosition[] = [];
   const seen = new Set<string>();
 
@@ -1218,7 +1294,6 @@ export function syncMoneyPositions(
     seen.add(existing.ticker);
   }
 
-  let openCount = next.filter((row) => row.status === "OPEN").length;
   return next
     .filter((row) => row.status !== "CLOSED" || now - row.updatedAt < 15000)
     .sort((a, b) => a.ticker.localeCompare(b.ticker));
@@ -1400,6 +1475,69 @@ export function buildMoneyOrderIntents(
   return intents.sort((a, b) => a.ticker.localeCompare(b.ticker) || a.intent.localeCompare(b.intent));
 }
 
+function buildFallbackPendingEntryPositions(
+  existingPositions: MoneyPosition[],
+  qualifiedLatches: MoneySignalLatch[],
+  filteredSignals: ArbitrageSignal[],
+  automationConfig: MoneyAutomationConfig | undefined,
+  entryCutoffEnabled: boolean,
+): MoneyPosition[] {
+  if (!qualifiedLatches.length) return existingPositions;
+
+  const now = Date.now();
+  const nowMinutes = currentMinutesLocal();
+  const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+  if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return existingPositions;
+
+  // Respect the same entryCutoffEnabled guard used everywhere else:
+  // global band (entryCutoffEnabled=false) has no position cap.
+  const maxOpenAllowed = entryCutoffEnabled
+    ? Math.max(1, automationConfig?.maxOpenPositions ?? 10)
+    : Number.MAX_SAFE_INTEGER;
+  const signalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
+  const next = existingPositions.slice();
+  const existingByTicker = new Set(existingPositions.map((row) => row.ticker));
+  let openCount = existingPositions.filter((row) =>
+    row.status === "OPEN" ||
+    row.status === "PRINT_PENDING" ||
+    row.status === "PENDING_ENTRY"
+  ).length;
+
+  for (const latch of qualifiedLatches) {
+    if (existingByTicker.has(latch.ticker)) continue;
+    if (openCount >= maxOpenAllowed) break;
+
+    const raw = signalMap.get(latch.ticker);
+    const signed = latch.side === "Long"
+      ? (toNum(raw?.zapLsigma) ?? signalSigned(raw) ?? signalAbs(raw))
+      : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw));
+
+    next.push({
+      ticker: latch.ticker,
+      benchmark: latch.benchmark,
+      side: latch.side,
+      entrySignal: signed,
+      lastSignal: signed,
+      lastScaleSignal: signed,
+      spread: signalSpread(raw),
+      status: "PENDING_ENTRY",
+      reason: `fallback pending entry after hold ${automationConfig?.minHoldMinutes ?? 0}m`,
+      entryCount: 1,
+      lockedForPrint: false,
+      pendingIntent: latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
+      entryDispatchedAt: null,
+      lastConfirmedActiveAt: null,
+      openedAt: now,
+      updatedAt: now,
+    });
+
+    existingByTicker.add(latch.ticker);
+    openCount += 1;
+  }
+
+  return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
 type UseMoneyEngineArgs = {
   enabled: boolean;
   ocrEnabled?: boolean;
@@ -1434,6 +1572,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
 const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
 const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
+const MONEY_AUTOMATION_TICK_MS = 1000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -1554,6 +1693,8 @@ export function useMoneyEngine({
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
   const moneyPositionsRef = useRef<MoneyPosition[]>(moneyPositions);
+  const dispatchLoopActiveRef = useRef(false);
+  const dispatchLoopReplayRef = useRef(false);
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
 
@@ -1617,8 +1758,8 @@ export function useMoneyEngine({
     const confirmedIntentIds: string[] = [];
 
     pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
-      if (!hasExecutionDispatchConfirmation(snapshot, intentId)) return;
-      confirmedEntries.push(...entries);
+      if (!hasExecutionDispatchConfirmation(snapshot, intentId, entries)) return;
+      confirmedEntries.push(...normalizeConfirmedActionLogEntries(entries));
       confirmedIntentIds.push(intentId);
     });
 
@@ -2133,7 +2274,6 @@ export function useMoneyEngine({
     refreshInFlightRef.current = true;
 
     try {
-    const refreshActionLogVersion = actionLogVersionRef.current;
     const refreshBridge = options?.refreshBridge !== false;
     const normalizedByTicker = new Map(
       primaryStreamSignalsRef.current.map((row) => [row.ticker, row] as const)
@@ -2245,8 +2385,98 @@ export function useMoneyEngine({
       if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
     });
     const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
-    const nextPositions = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
-    const intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+    const nextPositionsBase = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
+    const minHoldMs = Math.max(0, (automationConfig?.minHoldMinutes ?? 0)) * 60_000;
+    const now2 = Date.now();
+    const entryReady = decisionsForAutomation.filter(d => d.status === "ENTRY_READY").length;
+    const latched = nextLatches.length;
+    const qualifiedLatches = nextLatches.filter((l) => now2 - l.qualifiedSince >= minHoldMs);
+    let nextPositions = nextPositionsBase;
+    let intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+
+    if (
+      autoEnabledNow &&
+      automationConfig?.strategyModeEnabled &&
+      intents.length === 0 &&
+      qualifiedLatches.length > 0
+    ) {
+      nextPositions = buildFallbackPendingEntryPositions(
+        nextPositions,
+        qualifiedLatches,
+        filtered,
+        automationConfig,
+        entryCutoffEnabled,
+      );
+      intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+    }
+
+    const qualified = qualifiedLatches.length;
+    const pendingEntry = nextPositions.filter(p => p.status === "PENDING_ENTRY").length;
+    const ts = () => new Date().toTimeString().slice(0, 8);
+    const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
+    const secAgo = (ms: number) => ((now2 - ms) / 1000).toFixed(1) + "s ago";
+    const dilutionStep = automationConfig?.dilutionStep ?? 0.3;
+    const decisionMap2 = new Map(decisionsForAutomation.map(d => [d.ticker, d]));
+    const positionMap2 = new Map(nextPositions.map(p => [p.ticker, p]));
+
+    const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
+    const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
+    console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} prime=${wantsPrime} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMs / 60000}min`);
+
+    if (autoEnabledNow && entryReady > 0) {
+      for (const d of decisionsForAutomation.filter(r => r.status === "ENTRY_READY")) {
+        const latch = nextLatches.find(l => l.ticker === d.ticker);
+        const holdedMs = latch ? now2 - latch.qualifiedSince : null;
+        const passesHold = holdedMs != null && holdedMs >= minHoldMs;
+        const pos = positionMap2.get(d.ticker);
+        const addNum = pos ? pos.entryCount : 0;
+        const entryBase = pos?.entrySignal ?? pos?.lastScaleSignal;
+        const isShort = d.side === "Short";
+        // trigger magnitude: |entrySignal| + addNum × step
+        // Long: signal ≥ +trigger  |  Short: signal ≤ -trigger
+        const addTriggerMag = entryBase != null ? Math.abs(entryBase) + dilutionStep * addNum : null;
+        const addTriggerSigned = addTriggerMag != null ? (isShort ? -addTriggerMag : addTriggerMag) : null;
+        const dilutionMet = d.signal != null && addTriggerMag != null &&
+          Math.abs(d.signal) >= addTriggerMag &&
+          (entryBase == null || Math.sign(d.signal) === Math.sign(entryBase));
+        const status = !latch ? "NO_LATCH"
+          : !passesHold ? `HOLD(${((minHoldMs - holdedMs!) / 1000).toFixed(0)}s left)`
+          : "READY";
+        console.log(
+          `  ${d.ticker}/${d.benchmark} ${d.side.toUpperCase()} | sig=${sig(d.signal)} netEdge=${sig(d.netEdge)} spread=${d.spread != null ? d.spread.toFixed(4) : "n/a"}` +
+          ` | ${status}${latch ? ` qualifiedSince=${secAgo(latch.qualifiedSince)}` : ""}` +
+          `${addNum > 0
+            ? ` | add#${addNum} entry=${sig(entryBase)} threshold=${addTriggerSigned != null ? (isShort ? "≤" : "≥") + addTriggerSigned.toFixed(3) + "σ" : "n/a"} (|${sig(entryBase)}|+${addNum}×${dilutionStep})${dilutionMet ? " ✓FIRE" : " ✗waiting"}`
+            : ""}` +
+          ` | reason="${d.reason}"`
+        );
+      }
+    }
+
+    if (intents.length > 0) {
+      console.group(`  INTENTS (${intents.length}):`);
+      for (const intent of intents) {
+        const d2 = decisionMap2.get(intent.ticker);
+        const pos2 = positionMap2.get(intent.ticker);
+        const entryBase2 = pos2?.entrySignal ?? pos2?.lastScaleSignal;
+        const isAdd2 = intent.sequence > 1;
+        const isShort2 = intent.side === "Short";
+        const addNum2 = intent.sequence - 1;
+        const triggerMag2 = isAdd2 && entryBase2 != null ? Math.abs(entryBase2) + dilutionStep * addNum2 : null;
+        const thresholdStr2 = triggerMag2 != null
+          ? `${isShort2 ? "≤-" : "≥+"}${triggerMag2.toFixed(3)}σ`
+          : "";
+        console.log(
+          `  [${intent.status}] ${intent.intent} ${intent.ticker}/${intent.benchmark}` +
+          ` | ${isAdd2 ? `add#${addNum2}` : "entry"} ${intent.side}` +
+          ` sig=${sig(d2?.signal)}${isAdd2 ? ` threshold=${thresholdStr2} (|${sig(entryBase2)}|+${addNum2}×${dilutionStep})` : ""}` +
+          ` | "${intent.reason}"`
+        );
+      }
+      console.groupEnd();
+    }
+
+    console.groupEnd();
 
     moneyDecisionStore.applySnapshot(displayDecisions);
     moneySignalStore.applySnapshot(filtered);
@@ -2255,10 +2485,8 @@ export function useMoneyEngine({
     startTransition(() => {
       setMoneyEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
       setMoneySignalLatches(nextLatches);
-      if (actionLogVersionRef.current === refreshActionLogVersion) {
-        setMoneyPositions(nextPositions);
-        setMoneyOrderIntents(intents);
-      }
+      setMoneyPositions(nextPositions);
+      setMoneyOrderIntents(intents);
     });
     onUpdated?.();
     onError?.(null);
@@ -2427,8 +2655,14 @@ export function useMoneyEngine({
   }, [moneyOrderIntents]);
 
   useEffect(() => {
-    if (!enabled || !moneyAutoEnabled) return;
-    if (moneyExecutionSnapshotRef.current?.panicOff) return;
+    if (!enabled || !moneyAutoEnabled) {
+      console.log("[dispatch] blocked: enabled=", enabled, "moneyAutoEnabled=", moneyAutoEnabled);
+      return;
+    }
+    if (moneyExecutionSnapshotRef.current?.panicOff) {
+      console.log("[dispatch] blocked: panicOff=true");
+      return;
+    }
 
     const nowMinutes = currentMinutesLocal();
     const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
@@ -2442,9 +2676,9 @@ export function useMoneyEngine({
       if (!arkPrintLockActive) return true;
       return intent.intent === "CLOSE_ALL_PRINT";
     });
+    console.log("[dispatch] intents total=", moneyOrderIntents.length, "queued=", queued.length, "arkPrintLock=", arkPrintLockActive);
     if (!queued.length) return;
 
-    const abort = new AbortController();
     // Use a ref snapshot so setMoneyPositions calls inside the loop don't abort and
     // restart the effect (moneyPositions is excluded from deps for the same reason).
     const positionsSnapshot = moneyPositionsRef.current;
@@ -2455,12 +2689,16 @@ export function useMoneyEngine({
       openLoggedTickers.has(row.ticker)
     );
 
+    if (dispatchLoopActiveRef.current) {
+      dispatchLoopReplayRef.current = true;
+      return;
+    }
+
     const sendQueuedIntents = async () => {
+      dispatchLoopActiveRef.current = true;
       const sentDispatchKeys = new Set<string>();
 
       for (const intent of queued) {
-        if (abort.signal.aborted) return;
-
         const type =
           intent.intent === "ENTER_LONG_AGGRESSIVE" ? "EnterLongAggressive"
             : intent.intent === "ENTER_SHORT_AGGRESSIVE" ? "EnterShortAggressive"
@@ -2519,7 +2757,6 @@ export function useMoneyEngine({
               delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
               delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
             }),
-            signal: abort.signal,
           });
 
           const json = await response.json().catch(() => ({}));
@@ -2551,6 +2788,26 @@ export function useMoneyEngine({
 
         if (!primaryAlreadyDispatched) {
           const dispatchAt = Date.now();
+          const dispatchTs = new Date(dispatchAt).toTimeString().slice(0, 8);
+          const sigStr = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
+          const isAdd = intent.sequence > 1;
+          const pos3 = correspondingPosition;
+          const curSig3 = correspondingDecision?.signal;
+          const entryBase3 = pos3?.entrySignal ?? pos3?.lastScaleSignal;
+          const dilution3 = automationConfig?.dilutionStep ?? 0.3;
+          const addNum3 = intent.sequence - 1;
+          const isShort3 = intent.side === "Short";
+          const triggerMag3 = entryBase3 != null ? Math.abs(entryBase3) + dilution3 * addNum3 : null;
+          const triggerStr3 = triggerMag3 != null
+            ? `${isShort3 ? "≤-" : "≥+"}${triggerMag3.toFixed(3)}σ (|${sigStr(entryBase3)}|+${addNum3}×${dilution3})`
+            : "n/a";
+          console.log(
+            `[SEND ${dispatchTs}] ${intent.intent} ${intent.ticker}/${intent.benchmark} ${intent.side}` +
+            ` | ${isAdd
+              ? `add#${addNum3} sig=${sigStr(curSig3)} threshold=${triggerStr3}`
+              : `entry sig=${sigStr(curSig3)}`}` +
+            ` | hedged=${hedgeRequired} reason="${intent.reason}"`
+          );
           // Mark as dispatched and record attempt BEFORE the await so that
           // concurrent effect re-runs see this intent as already in-flight
           // and do not send it a second time.
@@ -2569,8 +2826,10 @@ export function useMoneyEngine({
             dispatchedIntentIdsRef.current.delete(intent.id);
             recentDispatchAttemptsRef.current.delete(dispatchKey);
             sentDispatchKeys.delete(dispatchKey);
+            console.error(`[SEND FAIL] ${intent.ticker} ${intent.intent}`, err);
             throw err;
           }
+          console.log(`[SENT OK] ${intent.ticker} → bridge queued`);
           setMoneySentOrdersCount((prev) => prev + 1);
           setMoneyPositions((prev) => prev.map((row) => {
             if (row.ticker !== intent.ticker) return row;
@@ -2647,6 +2906,7 @@ export function useMoneyEngine({
               ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
               : type;
 
+          console.log(`[HEDGE] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
           // Hedge leg must follow every entry/add and every exit in hedged mode (1:1), without cooldown suppression.
           dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
           try {
@@ -2668,13 +2928,31 @@ export function useMoneyEngine({
     };
 
     void sendQueuedIntents().catch((error: any) => {
-      if (!abort.signal.aborted) {
-        onError?.(error?.message ?? String(error));
+      onError?.(error?.message ?? String(error));
+    }).finally(() => {
+      dispatchLoopActiveRef.current = false;
+      if (dispatchLoopReplayRef.current) {
+        dispatchLoopReplayRef.current = false;
+        queueMicrotask(() => setExecutionRevision((prev) => prev + 1));
       }
     });
-
-    return () => abort.abort();
   }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, moneyAutoEnabled, moneyOrderIntents, onError, openLoggedTickers, queuePendingActionLogEntries, refreshExecutionStatus]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const strategyAutoRunning = moneyAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
+    if (!strategyAutoRunning) return;
+
+    const timer = window.setInterval(() => {
+      void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
+        onErrorRef.current?.(error?.message ?? String(error));
+      });
+    }, MONEY_AUTOMATION_TICK_MS);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [automationConfig?.strategyModeEnabled, enabled, moneyAutoEnabled]);
 
   const todaysMoneyActionLog = useMemo(() => (
     moneyActionLog

@@ -922,6 +922,13 @@ export default function ArbitrageMoneyView({
     [moneyDecisionVersion, signalDecisionIds]
   );
   const openCount = moneyPositionMeta.openCount;
+  const maxOpenPositions = Math.max(1, automationConfig.maxOpenPositions ?? 1);
+  const openCapReached = openCount >= maxOpenPositions;
+  const entryCapBlockingNewOrders =
+    automationRunning &&
+    openCapReached &&
+    entryReadyCount > 0 &&
+    queuedIntentsCount === 0;
   const exitBlockedCount = moneyPositionMeta.exitBlockedCount;
   const closedCount = moneyPositionMeta.closedCount;
   const blockedEdgeCount = useMemo(
@@ -935,10 +942,12 @@ export default function ArbitrageMoneyView({
     [moneySessionStartedAt, moneySessionStoppedAt, updatedLabel]
   );
 
-  const toggleAutomationRun = async () => {
+  const setAutomationRunning = async (nextRunning: boolean) => {
     if (!automationControlAllowed) return;
-    if (automationStartLocked) return;
-    if (automationRunning) {
+    if (automationStartLocked && nextRunning) return;
+    if (nextRunning === automationRunning) return;
+
+    if (!nextRunning) {
       try {
         await onTogglePanicOff(true);
       } finally {
@@ -972,6 +981,10 @@ export default function ArbitrageMoneyView({
     }
     await new Promise((resolve) => window.setTimeout(resolve, 0));
     await onForceRefresh();
+  };
+
+  const toggleAutomationRun = async () => {
+    await setAutomationRunning(!automationRunning);
   };
 
   const submitManual = async (action: MoneyManualOrderAction) => {
@@ -1025,6 +1038,18 @@ export default function ArbitrageMoneyView({
               )}
             </div>
           )}
+          {entryCapBlockingNewOrders ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-amber-200">
+                Entry Cap Reached
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-amber-100/90">
+                AUTO is running, but new entries are paused because open positions reached the limit:
+                {" "}
+                {intn(openCount)}/{intn(maxOpenPositions)}.
+              </div>
+            </div>
+          ) : null}
           <MainWindowBookSplitCard
             mainWindowBound={executionSnapshot?.mainWindow ?? null}
             mainWindowSnapshot={mainWindowSnapshot}
@@ -1036,6 +1061,11 @@ export default function ArbitrageMoneyView({
               <MetricCard label="ACTIVE SITUATIONS" value={intn(activeDecisionRows.length)} />
               <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
               <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
+              <MetricCard
+                label="OPEN CAP"
+                value={`${intn(openCount)}/${intn(maxOpenPositions)}`}
+                valueClassName={openCapReached ? "text-amber-200" : "text-zinc-300"}
+              />
               <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
               <MetricCard label="LIST MODE" value={listModeLabel} />
               <MetricCard label="UPDATED" value={updatedLabel ?? "-"} />
@@ -1173,7 +1203,7 @@ export default function ArbitrageMoneyView({
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               <button
                 type="button"
-                onClick={() => onAutomationConfigChange({ strategyModeEnabled: !strategyModeEnabled })}
+                onClick={() => void setAutomationRunning(!(strategyModeEnabled && moneyAutoEnabled && !panicOff))}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                   strategyModeEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -1183,7 +1213,7 @@ export default function ArbitrageMoneyView({
               </button>
               <button
                 type="button"
-                onClick={() => onSetAutoEnabled(!moneyAutoEnabled)}
+                onClick={() => void setAutomationRunning(!(moneyAutoEnabled && strategyModeEnabled && !panicOff))}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                   moneyAutoEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"

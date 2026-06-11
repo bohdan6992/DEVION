@@ -218,7 +218,6 @@ export default function MoneyPageContainer() {
   const [session, setSession] = useState<MoneySession>(readInitialMoneySession);
   const [automationConfig, setAutomationConfig] = useState<MoneyAutomationConfig>(readInitialAutomationConfig);
   const [moneyAutoEnabled, setMoneyAutoEnabled] = useState(false);
-  const [remoteAutomationReady, setRemoteAutomationReady] = useState(false);
   const [moneyPageClientId] = useState(createMoneyPageClientId);
   const remoteAutomationGuardUntilRef = useRef(0);
   const [sharedRatingRules, setSharedRatingRules] = useState<MoneyRatingRule[]>([
@@ -297,7 +296,6 @@ export default function MoneyPageContainer() {
         };
         return sameMoneyAutomationConfig(prev, next) ? prev : next;
       });
-      setRemoteAutomationReady(true);
     } catch {
       // keep local state if remote sync is unavailable
     }
@@ -347,26 +345,6 @@ export default function MoneyPageContainer() {
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [pullRemoteState, sendHeartbeat]);
-
-  useEffect(() => {
-    if (!remoteAutomationReady) return;
-
-    const controller = new AbortController();
-    void fetch(bridgeUrl("/api/money/automation/state"), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        autoEnabled: moneyAutoEnabled,
-        strategyModeEnabled: automationConfig.strategyModeEnabled,
-        source: "money-page",
-      }),
-      signal: controller.signal,
-    }).catch(() => {
-      // keep local UX responsive even if backend sync temporarily fails
-    });
-
-    return () => controller.abort();
-  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled, remoteAutomationReady]);
 
   const headerBadgeValues = ["EXECUTION", "FILTERED", shellStats.autoEnabled ? "AUTO ON" : "AUTO OFF"];
   const headerMetaLabel = `signals ${shellStats.signals.toLocaleString("en-US")} | ready ${shellStats.ready.toLocaleString("en-US")} | open ${shellStats.open.toLocaleString("en-US")}`;
