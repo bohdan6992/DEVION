@@ -14,6 +14,7 @@ import { moneyBookStore, resetMoneyOcrStores } from "./moneyOcrStores";
 import { moneyPositionStore } from "./moneyPositionStore";
 import { moneySignalStore } from "./moneySignalStore";
 import { moneyUpdatedAtStore } from "./moneyUpdatedAtStore";
+import { moneyLogStore, type MoneyLogEvent } from "./moneyLogStore";
 
 export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -1693,6 +1694,8 @@ export function useMoneyEngine({
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
   const moneyPositionsRef = useRef<MoneyPosition[]>(moneyPositions);
+  const moneySignalLatchesRef = useRef<MoneySignalLatch[]>([]);
+  const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
   const dispatchLoopActiveRef = useRef(false);
   const dispatchLoopReplayRef = useRef(false);
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
@@ -2386,6 +2389,15 @@ export function useMoneyEngine({
     });
     const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
     const nextPositionsBase = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
+    // Clear latch history for tickers whose positions just closed.
+    // This prevents MONEY from reusing a stale qualifiedSince on re-entry after close,
+    // which would cause MONEY to fire much faster than SCANNER (which requires fresh
+    // consecutive tape candles after each episode close).
+    for (const pos of nextPositionsBase) {
+      if (pos.status === "CLOSED") {
+        latchQualifiedSinceHistoryRef.current.delete(pos.ticker);
+      }
+    }
     const minHoldMs = Math.max(0, (automationConfig?.minHoldMinutes ?? 0)) * 60_000;
     const now2 = Date.now();
     const entryReady = decisionsForAutomation.filter(d => d.status === "ENTRY_READY").length;
@@ -2481,6 +2493,12 @@ export function useMoneyEngine({
     moneyDecisionStore.applySnapshot(displayDecisions);
     moneySignalStore.applySnapshot(filtered);
     moneyUpdatedAtStore.setValue(Date.now());
+
+    // keep sync refs current so sendQueuedIntents can read signal/latch state without closure staleness
+    const rawSigMap = new Map<string, ArbitrageSignal>();
+    for (const sig of filtered) rawSigMap.set(sig.ticker, sig);
+    rawSignalByTickerRef.current = rawSigMap;
+    moneySignalLatchesRef.current = nextLatches;
 
     startTransition(() => {
       setMoneyEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
@@ -2814,6 +2832,50 @@ export function useMoneyEngine({
           dispatchedIntentIdsRef.current.add(intent.id);
           recentDispatchAttemptsRef.current.set(dispatchKey, dispatchAt);
           sentDispatchKeys.add(dispatchKey);
+
+          // Pre-build structured log fields (shared between SENT and FAILED paths)
+          const _rawSig = rawSignalByTickerRef.current.get(intent.ticker);
+          const _latch = moneySignalLatchesRef.current.find(l => l.ticker === intent.ticker);
+          const _fmtMs = (ts: number) => {
+            const d = new Date(ts);
+            return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
+          };
+          const _isLong = intent.side === "Long";
+          const _logEvent: MoneyLogEvent =
+            intent.intent === "CLOSE_ALL_PRINT" ? "CLOSE_ALL"
+            : isExitIntent ? (intent.intent.includes("PRINT") ? "EXIT_PRINT" : "EXIT")
+            : isAdd ? "ADD" : "ENTRY";
+          const _logBase = {
+            ts: dispatchAt,
+            timeStr: _fmtMs(dispatchAt),
+            event: _logEvent,
+            ticker: intent.ticker,
+            benchmark: intent.benchmark,
+            side: intent.side as "Long" | "Short",
+            sigmaZap: correspondingDecision?.signal ?? null,
+            zapPct: _rawSig ? (_isLong ? (_rawSig.zapL ?? null) : (_rawSig.zapS ?? null)) : null,
+            bidPct: _rawSig ? toNum(_rawSig["BidLstClsΔ%"]) : null,
+            askPct: _rawSig ? toNum(_rawSig["AskLstClsΔ%"]) : null,
+            benchBidPct: null as number | null,
+            benchAskPct: null as number | null,
+            spread: correspondingDecision?.spread ?? null,
+            netEdge: correspondingDecision?.netEdge ?? null,
+            holdMs: _latch ? dispatchAt - _latch.qualifiedSince : null,
+            qualifiedAtStr: _latch ? _fmtMs(_latch.qualifiedSince) : null,
+            sequence: intent.sequence,
+            entrySignal: pos3?.entrySignal ?? null,
+            addThreshold: isAdd ? (triggerMag3 ?? null) : null,
+            dilutionStep: dilution3,
+            maxAdds: automationConfig?.maxAdds ?? null,
+            exitMode: automationConfig?.exitExecutionMode ?? "n/a",
+            hedgeMode: automationConfig?.hedgeMode ?? "n/a",
+            scaleMode: automationConfig?.scaleMode ?? "n/a",
+            minNetEdge: automationConfig?.minNetEdge ?? null,
+            minHoldMinutes: automationConfig?.minHoldMinutes ?? null,
+            hedgeRequired: !!hedgeRequired,
+            reason: intent.reason,
+          };
+
           try {
             await queueLegWithRetry({
               intentId: intent.id,
@@ -2827,8 +2889,10 @@ export function useMoneyEngine({
             recentDispatchAttemptsRef.current.delete(dispatchKey);
             sentDispatchKeys.delete(dispatchKey);
             console.error(`[SEND FAIL] ${intent.ticker} ${intent.intent}`, err);
+            moneyLogStore.push({ ..._logBase, status: "FAILED" });
             throw err;
           }
+          moneyLogStore.push({ ..._logBase, status: "SENT" });
           console.log(`[SENT OK] ${intent.ticker} → bridge queued`);
           setMoneySentOrdersCount((prev) => prev + 1);
           setMoneyPositions((prev) => prev.map((row) => {

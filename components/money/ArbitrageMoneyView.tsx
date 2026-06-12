@@ -11,6 +11,7 @@ import { useMoneyOrderIntentMeta, useMoneyOrderIntentRows } from "./moneyOrderIn
 import { useMoneyBookSnapshotState, useMoneyMainWindowSnapshotState } from "./moneyOcrStores";
 import { useMoneyActiveDecisionRows, useMoneyPositionMeta, useMoneyPositionRows } from "./moneyPositionStore";
 import { useMoneyUpdatedAt } from "./moneyUpdatedAtStore";
+import { moneyLogStore, downloadMoneyLog, useMoneyLogEntries } from "./moneyLogStore";
 import type {
   MoneyActionLogEntry,
   MainWindowDataSnapshot,
@@ -643,6 +644,14 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
 });
 
 const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
+  const structuredLogEntries = useMoneyLogEntries();
+
+  const handleDownloadCsv = () => {
+    const entries = moneyLogStore.getEntries();
+    if (entries.length === 0) return;
+    downloadMoneyLog(entries);
+  };
+
   const handleDownload = () => {
     const lines: string[] = [
       "=== MONEY ORDER LOG ===",
@@ -680,6 +689,15 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {structuredLogEntries.length > 0 && (
+            <button
+              onClick={handleDownloadCsv}
+              className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
+              title="Download detailed CSV log (sigma, zap%, hold time, filters)"
+            >
+              CSV
+            </button>
+          )}
           {rows.length > 0 && (
             <button
               onClick={handleDownload}

@@ -966,6 +966,78 @@ function minuteIdxToClockLabel(x: number | null | undefined): string {
   const mm = ((((totalMin % 1440) + 1440) % 1440) % 60).toString().padStart(2, "0");
   return `${hh}:${mm}`;
 }
+function downloadEpisodesCsv(rows: PaperArbClosedDto[], filename?: string): void {
+  const HEADERS = [
+    "date","ticker","bench","side",
+    "startTime","peakTime","endTime",
+    "startSigma","peakSigma","endSigma",
+    "startSigmaAbs","peakSigmaAbs","endSigmaAbs",
+    "holdCandles","entryCount","minHoldCandles","closeMode",
+    "totalPnlUsd","rawPnlUsd","hedgedPnlUsd",
+    "positionNotionalUsd","tierBp","corr","beta","sigma",
+    "rating","ratingTotal",
+    "spread","vwap","lstCls","yCls",
+    "country","exchange","sectorL3",
+  ];
+  const cell = (v: unknown): string => {
+    if (v == null) return "";
+    const s = String(v);
+    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const f4 = (v: number | null | undefined): string => v == null ? "" : v.toFixed(4);
+  const f2 = (v: number | null | undefined): string => v == null ? "" : v.toFixed(2);
+  const lines: string[] = [HEADERS.join(",")];
+  for (const r of rows) {
+    const dateKey = r.dateNy ?? r.date ?? r.day ?? r.tradeDate ?? r.sessionDate ?? "";
+    lines.push([
+      cell(dateKey),
+      cell(r.ticker),
+      cell(r.benchTicker),
+      cell(r.side),
+      cell(minuteIdxToClockLabel(r.startMinuteIdx)),
+      cell(minuteIdxToClockLabel(r.peakMinuteIdx)),
+      cell(minuteIdxToClockLabel(r.endMinuteIdx)),
+      f4(r.startMetric),
+      f4(r.peakMetric),
+      f4(r.endMetric),
+      f4(r.startMetricAbs),
+      f4(r.peakMetricAbs),
+      f4(r.endMetricAbs),
+      r.endMinuteIdx != null && r.startMinuteIdx != null ? String(r.endMinuteIdx - r.startMinuteIdx) : "",
+      r.entryCount ?? "",
+      r.minHoldCandles ?? "",
+      cell(r.closeMode ?? ""),
+      f2(r.totalPnlUsd),
+      f2(r.rawPnlUsd),
+      f2(r.hedgedPnlUsd),
+      f2(r.positionNotionalUsd),
+      f4(r.tierBp),
+      f4(r.corr),
+      f4(r.beta),
+      f4(r.sigma),
+      f4(r.rating),
+      f4(r.ratingTotal),
+      f4(r.spread),
+      f4(r.vwap),
+      f4(r.lstCls),
+      f4(r.yCls),
+      cell(r.country ?? ""),
+      cell(r.exchange ?? ""),
+      cell(r.sectorL3 ?? ""),
+    ].join(","));
+  }
+  const csv = lines.join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename ?? `scanner-episodes-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function sessionTimeChartRange(session: PaperArbSession): { from: number; to: number } {
   switch (session) {
     case "BLUE":  return { from: 0, to: 239 };
@@ -13363,7 +13435,17 @@ export default function ArbitrageScanner({
               </div>
             </div>
 
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-between">
+              {filteredEpisodes.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => downloadEpisodesCsv(filteredEpisodes, `scanner-episodes-${new Date().toISOString().slice(0, 10)}.csv`)}
+                  className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
+                  title="Download filtered episodes as CSV"
+                >
+                  CSV ({filteredEpisodes.length})
+                </button>
+              ) : <div />}
               <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
                 Scope Engine
               </div>
@@ -15036,7 +15118,19 @@ export default function ArbitrageScanner({
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
                   ANALYTICS TRADES | rows {analyticsSorted.length}
                 </div>
-                <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
+                <div className="flex items-center gap-2">
+                  {analyticsSorted.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => downloadEpisodesCsv(analyticsSorted, `scanner-analytics-${new Date().toISOString().slice(0, 10)}.csv`)}
+                      className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
+                      title="Download analytics episodes as CSV"
+                    >
+                      CSV
+                    </button>
+                  )}
+                  <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
+                </div>
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
