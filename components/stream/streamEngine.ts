@@ -3143,7 +3143,7 @@ export function useStreamEngine({
         }
 
         // Hedge leg: skip in beta mode — hedge is a real order
-        if (!_isBeta && hedgeRequired && !hedgeAlreadyDispatched) {
+        if (!automationConfig?.betaMode && hedgeRequired && !hedgeAlreadyDispatched) {
           const benchmarkType =
             isEntryIntent
               ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
