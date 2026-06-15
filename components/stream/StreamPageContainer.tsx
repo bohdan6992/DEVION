@@ -86,6 +86,7 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     printStartTime: "09:20",
     printCloseTime: "09:20",
     noSpreadExit: true,
+    exitConfirmTicks: 3,
     betaMode: false,
   };
 }
