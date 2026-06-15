@@ -1563,6 +1563,7 @@ function buildFallbackPendingEntryPositions(
       entrySignal: signed,
       lastSignal: signed,
       lastScaleSignal: signed,
+      belowThresholdTicks: 0,
       spread: signalSpread(raw),
       status: "PENDING_ENTRY",
       reason: `fallback pending entry after hold ${automationConfig?.minHoldMinutes ?? 0}m`,
