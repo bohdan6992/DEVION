@@ -1,4 +1,4 @@
-// lib/fullFields.ts
+﻿// lib/fullFields.ts
 
 export const FULL_FIELDS = [
     "Account",
@@ -169,7 +169,7 @@ export const FULL_FIELDS = [
     "MaxBpUsed",
     "MaxPosInvest",
     "MinClPnL",
-    "MoneyFloatM",
+    "StreamFloatM",
     "MTR20%",
     "MtchVolAMEX",
     "MtchVolARCA",

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,6 +7,7 @@ import clsx from "clsx";
 
 
 import { useUi } from "@/components/UiProvider";
+import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import PresetPicker from "@/components/presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
@@ -563,6 +564,10 @@ const getRenderableDirection = (s: any): "up" | "down" | "none" => {
 
   return "none";
 };
+
+export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
+  return getRenderableDirection(s) === "down" ? "Short" : "Long";
+}
 
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
@@ -1317,7 +1322,21 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
+  if (theme === "mercury") return "zinc";
+  if (theme === "magma") return "rose";
+  if (theme === "oceanic") return "cyan";
   return "emerald";
+};
+
+const getSonarActiveButtonClass = (theme?: string | null): string => {
+  if (theme === "inferno") return "bg-orange-500/75 text-white";
+  const c = getSonarPrimaryMsColor(theme);
+  if (c === "amber") return "bg-yellow-300/75 text-black";
+  if (c === "zinc") return "bg-zinc-300/65 text-zinc-900";
+  if (c === "fuchsia") return "bg-fuchsia-500/75 text-white";
+  if (c === "cyan") return "bg-sky-500/75 text-white";
+  if (c === "rose") return "bg-rose-500/75 text-white";
+  return "bg-emerald-500/80 text-white";
 };
 
 const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor): MsColor =>
@@ -1447,6 +1466,22 @@ const getSonarAccent = (theme?: string | null) => {
       textSoft: "text-fuchsia-200/75",
       softBorder: "border-fuchsia-500/35 bg-fuchsia-500/12 text-fuchsia-300",
       panelSoft: "border-fuchsia-500/20 bg-fuchsia-500/[0.03]",
+    };
+  }
+  if (primary === "rose") {
+    return {
+      selection: "selection:bg-rose-500/30",
+      dot: "bg-rose-400",
+      badge: "border-rose-500/20 bg-rose-500/10 text-rose-300",
+      button: "bg-rose-500/10 text-rose-300 border-rose-500/20 shadow-[0_0_10px_-3px_rgba(244,63,94,0.2)]",
+      outlineButton: "border-rose-500/50 text-rose-400 hover:bg-rose-500/10 shadow-[0_0_10px_rgba(244,63,94,0.1)]",
+      panel: "border-l-rose-500 shadow-[0_0_40px_-10px_rgba(244,63,94,0.06)]",
+      chip: "border-rose-500/30 bg-rose-500/10 text-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.18)]",
+      line: "bg-rose-400/50",
+      text: "text-rose-300",
+      textSoft: "text-rose-200/75",
+      softBorder: "border-rose-500/35 bg-rose-500/12 text-rose-300",
+      panelSoft: "border-rose-500/20 bg-rose-500/[0.03]",
     };
   }
   if (primary === "cyan") {
@@ -1631,7 +1666,7 @@ const MultiSelectFilter = ({
             <span
               className={clsx(
                 "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
-                enabled === "off" && `border-yellow-200/35 ${getSonarAccent(theme).text}`,
+                enabled === "off" && `border-yellow-200/35 accent-text`,
                 enabled === "include" && "border-emerald-400/50 text-emerald-400",
                 enabled === "exclude" && "border-red-400/50 text-red-400",
               )}
@@ -1752,11 +1787,11 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
                     }}
                     className={[
                       "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                      active ? getSonarAccent(theme).textSoft : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
+                      active ? "accent-text-soft" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
                     ].join(" ")}
                   >
                     <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                    {active && <span className={["h-1.5 w-1.5 rounded-full", getSonarAccent(theme).dot].join(" ")} />}
+                    {active && <span className="h-1.5 w-1.5 rounded-full accent-dot" />}
                   </button>
                 );
               })}
@@ -1832,8 +1867,6 @@ function GlassSelect({
   panelOffsetX?: number;
   panelWidth?: number;
 }) {
-  const { theme } = useUi();
-  const accent = getSonarAccent(theme);
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
@@ -1904,8 +1937,8 @@ function GlassSelect({
             ? "relative flex w-full items-center gap-1.5 h-[14px] border-0 bg-transparent px-0 py-0 text-xs font-mono font-normal normal-case tracking-normal leading-none shadow-none transition-colors duration-150"
             : "relative flex w-full items-center gap-2.5 h-9 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-300",
           compact
-            ? clsx(accent.textSoft, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
-            : clsx(accent.textSoft, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]"),
+            ? clsx("accent-text-soft", "border-transparent bg-transparent shadow-none hover:text-zinc-200")
+            : clsx("accent-text-soft", "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]"),
           className
         )}
       >
@@ -1938,12 +1971,12 @@ function GlassSelect({
                         opt.disabled
                           ? "cursor-not-allowed text-zinc-600"
                           : opt.value === value
-                            ? accent.button
+                            ? "accent-soft"
                             : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                      {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", accent.dot)} />}
+                      {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
                     </button>
                   </div>
                 ))}
@@ -1986,21 +2019,16 @@ const FB = {
   },
 } as const;
 
-const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => {
-  const { theme } = useUi();
-  const resolvedColor = resolveAccentMsColor(theme, color);
-
-  return (
-    <button
-      onClick={onClick}
-      className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
-        active ? FB[resolvedColor].on : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
-      }`}
-    >
-      {label}
-    </button>
-  );
-};
+const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
+      active ? "accent-chip" : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+    }`}
+  >
+    {label}
+  </button>
+);
 
 // ЗАМІНИТИ існуюче оголошення SignalCardProps + компонент SignalCard
 // на наступний блок:
@@ -2037,8 +2065,6 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   pinColor = null,
 }) => {
-  const { theme } = useUi();
-  const sonarAccent = getSonarAccent(theme);
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
 
@@ -2904,17 +2930,16 @@ export default function ArbitrageSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const isDark = true;
-  const sonarAccent = getSonarAccent(theme);
-  const accentSelectionClass = sonarAccent.selection;
-  const accentDotClass = sonarAccent.dot;
-  const accentBadgeClass = sonarAccent.badge;
-  const accentButtonClass = sonarAccent.button;
-  const accentOutlineButtonClass = sonarAccent.outlineButton;
-  const accentPanelClass = sonarAccent.panel;
-  const accentChipClass = sonarAccent.chip;
-  const accentLineClass = sonarAccent.line;
-  const accentTextClass = sonarAccent.text;
-  const accentTextSoftClass = sonarAccent.textSoft;
+  const accentSelectionClass = "accent-selection";
+  const accentDotClass = "accent-dot";
+  const accentBadgeClass = "accent-badge";
+  const accentButtonClass = "accent-soft";
+  const accentOutlineButtonClass = "accent-outline";
+  const accentPanelClass = "accent-panel-l";
+  const accentChipClass = "accent-chip";
+  const accentLineClass = "accent-line";
+  const accentTextClass = "accent-text";
+  const accentTextSoftClass = "accent-text-soft";
   const sonarActiveFilterStripClass = "flex items-center gap-1.5 self-start";
   const sonarActiveFilterButtonBaseClass =
     "inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[11px] font-mono font-bold uppercase leading-none transition-all";
@@ -4896,30 +4921,8 @@ export default function ArbitrageSonar() {
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* ========================= HEADER ========================= */}
         <header className="bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3">
-              <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${accentDotClass} ${loading ? "animate-pulse" : ""}`} />
-              <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                ARBITRAGE SONAR
-              </h1>
-
-              <div className="flex gap-2 ml-4">
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{classLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{modeLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{typeLabel}</span>
-                {listMode !== "off" && (
-                  <span className={`px-2 py-1 rounded-full border text-[10px] font-mono uppercase ${accentBadgeClass}`}>
-                    LIST: {listMode}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
-              <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
-              <span className="text-zinc-700 mx-1">|</span>
-              <span className="opacity-70">minRate {minRate ?? "-"} | minTotal {minTotal ?? "-"}</span>
-            </div>
+          <div className="flex items-center gap-3">
+            <GlitchTitle text="ARBITRAGE SONAR" />
           </div>
           
 
@@ -4927,14 +4930,14 @@ export default function ArbitrageSonar() {
 
           {/* ========================= MODE + ACTIVE FILTER ========================= */}
           <div className="flex items-center gap-3">
-            {/* Group 1: MONEY / SCANNER / SONAR */}
+            {/* Group 1: STREAM / SCANNER / SONAR */}
             <div className={secondaryGroupClass}>
               <Link
-                href="/money/arbitrage"
+                href="/stream/arbitrage"
                 className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /money/arbitrage"
+                title="Open /stream/arbitrage"
               >
-                MONEY
+                STREAM
               </Link>
 
               {/* SCANNER */}
@@ -5236,7 +5239,7 @@ export default function ArbitrageSonar() {
                     className={clsx(
                       "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
                       on
-                        ? "bg-emerald-500/80 text-white"
+                        ? "accent-fill"
                         : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
                     )}
                   >
@@ -6647,7 +6650,7 @@ export default function ArbitrageSonar() {
               "rounded-2xl bg-black/40 px-4 py-3",
               activeGoldTickers.length > 0
                 ? "border border-amber-500/20 bg-amber-500/[0.03]"
-                : sonarAccent.panelSoft,
+                : "accent-panel-soft",
             ].join(" ")}
           >
             {activeGoldTickers.length > 0 ? (
@@ -6760,7 +6763,7 @@ export default function ArbitrageSonar() {
               if (!activePairs.length) return null;
 
               return (
-                <div className={`px-3 py-2 rounded-lg border ${sonarAccent.panelSoft}`}>
+                <div className={`px-3 py-2 rounded-lg border ${"accent-panel-soft"}`}>
                   <div className="flex items-center gap-3">
                     <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
                     <span className={`text-[10px] font-mono uppercase tracking-widest ${accentTextClass}`}>

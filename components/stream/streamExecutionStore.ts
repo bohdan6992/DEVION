@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
-import type { TradingAppBoundWindowInfo, TradingAppExecutionSnapshot } from "./moneyEngine";
+import type { TradingAppBoundWindowInfo, TradingAppExecutionSnapshot } from "./streamEngine";
 
 function sameSteps(
   left: { step: string; message: string; atUtc: string }[],
@@ -111,7 +111,7 @@ function sameExecutionSnapshot(
   );
 }
 
-class MoneyExecutionStore {
+class StreamExecutionStore {
   private snapshot: TradingAppExecutionSnapshot | null = null;
   private listeners = new Set<() => void>();
 
@@ -139,12 +139,12 @@ class MoneyExecutionStore {
   };
 }
 
-export const moneyExecutionStore = new MoneyExecutionStore();
+export const streamExecutionStore = new StreamExecutionStore();
 
-export function useMoneyExecutionSnapshot(): TradingAppExecutionSnapshot | null {
+export function useStreamExecutionSnapshot(): TradingAppExecutionSnapshot | null {
   return useSyncExternalStore(
-    moneyExecutionStore.subscribe,
-    () => moneyExecutionStore.getSnapshot(),
+    streamExecutionStore.subscribe,
+    () => streamExecutionStore.getSnapshot(),
     () => null
   );
 }

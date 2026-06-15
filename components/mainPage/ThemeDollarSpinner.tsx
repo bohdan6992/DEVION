@@ -89,6 +89,8 @@ export default function ThemeDollarSpinner() {
   const isSpace = theme === "space";
   const isSparkle = theme === "sparkle";
   const isAsher = theme === "asher";
+  const isMagma = theme === "magma";
+  const isMercury = theme === "mercury";
   const modelPath = isNeon
     ? FLAMINGO_PATH
     : isLight
@@ -106,7 +108,7 @@ export default function ThemeDollarSpinner() {
       ? "#facc15"
     : isSpace
       ? "var(--dash-accent)"
-      : isSparkle || isAsher
+      : isSparkle || isAsher || isMagma || isMercury
         ? "var(--dash-accent)"
       : isDark
         ? "rgba(209,250,229,0.92)"
@@ -117,7 +119,7 @@ export default function ThemeDollarSpinner() {
       ? "rgba(250, 204, 21, 0.44)"
     : isSpace
       ? "var(--dash-accent-shadow)"
-      : isSparkle || isAsher
+      : isSparkle || isAsher || isMagma || isMercury
         ? "var(--dash-accent-shadow)"
       : isDark
         ? "rgba(209, 250, 229, 0.42)"
@@ -138,7 +140,7 @@ export default function ThemeDollarSpinner() {
     }, [depthCount, depthStep, isDark]);
 
   return (
-    <section className={`dollar-3d-shell rounded-2xl h-full w-full p-0 ${isLight ? "light-model" : ""} ${isNeon ? "neon-model" : ""} ${isSpace ? "space-model" : ""} ${isSparkle ? "sparkle-model" : ""} ${isAsher ? "asher-model" : ""} ${isDark ? "dark-model" : ""}`}>
+    <section className={`dollar-3d-shell rounded-2xl h-full w-full p-0 ${isLight ? "light-model" : ""} ${isNeon ? "neon-model" : ""} ${isSpace ? "space-model" : ""} ${isSparkle ? "sparkle-model" : ""} ${isAsher ? "asher-model" : ""} ${isDark ? "dark-model" : ""} ${isMagma ? "magma-model" : ""} ${isMercury ? "mercury-model" : ""}`}>
       <div className="dollar-3d-stage">
         <div className="dollar-3d-rotor">
           <div className="wire-cube" aria-hidden="true">
@@ -253,6 +255,16 @@ export default function ThemeDollarSpinner() {
           box-shadow: 0 0 18px rgba(250, 204, 21, 0.2);
         }
 
+        .dollar-3d-shell.magma-model .wire-cube-thin .cube-face {
+          border-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
+          box-shadow: 0 0 18px color-mix(in oklab, var(--dash-accent-shadow) 52%, transparent);
+        }
+
+        .dollar-3d-shell.mercury-model .wire-cube-thin .cube-face {
+          border-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
+          box-shadow: 0 0 18px color-mix(in oklab, var(--dash-accent-shadow) 52%, transparent);
+        }
+
         .dollar-3d-shell.sparkle-model .wire-cube-thin .cube-face {
           border-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
           box-shadow: 0 0 18px color-mix(in oklab, var(--dash-accent-shadow) 52%, transparent);
@@ -298,6 +310,20 @@ export default function ThemeDollarSpinner() {
           box-shadow:
             0 0 24px rgba(250, 204, 21, 0.24),
             inset 0 0 0 1px rgba(253, 224, 71, 0.24);
+        }
+
+        .dollar-3d-shell.magma-model .cube-face {
+          border-color: color-mix(in oklab, var(--dash-accent-border) 86%, transparent);
+          box-shadow:
+            0 0 24px color-mix(in oklab, var(--dash-accent-shadow) 58%, transparent),
+            inset 0 0 0 1px color-mix(in oklab, var(--dash-accent-border) 52%, transparent);
+        }
+
+        .dollar-3d-shell.mercury-model .cube-face {
+          border-color: color-mix(in oklab, var(--dash-accent-border) 86%, transparent);
+          box-shadow:
+            0 0 24px color-mix(in oklab, var(--dash-accent-shadow) 58%, transparent),
+            inset 0 0 0 1px color-mix(in oklab, var(--dash-accent-border) 52%, transparent);
         }
 
         .dollar-3d-shell.sparkle-model .cube-face {
@@ -361,6 +387,14 @@ export default function ThemeDollarSpinner() {
           border-top-color: color-mix(in oklab, var(--dash-accent-border) 70%, transparent);
         }
 
+        .dollar-3d-shell.magma-model .cube-face::before {
+          border-top-color: color-mix(in oklab, var(--dash-accent-border) 66%, transparent);
+        }
+
+        .dollar-3d-shell.mercury-model .cube-face::before {
+          border-top-color: color-mix(in oklab, var(--dash-accent-border) 66%, transparent);
+        }
+
         .dollar-3d-shell.sparkle-model .cube-face::before {
           border-top-color: color-mix(in oklab, var(--dash-accent-border) 66%, transparent);
         }
@@ -375,6 +409,14 @@ export default function ThemeDollarSpinner() {
 
         .dollar-3d-shell.space-model .cube-face::after {
           border-left-color: color-mix(in oklab, var(--dash-accent-border) 60%, transparent);
+        }
+
+        .dollar-3d-shell.magma-model .cube-face::after {
+          border-left-color: color-mix(in oklab, var(--dash-accent-border) 56%, transparent);
+        }
+
+        .dollar-3d-shell.mercury-model .cube-face::after {
+          border-left-color: color-mix(in oklab, var(--dash-accent-border) 56%, transparent);
         }
 
         .dollar-3d-shell.sparkle-model .cube-face::after {

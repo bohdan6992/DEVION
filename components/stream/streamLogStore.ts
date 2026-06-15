@@ -1,17 +1,18 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
 
 // ---- types ----------------------------------------------------------------
 
-export type MoneyLogEvent = "ENTRY" | "ADD" | "EXIT" | "EXIT_PRINT" | "CLOSE_ALL";
+export type StreamLogEvent = "ENTRY" | "ADD" | "EXIT" | "EXIT_PRINT" | "CLOSE_ALL";
 
-export type MoneyLogEntry = {
+export type StreamLogEntry = {
   seq: number;              // monotonic counter
   ts: number;               // unix ms
   timeStr: string;          // "HH:MM:SS.mmm"
-  event: MoneyLogEvent;
-  status: "SENT" | "FAILED";
+  event: StreamLogEvent;
+  status: "SENT" | "FAILED" | "SIMULATED";
+  betaMode: boolean;
 
   ticker: string;
   benchmark: string;
@@ -19,6 +20,8 @@ export type MoneyLogEntry = {
 
   // Signal at dispatch time (sigma)
   sigmaZap: number | null;
+  zapSsigma: number | null;   // normalized short sigma
+  zapLsigma: number | null;   // normalized long sigma
   // ZAP in % (raw pct, not sigma)
   zapPct: number | null;
   // Stock bid/ask vs last close %
@@ -30,6 +33,16 @@ export type MoneyLogEntry = {
   // Spread and net edge at dispatch
   spread: number | null;
   netEdge: number | null;
+
+  // Best-params enrichment
+  corr: number | null;
+  beta: number | null;
+  stockSigma: number | null;
+  rating: number | null;
+  ratingTotal: number | null;
+
+  // Filters satisfied at entry/add decision
+  filtersOk: string;
 
   // How long the signal was in ENTRY_READY before dispatch
   holdMs: number | null;
@@ -48,6 +61,7 @@ export type MoneyLogEntry = {
   scaleMode: string;
   minNetEdge: number | null;
   minHoldMinutes: number | null;
+  notionalUsd: number | null;
 
   // Hedge leg
   hedgeRequired: boolean;
@@ -59,13 +73,13 @@ const MAX_ENTRIES = 5000;
 
 // ---- store ----------------------------------------------------------------
 
-class MoneyLogStore {
-  private entries: MoneyLogEntry[] = [];
+class StreamLogStore {
+  private entries: StreamLogEntry[] = [];
   private seq = 0;
   private listeners = new Set<() => void>();
 
-  push(entry: Omit<MoneyLogEntry, "seq">): void {
-    const full: MoneyLogEntry = { seq: ++this.seq, ...entry };
+  push(entry: Omit<StreamLogEntry, "seq">): void {
+    const full: StreamLogEntry = { seq: ++this.seq, ...entry };
     if (this.entries.length >= MAX_ENTRIES) {
       this.entries = this.entries.slice(this.entries.length - MAX_ENTRIES + 1);
     }
@@ -73,7 +87,7 @@ class MoneyLogStore {
     this.listeners.forEach((l) => l());
   }
 
-  getEntries(): MoneyLogEntry[] {
+  getEntries(): StreamLogEntry[] {
     return this.entries;
   }
 
@@ -90,14 +104,14 @@ class MoneyLogStore {
   };
 }
 
-export const moneyLogStore = new MoneyLogStore();
+export const streamLogStore = new StreamLogStore();
 
 // ---- hooks ----------------------------------------------------------------
 
-export function useMoneyLogEntries(): MoneyLogEntry[] {
+export function useStreamLogEntries(): StreamLogEntry[] {
   return useSyncExternalStore(
-    moneyLogStore.subscribe,
-    () => moneyLogStore.getEntries(),
+    streamLogStore.subscribe,
+    () => streamLogStore.getEntries(),
     () => []
   );
 }
@@ -105,9 +119,12 @@ export function useMoneyLogEntries(): MoneyLogEntry[] {
 // ---- CSV export -----------------------------------------------------------
 
 const CSV_HEADERS = [
-  "seq", "time", "event", "status",
+  "seq", "time", "event", "status", "betaMode",
   "ticker", "benchmark", "side",
-  "sigmaZap", "zapPct", "bidPct", "askPct", "benchBidPct", "benchAskPct",
+  "sigmaZap", "zapSsigma", "zapLsigma", "zapPct",
+  "bidPct", "askPct", "benchBidPct", "benchAskPct",
+  "corr", "beta", "stockSigma", "rating", "ratingTotal",
+  "filtersOk",
   "spread", "netEdge",
   "holdSec", "qualifiedAt",
   "sequence", "entrySignal", "addThreshold", "dilutionStep", "maxAdds",
@@ -129,7 +146,7 @@ function fmt4(v: number | null): string {
   return v == null ? "" : v.toFixed(4);
 }
 
-export function moneyLogToCsv(entries: MoneyLogEntry[]): string {
+export function streamLogToCsv(entries: StreamLogEntry[]): string {
   const rows: string[] = [CSV_HEADERS.join(",")];
   for (const e of entries) {
     rows.push([
@@ -137,15 +154,24 @@ export function moneyLogToCsv(entries: MoneyLogEntry[]): string {
       csvCell(e.timeStr),
       e.event,
       e.status,
+      e.betaMode ? "1" : "0",
       csvCell(e.ticker),
       csvCell(e.benchmark),
       e.side,
       fmt4(e.sigmaZap),
+      fmt4(e.zapSsigma),
+      fmt4(e.zapLsigma),
       fmt4(e.zapPct),
       fmt4(e.bidPct),
       fmt4(e.askPct),
       fmt4(e.benchBidPct),
       fmt4(e.benchAskPct),
+      fmt4(e.corr),
+      fmt4(e.beta),
+      fmt4(e.stockSigma),
+      e.rating != null ? e.rating.toFixed(2) : "",
+      e.ratingTotal != null ? String(e.ratingTotal) : "",
+      csvCell(e.filtersOk),
       fmt4(e.spread),
       fmt4(e.netEdge),
       e.holdMs != null ? (e.holdMs / 1000).toFixed(1) : "",
@@ -167,12 +193,12 @@ export function moneyLogToCsv(entries: MoneyLogEntry[]): string {
   return rows.join("\n");
 }
 
-export function downloadMoneyLog(entries: MoneyLogEntry[], filename?: string): void {
-  const csv = moneyLogToCsv(entries);
+export function downloadStreamLog(entries: StreamLogEntry[], filename?: string): void {
+  const csv = streamLogToCsv(entries);
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const name = filename ?? `money-log-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.csv`;
+  const name = filename ?? `stream-log-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.csv`;
   a.href = url;
   a.download = name;
   document.body.appendChild(a);

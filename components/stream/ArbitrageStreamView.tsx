@@ -1,50 +1,50 @@
-"use client";
+﻿"use client";
 
 import clsx from "clsx";
 import AutoSizer from "react-virtualized-auto-sizer";
 import { List, type RowComponentProps } from "react-window";
 import React, { memo, useDeferredValue, useMemo, useState } from "react";
-import { useMoneyActionLogRows } from "./moneyActionLogStore";
-import { getMoneyDecisionRow, useMoneyDecisionIds, useMoneyDecisionRow, useMoneyDecisionVersion } from "./moneyDecisionStore";
-import { useMoneyExecutionSnapshot } from "./moneyExecutionStore";
-import { useMoneyOrderIntentMeta, useMoneyOrderIntentRows } from "./moneyOrderIntentStore";
-import { useMoneyBookSnapshotState, useMoneyMainWindowSnapshotState } from "./moneyOcrStores";
-import { useMoneyActiveDecisionRows, useMoneyPositionMeta, useMoneyPositionRows } from "./moneyPositionStore";
-import { useMoneyUpdatedAt } from "./moneyUpdatedAtStore";
-import { moneyLogStore, downloadMoneyLog, useMoneyLogEntries } from "./moneyLogStore";
+import { useStreamActionLogRows } from "./streamActionLogStore";
+import { getStreamDecisionRow, useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
+import { useStreamExecutionSnapshot } from "./streamExecutionStore";
+import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrderIntentStore";
+import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
+import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
+import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
+import { streamLogStore, downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
 import type {
-  MoneyActionLogEntry,
+  StreamActionLogEntry,
   MainWindowDataSnapshot,
   MarketMakerBookSnapshot,
-  MoneyAutomationConfig,
-  MoneyDecisionRow,
-  MoneyManualOrderAction,
+  StreamAutomationConfig,
+  StreamDecisionRow,
+  StreamManualOrderAction,
   TradingAppExecutionSnapshot,
-} from "./moneyEngine";
+} from "./streamEngine";
 
-type MoneyTabKey = "active" | "episodes" | "analytics";
-type MoneyViewMode = "money" | "auto" | "money-auto-tab";
+type StreamTabKey = "active" | "episodes" | "analytics";
+type StreamViewMode = "stream" | "auto" | "stream-auto-tab";
 
-type MoneyDecisionTableRow = {
+type StreamDecisionTableRow = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
   netEdge: number | null;
-  status: MoneyDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
+  status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
 };
 
-type ArbitrageMoneyViewProps = {
-  tab: MoneyTabKey;
-  moneySignalsCount: number;
-  moneyAutoEnabled: boolean;
-  moneySessionStartedAt: number | null;
-  moneySessionStoppedAt: number | null;
-  moneySentOrdersCount: number;
+type ArbitrageStreamViewProps = {
+  tab: StreamTabKey;
+  streamSignalsCount: number;
+  streamAutoEnabled: boolean;
+  streamSessionStartedAt: number | null;
+  streamSessionStoppedAt: number | null;
+  streamSentOrdersCount: number;
   onSetAutoEnabled: (enabled: boolean) => void;
   manualExecutionBusy: boolean;
-  onSubmitManualOrders: (tickersText: string, action: MoneyManualOrderAction) => Promise<void>;
+  onSubmitManualOrders: (tickersText: string, action: StreamManualOrderAction) => Promise<void>;
   onCaptureTickerPoint: () => Promise<void>;
   onCaptureTickerPointDelayed: (delayMs?: number) => Promise<void>;
   onClearTickerPoint: () => Promise<void>;
@@ -55,11 +55,11 @@ type ArbitrageMoneyViewProps = {
   onDismissActivePositions?: (tickers: string[]) => void;
   onForceRefresh: () => Promise<void>;
   listModeLabel: string;
-  automationConfig: MoneyAutomationConfig;
-  onAutomationConfigChange: (patch: Partial<MoneyAutomationConfig>) => void;
+  automationConfig: StreamAutomationConfig;
+  onAutomationConfigChange: (patch: Partial<StreamAutomationConfig>) => void;
   accentActiveSoftClass: string;
   accentActiveTextClass: string;
-  viewMode?: MoneyViewMode;
+  viewMode?: StreamViewMode;
   automationLaunchEnabled?: boolean;
   entryCutoffActive?: boolean;
   hideAutomationButtons?: boolean;
@@ -103,15 +103,15 @@ const MAIN_WINDOW_FIELD_ORDER = [
   "LstPrcTotalPnL",
   "BPLeft",
 ];
-const MONEY_BID_MINT = "#7ef7d4";
-const MONEY_BID_MINT_SOFT = "rgba(126, 247, 212, 0.10)";
-const MONEY_BID_MINT_PANEL = "rgba(126, 247, 212, 0.04)";
-const MONEY_READY_GREEN = "#63e6be";
-const MONEY_READY_GREEN_SOFT = "rgba(99, 230, 190, 0.12)";
-const MONEY_READY_GREEN_BORDER = "rgba(99, 230, 190, 0.22)";
-const MONEY_ALERT_RED = "#f38ba8";
-const MONEY_ALERT_RED_SOFT = "rgba(243, 139, 168, 0.12)";
-const MONEY_ALERT_RED_BORDER = "rgba(243, 139, 168, 0.24)";
+const STREAM_BID_MINT = "#7ef7d4";
+const STREAM_BID_MINT_SOFT = "rgba(126, 247, 212, 0.10)";
+const STREAM_BID_MINT_PANEL = "rgba(126, 247, 212, 0.04)";
+const STREAM_READY_GREEN = "#63e6be";
+const STREAM_READY_GREEN_SOFT = "rgba(99, 230, 190, 0.12)";
+const STREAM_READY_GREEN_BORDER = "rgba(99, 230, 190, 0.22)";
+const STREAM_ALERT_RED = "#f38ba8";
+const STREAM_ALERT_RED_SOFT = "rgba(243, 139, 168, 0.12)";
+const STREAM_ALERT_RED_BORDER = "rgba(243, 139, 168, 0.24)";
 
 function normalizeMainWindowFieldKey(value: string): string {
   return value.replace(/[^a-zA-Z0-9%]+/g, "").toLowerCase();
@@ -215,9 +215,9 @@ function MainWindowBookSplitCard({
                 className="flex h-7 w-7 items-center justify-center rounded-md font-mono text-[10px] font-bold uppercase leading-none"
                 style={
                   control.state === "RED"
-                    ? { color: MONEY_ALERT_RED, border: `1px solid ${MONEY_ALERT_RED_BORDER}`, backgroundColor: MONEY_ALERT_RED_SOFT }
+                    ? { color: STREAM_ALERT_RED, border: `1px solid ${STREAM_ALERT_RED_BORDER}`, backgroundColor: STREAM_ALERT_RED_SOFT }
                     : control.state === "GREEN"
-                      ? { color: MONEY_READY_GREEN, border: `1px solid ${MONEY_READY_GREEN}`, backgroundColor: "rgba(99,230,190,0.22)", boxShadow: `0 0 8px rgba(99,230,190,0.35)` }
+                      ? { color: STREAM_READY_GREEN, border: `1px solid ${STREAM_READY_GREEN}`, backgroundColor: "rgba(99,230,190,0.22)", boxShadow: `0 0 8px rgba(99,230,190,0.35)` }
                       : { color: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.06)", backgroundColor: "rgba(0,0,0,0.3)" }
                 }
               >
@@ -254,9 +254,9 @@ function MainWindowBookSplitCard({
           >
             <div
               className="flex items-center justify-between gap-3 pb-2"
-              style={{ borderBottom: `1px solid ${MONEY_BID_MINT_SOFT}` }}
+              style={{ borderBottom: `1px solid ${STREAM_BID_MINT_SOFT}` }}
             >
-              <div className="text-[10px] uppercase tracking-widest font-mono" style={{ color: MONEY_BID_MINT }}>Bids</div>
+              <div className="text-[10px] uppercase tracking-widest font-mono" style={{ color: STREAM_BID_MINT }}>Bids</div>
               <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
             </div>
             <div className="mt-2 flex-1 space-y-1.5">
@@ -270,7 +270,7 @@ function MainWindowBookSplitCard({
                 >
                   <div className="text-[10px] font-mono text-zinc-500">L{level}</div>
                   <div className="text-[11px] font-mono text-zinc-500 truncate">{bid?.exchange || "-"}</div>
-                  <div className="text-[11px] font-mono text-right" style={{ color: MONEY_BID_MINT }}>{num(bid?.price ?? null, 2)}</div>
+                  <div className="text-[11px] font-mono text-right" style={{ color: STREAM_BID_MINT }}>{num(bid?.price ?? null, 2)}</div>
                   <div className="text-[11px] font-mono text-right text-zinc-300">{intn(bid?.size ?? null)}</div>
                 </div>
               ))}
@@ -370,16 +370,16 @@ function MetricCard({
   );
 }
 
-const MONEY_DECISION_TABLE_MIN_WIDTH = 880;
-const MONEY_DECISION_ROW_HEIGHT = 57;
-const MONEY_DECISION_VIRTUAL_THRESHOLD = 240;
+const STREAM_DECISION_TABLE_MIN_WIDTH = 880;
+const STREAM_DECISION_ROW_HEIGHT = 57;
+const STREAM_DECISION_VIRTUAL_THRESHOLD = 240;
 
-function MoneyDecisionVirtualRow({
+function StreamDecisionVirtualRow({
   ariaAttributes,
   index,
   style,
   rows,
-}: RowComponentProps<{ rows: MoneyDecisionTableRow[] }>) {
+}: RowComponentProps<{ rows: StreamDecisionTableRow[] }>) {
   const row = rows[index];
   if (!row) return <div style={style} />;
 
@@ -399,19 +399,19 @@ function MoneyDecisionVirtualRow({
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-      <div className="px-2.5"><MoneyStatusBadge status={row.status} /></div>
+      <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
 }
 
-function MoneyDecisionStoreVirtualRow({
+function StreamDecisionStoreVirtualRow({
   ariaAttributes,
   index,
   style,
   rowIds,
 }: RowComponentProps<{ rowIds: string[] }>) {
   const rowId = rowIds[index];
-  const row = useMoneyDecisionRow(rowId);
+  const row = useStreamDecisionRow(rowId);
   if (!row) return <div style={style} />;
 
   return (
@@ -430,12 +430,12 @@ function MoneyDecisionStoreVirtualRow({
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-      <div className="px-2.5"><MoneyStatusBadge status={row.status} /></div>
+      <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
 }
 
-const MoneyDecisionTable = memo(function MoneyDecisionTable({
+const StreamDecisionTable = memo(function StreamDecisionTable({
   title,
   rows,
   emptyMessage,
@@ -443,12 +443,12 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
   onDismissAll,
 }: {
   title: string;
-  rows: MoneyDecisionTableRow[];
+  rows: StreamDecisionTableRow[];
   emptyMessage: string;
   onDismissTicker?: (ticker: string) => void;
   onDismissAll?: () => void;
 }) {
-  const useVirtualRows = rows.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
+  const useVirtualRows = rows.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
   const hasDismiss = !!onDismissTicker;
   const gridStyle: React.CSSProperties = {
     display: "grid",
@@ -480,7 +480,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
       <div className="overflow-x-auto">
         <div
           className="min-w-[880px]"
-          style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
+          style={{ minWidth: STREAM_DECISION_TABLE_MIN_WIDTH }}
         >
           <div
             className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl"
@@ -505,12 +505,12 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
               <AutoSizer>
                 {({ height, width }) => (
                   <List
-                    rowComponent={MoneyDecisionVirtualRow}
+                    rowComponent={StreamDecisionVirtualRow}
                     rowCount={rows.length}
-                    rowHeight={MONEY_DECISION_ROW_HEIGHT}
+                    rowHeight={STREAM_DECISION_ROW_HEIGHT}
                     rowProps={{ rows }}
                     overscanCount={8}
-                    style={{ width: Math.max(width, MONEY_DECISION_TABLE_MIN_WIDTH), height }}
+                    style={{ width: Math.max(width, STREAM_DECISION_TABLE_MIN_WIDTH), height }}
                   />
                 )}
               </AutoSizer>
@@ -533,7 +533,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-                  <div className="px-2.5 py-2.5"><MoneyStatusBadge status={row.status} /></div>
+                  <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   {hasDismiss && (
                     <div className="flex items-center justify-center px-1">
                       <button
@@ -555,7 +555,7 @@ const MoneyDecisionTable = memo(function MoneyDecisionTable({
   );
 });
 
-const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
+const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   title,
   rowIds,
   emptyMessage,
@@ -565,7 +565,7 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
   emptyMessage: string;
 }) {
   const deferredRowIds = useDeferredValue(rowIds);
-  const useVirtualRows = deferredRowIds.length > MONEY_DECISION_VIRTUAL_THRESHOLD;
+  const useVirtualRows = deferredRowIds.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
 
   return (
     <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
@@ -580,7 +580,7 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
       <div className="overflow-x-auto">
         <div
           className="min-w-[880px]"
-          style={{ minWidth: MONEY_DECISION_TABLE_MIN_WIDTH }}
+          style={{ minWidth: STREAM_DECISION_TABLE_MIN_WIDTH }}
         >
           <div className="sticky top-0 z-10 grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
             <div className="p-2.5 text-left">Ticker</div>
@@ -601,12 +601,12 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
               <AutoSizer>
                 {({ height, width }) => (
                   <List
-                    rowComponent={MoneyDecisionStoreVirtualRow}
+                    rowComponent={StreamDecisionStoreVirtualRow}
                     rowCount={deferredRowIds.length}
-                    rowHeight={MONEY_DECISION_ROW_HEIGHT}
+                    rowHeight={STREAM_DECISION_ROW_HEIGHT}
                     rowProps={{ rowIds: deferredRowIds }}
                     overscanCount={8}
-                    style={{ width: Math.max(width, MONEY_DECISION_TABLE_MIN_WIDTH), height }}
+                    style={{ width: Math.max(width, STREAM_DECISION_TABLE_MIN_WIDTH), height }}
                   />
                 )}
               </AutoSizer>
@@ -614,7 +614,7 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
           ) : (
             <div className="text-xs font-mono">
               {deferredRowIds.map((id, i) => {
-                const row = getMoneyDecisionRow(id);
+                const row = getStreamDecisionRow(id);
                 if (!row) return null;
                 return (
                   <div
@@ -631,7 +631,7 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-                    <div className="px-2.5 py-2.5"><MoneyStatusBadge status={row.status} /></div>
+                    <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   </div>
                 );
               })}
@@ -643,18 +643,18 @@ const MoneySignalsDecisionTable = memo(function MoneySignalsDecisionTable({
   );
 });
 
-const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: MoneyActionLogEntry[] }) {
-  const structuredLogEntries = useMoneyLogEntries();
+const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows: StreamActionLogEntry[] }) {
+  const structuredLogEntries = useStreamLogEntries();
 
   const handleDownloadCsv = () => {
-    const entries = moneyLogStore.getEntries();
+    const entries = streamLogStore.getEntries();
     if (entries.length === 0) return;
-    downloadMoneyLog(entries);
+    downloadStreamLog(entries);
   };
 
   const handleDownload = () => {
     const lines: string[] = [
-      "=== MONEY ORDER LOG ===",
+      "=== STREAM ORDER LOG ===",
       `Generated: ${new Date().toLocaleString("en-US", { hour12: false })}`,
       `Total entries: ${rows.length}`,
       "",
@@ -675,7 +675,7 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `money-log-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.download = `stream-log-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -761,7 +761,7 @@ const MoneyActionLogTable = memo(function MoneyActionLogTable({ rows }: { rows: 
           {!rows.length && (
             <tr>
               <td colSpan={8} className="p-8 text-center text-zinc-500">
-                No MONEY actions recorded for today yet.
+                No STREAM actions recorded for today yet.
               </td>
             </tr>
           )}
@@ -784,7 +784,7 @@ function SideBadge({ side }: { side: "Long" | "Short" }) {
   );
 }
 
-function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING" }) {
+function StreamStatusBadge({ status }: { status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING" }) {
   const isGreenStatus = status === "ENTRY_READY" || status === "OPEN";
   const className =
     isGreenStatus
@@ -805,9 +805,9 @@ function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | "PE
     <span
       className={clsx("inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border", className)}
       style={isGreenStatus ? {
-        color: MONEY_READY_GREEN,
-        backgroundColor: MONEY_READY_GREEN_SOFT,
-        borderColor: MONEY_READY_GREEN_BORDER,
+        color: STREAM_READY_GREEN,
+        backgroundColor: STREAM_READY_GREEN_SOFT,
+        borderColor: STREAM_READY_GREEN_BORDER,
       } : undefined}
     >
       {status.replaceAll("_", " ")}
@@ -815,7 +815,7 @@ function MoneyStatusBadge({ status }: { status: MoneyDecisionRow["status"] | "PE
   );
 }
 
-const MONEY_ICON_BUTTON =
+const STREAM_ICON_BUTTON =
   "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
 
 function LockToggleIcon({ open, className }: { open: boolean; className?: string }) {
@@ -848,13 +848,187 @@ function LockToggleIcon({ open, className }: { open: boolean; className?: string
   );
 }
 
-export default function ArbitrageMoneyView({
+function fmt2(v: number | null | undefined): string {
+  return v == null ? "—" : v.toFixed(2);
+}
+function fmt3(v: number | null | undefined): string {
+  return v == null ? "—" : v.toFixed(3);
+}
+function fmtPct(v: number | null | undefined): string {
+  return v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+function fmtMs(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+function SimEventBadge({ event, betaMode }: { event: string; betaMode: boolean }) {
+  const base = "inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider";
+  const color =
+    event === "ENTRY" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
+    event === "ADD"   ? "bg-sky-500/20 text-sky-300 border border-sky-500/30" :
+    event === "EXIT" || event === "EXIT_PRINT" || event === "CLOSE_ALL" ?
+      "bg-rose-500/20 text-rose-300 border border-rose-500/30" :
+      "bg-zinc-500/20 text-zinc-400 border border-zinc-500/30";
+  return (
+    <span className={clsx(base, color)}>
+      {betaMode && <span className="mr-1 opacity-60">β</span>}
+      {event}
+    </span>
+  );
+}
+
+function computeStreamExitPnl(entries: ReturnType<typeof useStreamLogEntries>, exitEntry: ReturnType<typeof useStreamLogEntries>[number]): number | null {
+  const isLong = exitEntry.side === "Long";
+  const exitPricePct = isLong ? exitEntry.bidPct : exitEntry.askPct;
+  if (exitPricePct == null) return null;
+
+  let totalPnl = 0;
+  let foundAny = false;
+  const exitIdx = entries.indexOf(exitEntry);
+
+  for (let i = exitIdx - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.ticker !== exitEntry.ticker) continue;
+    if (e.event === "EXIT" || e.event === "EXIT_PRINT" || e.event === "CLOSE_ALL") break;
+    if ((e.event === "ENTRY" || e.event === "ADD") && e.notionalUsd != null) {
+      const entryPricePct = isLong ? e.askPct : e.bidPct;
+      if (entryPricePct == null) continue;
+      const entryFactor = 1 + entryPricePct / 100;
+      const exitFactor = 1 + exitPricePct / 100;
+      if (entryFactor <= 0 || exitFactor <= 0) continue;
+      const returnFrac = isLong ? exitFactor / entryFactor - 1 : entryFactor / exitFactor - 1;
+      totalPnl += e.notionalUsd * returnFrac;
+      foundAny = true;
+    }
+  }
+
+  return foundAny ? totalPnl : null;
+}
+
+export function StreamSimLog() {
+  const entries = useStreamLogEntries();
+  const reversed = useMemo(() => [...entries].reverse(), [entries]);
+
+  function fmtDate(ts: number): string {
+    const d = new Date(ts);
+    return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Simulation Log</span>
+          <span className="text-[10px] font-mono text-zinc-600">{entries.length} entries</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => downloadStreamLog(entries)}
+          className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+        >
+          ↓ CSV
+        </button>
+      </div>
+
+      <style jsx global>{`
+        .stream-log-table th, .stream-log-table td { padding: 3px 5px !important; }
+      `}</style>
+      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <table className="stream-log-table min-w-[1520px] w-full text-[10px] font-mono">
+          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
+            <tr>
+              <th className="text-left text-violet-400">Date</th>
+              <th className="text-left">Time</th>
+              <th className="text-left">Event</th>
+              <th className="text-left">Ticker</th>
+              <th className="text-left">Bench</th>
+              <th className="text-left">Side</th>
+              <th className="text-right text-violet-400">σZap</th>
+              <th className="text-right text-violet-300">ZAPL</th>
+              <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right">Tick%</th>
+              <th className="text-right">Bench%</th>
+              <th className="text-right text-sky-400">Corr</th>
+              <th className="text-right text-sky-400">Beta</th>
+              <th className="text-right text-sky-300">σHist</th>
+              <th className="text-right text-amber-400">Rating</th>
+              <th className="text-right text-amber-300">Total</th>
+              <th className="text-right">Hold</th>
+              <th className="text-right">MinHold</th>
+              <th className="text-left">Filters</th>
+              <th className="text-left">Reason</th>
+              <th className="text-right text-emerald-400">P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reversed.map((e) => {
+              const isBeta = e.betaMode;
+              const isFailed = e.status === "FAILED";
+              const isExit = e.event === "EXIT" || e.event === "EXIT_PRINT" || e.event === "CLOSE_ALL";
+              const rowCls = clsx(
+                "border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]",
+                isBeta && "opacity-80",
+                isFailed && "opacity-40 line-through"
+              );
+              const tickPct = e.side === "Long" ? e.askPct : e.bidPct;
+              const benchPct = e.side === "Long" ? e.benchAskPct : e.benchBidPct;
+              const pnl = isExit ? computeStreamExitPnl(entries, e) : null;
+              return (
+                <tr key={e.seq} className={rowCls}>
+                  <td className="text-zinc-600 whitespace-nowrap">{fmtDate(e.ts)}</td>
+                  <td className="text-zinc-500 whitespace-nowrap">{e.timeStr}</td>
+                  <td><SimEventBadge event={e.event} betaMode={isBeta} /></td>
+                  <td className="text-zinc-100 font-semibold">{e.ticker}</td>
+                  <td className="text-zinc-400">{e.benchmark}</td>
+                  <td><SideBadge side={e.side} /></td>
+                  <td className="text-right tabular-nums text-violet-300">{fmt2(e.sigmaZap)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapLsigma)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapSsigma)}</td>
+                  <td className={clsx("text-right tabular-nums", tickPct != null && tickPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(tickPct)}</td>
+                  <td className={clsx("text-right tabular-nums", benchPct != null && benchPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(benchPct)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{fmt2(e.corr)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{fmt2(e.beta)}</td>
+                  <td className="text-right tabular-nums text-sky-200">{fmt2(e.stockSigma)}</td>
+                  <td className="text-right tabular-nums text-amber-300">{e.rating != null ? e.rating.toFixed(1) : "—"}</td>
+                  <td className="text-right tabular-nums text-amber-200">{e.ratingTotal ?? "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-400">{fmtMs(e.holdMs)}</td>
+                  <td className="text-right tabular-nums text-zinc-500">{e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "—"}</td>
+                  <td className="text-zinc-500 max-w-[160px] truncate">{e.filtersOk || "—"}</td>
+                  <td className="text-zinc-500 max-w-[180px] truncate">{e.reason}</td>
+                  <td className={clsx(
+                    "px-2.5 py-1.5 text-right tabular-nums font-semibold",
+                    pnl != null && pnl > 0 ? "text-emerald-300" : pnl != null && pnl < 0 ? "text-rose-300" : "text-zinc-600"
+                  )}>
+                    {pnl != null ? (pnl >= 0 ? "+" : "") + pnl.toFixed(0) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {!entries.length && (
+              <tr>
+                <td colSpan={21} className="px-4 py-10 text-center text-zinc-600">
+                  No entries yet. Enable AUTO (or BETA mode) and let STREAM run.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function ArbitrageStreamView({
   tab,
-  moneySignalsCount,
-  moneyAutoEnabled,
-  moneySessionStartedAt,
-  moneySessionStoppedAt,
-  moneySentOrdersCount,
+  streamSignalsCount,
+  streamAutoEnabled,
+  streamSessionStartedAt,
+  streamSessionStoppedAt,
+  streamSentOrdersCount,
   onSetAutoEnabled,
   manualExecutionBusy,
   onSubmitManualOrders,
@@ -872,28 +1046,28 @@ export default function ArbitrageMoneyView({
   onAutomationConfigChange,
   accentActiveSoftClass,
   accentActiveTextClass,
-  viewMode = "money",
+  viewMode = "stream",
   automationLaunchEnabled = true,
   entryCutoffActive = true,
   hideAutomationButtons = false,
-}: ArbitrageMoneyViewProps) {
+}: ArbitrageStreamViewProps) {
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [automationStartLocked, setAutomationStartLocked] = useState(false);
-  const moneyUpdatedAt = useMoneyUpdatedAt();
-  const updatedLabel = moneyUpdatedAt ? new Date(moneyUpdatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
-  const moneyActionLog = useMoneyActionLogRows();
-  const moneyOrderIntents = useMoneyOrderIntentRows();
-  const moneyOrderIntentMeta = useMoneyOrderIntentMeta();
-  const executionSnapshot = useMoneyExecutionSnapshot();
-  const moneyPositions = useMoneyPositionRows();
-  const activeDecisionRows = useMoneyActiveDecisionRows();
-  const moneyPositionMeta = useMoneyPositionMeta();
-  const bookSnapshotState = useMoneyBookSnapshotState();
-  const mainWindowSnapshotState = useMoneyMainWindowSnapshotState();
+  const streamUpdatedAt = useStreamUpdatedAt();
+  const updatedLabel = streamUpdatedAt ? new Date(streamUpdatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
+  const streamActionLog = useStreamActionLogRows();
+  const streamOrderIntents = useStreamOrderIntentRows();
+  const streamOrderIntentMeta = useStreamOrderIntentMeta();
+  const executionSnapshot = useStreamExecutionSnapshot();
+  const streamPositions = useStreamPositionRows();
+  const activeDecisionRows = useStreamActiveDecisionRows();
+  const streamPositionMeta = useStreamPositionMeta();
+  const bookSnapshotState = useStreamBookSnapshotState();
+  const mainWindowSnapshotState = useStreamMainWindowSnapshotState();
   const bookSnapshot = bookSnapshotState.snapshot;
   const mainWindowSnapshot = mainWindowSnapshotState.snapshot;
-  const queuedIntentsCount = moneyOrderIntentMeta.queuedCount;
+  const queuedIntentsCount = streamOrderIntentMeta.queuedCount;
   const boundWindow = executionSnapshot?.boundWindow ?? null;
   const executionQueueCount = executionSnapshot?.queue?.length ?? 0;
   const executionCurrent = executionSnapshot?.current ?? null;
@@ -913,33 +1087,33 @@ export default function ArbitrageMoneyView({
   const printStartMinutes = timeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   const entryWindowClosed = entryCutoffActive && nowMinutes >= printStartMinutes;
   const isAutoView = viewMode === "auto";
-  const isMoneyAutoTab = viewMode === "money-auto-tab";
-  const showAutomationWorkspace = isAutoView || (isMoneyAutoTab && tab === "analytics");
-  const automationRunning = moneyAutoEnabled && strategyModeEnabled && !panicOff;
+  const isStreamAutoTab = viewMode === "stream-auto-tab";
+  const showAutomationWorkspace = isAutoView || (isStreamAutoTab && (tab === "analytics" || tab === "episodes"));
+  const automationRunning = streamAutoEnabled && strategyModeEnabled && !panicOff;
   const automationControlAllowed = automationLaunchEnabled && showAutomationWorkspace;
-  const moneyDecisionIds = useMoneyDecisionIds();
-  const moneyDecisionVersion = useMoneyDecisionVersion();
-  const moneyDecisionRowsSnapshot = useMemo(
-    () => moneyDecisionIds
-      .map((id) => getMoneyDecisionRow(id))
+  const streamDecisionIds = useStreamDecisionIds();
+  const streamDecisionVersion = useStreamDecisionVersion();
+  const streamDecisionRowsSnapshot = useMemo(
+    () => streamDecisionIds
+      .map((id) => getStreamDecisionRow(id))
       .filter((row): row is NonNullable<typeof row> => row !== null),
-    [moneyDecisionIds, moneyDecisionVersion]
+    [streamDecisionIds, streamDecisionVersion]
   );
   const activeTickers = useMemo(
     () => new Set(activeDecisionRows.map((row) => row.ticker)),
     [activeDecisionRows]
   );
   const signalDecisionIds = useMemo(
-    () => moneyDecisionIds.filter((id) => !activeTickers.has(id)),
-    [activeTickers, moneyDecisionIds]
+    () => streamDecisionIds.filter((id) => !activeTickers.has(id)),
+    [activeTickers, streamDecisionIds]
   );
   const entryReadyCount = useMemo(
     () => signalDecisionIds.reduce((count, id) => {
-      return getMoneyDecisionRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
+      return getStreamDecisionRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
     }, 0),
-    [moneyDecisionVersion, signalDecisionIds]
+    [streamDecisionVersion, signalDecisionIds]
   );
-  const openCount = moneyPositionMeta.openCount;
+  const openCount = streamPositionMeta.openCount;
   const maxOpenPositions = Math.max(1, automationConfig.maxOpenPositions ?? 1);
   const openCapReached = openCount >= maxOpenPositions;
   const entryCapBlockingNewOrders =
@@ -947,17 +1121,17 @@ export default function ArbitrageMoneyView({
     openCapReached &&
     entryReadyCount > 0 &&
     queuedIntentsCount === 0;
-  const exitBlockedCount = moneyPositionMeta.exitBlockedCount;
-  const closedCount = moneyPositionMeta.closedCount;
+  const exitBlockedCount = streamPositionMeta.exitBlockedCount;
+  const closedCount = streamPositionMeta.closedCount;
   const blockedEdgeCount = useMemo(
     () => signalDecisionIds.reduce((count, id) => {
-      return getMoneyDecisionRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
+      return getStreamDecisionRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
     }, 0),
-    [moneyDecisionVersion, signalDecisionIds]
+    [streamDecisionVersion, signalDecisionIds]
   );
   const runtimeLabel = useMemo(
-    () => formatRuntime(moneySessionStartedAt, moneySessionStoppedAt),
-    [moneySessionStartedAt, moneySessionStoppedAt, updatedLabel]
+    () => formatRuntime(streamSessionStartedAt, streamSessionStoppedAt),
+    [streamSessionStartedAt, streamSessionStoppedAt, updatedLabel]
   );
 
   const setAutomationRunning = async (nextRunning: boolean) => {
@@ -977,7 +1151,7 @@ export default function ArbitrageMoneyView({
         if (strategyModeEnabled) {
           onAutomationConfigChange({ strategyModeEnabled: false });
         }
-        if (moneyAutoEnabled) {
+        if (streamAutoEnabled) {
           onSetAutoEnabled(false);
         }
         onResetAutomationState();
@@ -994,7 +1168,7 @@ export default function ArbitrageMoneyView({
     if (!strategyModeEnabled) {
       onAutomationConfigChange({ strategyModeEnabled: true });
     }
-    if (!moneyAutoEnabled) {
+    if (!streamAutoEnabled) {
       onSetAutoEnabled(true);
     }
     await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -1005,7 +1179,7 @@ export default function ArbitrageMoneyView({
     await setAutomationRunning(!automationRunning);
   };
 
-  const submitManual = async (action: MoneyManualOrderAction) => {
+  const submitManual = async (action: StreamManualOrderAction) => {
     try {
       setManualError(null);
       await onSubmitManualOrders(manualTickers, action);
@@ -1014,7 +1188,7 @@ export default function ArbitrageMoneyView({
     }
   };
 
-  if (tab === "analytics") {
+  if (tab === "analytics" || (isStreamAutoTab && tab === "episodes")) {
     if (showAutomationWorkspace) {
       return (
         <div className="space-y-3">
@@ -1025,7 +1199,7 @@ export default function ArbitrageMoneyView({
                   <button
                     type="button"
                     onClick={() => setAutomationStartLocked((prev) => !prev)}
-                    className={MONEY_ICON_BUTTON}
+                    className={STREAM_ICON_BUTTON}
                     title={automationStartLocked ? "Unlock auto start" : "Lock auto start"}
                     aria-label={automationStartLocked ? "Unlock auto start" : "Lock auto start"}
                   >
@@ -1087,36 +1261,37 @@ export default function ArbitrageMoneyView({
               <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
               <MetricCard label="LIST MODE" value={listModeLabel} />
               <MetricCard label="UPDATED" value={updatedLabel ?? "-"} />
-              <MetricCard label="SENT ORDERS" value={intn(moneySentOrdersCount)} />
+              <MetricCard label="SENT ORDERS" value={intn(streamSentOrdersCount)} />
               <MetricCard label="RUN TIME" value={runtimeLabel} />
               <MetricCard label="AUTO MODE" value={automationRunning ? "ON" : "OFF"} valueClassName={automationRunning ? accentActiveTextClass : "text-zinc-400"} />
               <MetricCard label="BLOCKED EDGE" value={intn(blockedEdgeCount)} valueClassName="text-amber-200" />
               <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-amber-200" />
               <MetricCard label="CLOSED" value={intn(closedCount)} />
             </div>
-            <MoneyActionLogTable rows={moneyActionLog} />
+            <StreamActionLogTable rows={streamActionLog} />
           </div>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            <MoneyDecisionTable
+            <StreamDecisionTable
               title="ACTIVE"
               rows={activeDecisionRows}
-              emptyMessage="No active MONEY situations yet."
+              emptyMessage="No active STREAM situations yet."
               onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
               onDismissAll={onDismissActivePositions && activeDecisionRows.length > 0 ? () => onDismissActivePositions(activeDecisionRows.map((r) => r.ticker)) : undefined}
             />
-            <MoneySignalsDecisionTable
+            <StreamSignalsDecisionTable
               title="SIGNALS"
               rowIds={signalDecisionIds}
-              emptyMessage="No filtered signals waiting in MONEY."
+              emptyMessage="No filtered signals waiting in STREAM."
             />
           </div>
+          <StreamSimLog />
         </div>
       );
     }
 
     return (
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <MetricCard label="FILTERED SIGNALS" value={intn(moneySignalsCount)} />
+        <MetricCard label="FILTERED SIGNALS" value={intn(streamSignalsCount)} />
         <MetricCard label="LIST MODE" value={listModeLabel} />
         <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
         <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
@@ -1126,7 +1301,7 @@ export default function ArbitrageMoneyView({
     );
   }
 
-  if (tab === "episodes") {
+  if (tab === "episodes" && !isStreamAutoTab) {
     if (isAutoView) {
       return (
         <div className="space-y-3">
@@ -1154,74 +1329,28 @@ export default function ArbitrageMoneyView({
       );
     }
 
-    return (
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="OPEN" value={intn(openCount)} />
-          <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-amber-200" />
-          <MetricCard label="CLOSED" value={intn(closedCount)} />
-          <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />
-        </div>
-        <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-          <table className="min-w-[1120px] w-full text-xs font-mono">
-            <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
-              <tr>
-                <th className="text-left p-2.5">Ticker</th>
-                <th className="text-left p-2.5">Bench</th>
-                <th className="text-left p-2.5">Side</th>
-                <th className="text-right p-2.5">Entry Sig</th>
-                <th className="text-right p-2.5">Last Sig</th>
-                <th className="text-right p-2.5">Spread</th>
-                <th className="text-left p-2.5">Status</th>
-                <th className="text-left p-2.5">Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {moneyPositions.map((row, i) => (
-                <tr key={`${row.ticker}|position|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
-                  <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
-                  <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
-                  <td className="p-2.5"><SideBadge side={row.side} /></td>
-                  <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.entrySignal, 2)}</td>
-                  <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.lastSignal, 2)}</td>
-                  <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</td>
-                  <td className="p-2.5"><MoneyStatusBadge status={row.status} /></td>
-                  <td className="p-2.5 text-zinc-400">{row.reason}</td>
-                </tr>
-              ))}
-              {!moneyPositions.length && (
-                <tr>
-                  <td colSpan={8} className="p-8 text-center text-zinc-500">
-                    No virtual positions yet. Enable AUTO and let MONEY monitor filtered SONAR signals.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
+    return <StreamSimLog />;
   }
 
   return (
     <div className="space-y-3">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <MetricCard label={isAutoView ? "ACTIVE SIGNALS" : "SONAR SIGNALS"} value={intn(moneySignalsCount)} />
+          <MetricCard label={isAutoView ? "ACTIVE SIGNALS" : "SONAR SIGNALS"} value={intn(streamSignalsCount)} />
           <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
           <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
-          <MetricCard label="AUTO MODE" value={moneyAutoEnabled ? "ON" : "OFF"} valueClassName={moneyAutoEnabled ? "text-emerald-300" : "text-zinc-400"} />
+          <MetricCard label="AUTO MODE" value={streamAutoEnabled ? "ON" : "OFF"} valueClassName={streamAutoEnabled ? "text-emerald-300" : "text-zinc-400"} />
           <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />
           <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
       </div>
 
       <div className="scanner-panel-surface rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] p-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{isAutoView ? "AUTO ENGINE | SONAR automation workspace" : "MONEY ENGINE | filtered SONAR signals"}</div>
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{isAutoView ? "AUTO ENGINE | SONAR automation workspace" : "STREAM ENGINE | filtered SONAR signals"}</div>
           {automationControlAllowed ? (
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
               <button
                 type="button"
-                onClick={() => void setAutomationRunning(!(strategyModeEnabled && moneyAutoEnabled && !panicOff))}
+                onClick={() => void setAutomationRunning(!(strategyModeEnabled && streamAutoEnabled && !panicOff))}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                   strategyModeEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -1231,13 +1360,13 @@ export default function ArbitrageMoneyView({
               </button>
               <button
                 type="button"
-                onClick={() => void setAutomationRunning(!(moneyAutoEnabled && strategyModeEnabled && !panicOff))}
+                onClick={() => void setAutomationRunning(!(streamAutoEnabled && strategyModeEnabled && !panicOff))}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  moneyAutoEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  streamAutoEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                AUTO {moneyAutoEnabled ? "ON" : "OFF"}
+                AUTO {streamAutoEnabled ? "ON" : "OFF"}
               </button>
             </div>
           ) : (
@@ -1248,8 +1377,8 @@ export default function ArbitrageMoneyView({
         </div>
         <div className="mt-2 text-[11px] font-mono text-zinc-500">
           {strategyModeEnabled
-            ? `SONAR mode watches live SONAR situations, enters after MINHOLD seconds, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and prints everything at ${automationConfig.printStartTime}.`
-            : "SONAR mode is off. AUTO keeps using the legacy MONEY intent builder."}
+            ? `SONAR mode watches live SONAR situations, enters after MINHOLD minutes, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and prints everything at ${automationConfig.printStartTime}.`
+            : "SONAR mode is off. AUTO keeps using the legacy STREAM intent builder."}
         </div>
         {isAutoView && (
           <div className="mt-3">
@@ -1452,7 +1581,7 @@ export default function ArbitrageMoneyView({
             <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Hedge Mode</div>
             <select
               value={automationConfig.hedgeMode}
-              onChange={(e) => onAutomationConfigChange({ hedgeMode: e.target.value as MoneyAutomationConfig["hedgeMode"] })}
+              onChange={(e) => onAutomationConfigChange({ hedgeMode: e.target.value as StreamAutomationConfig["hedgeMode"] })}
               className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
             >
               <option value="hedged">Hedged</option>
@@ -1463,7 +1592,7 @@ export default function ArbitrageMoneyView({
             <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Scale Mode</div>
             <select
               value={automationConfig.scaleMode}
-              onChange={(e) => onAutomationConfigChange({ scaleMode: e.target.value as MoneyAutomationConfig["scaleMode"] })}
+              onChange={(e) => onAutomationConfigChange({ scaleMode: e.target.value as StreamAutomationConfig["scaleMode"] })}
               className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
             >
               <option value="single">Single</option>
@@ -1474,7 +1603,7 @@ export default function ArbitrageMoneyView({
             <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Exit Mode</div>
             <select
               value={automationConfig.exitMode}
-              onChange={(e) => onAutomationConfigChange({ exitMode: e.target.value as MoneyAutomationConfig["exitMode"] })}
+              onChange={(e) => onAutomationConfigChange({ exitMode: e.target.value as StreamAutomationConfig["exitMode"] })}
               className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
             >
               <option value="normalize">Normalize</option>
@@ -1513,6 +1642,28 @@ export default function ArbitrageMoneyView({
               className="h-4 w-4 rounded border-white/20 bg-black/30"
             />
           </label>
+
+          <label className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 cursor-pointer transition-colors",
+            automationConfig.betaMode
+              ? "border-amber-500/40 bg-amber-500/10"
+              : "border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04]"
+          )}>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400">β BETA MODE</span>
+                {automationConfig.betaMode && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">ACTIVE</span>
+                )}
+              </div>
+              <div className="mt-1 text-xs font-mono text-zinc-400">Simulate all trades — no real orders sent. All logic, queues and signals run normally.</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={automationConfig.betaMode ?? false}
+              onChange={(e) => onAutomationConfigChange({ betaMode: e.target.checked })}
+              className="h-4 w-4 rounded border-amber-500/40 bg-black/30 accent-amber-500"
+            />
+          </label>
         </div>
       </div>
 
@@ -1532,8 +1683,8 @@ export default function ArbitrageMoneyView({
             </tr>
           </thead>
           <tbody>
-            {moneyDecisionRowsSnapshot.map((row, i) => (
-              <tr key={`${row.ticker}|money|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
+            {streamDecisionRowsSnapshot.map((row, i) => (
+              <tr key={`${row.ticker}|stream|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
                 <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
                 <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
                 <td className="p-2.5"><SideBadge side={row.side} /></td>
@@ -1541,14 +1692,14 @@ export default function ArbitrageMoneyView({
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</td>
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.safePrice, 3)}</td>
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
-                <td className="p-2.5"><MoneyStatusBadge status={row.status} /></td>
+                <td className="p-2.5"><StreamStatusBadge status={row.status} /></td>
                 <td className="p-2.5 text-zinc-400">{row.reason}</td>
               </tr>
             ))}
-            {!moneyDecisionRowsSnapshot.length && (
+            {!streamDecisionRowsSnapshot.length && (
               <tr>
                 <td colSpan={9} className="p-8 text-center text-zinc-500">
-                  No MONEY candidates yet. Current MONEY filters are applied to live SONAR signals.
+                  No STREAM candidates yet. Current STREAM filters are applied to live SONAR signals.
                 </td>
               </tr>
             )}
@@ -1570,7 +1721,7 @@ export default function ArbitrageMoneyView({
             </tr>
           </thead>
           <tbody>
-            {moneyOrderIntents.map((row, i) => (
+            {streamOrderIntents.map((row, i) => (
               <tr key={row.id ?? `${row.ticker}|intent|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
                 <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
                 <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
@@ -1590,10 +1741,10 @@ export default function ArbitrageMoneyView({
                 <td className="p-2.5 text-zinc-400">{row.reason}</td>
               </tr>
             ))}
-            {!moneyOrderIntents.length && (
+            {!streamOrderIntents.length && (
               <tr>
                 <td colSpan={7} className="p-8 text-center text-zinc-500">
-                  No order intents yet. When AUTO is enabled, MONEY will stage executable intents here.
+                  No order intents yet. When AUTO is enabled, STREAM will stage executable intents here.
                 </td>
               </tr>
             )}

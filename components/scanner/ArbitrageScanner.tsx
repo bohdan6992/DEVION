@@ -13,13 +13,14 @@ import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFil
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import ArbitrageMoneyView from "../money/ArbitrageMoneyView";
-import { useMoneyExecutionSnapshot } from "../money/moneyExecutionStore";
-import { useMoneyPositionMeta } from "../money/moneyPositionStore";
-import { useMoneySignalMeta } from "../money/moneySignalStore";
-import { buildMoneyFilterConfig, type MoneyAutomationConfig, type MoneyExecutionDescriptor, useMoneyEngine } from "../money/moneyEngine";
+import ArbitrageStreamView from "../stream/ArbitrageStreamView";
+import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
+import { useStreamPositionMeta } from "../stream/streamPositionStore";
+import { useStreamSignalMeta } from "../stream/streamSignalStore";
+import { buildStreamFilterConfig, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
+import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
 
 // =========================
@@ -33,11 +34,11 @@ function apiUrl(pathAndQuery: string) {
 // =========================
 // TYPES (Paper Arbitrage)
 // =========================
-type PrimaryPanelKey = "money" | "scanner";
+type PrimaryPanelKey = "stream" | "scanner";
 type TabKey = "active" | "episodes" | "analytics";
 type DateMode = "day" | "last" | "range";
 type PaperListMode = "off" | "ignore" | "apply" | "pin";
-type ZapUiMode = "off" | "zap" | "sigma" | "delta";
+type ZapMode = "off" | "zap" | "sigma" | "delta";
 type SortDir = "asc" | "desc";
 type EpisodeSortKey =
   | "ticker"
@@ -60,6 +61,7 @@ type PaperArbMetric = "SigmaZap" | "ZapPct";
 type PaperArbSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 type PaperArbCloseMode = "Active" | "Passive";
 type PaperArbPnlMode = "RawOnly" | "Hedged";
+type PaperArbPriceMode = "LastPrint" | "BidAsk";
 type PaperArbSizingMode = "Tier" | "Notional";
 type PaperArbDilutionMode = "Undiluted" | "Diluted";
 
@@ -154,6 +156,39 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         buttonBorder: "border-sky-400/20",
         outlineButton: "border-sky-400/50 text-sky-300 hover:bg-sky-400/10 shadow-[0_0_10px_rgba(56,189,248,0.1)]",
       };
+    case "magma":
+      return {
+        selection: "selection:bg-rose-500/30",
+        dot: "bg-rose-400",
+        activeButton: "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.32)] bg-rose-500/10",
+        activeText: "text-rose-200",
+        activeBorder: "border-rose-400/30 bg-rose-500/[0.06]",
+        activeSoft: "bg-rose-500/10 text-rose-200 border-rose-400/25 shadow-[0_0_10px_-3px_rgba(255,82,72,0.22)]",
+        buttonBorder: "border-rose-400/22",
+        outlineButton: "border-rose-400/50 text-rose-200 hover:bg-rose-500/10 shadow-[0_0_12px_rgba(255,82,72,0.12)]",
+      };
+    case "mercury":
+      return {
+        selection: "selection:bg-slate-400/25",
+        dot: "bg-slate-300",
+        activeButton: "border border-slate-300/60 text-slate-200 shadow-[0_0_10px_rgba(176,182,190,0.2)] bg-slate-400/10",
+        activeText: "text-slate-200",
+        activeBorder: "border-slate-300/28 bg-slate-400/[0.05]",
+        activeSoft: "bg-slate-400/10 text-slate-200 border-slate-300/22 shadow-[0_0_10px_-3px_rgba(176,182,190,0.14)]",
+        buttonBorder: "border-slate-300/20",
+        outlineButton: "border-slate-300/45 text-slate-200 hover:bg-slate-400/10 shadow-[0_0_10px_rgba(176,182,190,0.08)]",
+      };
+    case "oceanic":
+      return {
+        selection: "accent-selection",
+        dot: "accent-dot",
+        activeButton: "accent-soft",
+        activeText: "accent-text",
+        activeBorder: "accent-panel-soft",
+        activeSoft: "accent-soft",
+        buttonBorder: "border-cyan-500/20",
+        outlineButton: "accent-outline",
+      };
     default:
       return {
         selection: "selection:bg-zinc-200/24",
@@ -176,6 +211,9 @@ function getScannerHeaderButtonActiveClass(theme?: string | null): string {
   if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
+  if (theme === "magma") return "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.28)] bg-rose-500/10";
+  if (theme === "mercury") return "border border-slate-400 text-slate-200 shadow-[0_0_10px_rgba(176,182,190,0.18)] bg-slate-400/10";
+  if (theme === "oceanic") return "accent-soft";
   return "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10";
 }
 
@@ -214,6 +252,7 @@ type PaperArbActiveRow = {
   beta?: number | null;
   positionNotionalUsd?: number | null;
   entryCount?: number | null;
+  entrySnaps?: PaperArbSnap[] | null;
   rawPnlUsd?: number | null;
   benchPnlUsd?: number | null;
   hedgedPnlUsd?: number | null;
@@ -221,6 +260,8 @@ type PaperArbActiveRow = {
   lstPrcL?: number | null;
   lstCls?: number | null;
   yCls?: number | null;
+  gapPct?: number | null;
+  benchGapPct?: number | null;
   startClass?: string | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
@@ -304,6 +345,15 @@ type PaperArbClosedDto = {
   preMhHiLstClsPct?: number | null;
   preMhLoLstClsPct?: number | null;
   lstPrcLstClsPct?: number | null;
+  peakLstPrcLstClsPct?: number | null;
+  endLstPrcLstClsPct?: number | null;
+  startBenchLstPrcLstClsPct?: number | null;
+  peakBenchLstPrcLstClsPct?: number | null;
+  endBenchLstPrcLstClsPct?: number | null;
+  startBidPct?: number | null;
+  startAskPct?: number | null;
+  endBidPct?: number | null;
+  endAskPct?: number | null;
   imbExch925?: number | null;
   imbExch1555?: number | null;
   printMedianPos?: number | null;
@@ -329,12 +379,14 @@ type PaperArbAnalyticsRequest = {
   closeMode?: PaperArbCloseMode;
   minHoldCandles?: number;
   startCutoffMinuteIdx?: number | null;
+  priceMode?: PaperArbPriceMode;
   pnlMode?: PaperArbPnlMode;
   sizingMode?: PaperArbSizingMode;
   sizeValue?: number | null;
   dilutionMode?: PaperArbDilutionMode;
   dilutionStep?: number | null;
   maxAdds?: number | null;
+  addDelayMinutes?: number | null;
 
   // rating rules
   ratingType?: PaperArbRatingType | string | null;
@@ -881,43 +933,59 @@ function scannerTickerAmountUsd(
 function scannerRealtimePnlUsd(args: {
   side: TapeArbSide;
   beta: number | null | undefined;
-  tickerAmountUsd: number | null | undefined;
+  trancheAmountUsd: number | null | undefined;
+  entrySnaps: PaperArbSnap[] | null | undefined;
   start: PaperArbSnap | null | undefined;
   last: PaperArbSnap | null | undefined;
   pnlMode: PaperArbPnlMode;
+  priceMode: PaperArbPriceMode;
+  closeMode?: PaperArbCloseMode;
+  gapPct?: number | null;
+  benchGapPct?: number | null;
 }): { rawPnlUsd: number | null; benchPnlUsd: number | null; hedgedPnlUsd: number | null; totalPnlUsd: number | null } {
-  const { side, beta, tickerAmountUsd, start, last, pnlMode } = args;
-  if (!Number.isFinite(tickerAmountUsd ?? NaN) || Number(tickerAmountUsd) <= 0) {
-    return { rawPnlUsd: null, benchPnlUsd: pnlMode === "RawOnly" ? null : null, hedgedPnlUsd: null, totalPnlUsd: null };
-  }
+  const { side, beta, trancheAmountUsd, entrySnaps, start, last, pnlMode, priceMode, closeMode, gapPct, benchGapPct } = args;
+  const isPassive = closeMode === "Passive";
+  const null4 = { rawPnlUsd: null, benchPnlUsd: null, hedgedPnlUsd: null, totalPnlUsd: null };
+  if (!Number.isFinite(trancheAmountUsd ?? NaN) || Number(trancheAmountUsd) <= 0) return null4;
+  if (!last) return null4;
 
   const normalizedSide = String(side).toLowerCase() === "short" ? "Short" : "Long";
-  const stockStart = start?.lstPrcLstClsPct;
-  const stockLast = last?.lstPrcLstClsPct;
-  const benchStart = start?.benchLstPrcLstClsPct;
-  const benchLast = last?.benchLstPrcLstClsPct;
+  const hedgeSide = normalizedSide === "Short" ? "Long" : "Short";
 
-  let rawPnlUsd: number | null = null;
-  let benchPnlUsd: number | null = null;
+  // Prefer per-tranche entrySnaps (server sends them); fall back to single start snap.
+  const snaps: PaperArbSnap[] = (entrySnaps && entrySnaps.length > 0) ? entrySnaps : (start ? [start] : []);
+  if (snaps.length === 0) return null4;
 
-  const stockReturnFrac = scannerLastPriceReturnFrac(stockStart, stockLast, normalizedSide);
-  if (stockReturnFrac != null) {
-    rawPnlUsd = Number(tickerAmountUsd) * stockReturnFrac;
-  }
+  // Per-tranche P&L: each tranche invests equal USD, so per-tranche summation
+  // correctly captures the asymmetry of buying more shares at lower prices.
+  let rawSum = 0, rawAny = false;
+  let benchSum = 0, benchAny = false;
 
-  if (
-    pnlMode === "Hedged" &&
-    Number.isFinite(beta ?? NaN) &&
-    Number.isFinite(benchStart ?? NaN) &&
-    Number.isFinite(benchLast ?? NaN)
-  ) {
-    const hedgeSide = normalizedSide === "Short" ? "Long" : "Short";
-    const benchReturnFrac = scannerLastPriceReturnFrac(benchStart, benchLast, hedgeSide);
-    if (benchReturnFrac != null) {
-      benchPnlUsd = Number(tickerAmountUsd) * Number(beta) * benchReturnFrac;
+  const exitStockPct = priceMode === "BidAsk" && !isPassive
+    ? (normalizedSide === "Long" ? (last.bidPct ?? last.lstPrcLstClsPct) : (last.askPct ?? last.lstPrcLstClsPct))
+    : (isPassive ? (gapPct ?? null) : last.lstPrcLstClsPct);
+  const exitBenchPct = priceMode === "BidAsk" && !isPassive
+    ? (hedgeSide === "Long" ? (last.benchBidPct ?? last.benchLstPrcLstClsPct) : (last.benchAskPct ?? last.benchLstPrcLstClsPct))
+    : (isPassive ? (benchGapPct ?? null) : last.benchLstPrcLstClsPct);
+
+  for (const entry of snaps) {
+    const entryStockPct = priceMode === "BidAsk" && !isPassive
+      ? (normalizedSide === "Long" ? (entry.askPct ?? entry.lstPrcLstClsPct) : (entry.bidPct ?? entry.lstPrcLstClsPct))
+      : entry.lstPrcLstClsPct;
+    const stockFrac = scannerLastPriceReturnFrac(entryStockPct, exitStockPct, normalizedSide);
+    if (stockFrac != null) { rawSum += Number(trancheAmountUsd) * stockFrac; rawAny = true; }
+
+    if (pnlMode === "Hedged" && Number.isFinite(beta ?? NaN)) {
+      const entryBenchPct = priceMode === "BidAsk" && !isPassive
+        ? (hedgeSide === "Long" ? (entry.benchAskPct ?? entry.benchLstPrcLstClsPct) : (entry.benchBidPct ?? entry.benchLstPrcLstClsPct))
+        : entry.benchLstPrcLstClsPct;
+      const benchFrac = scannerLastPriceReturnFrac(entryBenchPct, exitBenchPct, hedgeSide);
+      if (benchFrac != null) { benchSum += Number(trancheAmountUsd) * Number(beta) * benchFrac; benchAny = true; }
     }
   }
 
+  const rawPnlUsd = rawAny ? rawSum : null;
+  let benchPnlUsd: number | null = benchAny ? benchSum : null;
   const hedgedPnlUsd =
     pnlMode === "RawOnly"
       ? rawPnlUsd
@@ -1156,11 +1224,11 @@ function normalizeSide(
   return { label: s.length ? s : "-", isLong: null };
 }
 
-function scannerBestParams(row: any) {
+function getBestParams(row: any) {
   return row?.best_params ?? row?.bestParams ?? row?.BestParams ?? row?.best_params_row ?? null;
 }
 
-function safeObjRecord(value: any): Record<string, any> | null {
+function safeObj(value: any): Record<string, any> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
@@ -1195,7 +1263,7 @@ function parseBinIntervals(value: any): Array<{ lo: number; hi: number; rate: nu
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => {
-      const obj = safeObjRecord(item);
+      const obj = safeObj(item);
       const lo = optNumOrNull(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
       const hi = optNumOrNull(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
       const rate = optNumOrNull(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
@@ -1216,18 +1284,18 @@ function scannerBinRatingSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObjRecord(scannerBestParams(row));
+  const root = safeObj(getBestParams(row));
   const binsRoot =
-    safeObjRecord(root?.best_windows_any)?.stitched ??
-    safeObjRecord(root?.BestWindowsAny)?.stitched ??
-    safeObjRecord(root?.best_windows_any)?.Stitched ??
-    safeObjRecord(root?.BestWindowsAny)?.Stitched ??
+    safeObj(root?.best_windows_any)?.stitched ??
+    safeObj(root?.BestWindowsAny)?.stitched ??
+    safeObj(root?.best_windows_any)?.Stitched ??
+    safeObj(root?.BestWindowsAny)?.Stitched ??
     null;
   const sigmaPeakBins =
-    safeObjRecord(binsRoot)?.sigma_peak_bins ??
-    safeObjRecord(binsRoot)?.SigmaPeakBins ??
+    safeObj(binsRoot)?.sigma_peak_bins ??
+    safeObj(binsRoot)?.SigmaPeakBins ??
     null;
-  const classBins = safeObjRecord(safeObjRecord(sigmaPeakBins)?.[classKey]);
+  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
   const intervals = parseBinIntervals(classBins?.[signKey]);
   if (!intervals.length) return null;
   const absSigma = Math.abs(sigmaAbs);
@@ -1245,18 +1313,18 @@ function passesBinRatingByBestParams(args: {
 }) {
   const { bestParams, classKey, signKey, sigmaAbs, minRate, minTotal } = args;
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
-  const root = safeObjRecord(bestParams);
+  const root = safeObj(bestParams);
   const binsRoot =
-    safeObjRecord(root?.best_windows_any)?.stitched ??
-    safeObjRecord(root?.BestWindowsAny)?.stitched ??
-    safeObjRecord(root?.best_windows_any)?.Stitched ??
-    safeObjRecord(root?.BestWindowsAny)?.Stitched ??
+    safeObj(root?.best_windows_any)?.stitched ??
+    safeObj(root?.BestWindowsAny)?.stitched ??
+    safeObj(root?.best_windows_any)?.Stitched ??
+    safeObj(root?.BestWindowsAny)?.Stitched ??
     null;
   const sigmaPeakBins =
-    safeObjRecord(binsRoot)?.sigma_peak_bins ??
-    safeObjRecord(binsRoot)?.SigmaPeakBins ??
+    safeObj(binsRoot)?.sigma_peak_bins ??
+    safeObj(binsRoot)?.SigmaPeakBins ??
     null;
-  const classBins = safeObjRecord(safeObjRecord(sigmaPeakBins)?.[classKey]);
+  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
   const intervals = parseBinIntervals(classBins?.[signKey]);
   if (!intervals.length) return false;
 
@@ -1289,20 +1357,20 @@ function scannerSigBinSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObjRecord(scannerBestParams(row));
-  const bwAny = safeObjRecord(root?.best_windows_any ?? root?.BestWindowsAny);
-  const stitched = safeObjRecord(bwAny?.stitched ?? bwAny?.Stitched);
-  const allStats = safeObjRecord(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
-  const clsStats = safeObjRecord(allStats?.[classKey]);
-  const signStats = safeObjRecord(clsStats?.[signKey]);
+  const root = safeObj(getBestParams(row));
+  const bwAny = safeObj(root?.best_windows_any ?? root?.BestWindowsAny);
+  const stitched = safeObj(bwAny?.stitched ?? bwAny?.Stitched);
+  const allStats = safeObj(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
+  const clsStats = safeObj(allStats?.[classKey]);
+  const signStats = safeObj(clsStats?.[signKey]);
   // compute bin key matching Python: floor(abs / step) * step formatted to 1 decimal
-  const sigBinParams = safeObjRecord(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
+  const sigBinParams = safeObj(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
   const step = Number(sigBinParams?.step ?? 0.5);
   const min = Number(sigBinParams?.min ?? 0.5);
   const max = Number(sigBinParams?.max ?? 10.0);
   const v = Math.max(min, Math.min(max, Math.abs(sigmaAbs)));
   const binKey = (Math.floor(v / step) * step).toFixed(1);
-  const entry = safeObjRecord(signStats?.[binKey]);
+  const entry = safeObj(signStats?.[binKey]);
   if (!entry) return null;
   const rate = optNumOrNull(entry.r ?? entry.rate ?? entry.Rate);
   const total = optNumOrNull(entry.t ?? entry.total ?? entry.Total);
@@ -1320,12 +1388,12 @@ function scannerTopWindowSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObjRecord(scannerBestParams(row));
-  const tw = safeObjRecord(safeObjRecord(root?.top_windows ?? root?.TopWindows)?.[classKey]);
-  const entry = safeObjRecord(tw?.[signKey]);
+  const root = safeObj(getBestParams(row));
+  const tw = safeObj(safeObj(root?.top_windows ?? root?.TopWindows)?.[classKey]);
+  const entry = safeObj(tw?.[signKey]);
   if (!entry) return null;
-  const sigmaTw = safeObjRecord(entry.sigma);
-  const timeTw = safeObjRecord(entry.time);
+  const sigmaTw = safeObj(entry.sigma);
+  const timeTw = safeObj(entry.time);
   return {
     sigma: sigmaTw && optNumOrNull(sigmaTw.lo) != null && optNumOrNull(sigmaTw.hi) != null
       ? { lo: Number(sigmaTw.lo), hi: Number(sigmaTw.hi) }
@@ -3257,10 +3325,10 @@ const SCANNER_CONTROL_SURFACE =
 
 const SCANNER_EYE_BUTTON =
   "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
-const MONEY_FIXED_ACTIVE_SOFT =
+const STREAM_FIXED_ACTIVE_SOFT =
   "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 shadow-[0_0_10px_-4px_rgba(16,185,129,0.35)]";
-const MONEY_FIXED_ACTIVE_TEXT = "text-emerald-300";
-const MONEY_FIXED_ICON_GREEN = "#63e6be";
+const STREAM_FIXED_ACTIVE_TEXT = "text-emerald-300";
+const STREAM_FIXED_ICON_GREEN = "#63e6be";
 
 const SOFT_LOSS_TEXT_CLASS = "text-[#f3a6b2]";
 const SOFT_LOSS_SOLID = "rgba(243,166,178,0.95)";
@@ -3327,7 +3395,6 @@ function GlassSelect({
   panelAnchorRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const { theme } = useUi();
-  const accent = getScannerAccent(theme);
   const isLightTheme = theme === "light";
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
@@ -3408,13 +3475,13 @@ function GlassSelect({
           open
             ? compact
               ? clsx(isLightTheme ? "text-slate-900" : "text-zinc-300", "border-transparent bg-transparent shadow-none")
-              : clsx(accent.activeText, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]", accent.buttonBorder ?? "border-white/20")
+              : clsx("accent-text", "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]")
             : compact
               ? clsx(
                   isLightTheme ? "text-slate-900 hover:text-slate-900" : "text-zinc-400 hover:text-zinc-200",
                   "border-transparent bg-transparent shadow-none"
                 )
-              : clsx(accent.activeText, SCANNER_CONTROL_SURFACE),
+              : clsx("accent-text", SCANNER_CONTROL_SURFACE),
           className
         )}
       >
@@ -3457,13 +3524,13 @@ function GlassSelect({
                                 groupOption.disabled
                                   ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
                                   : isSelected
-                                    ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : accent.activeSoft)
+                                    ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : "accent-soft")
                                     : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
                               )}
                               title={groupOption.disabled ? "Unavailable" : groupOption.label}
                             >
                               <span className="min-w-0 flex-1 truncate">{groupOption.label}</span>
-                              {isSelected && <span className={clsx("w-1.5 h-1.5 rounded-full", accent.dot)} />}
+                              {isSelected && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
                             </button>
                           );
                         })}
@@ -3481,12 +3548,12 @@ function GlassSelect({
                           opt.disabled
                             ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
                             : opt.value === value
-                              ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : accent.activeSoft)
+                              ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : "accent-soft")
                               : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
                         )}
                       >
                         <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                        {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", accent.dot)} />}
+                        {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
                       </button>
                     </div>
                   )
@@ -3546,6 +3613,9 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
+  if (theme === "magma") return "rose";
+  if (theme === "mercury") return "zinc";
+  if (theme === "oceanic") return "cyan";
   return "emerald";
 };
 
@@ -3894,6 +3964,7 @@ function Segmented({
   options: { value: string; label: string; hint?: string }[];
   className?: string;
 }) {
+  const activeClass = "accent-soft";
   return (
     <div className={clsx("inline-flex rounded-xl p-1", SCANNER_PANEL_SURFACE, className)}>
       {options.map((o) => {
@@ -3906,9 +3977,7 @@ function Segmented({
             onClick={() => onChange(o.value)}
             className={clsx(
               "px-3 py-1.5 text-[10px] font-mono font-bold uppercase rounded-lg tracking-wide transition-all border",
-              on
-                ? "bg-emerald-500/12 text-emerald-300 border-emerald-500/25 shadow-[0_0_10px_-4px_rgba(16,185,129,0.35)]"
-                : "text-zinc-400 border-transparent hover:text-zinc-200 hover:bg-black/30"
+              on ? activeClass : "text-zinc-400 border-transparent hover:text-zinc-200 hover:bg-black/30"
             )}
           >
             {o.label}
@@ -4443,8 +4512,6 @@ function OptimizerParameterRangeCard({
   minTradesFilter: number;
   bucketCount: number;
 }) {
-  const { theme } = useUi();
-  const accent = getScannerAccent(theme);
   const sortBucketsByMetric = (items: PaperArbOptimizerRangeBucketDto[]) =>
     [...items].sort((a, b) => {
       const aMetric = rankMetric === "winRate" ? a.winRate : rankMetric === "totalPnlUsd" ? a.totalPnlUsd : rankMetric === "score" ? a.score : a.avgPnlUsd;
@@ -4501,7 +4568,7 @@ function OptimizerParameterRangeCard({
       <div className="border-b border-white/5 bg-black/10 px-2.5 py-2">
         <div className="flex items-center justify-between gap-2.5">
           <div className="min-w-0 flex items-center gap-2">
-            <div className={clsx("text-[12px] uppercase tracking-[0.18em] font-mono", accent.activeText)}>{parameter.label}</div>
+            <div className={clsx("text-[12px] uppercase tracking-[0.18em] font-mono", "accent-text")}>{parameter.label}</div>
             {rankMetric === "tailDamage" && (() => {
               const td = scoreTailDamage(parameter, minTradesFilter);
               return td > 0 ? (
@@ -6741,27 +6808,28 @@ const SCANNER_ACTIVE_PRESET_ID_LS_KEY = "paper.arb.shared-preset.active-id";
 // =========================
 type ArbitrageScannerProps = {
   initialPrimaryPanel?: PrimaryPanelKey;
-  shellMode?: "full" | "moneyOnly";
+  shellMode?: "full" | "streamOnly";
   controlledTab?: TabKey;
   onControlledTabChange?: (tab: TabKey) => void;
   controlledSession?: PaperArbSession;
   onControlledSessionChange?: (session: PaperArbSession) => void;
   controlledRuleBand?: PaperArbRatingBand;
   onControlledRuleBandChange?: (band: PaperArbRatingBand) => void;
-  moneyExecutionDescriptorOverride?: MoneyExecutionDescriptor;
-  moneyAutomationConfigOverride?: MoneyAutomationConfig;
-  moneyAutoStartEnabledOverride?: boolean;
-  moneyAutoEnabledOverride?: boolean;
-  moneyViewModeOverride?: "money" | "auto" | "money-auto-tab";
-  onMoneyAutomationConfigChange?: (patch: Partial<MoneyAutomationConfig>) => void;
-  onMoneyAutoEnabledChange?: (enabled: boolean) => void;
+  streamExecutionDescriptorOverride?: StreamExecutionDescriptor;
+  streamAutomationConfigOverride?: StreamAutomationConfig;
+  streamAutoStartEnabledOverride?: boolean;
+  streamAutoEnabledOverride?: boolean;
+  streamViewModeOverride?: "stream" | "auto" | "stream-auto-tab";
+  onStreamAutomationConfigChange?: (patch: Partial<StreamAutomationConfig>) => void;
+  onStreamAutoEnabledChange?: (enabled: boolean) => void;
   headerTitleOverride?: string;
   headerBadgeValuesOverride?: string[];
   headerMetaLabelOverride?: string;
+  headerMinimal?: boolean;
   activeTabLabelOverride?: string;
   episodesTabLabelOverride?: string;
   analyticsTabLabelOverride?: string;
-  onMoneyShellStatsChange?: (stats: {
+  onStreamShellStatsChange?: (stats: {
     signals: number;
     ready: number;
     open: number;
@@ -6769,6 +6837,134 @@ type ArbitrageScannerProps = {
   }) => void;
   onSharedRatingRulesChange?: (rules: Array<{ band: PaperArbRatingBand; minRate: number; minTotal: number }>) => void;
 };
+
+function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; priceMode: PaperArbPriceMode }) {
+  const sorted = useMemo(() => [...rows].sort((a, b) => b.startMinuteIdx - a.startMinuteIdx), [rows]);
+
+  function fmtTime(tsNy: string | null | undefined): string {
+    if (!tsNy) return "—";
+    const m = tsNy.match(/(\d{2}:\d{2}:\d{2})/);
+    return m ? m[1] : tsNy;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Scanner Analytics Log</span>
+          <span className="text-[10px] font-mono text-zinc-600">{rows.length} entries</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => downloadEpisodesCsv(rows, `scanner-analytics-log-${new Date().toISOString().slice(0, 10)}.csv`)}
+          className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+        >
+          ↓ CSV
+        </button>
+      </div>
+      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <table className="min-w-[2000px] w-full text-[11px] font-mono">
+          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
+            <tr>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Date</th>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Time</th>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Mode</th>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Ticker</th>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Bench</th>
+              <th className="text-left px-2.5 py-1" rowSpan={2}>Side</th>
+              <th className="text-right px-2.5 py-1 text-violet-400" rowSpan={2}>σEntry</th>
+              <th className="text-right px-2.5 py-1 text-violet-300" rowSpan={2}>σPeak</th>
+              <th className="text-right px-2.5 py-1 text-violet-200" rowSpan={2}>σEnd</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>EntryPrc%</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>ExitPrc%</th>
+              <th className="text-right px-2.5 py-1 text-sky-400" rowSpan={2}>Corr</th>
+              <th className="text-right px-2.5 py-1 text-sky-400" rowSpan={2}>Beta</th>
+              <th className="text-right px-2.5 py-1 text-sky-300" rowSpan={2}>σHist</th>
+              <th className="text-right px-2.5 py-1 text-amber-400" rowSpan={2}>Rating</th>
+              <th className="text-right px-2.5 py-1 text-amber-300" rowSpan={2}>Total</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>Hold</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>Entries</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>Spread</th>
+              <th colSpan={3} className="text-center px-2.5 py-1 text-emerald-400 border-l border-white/10">P&amp;L</th>
+            </tr>
+            <tr>
+              <th className="text-right px-2.5 py-1 text-emerald-300 border-l border-white/10">Ticker</th>
+              <th className="text-right px-2.5 py-1 text-emerald-200">Bench</th>
+              <th className="text-right px-2.5 py-1 text-emerald-400">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => {
+              const isBidAsk = priceMode === "BidAsk";
+              const isLong = r.side === "Long";
+              // Entry: Long pays ask, Short receives bid
+              const entryPct = isBidAsk
+                ? (isLong ? (r.startAskPct ?? r.lstPrcLstClsPct) : (r.startBidPct ?? r.lstPrcLstClsPct))
+                : r.lstPrcLstClsPct;
+              // Exit: Long receives bid, Short pays ask
+              const exitPct = isBidAsk
+                ? (isLong ? (r.endBidPct ?? r.endLstPrcLstClsPct) : (r.endAskPct ?? r.endLstPrcLstClsPct))
+                : r.endLstPrcLstClsPct;
+              const holdMin = r.endMinuteIdx - r.startMinuteIdx;
+              const pnl = r.totalPnlUsd ?? null;
+              return (
+                <tr key={r.episodeId ?? i} className="border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]">
+                  <td className="px-2.5 py-1.5 text-zinc-600 whitespace-nowrap">{r.dateNy ?? r.date ?? r.tradeDateNy ?? "—"}</td>
+                  <td className="px-2.5 py-1.5 text-zinc-500 whitespace-nowrap">{fmtTime(r.startTsNy)}</td>
+                  <td className="px-2.5 py-1.5">
+                    <span className={clsx(
+                      "inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
+                      r.closeMode === "Passive" ? "bg-violet-500/20 text-violet-300" : "bg-sky-500/20 text-sky-300"
+                    )}>{r.closeMode ?? "—"}</span>
+                  </td>
+                  <td className="px-2.5 py-1.5 text-zinc-100 font-semibold">{r.ticker}</td>
+                  <td className="px-2.5 py-1.5 text-zinc-400">{r.benchTicker}</td>
+                  <td className="px-2.5 py-1.5"><SideBadge side={r.side} /></td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-300">{num(r.startMetric, 2)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-200">{num(r.peakMetric, 2)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-200/70">{num(r.endMetric, 2)}</td>
+                  <td className={clsx("px-2.5 py-1.5 text-right tabular-nums", entryPct != null && entryPct < 0 ? "text-rose-300" : "text-emerald-300")}>
+                    {entryPct != null ? `${entryPct >= 0 ? "+" : ""}${entryPct.toFixed(2)}%` : "—"}
+                  </td>
+                  <td className={clsx("px-2.5 py-1.5 text-right tabular-nums", exitPct != null && exitPct < 0 ? "text-rose-300" : "text-emerald-300")}>
+                    {exitPct != null ? `${exitPct >= 0 ? "+" : ""}${exitPct.toFixed(2)}%` : "—"}
+                  </td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-300">{num(r.corr, 2)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-300">{num(r.beta, 2)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-200">{num(r.sigma, 2)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-500">{r.entryCount ?? "—"}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{num(r.spread, 4)}</td>
+                  <td className={clsx(
+                    "px-2.5 py-1.5 text-right tabular-nums border-l border-white/10",
+                    (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-400"
+                  )}>{num(r.rawPnlUsd ?? null, 2)}</td>
+                  <td className={clsx(
+                    "px-2.5 py-1.5 text-right tabular-nums",
+                    (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-200" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-400"
+                  )}>{num(r.benchPnlUsd ?? null, 2)}</td>
+                  <td className={clsx(
+                    "px-2.5 py-1.5 text-right tabular-nums font-semibold",
+                    pnl != null && pnl > 0 ? "text-emerald-400" : pnl != null && pnl < 0 ? "text-rose-300" : "text-zinc-400"
+                  )}>{num(pnl, 2)}</td>
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr>
+                <td colSpan={22} className="px-4 py-10 text-center text-zinc-600">
+                  No analytics trades yet. Run Analytics for a date range.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 export default function ArbitrageScanner({
   initialPrimaryPanel = "scanner",
@@ -6779,39 +6975,38 @@ export default function ArbitrageScanner({
   onControlledSessionChange,
   controlledRuleBand,
   onControlledRuleBandChange,
-  moneyExecutionDescriptorOverride,
-  moneyAutomationConfigOverride,
-  moneyAutoStartEnabledOverride,
-  moneyAutoEnabledOverride,
-  moneyViewModeOverride,
-  onMoneyAutomationConfigChange,
-  onMoneyAutoEnabledChange,
+  streamExecutionDescriptorOverride,
+  streamAutomationConfigOverride,
+  streamAutoStartEnabledOverride,
+  streamAutoEnabledOverride,
+  streamViewModeOverride,
+  onStreamAutomationConfigChange,
+  onStreamAutoEnabledChange,
   headerTitleOverride,
   headerBadgeValuesOverride,
   headerMetaLabelOverride,
+  headerMinimal,
   activeTabLabelOverride,
   episodesTabLabelOverride,
   analyticsTabLabelOverride,
-  onMoneyShellStatsChange,
+  onStreamShellStatsChange,
   onSharedRatingRulesChange,
 }: ArbitrageScannerProps) {
   const { theme } = useUi();
-  const accent = useMemo(() => getScannerAccent(theme), [theme]);
-  const headerButtonActiveClass = useMemo(() => getScannerHeaderButtonActiveClass(theme), [theme]);
   const isLightTheme = theme === "light";
   const [primaryPanel, setPrimaryPanel] = useState<PrimaryPanelKey>(() => {
-    if (initialPrimaryPanel === "money" || initialPrimaryPanel === "scanner") return initialPrimaryPanel;
+    if (initialPrimaryPanel === "stream" || initialPrimaryPanel === "scanner") return initialPrimaryPanel;
     if (typeof window === "undefined") return "scanner";
     try {
       const qs = new URLSearchParams(window.location.search);
-      return qs.get("panel") === "money" ? "money" : "scanner";
+      return qs.get("panel") === "stream" ? "stream" : "scanner";
     } catch {
       return "scanner";
     }
   });
   const [internalTab, setInternalTab] = useState<TabKey>("active");
   const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
-  const [zapUiMode, setZapUiMode] = useState<ZapUiMode>("zap");
+  const [zapMode, setZapMode] = useState<ZapMode>("zap");
   const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
 
   // days + date mode
@@ -6821,8 +7016,8 @@ export default function ArbitrageScanner({
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
   const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
-  const routeLocksPrimaryPanel = initialPrimaryPanel === "money" || initialPrimaryPanel === "scanner";
-  const isMoneyOnlyShell = shellMode === "moneyOnly";
+  const routeLocksPrimaryPanel = initialPrimaryPanel === "stream" || initialPrimaryPanel === "scanner";
+  const isStreamOnlyShell = shellMode === "streamOnly";
   const tab = controlledTab ?? internalTab;
   const [internalSession, setInternalSession] = useState<PaperArbSession>("GLOB");
   const session = controlledSession ?? internalSession;
@@ -6861,11 +7056,14 @@ export default function ArbitrageScanner({
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
+  const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
   const [sizeValue, setSizeValue] = useState<number>(1000);
   const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>("Undiluted");
   const [dilutionStep, setDilutionStep] = useState<number>(0.3);
   const [maxAdds, setMaxAdds] = useState<number>(3);
+  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(0);
+  const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -6877,7 +7075,7 @@ export default function ArbitrageScanner({
   // table sub-filters (client-side)
   const [qTicker, setQTicker] = useState("");
   const [qSide, setQSide] = useState<"" | "Long" | "Short">("");
-  const [moneySortKey, setMoneySortKey] = useState<"alpha" | "sigma" | "netEdge">("alpha");
+  const [streamSortKey, setStreamSortKey] = useState<"alpha" | "sigma" | "netEdge">("alpha");
 
   // data
   const [activeRows, setActiveRows] = useState<PaperArbActiveRow[]>([]);
@@ -7235,7 +7433,7 @@ export default function ArbitrageScanner({
     return [
       `metric=${metric}`,
       `startAbs=${startAbs}`,
-      `deltaPrint=${zapUiMode === "delta" ? "on" : "off"}`,
+      `deltaPrint=${zapMode === "delta" ? "on" : "off"}`,
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
@@ -7244,24 +7442,24 @@ export default function ArbitrageScanner({
       `offset=${offset}`,
       `closeMode=${closeMode}`,
       `minHoldCandles=${minHoldCandles}`,
-      `priceMode=LastPrint`,
+      `priceMode=${priceMode}`,
       `pnlMode=${pnlMode}`,
       `maxAdds=${maxAdds}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, maxAdds, zapUiMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${zapUiMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|LastPrint`;
+    const s = `${metric}|${startAbs}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, pnlMode, maxAdds, zapUiMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const forceEpisodesSearch = useMemo(() => {
     const has = (v: string) => String(v ?? "").trim().length > 0;
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs);
+    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs);
     return (
       has(minCorr) || has(maxCorr) ||
       has(minBeta) || has(maxBeta) ||
@@ -7324,7 +7522,7 @@ export default function ArbitrageScanner({
     minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
     minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
     minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-    startAbsMax, startAbs, zapUiMode,
+    startAbsMax, startAbs, zapMode,
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
@@ -7347,12 +7545,12 @@ export default function ArbitrageScanner({
 
     if (!(startAbs > 0)) e.push("startAbs must be > 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    if (zapUiMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    if (zapMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
     return e;
-  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapUiMode]);
+  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -7474,10 +7672,10 @@ export default function ArbitrageScanner({
       } else {
         const s = JSON.parse(raw) as Record<string, any>;
 
-        if (!routeLocksPrimaryPanel && (s.primaryPanel === "money" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
+        if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
         if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
-        if (s.zapUiMode === "off" || s.zapUiMode === "zap" || s.zapUiMode === "sigma" || s.zapUiMode === "delta") setZapUiMode(s.zapUiMode);
+        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -7501,11 +7699,13 @@ export default function ArbitrageScanner({
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
+        if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
         if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
         if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
         if (typeof s.maxAdds === "number") setMaxAdds(normalizeMaxAddsValue(s.maxAdds));
+        if (typeof s.addDelayMinutes === "number") setAddDelayMinutes(Math.max(0, Math.trunc(s.addDelayMinutes)));
         if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score" || s.optimizerRangeRankMetric === "tailDamage") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
@@ -7684,7 +7884,7 @@ export default function ArbitrageScanner({
       primaryPanel,
       tab,
       ruleBand,
-      zapUiMode,
+      zapMode,
       showSharedMinMax,
       dateMode,
       dateNy,
@@ -7698,11 +7898,13 @@ export default function ArbitrageScanner({
       endAbs,
       minHoldCandles,
       pnlMode,
+      priceMode,
       sizingMode,
       sizeValue,
       dilutionMode,
       dilutionStep,
       maxAdds,
+      addDelayMinutes,
       optimizerRangeRankMetric,
       optimizerRangeMinTrades,
       optimizerBucketCount,
@@ -7852,8 +8054,8 @@ export default function ArbitrageScanner({
       maxImbExchValue,
     }),
     [
-      primaryPanel, tab, ruleBand, zapUiMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, pnlMode,
+      primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
+      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, priceMode, pnlMode,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
@@ -8132,18 +8334,18 @@ export default function ArbitrageScanner({
     }
   }, [persistedFilters]);
 
-  const derivedMoneySignalClass = useMemo(() => {
+  const derivedStreamSignalClass = useMemo(() => {
     if (ruleBand === "GLOBAL") return "global";
     return ruleBand.toLowerCase();
   }, [ruleBand]);
-  const moneySignalClass = moneyExecutionDescriptorOverride?.signalClass ?? derivedMoneySignalClass;
+  const streamSignalClass = streamExecutionDescriptorOverride?.signalClass ?? derivedStreamSignalClass;
 
-  const derivedMoneyRatingRule = useMemo(() => {
+  const derivedStreamRatingRule = useMemo(() => {
     return ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
   }, [ratingRules, ruleBand]);
-  const moneyRatingRule = moneyExecutionDescriptorOverride?.ratingRule ?? derivedMoneyRatingRule;
+  const streamRatingRule = streamExecutionDescriptorOverride?.ratingRule ?? derivedStreamRatingRule;
 
-  const moneyFilterConfig = useMemo<ArbitrageFilterConfigV1>(() => {
+  const streamFilterConfig = useMemo<ArbitrageFilterConfigV1>(() => {
     const mm = (minRaw: string, maxRaw: string) => {
       const min = optNumOrNull(minRaw);
       const max = optNumOrNull(maxRaw);
@@ -8161,11 +8363,11 @@ export default function ArbitrageScanner({
     const exchanges = Array.from(selExchanges);
     const sectors = Array.from(selSectors);
 
-    return buildMoneyFilterConfig({
-      signalClass: moneySignalClass,
+    return buildStreamFilterConfig({
+      signalClass: streamSignalClass,
       ratingType,
-      minRate: moneyRatingRule.minRate,
-      minTotal: moneyRatingRule.minTotal,
+      minRate: streamRatingRule.minRate,
+      minTotal: streamRatingRule.minTotal,
       listMode,
       ignoreTickers,
       applyTickers,
@@ -8224,9 +8426,9 @@ export default function ArbitrageScanner({
       zapThresholdAbs: startAbs,
     });
   }, [
-    moneySignalClass,
+    streamSignalClass,
     ratingType,
-    moneyRatingRule,
+    streamRatingRule,
     listMode,
     scopeMode,
     ignoreTickersText,
@@ -8246,7 +8448,7 @@ export default function ArbitrageScanner({
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
-  const moneyExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
+  const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
     const mm = (minRaw: string, maxRaw: string) => ({
       min: optNumOrNull(minRaw),
       max: optNumOrNull(maxRaw),
@@ -8256,12 +8458,12 @@ export default function ArbitrageScanner({
       const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
 
       return {
-        cls: moneySignalClass,
+        cls: streamSignalClass,
         type: ratingType ?? "any",
         mode: scopeModeForSnapshot,
         ratingMode,
-        minRate: moneyRatingRule.minRate,
-        minTotal: moneyRatingRule.minTotal,
+        minRate: streamRatingRule.minRate,
+        minTotal: streamRatingRule.minTotal,
         tickersFilterNorm: splitListUpper(tickersText).join(","),
         listMode,
         ignoreSet: new Set(splitListUpper(ignoreTickersText)),
@@ -8332,7 +8534,7 @@ export default function ArbitrageScanner({
       betaMax: maxBeta,
       sigmaMin: minSigma,
       sigmaMax: maxSigma,
-      zapMode: zapUiMode,
+      zapMode: zapMode,
       zapShowAbs: startAbs,
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
@@ -8437,84 +8639,89 @@ export default function ArbitrageScanner({
     minVolatility90,
     minVWAP,
     minYCls,
-      moneyRatingRule.minRate,
-      moneyRatingRule.minTotal,
-      moneySignalClass,
+      streamRatingRule.minRate,
+      streamRatingRule.minTotal,
+      streamSignalClass,
       ratingType,
       startAbs,
       tickersText,
-      zapUiMode,
+      zapMode,
     ]);
 
-  const effectiveMoneyAutomationConfig = useMemo<MoneyAutomationConfig>(() => ({
-    strategyModeEnabled: moneyAutomationConfigOverride?.strategyModeEnabled ?? false,
-    minNetEdge: moneyAutomationConfigOverride?.minNetEdge ?? 0,
-    endSignalThreshold: moneyAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
-    maxOpenPositions: moneyAutomationConfigOverride?.maxOpenPositions ?? 10,
-    maxAdds: moneyAutomationConfigOverride?.maxAdds ?? maxAdds,
-    queueDelayMinSeconds: moneyAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
-    queueDelayMaxSeconds: moneyAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
+  const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
+    strategyModeEnabled: streamAutomationConfigOverride?.strategyModeEnabled ?? false,
+    minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
+    endSignalThreshold: streamAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
+    maxOpenPositions: streamAutomationConfigOverride?.maxOpenPositions ?? 10,
+    maxAdds: streamAutomationConfigOverride?.maxAdds ?? maxAdds,
+    queueDelayMinSeconds: streamAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
+    queueDelayMaxSeconds: streamAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
     exitExecutionMode: closeMode === "Passive" ? "passive" : "active",
     hedgeMode: pnlMode === "Hedged" ? "hedged" : "unhedged",
     scaleMode: dilutionMode === "Diluted" ? "scale_in" : "single",
     sizingMode: sizingMode === "Tier" ? "TIER" : "USD",
     sizeValue,
     dilutionStep,
+    addDelayMinutes,
     minHoldMinutes: minHoldCandles,
-    exitMode: moneyAutomationConfigOverride?.exitMode ?? "normalize",
-    printStartTime: moneyAutomationConfigOverride?.printStartTime ?? "09:20",
-    printCloseTime: moneyAutomationConfigOverride?.printCloseTime ?? "09:30",
-    noSpreadExit: moneyAutomationConfigOverride?.noSpreadExit ?? true,
+    exitConfirmTicks: streamAutomationConfigOverride?.exitConfirmTicks ?? exitConfirmTicks,
+    exitMode: streamAutomationConfigOverride?.exitMode ?? "normalize",
+    printStartTime: streamAutomationConfigOverride?.printStartTime ?? "09:20",
+    printCloseTime: streamAutomationConfigOverride?.printCloseTime ?? "09:30",
+    noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
+    betaMode: streamAutomationConfigOverride?.betaMode ?? false,
   }), [
+    addDelayMinutes,
     closeMode,
     dilutionMode,
     dilutionStep,
     endAbs,
+    exitConfirmTicks,
     maxAdds,
     minHoldCandles,
-    moneyAutomationConfigOverride,
+    streamAutomationConfigOverride,
     pnlMode,
     sizeValue,
     sizingMode,
   ]);
 
-  const moneyTrackedSignalsEnabled =
-    !isMoneyOnlyShell ||
+  const streamTrackedSignalsEnabled =
+    !isStreamOnlyShell ||
     tab !== "active" ||
-    moneyViewModeOverride === "auto" ||
-    Boolean(moneyAutoEnabledOverride) ||
-    Boolean(moneyAutoStartEnabledOverride) ||
-    Boolean(effectiveMoneyAutomationConfig.strategyModeEnabled);
+    streamViewModeOverride === "auto" ||
+    Boolean(streamAutoEnabledOverride) ||
+    Boolean(streamAutoStartEnabledOverride) ||
+    Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
 
   const {
-    moneyEntryReadyCount,
-    moneyAutoEnabled,
-    moneySessionStartedAt,
-    moneySessionStoppedAt,
-    moneySentOrdersCount,
-    setMoneyAutoEnabled,
-    moneyManualExecutionBusy,
-    bindMoneyWindows,
-    clearMoneyBoundWindow,
-    captureMoneyTickerPoint,
-    captureMoneyTickerPointDelayed,
-    clearMoneyTickerPoint,
-    toggleMoneyPanicOff,
-    startMoneyAutomation,
-    clearMoneyExecutionQueue,
-    resetMoneyAutomationState,
-    dismissMoneyActivePositions,
-    submitManualMoneyOrders,
-    refresh: refreshMoneySignals,
-  } = useMoneyEngine({
-    enabled: primaryPanel === "money",
-    ocrEnabled: moneyViewModeOverride === "auto" || (moneyViewModeOverride === "money-auto-tab" && tab === "analytics"),
-    trackedSignalsEnabled: moneyTrackedSignalsEnabled,
-    initialAutoEnabled: moneyAutoStartEnabledOverride ?? (moneyViewModeOverride === "auto"),
-    signalClass: moneySignalClass,
+    streamEntryReadyCount,
+    streamAutoEnabled,
+    streamSessionStartedAt,
+    streamSessionStoppedAt,
+    streamSentOrdersCount,
+    setStreamAutoEnabled,
+    streamManualExecutionBusy,
+    bindStreamWindows,
+    clearStreamBoundWindow,
+    captureStreamTickerPoint,
+    captureStreamTickerPointDelayed,
+    clearStreamTickerPoint,
+    toggleStreamPanicOff,
+    startStreamAutomation,
+    clearStreamExecutionQueue,
+    resetStreamAutomationState,
+    dismissStreamActivePositions,
+    submitManualStreamOrders,
+    refresh: refreshStreamSignals,
+  } = useStreamEngine({
+    enabled: primaryPanel === "stream",
+    ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
+    trackedSignalsEnabled: streamTrackedSignalsEnabled,
+    initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
+    signalClass: streamSignalClass,
     ratingType,
     metric,
-    ratingRule: { minRate: moneyRatingRule.minRate, minTotal: moneyRatingRule.minTotal },
+    ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
     tickersCsv: splitListUpper(tickersText).join(",") || undefined,
     minCorr: optNumOrNull(minCorr),
     maxCorr: optNumOrNull(maxCorr),
@@ -8522,80 +8729,94 @@ export default function ArbitrageScanner({
     maxBeta: optNumOrNull(maxBeta),
     minSigma: optNumOrNull(minSigma),
     maxSigma: optNumOrNull(maxSigma),
-    filterConfig: moneyFilterConfig,
-    exactSonarFilterSnapshot: moneyExactSonarFilterSnapshot,
+    filterConfig: streamFilterConfig,
+    exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
     maxSpreadValue: maxSpread,
-    automationConfig: effectiveMoneyAutomationConfig,
-    onUpdated: isMoneyOnlyShell ? undefined : () => setUpdatedAt(new Date()),
+    automationConfig: effectiveStreamAutomationConfig,
+    activeScannerTickers: activeRows.map((r) => ({
+      ticker: r.ticker,
+      side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
+    })),
+    onFetchActiveTickers: async () => {
+      const params = buildGetParams(dateNy);
+      const qs = buildPaperQuery(params);
+      const j = await apiGet<any>(`/api/paper/arbitrage/active${qs}`);
+      const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
+      return rows.map((r) => ({
+        ticker: r.ticker,
+        side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
+      }));
+    },
+    onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
-  const moneySignalMeta = useMoneySignalMeta();
+  const streamSignalMeta = useStreamSignalMeta();
   const tapeMeta = useTapeMeta();
-  const moneyPositionMeta = useMoneyPositionMeta();
-  const [moneyAutoStartLocked, setMoneyAutoStartLocked] = useState(false);
-  const [moneyAutomationTogglePending, setMoneyAutomationTogglePending] = useState<null | "start" | "stop">(null);
-  const [moneyWindowCaptureBusy, setMoneyWindowCaptureBusy] = useState(false);
-  const moneyAutomationLaunchEnabled = moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab";
-  const moneyStrategyModeEnabled = effectiveMoneyAutomationConfig.strategyModeEnabled;
-  const effectiveMoneyAutoEnabled = typeof moneyAutoEnabledOverride === "boolean" ? moneyAutoEnabledOverride : moneyAutoEnabled;
-  const applyMoneyAutoEnabled = useCallback((enabled: boolean) => {
-    setMoneyAutoEnabled(enabled);
-    onMoneyAutoEnabledChange?.(enabled);
-  }, [onMoneyAutoEnabledChange, setMoneyAutoEnabled]);
-  const moneyAutomationEnabled = effectiveMoneyAutoEnabled && moneyStrategyModeEnabled;
-  const moneyAutomationRunning = moneyAutomationTogglePending === "start"
+  const streamPositionMeta = useStreamPositionMeta();
+  const [streamAutoStartLocked, setStreamAutoStartLocked] = useState(false);
+  const [streamAutomationTogglePending, setStreamAutomationTogglePending] = useState<null | "start" | "stop">(null);
+  const [streamWindowCaptureBusy, setStreamWindowCaptureBusy] = useState(false);
+  const streamAutomationLaunchEnabled = streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab";
+  const streamStrategyModeEnabled = effectiveStreamAutomationConfig.strategyModeEnabled;
+  const effectiveStreamAutoEnabled = typeof streamAutoEnabledOverride === "boolean" ? streamAutoEnabledOverride : streamAutoEnabled;
+  const applyStreamAutoEnabled = useCallback((enabled: boolean) => {
+    setStreamAutoEnabled(enabled);
+    onStreamAutoEnabledChange?.(enabled);
+  }, [onStreamAutoEnabledChange, setStreamAutoEnabled]);
+  const streamAutomationEnabled = effectiveStreamAutoEnabled && streamStrategyModeEnabled;
+  const streamAutomationRunning = streamAutomationTogglePending === "start"
     ? true
-    : moneyAutomationTogglePending === "stop"
+    : streamAutomationTogglePending === "stop"
       ? false
-      : moneyAutomationEnabled;
-  const moneyAutomationToggleBusy = moneyAutomationTogglePending !== null;
-  const moneyExecutionSnapshot = useMoneyExecutionSnapshot();
-  const moneyWindowsBound = Boolean(moneyExecutionSnapshot?.boundWindow?.isBound && moneyExecutionSnapshot?.mainWindow?.isBound);
+      : streamAutomationEnabled;
+  const streamAutomationToggleBusy = streamAutomationTogglePending !== null;
+  const streamExecutionSnapshot = useStreamExecutionSnapshot();
+  const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
   useEffect(() => {
-    if (typeof moneyAutoEnabledOverride !== "boolean") return;
-    if (moneyAutoEnabled !== moneyAutoEnabledOverride) {
-      setMoneyAutoEnabled(moneyAutoEnabledOverride);
+    if (typeof streamAutoEnabledOverride !== "boolean") return;
+    if (streamAutoEnabled !== streamAutoEnabledOverride) {
+      setStreamAutoEnabled(streamAutoEnabledOverride);
     }
-  }, [moneyAutoEnabled, moneyAutoEnabledOverride, setMoneyAutoEnabled]);
+  }, [streamAutoEnabled, streamAutoEnabledOverride, setStreamAutoEnabled]);
 
-  const moneyCountries = useMemo(() => {
-    const s = new Set<string>([...tapeMeta.countries, ...moneySignalMeta.countries]);
+  const streamCountries = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.countries, ...streamSignalMeta.countries]);
     for (const row of episodesRows) {
       const v = row.country?.trim().toUpperCase();
       if (v) s.add(v);
     }
     return Array.from(s).sort();
-  }, [tapeMeta.countries, moneySignalMeta.countries, episodesRows]);
+  }, [tapeMeta.countries, streamSignalMeta.countries, episodesRows]);
 
-  const moneyExchanges = useMemo(() => {
-    const s = new Set<string>([...tapeMeta.exchanges, ...moneySignalMeta.exchanges]);
+  const streamExchanges = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.exchanges, ...streamSignalMeta.exchanges]);
     for (const row of episodesRows) {
       const v = row.exchange?.trim().toUpperCase();
       if (v) s.add(v);
     }
     return Array.from(s).sort();
-  }, [tapeMeta.exchanges, moneySignalMeta.exchanges, episodesRows]);
+  }, [tapeMeta.exchanges, streamSignalMeta.exchanges, episodesRows]);
 
-  const moneySectors = useMemo(() => {
-    const s = new Set<string>([...tapeMeta.sectors, ...moneySignalMeta.sectors]);
+  const streamSectors = useMemo(() => {
+    const s = new Set<string>([...tapeMeta.sectors, ...streamSignalMeta.sectors]);
     for (const row of episodesRows) {
       const v = row.sectorL3?.trim();
       if (v) s.add(v);
     }
     return Array.from(s).sort();
-  }, [tapeMeta.sectors, moneySignalMeta.sectors, episodesRows]);
+  }, [tapeMeta.sectors, streamSignalMeta.sectors, episodesRows]);
 
 
-  const toggleMoneyAutomationRunFromHeader = async () => {
-    if (!moneyAutomationLaunchEnabled) return;
-    if (moneyAutomationToggleBusy) return;
-    if (moneyAutoStartLocked && !moneyAutomationRunning) return;
+  const toggleStreamAutomationRunFromHeader = async () => {
+    if (!streamAutomationLaunchEnabled) return;
+    if (streamAutomationToggleBusy) return;
+    if (streamAutoStartLocked && !streamAutomationRunning) return;
 
-    if (moneyAutomationRunning) {
-      setMoneyAutomationTogglePending("stop");
+    if (streamAutomationRunning) {
+      setStreamAutomationTogglePending("stop");
       try {
-        const response = await fetch(apiUrl("/api/money/automation/stop"), {
+        const response = await fetch(apiUrl("/api/stream/automation/stop"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8608,22 +8829,22 @@ export default function ArbitrageScanner({
         }
       } finally {
         try {
-          await clearMoneyExecutionQueue();
+          await clearStreamExecutionQueue();
         } catch {
           // best effort cleanup
         }
-        onMoneyAutomationConfigChange?.({ strategyModeEnabled: false });
-        applyMoneyAutoEnabled(false);
-        resetMoneyAutomationState();
-        setMoneyAutomationTogglePending(null);
+        onStreamAutomationConfigChange?.({ strategyModeEnabled: false });
+        applyStreamAutoEnabled(false);
+        resetStreamAutomationState();
+        setStreamAutomationTogglePending(null);
       }
       return;
     }
 
-    setMoneyAutomationTogglePending("start");
+    setStreamAutomationTogglePending("start");
     try {
-      resetMoneyAutomationState();
-      const response = await fetch(apiUrl("/api/money/automation/start"), {
+      resetStreamAutomationState();
+      const response = await fetch(apiUrl("/api/stream/automation/start"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -8634,33 +8855,32 @@ export default function ArbitrageScanner({
       if (!response.ok || json?.ok === false) {
         throw new Error(json?.error || json?.message || `HTTP ${response.status}`);
       }
-      onMoneyAutomationConfigChange?.({ strategyModeEnabled: true });
-      applyMoneyAutoEnabled(true);
+      onStreamAutomationConfigChange?.({ strategyModeEnabled: true });
+      applyStreamAutoEnabled(true);
     } finally {
-      setMoneyAutomationTogglePending(null);
+      setStreamAutomationTogglePending(null);
     }
   };
 
-  const captureMoneyWindowsFromHeader = async () => {
-    if (moneyWindowCaptureBusy) return;
-    setMoneyWindowCaptureBusy(true);
+  const captureStreamWindowsFromHeader = async () => {
+    if (streamWindowCaptureBusy) return;
+    setStreamWindowCaptureBusy(true);
     try {
       setErr(null);
-      if (moneyWindowsBound) {
-        await clearMoneyBoundWindow();
+      if (streamWindowsBound) {
+        await clearStreamBoundWindow();
       } else {
-        await bindMoneyWindows();
+        await bindStreamWindows();
       }
     } catch (error: any) {
       setErr(error?.message ?? String(error));
     } finally {
-      setMoneyWindowCaptureBusy(false);
+      setStreamWindowCaptureBusy(false);
     }
   };
 
   // ========= Build query params for GET /active & /episodes
   function buildGetParams(d: string) {
-    // NOTE: priceMode not sent (server accepts empty or LastPrint; Quotes rejected)
     const mh = Math.max(0, Math.min(60, clampInt(minHoldCandles, 0)));
     const reqTickers = requestScopedTickers;
 
@@ -8668,12 +8888,13 @@ export default function ArbitrageScanner({
       dateNy: d,
       metric,
       startAbs,
-      usePrintMedianDelta: zapUiMode === "delta" ? true : undefined,
+      usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: optNumOrNull(startAbsMax),
       endAbs,
       session,
       closeMode,
       minHoldCandles: mh,
+      priceMode,
       pnlMode,
       sizingMode,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
@@ -8803,7 +9024,7 @@ export default function ArbitrageScanner({
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapUiMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
+    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
     const reqTickers = requestScopedTickers;
 
     const sessionBand = ratingBandFromSession(session);
@@ -8819,12 +9040,13 @@ export default function ArbitrageScanner({
 
       metric,
       startAbs,
-      usePrintMedianDelta: zapUiMode === "delta" ? true : undefined,
+      usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: startAbsMaxEff,
       endAbs,
       session,
       closeMode,
       minHoldCandles: mh,
+      priceMode,
       pnlMode,
       sizingMode,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
@@ -9021,8 +9243,8 @@ export default function ArbitrageScanner({
     setErr(null);
 
     try {
-      if (primaryPanel === "money") {
-        await refreshMoneySignals();
+      if (primaryPanel === "stream") {
+        await refreshStreamSignals();
         return;
       }
       if (tab === "active") {
@@ -9374,7 +9596,7 @@ export default function ArbitrageScanner({
     ruleBand,
     sharedRangeFilterModes,
     startAbsMax,
-    zapUiMode,
+    zapMode,
   ]);
 
   const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
@@ -9843,7 +10065,7 @@ export default function ArbitrageScanner({
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
-      if (zapUiMode === "delta" && !passesDeltaZapGate({
+      if (zapMode === "delta" && !passesDeltaZapGate({
         side: r.side,
         metricAbs: r.start?.metricAbs,
         deltaAbs: startAbs,
@@ -9880,7 +10102,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
@@ -9895,7 +10117,7 @@ export default function ArbitrageScanner({
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
-      if (zapUiMode === "delta" && !passesDeltaZapGate({
+      if (zapMode === "delta" && !passesDeltaZapGate({
         side: r.side,
         metricAbs: r.startMetricAbs,
         deltaAbs: startAbs,
@@ -9932,7 +10154,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapUiMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -10047,13 +10269,22 @@ export default function ArbitrageScanner({
         row.entryCount ?? (row as any).EntryCount ?? null,
         dilutionMode
       );
+      const trancheAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, row.tierBp ?? (row as any).TierBp ?? null, 1, "Undiluted");
+      const rowCloseMode = row.closeMode ?? closeMode;
+      const rowGapPct = row.gapPct ?? (row as any).GapPct ?? null;
+      const isRowPassive = rowCloseMode === "Passive";
       const pnl = scannerRealtimePnlUsd({
         side: row.side,
         beta: row.beta ?? (row as any).Beta ?? null,
-        tickerAmountUsd,
+        trancheAmountUsd,
+        entrySnaps: row.entrySnaps ?? null,
         start: row.start,
         last: row.last,
         pnlMode,
+        priceMode,
+        closeMode: rowCloseMode,
+        gapPct: rowGapPct,
+        benchGapPct: row.benchGapPct ?? (row as any).BenchGapPct ?? null,
       });
       const serverRawPnl = row.rawPnlUsd ?? (row as any).RawPnlUsd ?? null;
       const serverBenchPnl = row.benchPnlUsd ?? (row as any).BenchPnlUsd ?? null;
@@ -10073,7 +10304,7 @@ export default function ArbitrageScanner({
         sessionDateNy: dateNy,
         startMinuteIdx: row.start?.minuteIdx ?? 0,
         peakMinuteIdx: row.peak?.minuteIdx ?? row.start?.minuteIdx ?? 0,
-        endMinuteIdx: row.last?.minuteIdx ?? row.peak?.minuteIdx ?? row.start?.minuteIdx ?? 0,
+        endMinuteIdx: isRowPassive && rowGapPct != null ? 570 : (row.last?.minuteIdx ?? row.peak?.minuteIdx ?? row.start?.minuteIdx ?? 0),
         startMetric: row.start?.metric ?? null,
         startMetricAbs: startAbs,
         peakMetric: row.peak?.metric ?? null,
@@ -10095,7 +10326,7 @@ export default function ArbitrageScanner({
         yCls: row.yCls ?? (row as any).YCls ?? null,
       };
     });
-  }, [filteredActive, dateNy, closeMode, minHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode]);
+  }, [filteredActive, dateNy, closeMode, minHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
 
   const activeRealtimeSorted = useMemo(() => {
     const mul = dirMul(analyticsSort.dir);
@@ -10558,6 +10789,26 @@ export default function ArbitrageScanner({
     optimizerImpactRows.length > 0 ||
     optimizerRangeGroups.length > 0;
   const hasVisualScopeLoaded = episodesRows.length > 0 || filteredEpisodes.length > 0;
+
+  const downloadEpisodesLog = useCallback(() => {
+    if (!filteredEpisodes.length) return;
+    const meta = {
+      exportedAt: new Date().toISOString(),
+      filters: { metric, startAbs, endAbs, session, closeMode, minHoldCandles, priceMode, pnlMode, dilutionMode, dilutionStep, maxAdds },
+      count: filteredEpisodes.length,
+    };
+    const lines = [
+      JSON.stringify({ _meta: meta }),
+      ...filteredEpisodes.map((r) => JSON.stringify(r)),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "application/x-ndjson" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scanner_log_${metric}_${session}_${dateFrom}_${dateTo}_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.jsonl`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredEpisodes, metric, startAbs, endAbs, session, closeMode, minHoldCandles, priceMode, pnlMode, dilutionMode, dilutionStep, maxAdds, dateFrom, dateTo]);
   const episodeEntryCount = (row: PaperArbClosedDto) => {
     const count = Math.trunc(row.entryCount ?? 1);
     return Number.isFinite(count) && count > 0 ? count : 1;
@@ -10565,25 +10816,25 @@ export default function ArbitrageScanner({
   const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
     pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
   const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
-  const episodeTickerMoneyflowUsd = (row: PaperArbClosedDto) => {
+  const episodeTickerStreamflowUsd = (row: PaperArbClosedDto) => {
     const baseNotional = row.positionNotionalUsd ?? 0;
     if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
     return baseNotional * episodeEntryCount(row);
   };
-  const episodeBenchMoneyflowUsd = (row: PaperArbClosedDto) => {
+  const episodeBenchStreamflowUsd = (row: PaperArbClosedDto) => {
     if (!episodeHasHedgeLeg(row)) return 0;
-    const tickerFlow = episodeTickerMoneyflowUsd(row);
+    const tickerFlow = episodeTickerStreamflowUsd(row);
     if (!Number.isFinite(tickerFlow) || tickerFlow <= 0) return 0;
     return tickerFlow * Math.abs(row.beta ?? 0);
   };
-  const episodeMoneyflowUsd = (row: PaperArbClosedDto) => {
-    return episodeTickerMoneyflowUsd(row) + episodeBenchMoneyflowUsd(row);
+  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
+    return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
     const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
     const situations = pnl.length;
     const trades = filteredEpisodes.reduce((sum, row) => sum + episodeTradeCount(row), 0);
-    const moneyflowUsd = filteredEpisodes.reduce((sum, row) => sum + episodeMoneyflowUsd(row), 0);
+    const streamflowUsd = filteredEpisodes.reduce((sum, row) => sum + episodeStreamflowUsd(row), 0);
     const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
     const wins = pnl.filter((x) => x > 0).length;
     const losses = pnl.filter((x) => x < 0).length;
@@ -10629,7 +10880,7 @@ export default function ArbitrageScanner({
           row,
           index,
           dateKey: getEpisodeDateKey(row, fallbackDate),
-          minute: Number.isFinite(row.endMinuteIdx) ? row.endMinuteIdx : null,
+          minute: Number.isFinite(row.endMinuteIdx) ? (row.closeMode === "Passive" ? 570 : row.endMinuteIdx) : null,
         }))
         .sort((a, b) => {
           const da = a.dateKey ?? "";
@@ -10657,7 +10908,7 @@ export default function ArbitrageScanner({
     return {
       situations,
       trades,
-      moneyflowUsd,
+      streamflowUsd,
       totalPnlUsd,
       winRate,
       profitFactor,
@@ -10795,7 +11046,7 @@ export default function ArbitrageScanner({
   };
 
   useEffect(() => {
-    setZapUiMode((prev) => {
+    setZapMode((prev) => {
       if (prev === "delta" && metric === "SigmaZap") return "delta";
       return metric === "ZapPct" ? "zap" : "sigma";
     });
@@ -10808,43 +11059,43 @@ export default function ArbitrageScanner({
     setAnalyticsSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
   };
   const sortMark = (active: boolean, dir: SortDir) => (active ? (dir === "asc" ? " ↑" : " ↓") : "");
-  const moneyStats = useMemo(() => ({
-    signals: moneySignalMeta.totalCount,
-    ready: moneyEntryReadyCount,
-    open: moneyPositionMeta.openCount,
-    autoEnabled: moneyAutoEnabled,
-  }), [moneyEntryReadyCount, moneyPositionMeta.openCount, moneySignalMeta.totalCount, moneyAutoEnabled]);
-  const scannerShellTitle = isMoneyOnlyShell
-    ? (headerTitleOverride ?? "ARBITRAGE MONEY")
-    : primaryPanel === "money"
-      ? "ARBITRAGE MONEY"
+  const streamStats = useMemo(() => ({
+    signals: streamSignalMeta.totalCount,
+    ready: streamEntryReadyCount,
+    open: streamPositionMeta.openCount,
+    autoEnabled: streamAutoEnabled,
+  }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
+  const scannerShellTitle = isStreamOnlyShell
+    ? (headerTitleOverride ?? "ARBITRAGE STREAM")
+    : primaryPanel === "stream"
+      ? "ARBITRAGE STREAM"
       : "ARBITRAGE SCANNER";
-  const headerBadgeValues = isMoneyOnlyShell
-    ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", moneyAutoEnabled ? "AUTO ON" : "AUTO OFF"])
+  const headerBadgeValues = isStreamOnlyShell
+    ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
-  const headerMetaLabel = isMoneyOnlyShell
-    ? (headerMetaLabelOverride ?? `signals ${intn(moneyStats.signals)} | ready ${intn(moneyStats.ready)} | open ${intn(moneyStats.open)}`)
+  const headerMetaLabel = isStreamOnlyShell
+    ? (headerMetaLabelOverride ?? `signals ${intn(streamStats.signals)} | ready ${intn(streamStats.ready)} | open ${intn(streamStats.open)}`)
     : `minRate ${num(minRateLabel, 2)} | minTotal ${intn(minTotalLabel)} | limit ${intn(limitLabel)}`;
-  const activeTabLabel = isMoneyOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "ACTIVE";
-  const episodesTabLabel = isMoneyOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
-  const analyticsTabLabel = isMoneyOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "ANALYTICS";
+  const activeTabLabel = isStreamOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "ACTIVE";
+  const episodesTabLabel = isStreamOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
+  const analyticsTabLabel = isStreamOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "ANALYTICS";
   const headerNavGroupClass = isLightTheme
     ? "flex h-7 items-center gap-2 rounded-lg border border-slate-900/10 bg-white/35"
     : "flex h-7 items-center gap-2 rounded-lg bg-black/20";
   const headerNavInactiveClass = isLightTheme
     ? "border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
-  const moneyShellActiveClass = headerButtonActiveClass;
+  const streamShellActiveClass = "accent-soft";
   const shellTabStripClass = "flex items-center gap-1.5 self-start";
   const shellTabButtonBaseClass =
     "inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[11px] font-mono font-bold uppercase leading-none transition-all";
-  const shellTabButtonActiveClass = headerButtonActiveClass;
+  const shellTabButtonActiveClass = "accent-soft";
   const shellTabButtonInactiveClass = isLightTheme
     ? "border border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
     : "border border-transparent text-[#8b8d97] hover:text-[#cfd1d8] hover:bg-white/[0.03]";
   const shellTabIconClass = isLightTheme ? "text-slate-400" : "text-[#8f919b]";
   const shellTabActiveIconClass = "text-current";
-  const autoStartButtonClass = headerButtonActiveClass;
+  const autoStartButtonClass = "accent-soft";
   const autoStopButtonClass = isLightTheme
     ? "border-rose-500/35 bg-rose-500/12 text-rose-700 shadow-none"
     : "border-rose-500/20 bg-rose-500/10 text-rose-300";
@@ -10853,9 +11104,9 @@ export default function ArbitrageScanner({
     : "inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500";
 
   useEffect(() => {
-    if (!isMoneyOnlyShell || !onMoneyShellStatsChange) return;
-    onMoneyShellStatsChange(moneyStats);
-  }, [isMoneyOnlyShell, moneyStats, onMoneyShellStatsChange]);
+    if (!isStreamOnlyShell || !onStreamShellStatsChange) return;
+    onStreamShellStatsChange(streamStats);
+  }, [isStreamOnlyShell, streamStats, onStreamShellStatsChange]);
 
   useEffect(() => {
     if (!onSharedRatingRulesChange) return;
@@ -10873,8 +11124,8 @@ export default function ArbitrageScanner({
       const url = new URL(window.location.href);
       if (routeLocksPrimaryPanel) {
         url.searchParams.delete("panel");
-      } else if (primaryPanel === "money") {
-        url.searchParams.set("panel", "money");
+      } else if (primaryPanel === "stream") {
+        url.searchParams.set("panel", "stream");
       } else {
         url.searchParams.delete("panel");
       }
@@ -10947,52 +11198,35 @@ export default function ArbitrageScanner({
 
   // ========= UI
   return (
-    <div className={clsx("scanner-borderless relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-hidden", accent.selection, isLightTheme && "scanner-light-theme")}>
+    <div className={clsx("scanner-borderless relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-clip", "accent-selection", isLightTheme && "scanner-light-theme")}>
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* Header */}
         <header className="scanner-header-surface bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3">
-              <span className={clsx("w-2.5 h-2.5 rounded-full border border-white/10", accent.dot, loading && "animate-pulse")} />
-              <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                {scannerShellTitle}
-              </h1>
-              <div className="flex gap-2 ml-4">
-                {headerBadgeValues.map((value) => (
-                  <span key={value} className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">
-                    {value}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
-              <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
-              <span className="text-zinc-700 mx-1">|</span>
-              <span className="opacity-70">{headerMetaLabel}</span>
-            </div>
+          <div className="flex items-center gap-3">
+            <GlitchTitle text={scannerShellTitle} />
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
             <div className={headerNavGroupClass}>
               <Link
-                href="/money/arbitrage"
+                href="/stream/arbitrage"
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  primaryPanel === "money"
-                    ? headerButtonActiveClass
+                  primaryPanel === "stream"
+                    ? "accent-soft"
                     : headerNavInactiveClass
                 )}
-                title={primaryPanel === "money" ? "MONEY (current)" : "Open MONEY"}
+                title={primaryPanel === "stream" ? "STREAM (current)" : "Open STREAM"}
               >
-                MONEY
+                STREAM
               </Link>
               <Link
                 href="/paper/arbitrage"
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   primaryPanel === "scanner"
-                    ? headerButtonActiveClass
+                    ? "accent-soft"
                     : headerNavInactiveClass
                 )}
                 title={primaryPanel === "scanner" ? "SCANNER (current)" : "Open SCANNER"}
@@ -11158,7 +11392,7 @@ export default function ArbitrageScanner({
               className={clsx(
                 "w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95",
                 canRun
-                  ? accent.outlineButton
+                  ? "accent-outline"
                   : "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed"
               )}
               title={variantString}
@@ -11373,7 +11607,7 @@ export default function ArbitrageScanner({
                     topMode === isTop
                       ? isTop
                         ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : accent.activeSoft
+                        : "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -11415,7 +11649,7 @@ export default function ArbitrageScanner({
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                   ratingMode === modeKey
-                    ? accent.activeSoft
+                    ? "accent-soft"
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -11434,7 +11668,7 @@ export default function ArbitrageScanner({
                 min={0}
                 value={activeRule.minRate}
                 onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
@@ -11469,7 +11703,7 @@ export default function ArbitrageScanner({
                 min={0}
                 value={activeRule.minTotal}
                 onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
@@ -11511,7 +11745,7 @@ export default function ArbitrageScanner({
                   step={field.step}
                   value={field.minValue}
                   onChange={(e) => field.setMin(e.target.value)}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                   placeholder="min"
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -11540,7 +11774,7 @@ export default function ArbitrageScanner({
                   step={field.step}
                   value={field.maxValue}
                   onChange={(e) => field.setMax(e.target.value)}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                   placeholder="max"
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -11577,7 +11811,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     ratingMode === modeKey
-                      ? accent.activeSoft
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -11596,7 +11830,7 @@ export default function ArbitrageScanner({
                   min={0}
                   value={activeRule.minRate}
                   onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -11631,7 +11865,7 @@ export default function ArbitrageScanner({
                   min={0}
                   value={activeRule.minTotal}
                   onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -11672,7 +11906,7 @@ export default function ArbitrageScanner({
                     step={field.step}
                     value={field.minValue}
                     onChange={(e) => field.setMin(e.target.value)}
-                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                     placeholder="min"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -11701,7 +11935,7 @@ export default function ArbitrageScanner({
                     step={field.step}
                     value={field.maxValue}
                     onChange={(e) => field.setMax(e.target.value)}
-                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                     placeholder="max"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -11770,7 +12004,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     ruleBand === b.key
-                      ? headerButtonActiveClass
+                      ? "accent-soft"
                       : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                 >
@@ -11797,7 +12031,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     scopeMode === m.key
-                      ? headerButtonActiveClass
+                      ? "accent-soft"
                       : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                 >
@@ -11821,7 +12055,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
                     ratingType === rt.key
-                      ? headerButtonActiveClass
+                      ? "accent-soft"
                       : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
                   title={`RatingType = ${rt.key}`}
@@ -11908,7 +12142,7 @@ export default function ArbitrageScanner({
                   scannerPresetBusy
                     ? "border-transparent text-zinc-600"
                     : scannerPresetSaveMode
-                      ? accent.activeSoft
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -12078,7 +12312,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     closeMode === m.key
-                      ? accent.activeSoft
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -12099,7 +12333,28 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     pnlMode === m.key
-                      ? accent.activeSoft
+                      ? "accent-soft"
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {[
+                { key: "LastPrint", label: "PRINT" },
+                { key: "BidAsk", label: "BIDASK" },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => setPriceMode(m.key as PaperArbPriceMode)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    priceMode === m.key
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -12128,7 +12383,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     sizingMode === m.key
-                      ? accent.activeSoft
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -12149,7 +12404,7 @@ export default function ArbitrageScanner({
                   step={sizingMode === "Tier" ? 1 : 1000}
                   value={formatScannerSizeValue(sizingMode, sizeValue)}
                   onChange={(e) => setSizeValue(normalizeScannerSizeValue(sizingMode, Number(e.target.value)))}
-                  className={clsx("center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all", accent.activeText)}
+                  className={clsx("center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -12186,7 +12441,7 @@ export default function ArbitrageScanner({
                   className={clsx(
                     "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     dilutionMode === m.key
-                      ? accent.activeSoft
+                      ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                   )}
                 >
@@ -12208,7 +12463,7 @@ export default function ArbitrageScanner({
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-                    accent.activeText
+                    "accent-text"
                   )}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -12250,7 +12505,7 @@ export default function ArbitrageScanner({
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-                    accent.activeText
+                    "accent-text"
                   )}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -12274,6 +12529,83 @@ export default function ArbitrageScanner({
                   >
                     ▼
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={60}
+                  step={1}
+                  value={addDelayMinutes}
+                  onChange={(e) => setAddDelayMinutes(Math.max(0, Math.min(60, Math.trunc(Number(e.target.value) || 0))))}
+                  disabled={dilutionMode !== "Diluted"}
+                  className={clsx(
+                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
+                    "accent-text"
+                  )}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setAddDelayMinutes((v) => Math.min(60, v + 1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase add delay minutes"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setAddDelayMinutes((v) => Math.max(0, v - 1))}
+                    disabled={dilutionMode !== "Diluted"}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Decrease add delay minutes"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CONF</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={exitConfirmTicks}
+                  onChange={(e) => setExitConfirmTicks(Math.max(1, Math.min(30, Math.trunc(Number(e.target.value) || 3))))}
+                  className={clsx(
+                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all",
+                    "accent-text"
+                  )}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setExitConfirmTicks((v) => Math.min(30, v + 1))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase exit confirm ticks"
+                  >▲</button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setExitConfirmTicks((v) => Math.max(1, v - 1))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease exit confirm ticks"
+                  >▼</button>
                 </div>
               </div>
             </div>
@@ -12327,7 +12659,7 @@ export default function ArbitrageScanner({
                   step={1}
                   value={minHoldCandles}
                   onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
@@ -12361,25 +12693,25 @@ export default function ArbitrageScanner({
                   min={0}
                   max={600}
                   step={1}
-                  value={effectiveMoneyAutomationConfig.queueDelayMinSeconds}
+                  value={effectiveStreamAutomationConfig.queueDelayMinSeconds}
                   onChange={(e) => {
                     const nextMin = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
-                    const nextMax = Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds);
-                    onMoneyAutomationConfigChange?.({
+                    const nextMax = Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds);
+                    onStreamAutomationConfigChange?.({
                       queueDelayMinSeconds: nextMin,
                       queueDelayMaxSeconds: nextMax,
                     });
                   }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMinSeconds + 1)));
-                      const nextMax = Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds);
-                      onMoneyAutomationConfigChange?.({
+                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMinSeconds + 1)));
+                      const nextMax = Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds);
+                      onStreamAutomationConfigChange?.({
                         queueDelayMinSeconds: nextMin,
                         queueDelayMaxSeconds: nextMax,
                       });
@@ -12393,10 +12725,10 @@ export default function ArbitrageScanner({
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMinSeconds - 1)));
-                      onMoneyAutomationConfigChange?.({
+                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMinSeconds - 1)));
+                      onStreamAutomationConfigChange?.({
                         queueDelayMinSeconds: nextMin,
-                        queueDelayMaxSeconds: Math.max(nextMin, effectiveMoneyAutomationConfig.queueDelayMaxSeconds),
+                        queueDelayMaxSeconds: Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds),
                       });
                     }}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -12414,24 +12746,24 @@ export default function ArbitrageScanner({
                   min={0}
                   max={600}
                   step={1}
-                  value={effectiveMoneyAutomationConfig.queueDelayMaxSeconds}
+                  value={effectiveStreamAutomationConfig.queueDelayMaxSeconds}
                   onChange={(e) => {
                     const nextMax = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
-                    const nextMin = Math.min(effectiveMoneyAutomationConfig.queueDelayMinSeconds, nextMax);
-                    onMoneyAutomationConfigChange?.({
+                    const nextMin = Math.min(effectiveStreamAutomationConfig.queueDelayMinSeconds, nextMax);
+                    onStreamAutomationConfigChange?.({
                       queueDelayMinSeconds: nextMin,
                       queueDelayMaxSeconds: nextMax,
                     });
                   }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", accent.activeText)}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMaxSeconds + 1)));
-                      onMoneyAutomationConfigChange?.({
+                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMaxSeconds + 1)));
+                      onStreamAutomationConfigChange?.({
                         queueDelayMaxSeconds: nextMax,
                       });
                     }}
@@ -12444,9 +12776,9 @@ export default function ArbitrageScanner({
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveMoneyAutomationConfig.queueDelayMaxSeconds - 1)));
-                      const nextMin = Math.min(effectiveMoneyAutomationConfig.queueDelayMinSeconds, nextMax);
-                      onMoneyAutomationConfigChange?.({
+                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMaxSeconds - 1)));
+                      const nextMin = Math.min(effectiveStreamAutomationConfig.queueDelayMinSeconds, nextMax);
+                      onStreamAutomationConfigChange?.({
                         queueDelayMinSeconds: nextMin,
                         queueDelayMaxSeconds: nextMax,
                       });
@@ -12463,6 +12795,17 @@ export default function ArbitrageScanner({
 
             <div className="flex-1" />
 
+            {tab === "episodes" && !isStreamOnlyShell && filteredEpisodes.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadEpisodesLog}
+                className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+                title={`Download ${filteredEpisodes.length} episodes as JSONL`}
+              >
+                ↓ LOG
+              </button>
+            )}
+
             {tab === "episodes" && (
               <div className="flex h-7 items-center gap-2 px-2 rounded-lg bg-black/20">
                 <span className="text-[10px] font-mono text-zinc-500 uppercase">EP MODE</span>
@@ -12473,7 +12816,7 @@ export default function ArbitrageScanner({
                     className={clsx(
                       "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
                       !episodesUseSearchEffective
-                        ? accent.activeSoft
+                        ? "accent-soft"
                         : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     )}
                     title={forceEpisodesSearch ? "Disabled: extended filters require SEARCH(POST)" : "GET /api/paper/arbitrage/episodes (single day)"}
@@ -12487,7 +12830,7 @@ export default function ArbitrageScanner({
                     className={clsx(
                       "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
                       episodesUseSearchEffective
-                        ? accent.activeSoft
+                        ? "accent-soft"
                         : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     )}
                     title="POST /api/paper/arbitrage/episodes/search (date range + filters)"
@@ -12498,7 +12841,7 @@ export default function ArbitrageScanner({
               </div>
             )}
 
-            {!isMoneyOnlyShell && (
+            {!isStreamOnlyShell && (
               <div className="flex items-center gap-2">
                 <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
                   {[
@@ -12535,7 +12878,7 @@ export default function ArbitrageScanner({
                       className={clsx(
                         "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                         dateMode === m.key
-                          ? accent.activeSoft
+                          ? "accent-soft"
                           : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                       )}
                     >
@@ -12731,7 +13074,7 @@ export default function ArbitrageScanner({
             <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
               <MultiSelectFilter
                 label="COUNTRY"
-                options={moneyCountries}
+                options={streamCountries}
                 selected={selCountries}
                 setSelected={setSelCountries}
                 enabled={countryEnabled}
@@ -12740,7 +13083,7 @@ export default function ArbitrageScanner({
               />
               <MultiSelectFilter
                 label="EXCHANGE"
-                options={moneyExchanges}
+                options={streamExchanges}
                 selected={selExchanges}
                 setSelected={setSelExchanges}
                 enabled={exchangeEnabled}
@@ -12749,7 +13092,7 @@ export default function ArbitrageScanner({
               />
               <MultiSelectFilter
                 label="SECTOR"
-                options={moneySectors}
+                options={streamSectors}
                 selected={selSectors}
                 setSelected={setSelSectors}
                 enabled={sectorEnabled}
@@ -12761,8 +13104,8 @@ export default function ArbitrageScanner({
             <div className="inline-flex items-center gap-1 rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-1.5">
               <div className="relative flex h-7 items-center rounded-full border border-sky-400/25 bg-[#0a1520]/85">
                 <GlassSelect
-                  value={moneySortKey}
-                  onChange={(e) => setMoneySortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
+                  value={streamSortKey}
+                  onChange={(e) => setStreamSortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
                   options={[
                     { value: "alpha", label: "ABC" },
                     { value: "sigma", label: "SIG" },
@@ -12777,17 +13120,17 @@ export default function ArbitrageScanner({
               <button
                 type="button"
                 onClick={() => {
-                  if (zapUiMode === "zap") {
-                    setZapUiMode("off");
+                  if (zapMode === "zap") {
+                    setZapMode("off");
                     setMetric("SigmaZap");
                   } else {
-                    setZapUiMode("zap");
+                    setZapMode("zap");
                     setMetric("ZapPct");
                   }
                 }}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapUiMode === "zap"
+                  zapMode === "zap"
                     ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
@@ -12798,16 +13141,16 @@ export default function ArbitrageScanner({
               <button
                 type="button"
                 onClick={() => {
-                  if (zapUiMode === "sigma") {
-                    setZapUiMode("off");
+                  if (zapMode === "sigma") {
+                    setZapMode("off");
                   } else {
-                    setZapUiMode("sigma");
+                    setZapMode("sigma");
                     setMetric("SigmaZap");
                   }
                 }}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapUiMode === "sigma"
+                  zapMode === "sigma"
                     ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
@@ -12818,16 +13161,16 @@ export default function ArbitrageScanner({
               <button
                 type="button"
                 onClick={() => {
-                  if (zapUiMode === "delta") {
-                    setZapUiMode("off");
+                  if (zapMode === "delta") {
+                    setZapMode("off");
                   } else {
-                    setZapUiMode("delta");
+                    setZapMode("delta");
                     setMetric("SigmaZap");
                   }
                 }}
                 className={clsx(
                   "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapUiMode === "delta"
+                  zapMode === "delta"
                     ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                 )}
@@ -12836,20 +13179,20 @@ export default function ArbitrageScanner({
                 <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
               </button>
 
-              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
                 <input
                   type="number"
                   step={0.1}
                   min={0}
                   value={startAbs}
-                  disabled={zapUiMode === "off"}
+                  disabled={zapMode === "off"}
                   onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
                   className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
@@ -12859,7 +13202,7 @@ export default function ArbitrageScanner({
                   </button>
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
@@ -12869,13 +13212,13 @@ export default function ArbitrageScanner({
                   </button>
                 </div>
               </div>
-              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
                 <input
                   type="number"
                   step={0.1}
                   min={0}
                   value={startAbsMax}
-                  disabled={zapUiMode === "off"}
+                  disabled={zapMode === "off"}
                   onChange={(e) => setStartAbsMax(e.target.value)}
                   placeholder="start max"
                   className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
@@ -12883,7 +13226,7 @@ export default function ArbitrageScanner({
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => bumpStartAbsMax(0.1)}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
@@ -12893,7 +13236,7 @@ export default function ArbitrageScanner({
                   </button>
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => bumpStartAbsMax(-0.1)}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
@@ -12903,20 +13246,20 @@ export default function ArbitrageScanner({
                   </button>
                 </div>
               </div>
-              <div className={clsx("group relative w-[78px]", zapUiMode === "off" && "opacity-60")}>
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
                 <input
                   type="number"
                   step={0.05}
                   min={0}
                   value={endAbs}
-                  disabled={zapUiMode === "off"}
+                  disabled={zapMode === "off"}
                   onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
                   className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
@@ -12926,7 +13269,7 @@ export default function ArbitrageScanner({
                   </button>
                   <button
                     type="button"
-                    disabled={zapUiMode === "off"}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
@@ -12949,67 +13292,67 @@ export default function ArbitrageScanner({
         )}
 
         <div className="flex items-center justify-end gap-2">
-          {primaryPanel === "money" ? (
-            moneyAutomationLaunchEnabled ? (
+          {primaryPanel === "stream" ? (
+            streamAutomationLaunchEnabled ? (
               <>
                 <button
                   type="button"
-                  onClick={() => void captureMoneyWindowsFromHeader()}
-                  disabled={moneyWindowCaptureBusy}
+                  onClick={() => void captureStreamWindowsFromHeader()}
+                  disabled={streamWindowCaptureBusy}
                   className={clsx(
                     SCANNER_EYE_BUTTON,
-                    moneyWindowCaptureBusy && "cursor-not-allowed opacity-60"
+                    streamWindowCaptureBusy && "cursor-not-allowed opacity-60"
                   )}
                   title={
-                    moneyWindowCaptureBusy
-                      ? (moneyWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
-                      : (moneyWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
+                    streamWindowCaptureBusy
+                      ? (streamWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
+                      : (streamWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
                   }
                   aria-label={
-                    moneyWindowCaptureBusy
-                      ? (moneyWindowsBound ? "Disconnecting windows" : "Capturing windows")
-                      : (moneyWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
+                    streamWindowCaptureBusy
+                      ? (streamWindowsBound ? "Disconnecting windows" : "Capturing windows")
+                      : (streamWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
                   }
                 >
                   <CrosshairIcon
                     className={clsx(
                       "transition-colors",
-                      !moneyWindowsBound && "text-zinc-300 group-hover:text-white"
+                      !streamWindowsBound && "text-zinc-300 group-hover:text-white"
                     )}
-                    style={moneyWindowsBound ? { color: MONEY_FIXED_ICON_GREEN } : undefined}
+                    style={streamWindowsBound ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
                   />
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMoneyAutoStartLocked((prev) => !prev)}
+                  onClick={() => setStreamAutoStartLocked((prev) => !prev)}
                   className={SCANNER_EYE_BUTTON}
-                  title={moneyAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                  aria-label={moneyAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
+                  title={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
+                  aria-label={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
                 >
                   <LockToggleIcon
-                    open={moneyAutoStartLocked}
+                    open={streamAutoStartLocked}
                     className="text-zinc-300 group-hover:text-white transition-colors"
                   />
                 </button>
                 <button
                   type="button"
-                  onClick={() => void toggleMoneyAutomationRunFromHeader()}
-                  disabled={moneyAutomationToggleBusy || (moneyAutoStartLocked && !moneyAutomationRunning)}
+                  onClick={() => void toggleStreamAutomationRunFromHeader()}
+                  disabled={streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)}
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    moneyAutomationRunning
+                    streamAutomationRunning
                       ? autoStopButtonClass
                       : autoStartButtonClass,
-                    (moneyAutomationToggleBusy || (moneyAutoStartLocked && !moneyAutomationRunning)) && "cursor-not-allowed opacity-40"
+                    (streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)) && "cursor-not-allowed opacity-40"
                   )}
                 >
-                  {moneyAutomationTogglePending === "start"
+                  {streamAutomationTogglePending === "start"
                     ? "STARTING"
-                    : moneyAutomationTogglePending === "stop"
+                    : streamAutomationTogglePending === "stop"
                       ? "STOPPING"
-                      : moneyAutomationRunning
+                      : streamAutomationRunning
                         ? "STOP AUTO"
-                        : moneyAutoStartLocked
+                        : streamAutoStartLocked
                           ? "START LOCKED"
                           : "START AUTO"}
                 </button>
@@ -13027,34 +13370,34 @@ export default function ArbitrageScanner({
         </div>
 
         {/* CONTENT */}
-        {primaryPanel === "money" && (
-          <ArbitrageMoneyView
+        {primaryPanel === "stream" && (
+          <ArbitrageStreamView
             tab={tab}
-            moneySignalsCount={moneySignalMeta.totalCount}
-            moneyAutoEnabled={effectiveMoneyAutoEnabled}
-            moneySessionStartedAt={moneySessionStartedAt}
-            moneySessionStoppedAt={moneySessionStoppedAt}
-            moneySentOrdersCount={moneySentOrdersCount}
-            onSetAutoEnabled={applyMoneyAutoEnabled}
-            manualExecutionBusy={moneyManualExecutionBusy}
-            onSubmitManualOrders={submitManualMoneyOrders}
-            onCaptureTickerPoint={captureMoneyTickerPoint}
-            onCaptureTickerPointDelayed={captureMoneyTickerPointDelayed}
-            onClearTickerPoint={clearMoneyTickerPoint}
-            onTogglePanicOff={toggleMoneyPanicOff}
-            onStartAutomation={startMoneyAutomation}
-            onClearExecutionQueue={clearMoneyExecutionQueue}
-            onResetAutomationState={resetMoneyAutomationState}
-            onDismissActivePositions={dismissMoneyActivePositions}
-            onForceRefresh={refreshMoneySignals}
+            streamSignalsCount={streamSignalMeta.totalCount}
+            streamAutoEnabled={effectiveStreamAutoEnabled}
+            streamSessionStartedAt={streamSessionStartedAt}
+            streamSessionStoppedAt={streamSessionStoppedAt}
+            streamSentOrdersCount={streamSentOrdersCount}
+            onSetAutoEnabled={applyStreamAutoEnabled}
+            manualExecutionBusy={streamManualExecutionBusy}
+            onSubmitManualOrders={submitManualStreamOrders}
+            onCaptureTickerPoint={captureStreamTickerPoint}
+            onCaptureTickerPointDelayed={captureStreamTickerPointDelayed}
+            onClearTickerPoint={clearStreamTickerPoint}
+            onTogglePanicOff={toggleStreamPanicOff}
+            onStartAutomation={startStreamAutomation}
+            onClearExecutionQueue={clearStreamExecutionQueue}
+            onResetAutomationState={resetStreamAutomationState}
+            onDismissActivePositions={dismissStreamActivePositions}
+            onForceRefresh={refreshStreamSignals}
             listModeLabel={listMode.toUpperCase()}
-            automationConfig={effectiveMoneyAutomationConfig}
-            onAutomationConfigChange={(patch) => onMoneyAutomationConfigChange?.(patch)}
-            accentActiveSoftClass={MONEY_FIXED_ACTIVE_SOFT}
-            accentActiveTextClass={MONEY_FIXED_ACTIVE_TEXT}
-            viewMode={moneyViewModeOverride ?? "money"}
-            automationLaunchEnabled={moneyViewModeOverride === "auto" || moneyViewModeOverride === "money-auto-tab"}
-            entryCutoffActive={moneySignalClass === "ark"}
+            automationConfig={effectiveStreamAutomationConfig}
+            onAutomationConfigChange={(patch) => onStreamAutomationConfigChange?.(patch)}
+            accentActiveSoftClass={STREAM_FIXED_ACTIVE_SOFT}
+            accentActiveTextClass={STREAM_FIXED_ACTIVE_TEXT}
+            viewMode={streamViewModeOverride ?? "stream"}
+            automationLaunchEnabled={streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab"}
+            entryCutoffActive={streamSignalClass === "ark"}
             hideAutomationButtons
           />
         )}
@@ -13388,7 +13731,7 @@ export default function ArbitrageScanner({
           </div>
         )}
 
-        {primaryPanel === "scanner" && tab === "episodes" && (
+        {primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell && (
           <div className="space-y-3">
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -13410,7 +13753,7 @@ export default function ArbitrageScanner({
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
                 <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
-                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.moneyflowUsd, 2)} inline valueClassName={accent.activeText} />
+                <SummaryMetricCard label="STREAMFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
@@ -13460,7 +13803,7 @@ export default function ArbitrageScanner({
                       onClick={() => setScopeSelectedParameterKeys(SCOPE_PARAMETER_DEFINITIONS.map((item) => item.key))}
                       className={clsx(
                         "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                        accent.activeSoft
+                        "accent-soft"
                       )}
                     >
                       Select All
@@ -13537,7 +13880,7 @@ export default function ArbitrageScanner({
                                 }
                                 className={clsx(
                                   "px-2.5 py-1 rounded-full border text-[10px] font-mono uppercase tracking-[0.16em] transition-all shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                                  accent.activeSoft
+                                  "accent-soft"
                                 )}
                                 title={`Remove ${option.label}`}
                               >
@@ -13600,7 +13943,7 @@ export default function ArbitrageScanner({
                       SCANNER_PANEL_SURFACE,
                       optimizerLoading
                         ? "border-white/10 bg-[#0a0a0a]/30 text-zinc-600 cursor-not-allowed hover:bg-[#0a0a0a]/30 hover:border-white/10"
-                        : accent.outlineButton
+                        : "accent-outline"
                     )}
                     aria-label={optimizerLoading ? "Running scope" : "Run scope"}
                     title={optimizerLoading ? "Running scope" : "Run scope"}
@@ -13721,7 +14064,7 @@ export default function ArbitrageScanner({
                 <div className={clsx("rounded-2xl px-4 py-3", SCANNER_PANEL_SURFACE)}>
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0 flex-1">
-                      <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", accent.activeText)}>
+                      <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", "accent-text")}>
                         STATS
                       </div>
                     </div>
@@ -13943,7 +14286,7 @@ export default function ArbitrageScanner({
                     <div className={clsx("rounded-2xl px-4 py-3", SCANNER_PANEL_SURFACE)}>
                       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                         <div className="min-w-0 flex-1">
-                          <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", accent.activeText)}>
+                          <div className={clsx("text-[12px] uppercase tracking-[0.24em] font-mono", "accent-text")}>
                             {OPTIMIZER_GROUP_DISPLAY_LABELS[group.group as OptimizerRangeGroupKey] ?? group.group}
                           </div>
                         </div>
@@ -14134,7 +14477,7 @@ export default function ArbitrageScanner({
                               className={clsx(
                                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                                   draft.chartType === mode.key
-                                    ? accent.activeSoft
+                                    ? "accent-soft"
                                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                                 )}
                               >
@@ -14149,7 +14492,7 @@ export default function ArbitrageScanner({
                               className={clsx(
                                 "w-9 h-9 flex items-center justify-center rounded-lg transition-all active:scale-95",
                                 SCANNER_PANEL_SURFACE,
-                                accent.outlineButton
+                                "accent-outline"
                               )}
                               title={scopeFullscreenPanel === panel.key ? `Close ${panel.label} fullscreen` : `Open ${panel.label} fullscreen`}
                               aria-label={scopeFullscreenPanel === panel.key ? `Close ${panel.label} fullscreen` : `Open ${panel.label} fullscreen`}
@@ -14183,7 +14526,7 @@ export default function ArbitrageScanner({
                               className={clsx(
                                 "w-9 h-9 flex items-center justify-center rounded-lg transition-all active:scale-95",
                                 SCANNER_PANEL_SURFACE,
-                                accent.outlineButton
+                                "accent-outline"
                               )}
                               title={`Apply ${panel.label}`}
                               aria-label={`Apply ${panel.label}`}
@@ -14716,7 +15059,7 @@ export default function ArbitrageScanner({
                         className={clsx(
                           "h-8 px-3 rounded-lg border whitespace-nowrap leading-none transition-all text-[10px] font-mono uppercase",
                           scopeResearchChartType === mode.key
-                            ? accent.activeSoft
+                            ? "accent-soft"
                             : "border-white/5 bg-black/20 text-zinc-500 hover:text-zinc-200 hover:border-white/10"
                         )}
                       >
@@ -15005,7 +15348,7 @@ export default function ArbitrageScanner({
           </div>
         )}
 
-        {primaryPanel === "scanner" && tab === "analytics" && (
+        {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -15027,7 +15370,7 @@ export default function ArbitrageScanner({
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
                 <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
-                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.moneyflowUsd, 2)} inline valueClassName={accent.activeText} />
+                <SummaryMetricCard label="STREAMFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
@@ -15134,7 +15477,7 @@ export default function ArbitrageScanner({
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[1840px] w-full text-xs font-mono">
+                <table className="analytics-trades-table min-w-[1560px] w-full text-[10px] font-mono">
                   <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
                       <th className="text-left p-2.5" rowSpan={2}>
@@ -15146,8 +15489,8 @@ export default function ArbitrageScanner({
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
                       </th>
-                      <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
+                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-400" colSpan={3}>
+                        P&amp;L
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
                         Bp
@@ -15158,20 +15501,29 @@ export default function ArbitrageScanner({
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Metric
                       </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Legs
+                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
+                        Ticker %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
+                        Bench %
                       </th>
                     </tr>
                     <tr className="text-zinc-400">
+                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-300"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Ticker{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 text-emerald-200"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 text-emerald-400"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Total{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>EndTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
+                      <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-emerald-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-sky-500/70">Start</th>
+                      <th className="text-right p-2.5 text-sky-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-sky-500/70">End</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -15198,27 +15550,17 @@ export default function ArbitrageScanner({
                             <SideBadge side={r.side} />
                           </td>
 
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
-                              pnl > 0 ? "text-[#6ee7b7]" : pnl < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
-                            )}
-                          >
-                            {num(r.totalPnlUsd ?? null, 2)}
+                          <td className={clsx("p-2.5 text-right tabular-nums border-l border-white/10", (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.rawPnlUsd ?? null, 2)}
                           </td>
-                          <td className="p-2.5 text-right tabular-nums border-l border-white/10">
-                            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
-                              <span className="text-zinc-500">Ticker</span>{" "}
-                              <span className="text-zinc-300">
-                                {tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}
-                              </span>
-                            </div>
-                            <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
-                              <span className="text-zinc-500">Bench</span>{" "}
-                              <span className="text-zinc-300">
-                                {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
-                              </span>
-                            </div>
+                          <td className={clsx("p-2.5 text-right tabular-nums", (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.benchPnlUsd ?? null, 2)}
+                          </td>
+                          <td className={clsx("p-2.5 text-right tabular-nums", (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.hedgedPnlUsd ?? null, 2)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums border-l border-white/10 whitespace-nowrap">
+                            <span className="text-zinc-500">T</span><span className="text-zinc-300">{tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}</span>
                           </td>
 
                           <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
@@ -15239,69 +15581,25 @@ export default function ArbitrageScanner({
                           <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums border-l border-white/10",
-                              (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.rawPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.rawPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.rawPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.benchPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.benchPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.benchPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.hedgedPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.hedgedPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.hedgedPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
+                          {(() => {
+                            const fP = (v: number | null | undefined) => v == null
+                              ? <span className="text-zinc-600">—</span>
+                              : <span className={v >= 0 ? "text-emerald-400" : "text-rose-400"}>{v >= 0 ? "+" : ""}{v.toFixed(2)}%</span>;
+                            return (<>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.lstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBenchLstPrcLstClsPct)}</td>
+                            </>);
+                          })()}
                         </tr>
                       );
                     })}
                     {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={14} className="p-8 text-center text-zinc-500">
+                        <td colSpan={19} className="p-8 text-center text-zinc-500">
                           No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>
@@ -15312,10 +15610,15 @@ export default function ArbitrageScanner({
 
             </div>
             )}
+            <ScannerAnalyticsLog rows={analyticsSorted} priceMode={priceMode} />
           </div>
         )}
 
         <style jsx global>{`
+          .analytics-trades-table th,
+          .analytics-trades-table td {
+            padding: 4px 7px !important;
+          }
           input.center-spin[type="number"] {
             -moz-appearance: textfield;
           }

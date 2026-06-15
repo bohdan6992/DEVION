@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
 
-export type MoneyDecisionStoreRow = {
+export type StreamDecisionStoreRow = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
@@ -21,7 +21,7 @@ function sameNullableNumber(a: number | null | undefined, b: number | null | und
   return a === b;
 }
 
-function sameDecisionRow(a: MoneyDecisionStoreRow | undefined, b: MoneyDecisionStoreRow): boolean {
+function sameDecisionRow(a: StreamDecisionStoreRow | undefined, b: StreamDecisionStoreRow): boolean {
   if (!a) return false;
   return (
     a.ticker === b.ticker &&
@@ -38,8 +38,8 @@ function sameDecisionRow(a: MoneyDecisionStoreRow | undefined, b: MoneyDecisionS
   );
 }
 
-class MoneyDecisionStore {
-  private rows = new Map<string, MoneyDecisionStoreRow>();
+class StreamDecisionStore {
+  private rows = new Map<string, StreamDecisionStoreRow>();
   private ids: string[] = [];
   private version = 0;
   private idsListeners = new Set<() => void>();
@@ -54,7 +54,7 @@ class MoneyDecisionStore {
     return this.version;
   }
 
-  getRow(id: string): MoneyDecisionStoreRow | null {
+  getRow(id: string): StreamDecisionStoreRow | null {
     return this.rows.get(id) ?? null;
   }
 
@@ -89,7 +89,7 @@ class MoneyDecisionStore {
     };
   };
 
-  applySnapshot(nextRows: MoneyDecisionStoreRow[]): void {
+  applySnapshot(nextRows: StreamDecisionStoreRow[]): void {
     const nextIds = nextRows.map((row) => row.ticker);
     const prevIds = this.ids;
     const prevIdSet = new Set(prevIds);
@@ -146,32 +146,32 @@ class MoneyDecisionStore {
   }
 }
 
-export const moneyDecisionStore = new MoneyDecisionStore();
+export const streamDecisionStore = new StreamDecisionStore();
 
-export function getMoneyDecisionRow(id: string): MoneyDecisionStoreRow | null {
-  return moneyDecisionStore.getRow(id);
+export function getStreamDecisionRow(id: string): StreamDecisionStoreRow | null {
+  return streamDecisionStore.getRow(id);
 }
 
-export function useMoneyDecisionIds(): string[] {
+export function useStreamDecisionIds(): string[] {
   return useSyncExternalStore(
-    moneyDecisionStore.subscribeToIds,
-    () => moneyDecisionStore.getIds(),
+    streamDecisionStore.subscribeToIds,
+    () => streamDecisionStore.getIds(),
     () => []
   );
 }
 
-export function useMoneyDecisionVersion(): number {
+export function useStreamDecisionVersion(): number {
   return useSyncExternalStore(
-    moneyDecisionStore.subscribeToVersion,
-    () => moneyDecisionStore.getVersion(),
+    streamDecisionStore.subscribeToVersion,
+    () => streamDecisionStore.getVersion(),
     () => 0
   );
 }
 
-export function useMoneyDecisionRow(id: string): MoneyDecisionStoreRow | null {
+export function useStreamDecisionRow(id: string): StreamDecisionStoreRow | null {
   return useSyncExternalStore(
-    (listener) => moneyDecisionStore.subscribeToRow(id, listener),
-    () => moneyDecisionStore.getRow(id),
+    (listener) => streamDecisionStore.subscribeToRow(id, listener),
+    () => streamDecisionStore.getRow(id),
     () => null
   );
 }

@@ -1,27 +1,27 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
-import { getMoneyDecisionRow, moneyDecisionStore } from "./moneyDecisionStore";
-import type { MoneyDecisionRow, MoneyPosition } from "./moneyEngine";
+import { getStreamDecisionRow, streamDecisionStore } from "./streamDecisionStore";
+import type { StreamDecisionRow, StreamPosition } from "./streamEngine";
 
-export type MoneyPositionMeta = {
+export type StreamPositionMeta = {
   activeCount: number;
   openCount: number;
   exitBlockedCount: number;
   closedCount: number;
 };
 
-export type MoneyActiveDecisionRow = {
+export type StreamActiveDecisionRow = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
   netEdge: number | null;
-  status: MoneyDecisionRow["status"] | MoneyPosition["status"];
+  status: StreamDecisionRow["status"] | StreamPosition["status"];
 };
 
-const EMPTY_META: MoneyPositionMeta = {
+const EMPTY_META: StreamPositionMeta = {
   activeCount: 0,
   openCount: 0,
   exitBlockedCount: 0,
@@ -33,7 +33,7 @@ function sameNullableNumber(left: number | null | undefined, right: number | nul
   return left === right;
 }
 
-function samePosition(left: MoneyPosition, right: MoneyPosition): boolean {
+function samePosition(left: StreamPosition, right: StreamPosition): boolean {
   return (
     left.ticker === right.ticker &&
     left.benchmark === right.benchmark &&
@@ -54,7 +54,7 @@ function samePosition(left: MoneyPosition, right: MoneyPosition): boolean {
   );
 }
 
-function samePositionArray(left: MoneyPosition[], right: MoneyPosition[]): boolean {
+function samePositionArray(left: StreamPosition[], right: StreamPosition[]): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
     if (!samePosition(left[index], right[index])) return false;
@@ -62,7 +62,7 @@ function samePositionArray(left: MoneyPosition[], right: MoneyPosition[]): boole
   return true;
 }
 
-function sameActiveRow(left: MoneyActiveDecisionRow, right: MoneyActiveDecisionRow): boolean {
+function sameActiveRow(left: StreamActiveDecisionRow, right: StreamActiveDecisionRow): boolean {
   return (
     left.ticker === right.ticker &&
     left.benchmark === right.benchmark &&
@@ -74,7 +74,7 @@ function sameActiveRow(left: MoneyActiveDecisionRow, right: MoneyActiveDecisionR
   );
 }
 
-function sameActiveRowArray(left: MoneyActiveDecisionRow[], right: MoneyActiveDecisionRow[]): boolean {
+function sameActiveRowArray(left: StreamActiveDecisionRow[], right: StreamActiveDecisionRow[]): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
     if (!sameActiveRow(left[index], right[index])) return false;
@@ -82,7 +82,7 @@ function sameActiveRowArray(left: MoneyActiveDecisionRow[], right: MoneyActiveDe
   return true;
 }
 
-function sameMeta(left: MoneyPositionMeta, right: MoneyPositionMeta): boolean {
+function sameMeta(left: StreamPositionMeta, right: StreamPositionMeta): boolean {
   return (
     left.activeCount === right.activeCount &&
     left.openCount === right.openCount &&
@@ -91,7 +91,7 @@ function sameMeta(left: MoneyPositionMeta, right: MoneyPositionMeta): boolean {
   );
 }
 
-function countsAsOpen(position: MoneyPosition): boolean {
+function countsAsOpen(position: StreamPosition): boolean {
   return (
     (position.status === "OPEN" || position.status === "PRINT_PENDING" || position.status === "EXIT_BLOCKED") &&
     (
@@ -102,12 +102,12 @@ function countsAsOpen(position: MoneyPosition): boolean {
   );
 }
 
-function buildActiveRows(positions: MoneyPosition[]): MoneyActiveDecisionRow[] {
-  const rows = new Map<string, MoneyActiveDecisionRow>();
+function buildActiveRows(positions: StreamPosition[]): StreamActiveDecisionRow[] {
+  const rows = new Map<string, StreamActiveDecisionRow>();
 
   for (const position of positions) {
     if (position.status === "CLOSED" || position.status === "PENDING_ENTRY") continue;
-    const decision = getMoneyDecisionRow(position.ticker);
+    const decision = getStreamDecisionRow(position.ticker);
     const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
     const spread = decision?.spread ?? position.spread;
     const netEdge = decision?.netEdge ?? (signal != null ? Math.max(0, Math.abs(signal) - Math.max(0, spread ?? 0)) : null);
@@ -125,7 +125,7 @@ function buildActiveRows(positions: MoneyPosition[]): MoneyActiveDecisionRow[] {
   return Array.from(rows.values()).sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
-function buildMeta(positions: MoneyPosition[], activeRows: MoneyActiveDecisionRow[]): MoneyPositionMeta {
+function buildMeta(positions: StreamPosition[], activeRows: StreamActiveDecisionRow[]): StreamPositionMeta {
   return {
     activeCount: activeRows.length,
     openCount: positions.filter((row) => countsAsOpen(row)).length,
@@ -134,31 +134,31 @@ function buildMeta(positions: MoneyPosition[], activeRows: MoneyActiveDecisionRo
   };
 }
 
-class MoneyPositionStore {
-  private rows: MoneyPosition[] = [];
-  private activeRows: MoneyActiveDecisionRow[] = [];
-  private meta: MoneyPositionMeta = EMPTY_META;
+class StreamPositionStore {
+  private rows: StreamPosition[] = [];
+  private activeRows: StreamActiveDecisionRow[] = [];
+  private meta: StreamPositionMeta = EMPTY_META;
   private listeners = new Set<() => void>();
 
   constructor() {
-    moneyDecisionStore.subscribeToVersion(() => {
+    streamDecisionStore.subscribeToVersion(() => {
       this.recomputeDerived();
     });
   }
 
-  getRows(): MoneyPosition[] {
+  getRows(): StreamPosition[] {
     return this.rows;
   }
 
-  getActiveRows(): MoneyActiveDecisionRow[] {
+  getActiveRows(): StreamActiveDecisionRow[] {
     return this.activeRows;
   }
 
-  getMeta(): MoneyPositionMeta {
+  getMeta(): StreamPositionMeta {
     return this.meta;
   }
 
-  applySnapshot(rows: MoneyPosition[]): void {
+  applySnapshot(rows: StreamPosition[]): void {
     const nextRows = rows.slice();
     const rowsChanged = !samePositionArray(this.rows, nextRows);
     if (rowsChanged) {
@@ -194,28 +194,28 @@ class MoneyPositionStore {
   }
 }
 
-export const moneyPositionStore = new MoneyPositionStore();
+export const streamPositionStore = new StreamPositionStore();
 
-export function useMoneyPositionRows(): MoneyPosition[] {
+export function useStreamPositionRows(): StreamPosition[] {
   return useSyncExternalStore(
-    moneyPositionStore.subscribe,
-    () => moneyPositionStore.getRows(),
+    streamPositionStore.subscribe,
+    () => streamPositionStore.getRows(),
     () => []
   );
 }
 
-export function useMoneyActiveDecisionRows(): MoneyActiveDecisionRow[] {
+export function useStreamActiveDecisionRows(): StreamActiveDecisionRow[] {
   return useSyncExternalStore(
-    moneyPositionStore.subscribe,
-    () => moneyPositionStore.getActiveRows(),
+    streamPositionStore.subscribe,
+    () => streamPositionStore.getActiveRows(),
     () => []
   );
 }
 
-export function useMoneyPositionMeta(): MoneyPositionMeta {
+export function useStreamPositionMeta(): StreamPositionMeta {
   return useSyncExternalStore(
-    moneyPositionStore.subscribe,
-    () => moneyPositionStore.getMeta(),
+    streamPositionStore.subscribe,
+    () => streamPositionStore.getMeta(),
     () => EMPTY_META
   );
 }

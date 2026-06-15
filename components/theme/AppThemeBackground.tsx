@@ -8,6 +8,9 @@ import NeonThemeBackground from "@/components/theme/NeonThemeBackground";
 import BlackSpheresBackground from "@/components/theme/BlackSpheresBackground";
 import RainThemeBackground from "@/components/theme/RainThemeBackground";
 import SpaceThemeBackground from "@/components/theme/SpaceThemeBackground";
+import MercuryThemeBackground from "@/components/theme/MercuryThemeBackground";
+import MagmaThemeBackground from "@/components/theme/MagmaThemeBackground";
+import OceanicThemeBackground from "@/components/theme/OceanicThemeBackground";
 
 export default function AppThemeBackground() {
   const { theme } = useUi();
@@ -30,6 +33,18 @@ export default function AppThemeBackground() {
 
   if (theme === "space") {
     return <SpaceThemeBackground />;
+  }
+
+  if (theme === "mercury") {
+    return <MercuryThemeBackground />;
+  }
+
+  if (theme === "magma") {
+    return <MagmaThemeBackground />;
+  }
+
+  if (theme === "oceanic") {
+    return <OceanicThemeBackground />;
   }
 
   return <ThemeStarfieldCanvas />;

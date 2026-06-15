@@ -1,24 +1,24 @@
-"use client";
+﻿"use client";
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { applyExactSonarClientFilters, buildSignalsStreamUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
-import { moneyActionLogStore } from "./moneyActionLogStore";
-import { getMoneyDecisionRow, moneyDecisionStore } from "./moneyDecisionStore";
-import { moneyExecutionStore } from "./moneyExecutionStore";
-import { connectMoneyOcrStream } from "./moneyOcrStream";
-import { moneyOrderIntentStore } from "./moneyOrderIntentStore";
-import { moneyBookStore, resetMoneyOcrStores } from "./moneyOcrStores";
-import { moneyPositionStore } from "./moneyPositionStore";
-import { moneySignalStore } from "./moneySignalStore";
-import { moneyUpdatedAtStore } from "./moneyUpdatedAtStore";
-import { moneyLogStore, type MoneyLogEvent } from "./moneyLogStore";
+import { streamActionLogStore } from "./streamActionLogStore";
+import { getStreamDecisionRow, streamDecisionStore } from "./streamDecisionStore";
+import { streamExecutionStore } from "./streamExecutionStore";
+import { connectStreamOcrFeed } from "./streamOcrFeed";
+import { streamOrderIntentStore } from "./streamOrderIntentStore";
+import { streamBookStore, resetStreamOcrStores } from "./streamOcrStores";
+import { streamPositionStore } from "./streamPositionStore";
+import { streamSignalStore } from "./streamSignalStore";
+import { streamUpdatedAtStore } from "./streamUpdatedAtStore";
+import { streamLogStore, type StreamLogEvent } from "./streamLogStore";
 
-export type MoneyDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
+export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
-export type MoneyDecisionRow = {
+export type StreamDecisionRow = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
@@ -27,12 +27,12 @@ export type MoneyDecisionRow = {
   safePrice: number | null;
   netEdge: number | null;
   positionBp: number | null;
-  status: MoneyDecisionStatus;
+  status: StreamDecisionStatus;
   reason: string;
   updatedAt: number;
 };
 
-export type MoneyPosition = {
+export type StreamPosition = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
@@ -43,30 +43,32 @@ export type MoneyPosition = {
   status: "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
   reason: string;
   entryCount: number;
+  belowThresholdTicks: number;
   lockedForPrint: boolean;
-  pendingIntent: MoneyOrderIntentType | null;
+  pendingIntent: StreamOrderIntentType | null;
   entryDispatchedAt: number | null;
+  lastDispatchedAt: number | null;
   lastConfirmedActiveAt: number | null;
   openedAt: number;
   updatedAt: number;
 };
 
-export type MoneyActionLogKind = "ENTRY" | "ADD" | "CLOSE";
+export type StreamActionLogKind = "ENTRY" | "ADD" | "CLOSE";
 
-export type MoneyActionLogEntry = {
+export type StreamActionLogEntry = {
   id: string;
   dayKey: string;
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
-  kind: MoneyActionLogKind;
+  kind: StreamActionLogKind;
   deviation: number | null;
   at: number;
-  intent: MoneyOrderIntentType | "MANUAL";
+  intent: StreamOrderIntentType | "MANUAL";
   reason?: string;
 };
 
-export type MoneyOrderIntentType =
+export type StreamOrderIntentType =
   | "ENTER_LONG_AGGRESSIVE"
   | "ENTER_SHORT_AGGRESSIVE"
   | "EXIT_LONG_AGGRESSIVE"
@@ -75,12 +77,12 @@ export type MoneyOrderIntentType =
   | "EXIT_SHORT_PRINT"
   | "CLOSE_ALL_PRINT";
 
-export type MoneyOrderIntent = {
+export type StreamOrderIntent = {
   id: string;
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
-  intent: MoneyOrderIntentType;
+  intent: StreamOrderIntentType;
   sequence: number;
   priceRef: "BID" | "ASK" | "PRINT";
   status: "QUEUED" | "BLOCKED";
@@ -88,11 +90,11 @@ export type MoneyOrderIntent = {
   createdAt: number;
 };
 
-function isEntryOrderIntent(intent: MoneyOrderIntentType | null | undefined): boolean {
+function isEntryOrderIntent(intent: StreamOrderIntentType | null | undefined): boolean {
   return intent === "ENTER_LONG_AGGRESSIVE" || intent === "ENTER_SHORT_AGGRESSIVE";
 }
 
-function isExitOrderIntent(intent: MoneyOrderIntentType | null | undefined): boolean {
+function isExitOrderIntent(intent: StreamOrderIntentType | null | undefined): boolean {
   return intent === "EXIT_LONG_AGGRESSIVE" ||
     intent === "EXIT_SHORT_AGGRESSIVE" ||
     intent === "EXIT_LONG_PRINT" ||
@@ -191,21 +193,21 @@ export type MainWindowDataSnapshot = {
   ocrText: string;
 };
 
-export type MoneyRatingBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
-export type MoneyRatingRule = {
-  band: MoneyRatingBand;
+export type StreamRatingBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+export type StreamRatingRule = {
+  band: StreamRatingBand;
   minRate: number;
   minTotal: number;
 };
 
-export type MoneyExecutionDescriptor = {
+export type StreamExecutionDescriptor = {
   signalClass: string;
-  ratingRule: MoneyRatingRule;
+  ratingRule: StreamRatingRule;
 };
 
-export type MoneyManualOrderAction = "buy" | "sell" | "cover";
+export type StreamManualOrderAction = "buy" | "sell" | "cover";
 
-export type MoneyAutomationConfig = {
+export type StreamAutomationConfig = {
   strategyModeEnabled: boolean;
   minNetEdge: number;
   endSignalThreshold: number;
@@ -219,14 +221,17 @@ export type MoneyAutomationConfig = {
   sizingMode: "USD" | "TIER";
   sizeValue: number;
   dilutionStep: number;
+  addDelayMinutes: number;
   minHoldMinutes: number;
+  exitConfirmTicks: number;
   exitMode: "normalize" | "print";
   printStartTime: string;
   printCloseTime: string;
   noSpreadExit: boolean;
+  betaMode: boolean;
 };
 
-type MoneySignalLatch = {
+type StreamSignalLatch = {
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
@@ -234,12 +239,12 @@ type MoneySignalLatch = {
   lastSeenAt: number;
 };
 
-type MoneyMinMax = {
+type StreamMinMax = {
   min?: number;
   max?: number;
 };
 
-export type MoneyFilterBuilderArgs = {
+export type StreamFilterBuilderArgs = {
   signalClass: string;
   ratingType: string | null | undefined;
   minRate: number;
@@ -249,35 +254,35 @@ export type MoneyFilterBuilderArgs = {
   applyTickers: string[];
   pinnedTickers: string[];
   bounds: {
-    ADV20?: MoneyMinMax;
-    ADV20NF?: MoneyMinMax;
-    ADV90?: MoneyMinMax;
-    ADV90NF?: MoneyMinMax;
-    AvPreMhv?: MoneyMinMax;
-    RoundLot?: MoneyMinMax;
-    VWAP?: MoneyMinMax;
-    Spread?: MoneyMinMax;
-    LstPrcL?: MoneyMinMax;
-    LstCls?: MoneyMinMax;
-    YCls?: MoneyMinMax;
-    TCls?: MoneyMinMax;
-    ClsToClsPct?: MoneyMinMax;
-    Lo?: MoneyMinMax;
-    LstClsNewsCnt?: MoneyMinMax;
-    MarketCapM?: MoneyMinMax;
-    PreMhVolNF?: MoneyMinMax;
-    VolNFfromLstCls?: MoneyMinMax;
-    AvPostMhVol90NF?: MoneyMinMax;
-    AvPreMhVol90NF?: MoneyMinMax;
-    AvPreMhValue20NF?: MoneyMinMax;
-    AvPreMhValue90NF?: MoneyMinMax;
-    AvgDailyValue20?: MoneyMinMax;
-    AvgDailyValue90?: MoneyMinMax;
-    Volatility20?: MoneyMinMax;
-    Volatility90?: MoneyMinMax;
-    PreMhMDV20NF?: MoneyMinMax;
-    PreMhMDV90NF?: MoneyMinMax;
-    VolRel?: MoneyMinMax;
+    ADV20?: StreamMinMax;
+    ADV20NF?: StreamMinMax;
+    ADV90?: StreamMinMax;
+    ADV90NF?: StreamMinMax;
+    AvPreMhv?: StreamMinMax;
+    RoundLot?: StreamMinMax;
+    VWAP?: StreamMinMax;
+    Spread?: StreamMinMax;
+    LstPrcL?: StreamMinMax;
+    LstCls?: StreamMinMax;
+    YCls?: StreamMinMax;
+    TCls?: StreamMinMax;
+    ClsToClsPct?: StreamMinMax;
+    Lo?: StreamMinMax;
+    LstClsNewsCnt?: StreamMinMax;
+    MarketCapM?: StreamMinMax;
+    PreMhVolNF?: StreamMinMax;
+    VolNFfromLstCls?: StreamMinMax;
+    AvPostMhVol90NF?: StreamMinMax;
+    AvPreMhVol90NF?: StreamMinMax;
+    AvPreMhValue20NF?: StreamMinMax;
+    AvPreMhValue90NF?: StreamMinMax;
+    AvgDailyValue20?: StreamMinMax;
+    AvgDailyValue90?: StreamMinMax;
+    Volatility20?: StreamMinMax;
+    Volatility90?: StreamMinMax;
+    PreMhMDV20NF?: StreamMinMax;
+    PreMhMDV90NF?: StreamMinMax;
+    VolRel?: StreamMinMax;
   };
   exclude: {
     dividend: boolean;
@@ -364,9 +369,6 @@ function intentId(parts: Array<string | number>): string {
   return parts.join("|");
 }
 
-function signalSide(row: ArbitrageSignal): "Long" | "Short" {
-  return row.direction === "down" ? "Short" : "Long";
-}
 
 function signalAbs(row: ArbitrageSignal | null | undefined): number | null {
   if (!row) return null;
@@ -403,7 +405,7 @@ function numPositionBp(row: ArbitrageSignal | null | undefined): number | null {
 function isActiveByPositionBp(row: ArbitrageSignal | null | undefined): boolean {
   if (!row) return false;
   const bp = numPositionBp(row);
-  // Money engine uses strict position activity: only PositionBp != 0 means active.
+  // Stream engine uses strict position activity: only PositionBp != 0 means active.
   return bp != null && bp !== 0;
 }
 
@@ -448,9 +450,9 @@ function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
     .filter(Boolean) as ArbitrageSignal[];
 }
 
-function moneyActionLogStorageKey(signalClass: string | undefined): string {
+function streamActionLogStorageKey(signalClass: string | undefined): string {
   const suffix = (signalClass ?? "global").trim().toLowerCase() || "global";
-  return `money.arbitrage.action-log.${suffix}`;
+  return `stream.arbitrage.action-log.${suffix}`;
 }
 
 function localDayKey(timestamp = Date.now()): string {
@@ -467,7 +469,7 @@ function dayKeyAgeInDays(dayKey: string, now = Date.now()): number {
   return Math.floor((current.getTime() - target.getTime()) / 86_400_000);
 }
 
-function pruneMoneyActionLog(entries: MoneyActionLogEntry[], now = Date.now()): MoneyActionLogEntry[] {
+function pruneStreamActionLog(entries: StreamActionLogEntry[], now = Date.now()): StreamActionLogEntry[] {
   return entries
     .filter((entry) => {
       const age = dayKeyAgeInDays(entry.dayKey, now);
@@ -476,17 +478,17 @@ function pruneMoneyActionLog(entries: MoneyActionLogEntry[], now = Date.now()): 
     .sort((a, b) => a.at - b.at);
 }
 
-function readMoneyActionLog(storageKey: string): MoneyActionLogEntry[] {
+function readStreamActionLog(storageKey: string): StreamActionLogEntry[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(storageKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return pruneMoneyActionLog(parsed
+    return pruneStreamActionLog(parsed
       .map((item) => {
         if (!item || typeof item !== "object") return null;
-        const row = item as Partial<MoneyActionLogEntry>;
+        const row = item as Partial<StreamActionLogEntry>;
         const ticker = String(row.ticker ?? "").trim().toUpperCase();
         if (!ticker) return null;
         return {
@@ -510,19 +512,19 @@ function readMoneyActionLog(storageKey: string): MoneyActionLogEntry[] {
             row.intent === "MANUAL"
               ? row.intent
               : "MANUAL",
-        } satisfies MoneyActionLogEntry;
+        } satisfies StreamActionLogEntry;
       })
-      .filter((row): row is MoneyActionLogEntry => row !== null), Date.now());
+      .filter((row): row is StreamActionLogEntry => row !== null), Date.now());
   } catch {
     return [];
   }
 }
 
-function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey = localDayKey()): MoneyPosition[] {
+function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): StreamPosition[] {
   const todaysEntries = entries
     .filter((entry) => entry.dayKey === dayKey)
     .sort((a, b) => a.at - b.at);
-  const openByTicker = new Map<string, MoneyPosition>();
+  const openByTicker = new Map<string, StreamPosition>();
 
   for (const entry of todaysEntries) {
     if (entry.kind === "CLOSE") {
@@ -539,6 +541,7 @@ function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey
         entrySignal: entry.deviation,
         lastSignal: entry.deviation,
         lastScaleSignal: entry.deviation,
+        belowThresholdTicks: 0,
         spread: null,
         status: "OPEN",
         reason: entry.kind === "ADD" ? "restored add from action log" : "restored entry from action log",
@@ -546,6 +549,7 @@ function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey
         lockedForPrint: false,
         pendingIntent: null,
         entryDispatchedAt: entry.at,
+        lastDispatchedAt: entry.at,
         lastConfirmedActiveAt: entry.at,
         openedAt: entry.at,
         updatedAt: entry.at,
@@ -563,6 +567,7 @@ function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey
       reason: entry.kind === "ADD" ? "restored add from action log" : existing.reason,
       entryCount: nextEntryCount,
       entryDispatchedAt: existing.entryDispatchedAt ?? entry.at,
+      lastDispatchedAt: entry.at,
       lastConfirmedActiveAt: entry.at,
       updatedAt: entry.at,
     });
@@ -571,14 +576,14 @@ function buildMoneyPositionsFromActionLog(entries: MoneyActionLogEntry[], dayKey
   return Array.from(openByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
-function buildOpenTickersFromActionLog(entries: MoneyActionLogEntry[], dayKey = localDayKey()): Set<string> {
-  return new Set(buildMoneyPositionsFromActionLog(entries, dayKey).map((row) => row.ticker));
+function buildOpenTickersFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): Set<string> {
+  return new Set(buildStreamPositionsFromActionLog(entries, dayKey).map((row) => row.ticker));
 }
 
 function hasExecutionDispatchConfirmation(
   snapshot: TradingAppExecutionSnapshot | null | undefined,
   intentId: string,
-  entries: MoneyActionLogEntry[] = [],
+  entries: StreamActionLogEntry[] = [],
 ): boolean {
   if (!snapshot || !intentId) return false;
   const matchesIntent = (item: TradingAppQueueItem | null | undefined) =>
@@ -605,7 +610,7 @@ function hasExecutionDispatchConfirmation(
     snapshot.history.some(fallbackMatch);
 }
 
-function mapActionLogIntentToExecutionType(intent: MoneyActionLogEntry["intent"]): TradingAppQueueItem["type"] | null {
+function mapActionLogIntentToExecutionType(intent: StreamActionLogEntry["intent"]): TradingAppQueueItem["type"] | null {
   switch (intent) {
     case "ENTER_LONG_AGGRESSIVE":
       return "EnterLongAggressive";
@@ -625,7 +630,7 @@ function mapActionLogIntentToExecutionType(intent: MoneyActionLogEntry["intent"]
 
 function queueItemMatchesPendingActionLogEntry(
   item: TradingAppQueueItem,
-  entry: MoneyActionLogEntry | undefined,
+  entry: StreamActionLogEntry | undefined,
 ): boolean {
   if (!entry) return false;
   if (item.status !== "Sent" && item.status !== "Completed") return false;
@@ -643,7 +648,7 @@ function queueItemMatchesPendingActionLogEntry(
   return itemTimestamp >= entry.at - 60_000;
 }
 
-function normalizeConfirmedActionLogReason(entry: MoneyActionLogEntry): string | undefined {
+function normalizeConfirmedActionLogReason(entry: StreamActionLogEntry): string | undefined {
   const reason = entry.reason?.trim();
   if (
     reason &&
@@ -663,19 +668,19 @@ function normalizeConfirmedActionLogReason(entry: MoneyActionLogEntry): string |
   return "entry confirmed";
 }
 
-function normalizeConfirmedActionLogEntries(entries: MoneyActionLogEntry[]): MoneyActionLogEntry[] {
+function normalizeConfirmedActionLogEntries(entries: StreamActionLogEntry[]): StreamActionLogEntry[] {
   return entries.map((entry) => ({
     ...entry,
     reason: normalizeConfirmedActionLogReason(entry),
   }));
 }
 
-function mergeMoneyPositionsWithActionLog(
-  prev: MoneyPosition[],
-  entries: MoneyActionLogEntry[],
+function mergeStreamPositionsWithActionLog(
+  prev: StreamPosition[],
+  entries: StreamActionLogEntry[],
   dayKey = localDayKey()
-): MoneyPosition[] {
-  const restored = buildMoneyPositionsFromActionLog(entries, dayKey);
+): StreamPosition[] {
+  const restored = buildStreamPositionsFromActionLog(entries, dayKey);
   const restoredByTicker = new Map(restored.map((row) => [row.ticker, row]));
   const prevByTicker = new Map(prev.map((row) => [row.ticker, row]));
   const transient = prev.filter((row) =>
@@ -684,7 +689,7 @@ function mergeMoneyPositionsWithActionLog(
     isEntryOrderIntent(row.pendingIntent)
   );
   const transientByTicker = new Map(transient.map((row) => [row.ticker, row]));
-  const merged = new Map<string, MoneyPosition>();
+  const merged = new Map<string, StreamPosition>();
 
   for (const [ticker, row] of restoredByTicker) {
     const existing = prevByTicker.get(ticker) ?? null;
@@ -708,7 +713,7 @@ function mergeMoneyPositionsWithActionLog(
 
   // Keep positions that have been dispatched but not yet confirmed in the action log.
   // Without this they'd be dropped from positionsBaseline, fall out of `seen` in
-  // syncMoneyPositions, and the latch would recreate them with a new openedAt →
+  // syncStreamPositions, and the latch would recreate them with a new openedAt →
   // different intentId → duplicate dispatch.
   for (const [ticker, row] of prevByTicker) {
     if (!merged.has(ticker) && row.status !== "CLOSED" && row.entryDispatchedAt != null) {
@@ -728,7 +733,7 @@ function sameSignalList(a: ArbitrageSignal[], b: ArbitrageSignal[]): boolean {
   return true;
 }
 
-function sameDecisionRows(a: MoneyDecisionRow[], b: MoneyDecisionRow[]): boolean {
+function sameDecisionRows(a: StreamDecisionRow[], b: StreamDecisionRow[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -751,38 +756,57 @@ function sameDecisionRows(a: MoneyDecisionRow[], b: MoneyDecisionRow[]): boolean
   return true;
 }
 
-function syncMoneySignalLatches(
-  prev: MoneySignalLatch[],
-  decisions: MoneyDecisionRow[],
+function syncStreamSignalLatches(
+  prev: StreamSignalLatch[],
+  decisions: StreamDecisionRow[],
   autoEnabled: boolean,
-  automationConfig?: MoneyAutomationConfig,
+  automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   primeImmediately = false,
-  latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>
-): MoneySignalLatch[] {
+  latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
+  primedTickers?: ReadonlySet<string>,
+  minuteQualifiedTickers?: ReadonlySet<string>
+): StreamSignalLatch[] {
   if (!autoEnabled || !automationConfig?.strategyModeEnabled) return [];
 
   const now = Date.now();
-  const minHoldMs = Math.max(0, automationConfig.minHoldMinutes ?? 0) * 1000;
+  const minHoldMinutes = Math.max(0, automationConfig.minHoldMinutes ?? 0);
+  const minHoldMs = minHoldMinutes * 60_000;
+  const nowMinuteIdx = Math.floor(now / 60_000);
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return [];
 
   const prevMap = new Map(prev.map((row) => [row.ticker, row]));
-  const next: MoneySignalLatch[] = [];
+  const next: StreamSignalLatch[] = [];
 
   for (const row of decisions) {
-    if (row.status !== "ENTRY_READY") continue;
+    // Track all signal candidates (above startAbs threshold): ENTRY_READY,
+    // BLOCKED_SPREAD, and BLOCKED_EDGE. HOLD means below threshold — skip.
+    if (row.status === "HOLD") continue;
     const existing = prevMap.get(row.ticker);
     // Recover qualifiedSince from history if the latch briefly dropped (signal bounced
-    // out of ENTRY_READY for one or more ticks). Without this, each bounce resets the
-    // hold timer and the ticker never dispatches.
+    // below threshold for < 1 min). Without this, sub-minute noise resets the hold
+    // timer and the ticker never dispatches.
     const historic = !existing ? latchHistory?.get(row.ticker) : null;
+    // If this ticker was already active in SCANNER when STREAM started, pre-seed its
+    // qualifiedSince so it qualifies immediately (matching SCANNER candidate list).
+    const isPrimed = !existing && !historic && !!primedTickers?.has(`${row.ticker}|${row.side}`);
+    // For brand-new latches (no existing, no history, not primed): only create if the
+    // ticker was above threshold at the last minute boundary. This mirrors tape behavior
+    // where a new episode can only start at a candle (minute) boundary.
+    if (!existing && !historic && !isPrimed) {
+      const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${row.ticker}|${row.side}`);
+      if (!isMinuteQualified) continue;
+    }
+    // qualifiedSince is aligned to minute boundaries so hold check (minute index
+    // arithmetic) gives integer-exact results matching tape candle counting.
+    const minuteAlignedNow = nowMinuteIdx * 60_000;
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
-      qualifiedSince: existing?.qualifiedSince ?? historic?.qualifiedSince ?? (primeImmediately ? now - minHoldMs : now),
+      qualifiedSince: existing?.qualifiedSince ?? historic?.qualifiedSince ?? (isPrimed ? minuteAlignedNow - minHoldMs : minuteAlignedNow),
       lastSeenAt: now,
     });
   }
@@ -790,26 +814,26 @@ function syncMoneySignalLatches(
   return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
-export function parseMoneySpreadLimit(value: unknown): number | null {
+export function parseStreamSpreadLimit(value: unknown): number | null {
   return toNum(value);
 }
 
-export function deriveMoneySignalClass(ruleBand: "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
+export function deriveStreamSignalClass(ruleBand: "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
   return ruleBand === "GLOBAL" ? "global" : ruleBand.toLowerCase();
 }
 
-export function deriveMoneyRatingRule(ruleBand: MoneyRatingBand, ratingRules: MoneyRatingRule[]): MoneyRatingRule {
+export function deriveStreamRatingRule(ruleBand: StreamRatingBand, ratingRules: StreamRatingRule[]): StreamRatingRule {
   return ratingRules.find((rule) => rule.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
 }
 
-export function deriveMoneyExecutionDescriptor(ruleBand: MoneyRatingBand, ratingRules: MoneyRatingRule[]): MoneyExecutionDescriptor {
+export function deriveStreamExecutionDescriptor(ruleBand: StreamRatingBand, ratingRules: StreamRatingRule[]): StreamExecutionDescriptor {
   return {
-    signalClass: deriveMoneySignalClass(ruleBand),
-    ratingRule: deriveMoneyRatingRule(ruleBand, ratingRules),
+    signalClass: deriveStreamSignalClass(ruleBand),
+    ratingRule: deriveStreamRatingRule(ruleBand, ratingRules),
   };
 }
 
-export function buildMoneyFilterConfig(args: MoneyFilterBuilderArgs): ArbitrageFilterConfigV1 {
+export function buildStreamFilterConfig(args: StreamFilterBuilderArgs): ArbitrageFilterConfigV1 {
   return {
     version: 1,
     source: {
@@ -848,13 +872,13 @@ export function buildMoneyFilterConfig(args: MoneyFilterBuilderArgs): ArbitrageF
   };
 }
 
-export function computeMoneyDecisionRows(
+export function computeStreamDecisionRows(
   signals: ArbitrageSignal[],
   maxSpreadValue: unknown,
-  automationConfig?: MoneyAutomationConfig,
+  automationConfig?: StreamAutomationConfig,
   bookSnapshot?: MarketMakerBookSnapshot | null
-): MoneyDecisionRow[] {
-  const spreadLimit = parseMoneySpreadLimit(maxSpreadValue);
+): StreamDecisionRow[] {
+  const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const canApplyBook = signals.length === 1 && (bookSnapshot?.bestBid != null || bookSnapshot?.bestAsk != null);
 
   return signals.map((row) => {
@@ -900,27 +924,29 @@ export function computeMoneyDecisionRows(
   });
 }
 
-export function syncMoneyPositions(
-  prev: MoneyPosition[],
-  decisions: MoneyDecisionRow[],
+export function syncStreamPositions(
+  prev: StreamPosition[],
+  decisions: StreamDecisionRow[],
   allSignals: ArbitrageSignal[],
   filteredSignals: ArbitrageSignal[],
-  latches: MoneySignalLatch[],
+  latches: StreamSignalLatch[],
   autoEnabled: boolean,
   maxSpreadValue: unknown,
-  automationConfig?: MoneyAutomationConfig,
+  automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   loggedOpenTickers: ReadonlySet<string> = new Set()
-): MoneyPosition[] {
+): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
   const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
-  const spreadLimit = parseMoneySpreadLimit(maxSpreadValue);
+  const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
+  const nowMinuteIdx = Math.floor(now / 60_000);
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const endThreshold = Math.max(0, automationConfig?.endSignalThreshold ?? 0);
-  const minHoldMs = Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 1000;
+  const minHoldMinutes = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
+  const minHoldMs = minHoldMinutes * 60_000;
 
   if (!autoEnabled) {
     return prev
@@ -942,7 +968,7 @@ export function syncMoneyPositions(
           lastScaleSignal: existing.lastScaleSignal ?? existing.entrySignal ?? currentSignal,
           spread: signalSpread(raw) ?? existing.spread,
           status: inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN"),
-          reason: inPrintWindow ? "09:20 print exit armed" : "restored active MONEY position from action log",
+          reason: inPrintWindow ? "09:20 print exit armed" : "restored active STREAM position from action log",
           lockedForPrint: inPrintWindow,
           pendingIntent: inPrintWindow && !existing.lockedForPrint
             ? (existing.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
@@ -951,13 +977,13 @@ export function syncMoneyPositions(
           lastConfirmedActiveAt: existing.lastConfirmedActiveAt ?? existing.updatedAt ?? now,
           openedAt: existing.openedAt ?? (now - minHoldMs),
           updatedAt: now,
-        } satisfies MoneyPosition;
+        } satisfies StreamPosition;
       })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
   }
 
   if (automationConfig?.strategyModeEnabled) {
-    const next: MoneyPosition[] = [];
+    const next: StreamPosition[] = [];
     const seen = new Set<string>();
     const maxOpenAllowed = entryCutoffEnabled
       ? (automationConfig.maxOpenPositions ?? Number.MAX_SAFE_INTEGER)
@@ -978,21 +1004,24 @@ export function syncMoneyPositions(
       const currentSigned = zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
       const currentAbs = currentSigned == null ? signalAbs(raw) : Math.abs(currentSigned);
       const currentSpread = signalSpread(raw) ?? existing.spread;
+      // Lazy-init: positions restored from action log may have null entrySignal (missing deviation).
+      // Fill from current signal on first available tick so add triggers are anchored correctly.
+      const resolvedEntrySignal = existing.entrySignal ?? currentSigned ?? null;
       const spreadBlocked = spreadLimit != null && currentSpread != null && currentSpread > spreadLimit;
       const holdBlocked = minHoldMs > 0 && now - existing.openedAt < minHoldMs;
       const inPrintWindow = entryCutoffEnabled && nowMinutes >= printStartMinutes;
       const activeExitMode = (automationConfig.exitExecutionMode ?? "active") === "active";
       const belowEndThreshold = currentAbs != null && currentAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
-      // Require signal to be below threshold for two consecutive refreshes before exiting
-      // (existing.lastSignal is the signal from the previous refresh cycle)
-      const prevAbs = existing.lastSignal == null ? null : Math.abs(existing.lastSignal);
-      const prevBelowThreshold = prevAbs != null && prevAbs < endThreshold;
-      const shouldNormalizeExit = activeExitMode && belowEndThreshold && prevBelowThreshold;
+      const exitConfirmTicks = Math.max(1, automationConfig.exitConfirmTicks ?? 3);
+      const belowThresholdTicks = belowEndThreshold
+        ? (existing.belowThresholdTicks ?? 0) + 1
+        : 0;
+      const shouldNormalizeExit = activeExitMode && belowThresholdTicks >= exitConfirmTicks;
 
-      let status: MoneyPosition["status"] = existing.status;
+      let status: StreamPosition["status"] = existing.status;
       let reason = existing.reason;
-      let pendingIntent: MoneyPosition["pendingIntent"] = existing.pendingIntent;
+      let pendingIntent: StreamPosition["pendingIntent"] = existing.pendingIntent;
       let lockedForPrint = existing.lockedForPrint;
       let entryCount = existing.entryCount;
       let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
@@ -1006,7 +1035,7 @@ export function syncMoneyPositions(
 
       if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
         // Keep in next so the position stays in state across refresh cycles.
-        // Without this, setMoneyPositions removes it → mergeMoneyPositionsWithActionLog
+        // Without this, setStreamPositions removes it → mergeStreamPositionsWithActionLog
         // can't restore it → latch recreates a new position with a different openedAt
         // → duplicate dispatch before action-log confirmation arrives.
         next.push({
@@ -1122,10 +1151,10 @@ export function syncMoneyPositions(
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
-          // Trigger base is always the original entry signal so that each add threshold
-          // is: |entrySignal| + addNumber × dilutionStep.
-          // Example: entry=0.5σ, step=0.5 → add#1 at 1.0σ, add#2 at 1.5σ, add#3 at 2.0σ.
-          const entryBase = existing.entrySignal ?? lastScaleSignal;
+          // Trigger base is always the FIRST entry signal (never lastScaleSignal).
+          // Each add threshold: |entrySignal| + addNumber × dilutionStep.
+          // Example: entry=1.2σ, step=0.3 → add#1 at 1.5σ, add#2 at 1.8σ, add#3 at 2.1σ.
+          const entryBase = resolvedEntrySignal;
           if (entryBase == null || entryBase === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           } else {
@@ -1136,7 +1165,10 @@ export function syncMoneyPositions(
             Number.isFinite(filteredSigned) &&
             filteredSigned !== 0 &&
             Math.sign(filteredSigned) === Math.sign(entryBase);
-          if (filteredAbs != null && filteredAbs >= trigger && sameSign) {
+          const addDelayMs = Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000;
+          const lastDispatch = existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt;
+          const addDelayPassed = addDelayMs === 0 || now - lastDispatch >= addDelayMs;
+          if (filteredAbs != null && filteredAbs >= trigger && sameSign && addDelayPassed) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
@@ -1162,8 +1194,10 @@ export function syncMoneyPositions(
 
       next.push({
         ...existing,
+        entrySignal: resolvedEntrySignal,
         lastSignal: currentSigned ?? currentAbs,
         lastScaleSignal,
+        belowThresholdTicks,
         spread: currentSpread,
         status,
         reason,
@@ -1186,7 +1220,13 @@ export function syncMoneyPositions(
       if (seen.has(latch.ticker)) continue;
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
       if (openCount >= maxOpenAllowed) continue;
-      if (now - latch.qualifiedSince < minHoldMs) continue;
+      // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
+      // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
+      if (nowMinuteIdx - Math.floor(latch.qualifiedSince / 60_000) < minHoldMinutes) continue;
+      // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
+      // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
+      const latchDecision = decisionMap.get(latch.ticker);
+      if (!latchDecision || latchDecision.status !== "ENTRY_READY") continue;
 
       const raw = filteredSignalMap.get(latch.ticker) ?? signalMap.get(latch.ticker);
       const filteredRawEntry = filteredSignalMap.get(latch.ticker);
@@ -1194,6 +1234,7 @@ export function syncMoneyPositions(
         ? (toNum(filteredRawEntry?.zapLsigma) ?? toNum(raw?.zapLsigma))
         : (toNum(filteredRawEntry?.zapSsigma) ?? toNum(raw?.zapSsigma));
       const currentSigned = zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
+      if (currentSigned == null) continue; // no signal — cannot anchor add triggers, skip
       const currentSpread = signalSpread(raw);
       next.push({
         ticker: latch.ticker,
@@ -1202,13 +1243,15 @@ export function syncMoneyPositions(
         entrySignal: currentSigned,
         lastSignal: currentSigned,
         lastScaleSignal: currentSigned,
+        belowThresholdTicks: 0,
         spread: currentSpread,
         status: "PENDING_ENTRY",
-        reason: `entered after hold ${automationConfig.minHoldMinutes}s`,
+        reason: `entered after hold ${automationConfig.minHoldMinutes ?? 0}min`,
         entryCount: 1,
         lockedForPrint: false,
         pendingIntent: latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
         entryDispatchedAt: null,
+        lastDispatchedAt: null,
         lastConfirmedActiveAt: null,
         openedAt: now,
         updatedAt: now,
@@ -1224,7 +1267,7 @@ export function syncMoneyPositions(
 
   const printCloseMinutes = parseTimeToMinutes(automationConfig?.printCloseTime, 9 * 60 + 30);
   const printWindowEnabled = entryCutoffEnabled && automationConfig?.exitMode === "print";
-  const next: MoneyPosition[] = [];
+  const next: StreamPosition[] = [];
   const seen = new Set<string>();
 
   for (const existing of prev) {
@@ -1300,20 +1343,20 @@ export function syncMoneyPositions(
     .sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
-export function buildMoneyOrderIntents(
-  decisions: MoneyDecisionRow[],
-  positions: MoneyPosition[],
+export function buildStreamOrderIntents(
+  decisions: StreamDecisionRow[],
+  positions: StreamPosition[],
   autoEnabled: boolean,
-  automationConfig?: MoneyAutomationConfig,
+  automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = false
-): MoneyOrderIntent[] {
+): StreamOrderIntent[] {
   if (!autoEnabled) return [];
 
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const printWindowEnabled = entryCutoffEnabled && automationConfig?.exitMode === "print";
-  const intents: MoneyOrderIntent[] = [];
+  const intents: StreamOrderIntent[] = [];
   const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
 
   if (automationConfig?.strategyModeEnabled) {
@@ -1440,7 +1483,7 @@ export function buildMoneyOrderIntents(
     }
 
     if (normalizeExitTriggered) {
-      const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 1000;
+      const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 60_000;
       intents.push({
         id: intentId([position.ticker, "normalize-exit", position.side]),
         ticker: position.ticker,
@@ -1451,7 +1494,7 @@ export function buildMoneyOrderIntents(
         priceRef: automationConfig?.exitExecutionMode === "passive" ? (position.side === "Long" ? "ASK" : "BID") : (position.side === "Long" ? "BID" : "ASK"),
         status: holdBlocked ? "BLOCKED" : "QUEUED",
         reason: holdBlocked
-          ? `min hold ${automationConfig?.minHoldMinutes}s not reached`
+          ? `min hold ${automationConfig?.minHoldMinutes}min not reached`
           : `normalization exit | abs(signal) ${Math.abs(decision.signal!).toFixed(2)} < ${Math.max(0, automationConfig?.endSignalThreshold ?? 0).toFixed(2)} | ${automationConfig?.exitExecutionMode === "passive" ? "passive" : "active"}`,
         createdAt: now,
       });
@@ -1477,12 +1520,12 @@ export function buildMoneyOrderIntents(
 }
 
 function buildFallbackPendingEntryPositions(
-  existingPositions: MoneyPosition[],
-  qualifiedLatches: MoneySignalLatch[],
+  existingPositions: StreamPosition[],
+  qualifiedLatches: StreamSignalLatch[],
   filteredSignals: ArbitrageSignal[],
-  automationConfig: MoneyAutomationConfig | undefined,
+  automationConfig: StreamAutomationConfig | undefined,
   entryCutoffEnabled: boolean,
-): MoneyPosition[] {
+): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
 
   const now = Date.now();
@@ -1527,6 +1570,7 @@ function buildFallbackPendingEntryPositions(
       lockedForPrint: false,
       pendingIntent: latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
       entryDispatchedAt: null,
+      lastDispatchedAt: null,
       lastConfirmedActiveAt: null,
       openedAt: now,
       updatedAt: now,
@@ -1539,7 +1583,7 @@ function buildFallbackPendingEntryPositions(
   return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
-type UseMoneyEngineArgs = {
+type UseStreamEngineArgs = {
   enabled: boolean;
   ocrEnabled?: boolean;
   trackedSignalsEnabled?: boolean;
@@ -1558,7 +1602,13 @@ type UseMoneyEngineArgs = {
   filterConfig: ArbitrageFilterConfigV1;
   exactSonarFilterSnapshot?: SonarExactFilterSnapshot;
   maxSpreadValue: unknown;
-  automationConfig?: MoneyAutomationConfig;
+  automationConfig?: StreamAutomationConfig;
+  /** Tickers currently active in SCANNER (already past minHoldCandles). Used as a
+   *  quick fallback seed before the async fetch completes. */
+  activeScannerTickers?: ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>;
+  /** Called once at automation startup to fetch the authoritative active list from the
+   *  tape API. Result overwrites activeScannerTickers so the seed is always fresh. */
+  onFetchActiveTickers?: () => Promise<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>;
   onUpdated?: () => void;
   onError?: (message: string | null) => void;
 };
@@ -1573,7 +1623,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
 const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
 const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
-const MONEY_AUTOMATION_TICK_MS = 1000;
+const STREAM_AUTOMATION_TICK_MS = 1000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -1629,7 +1679,7 @@ const tradingAppBridgeUrl = (path: string) => {
   return `${base}/api/execution/tradingapp${path.startsWith("/") ? path : `/${path}`}`;
 };
 
-export function useMoneyEngine({
+export function useStreamEngine({
   enabled,
   ocrEnabled = false,
   trackedSignalsEnabled = true,
@@ -1649,9 +1699,11 @@ export function useMoneyEngine({
   exactSonarFilterSnapshot,
   maxSpreadValue,
   automationConfig,
+  activeScannerTickers,
+  onFetchActiveTickers,
   onUpdated,
   onError,
-}: UseMoneyEngineArgs) {
+}: UseStreamEngineArgs) {
   const STATUS_REFRESH_INTERVAL_MS = 2500;
   const AUTO_DISPATCH_COOLDOWN_MS = 15000;
   const SIGNAL_SURGE_GUARD_MIN_COUNT = 24;
@@ -1659,29 +1711,29 @@ export function useMoneyEngine({
   const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
-  const actionLogStorageKey = moneyActionLogStorageKey(signalClass);
+  const actionLogStorageKey = streamActionLogStorageKey(signalClass);
   const currentDayKey = localDayKey();
-  const [moneyActionLog, setMoneyActionLog] = useState<MoneyActionLogEntry[]>(() => readMoneyActionLog(actionLogStorageKey));
-  const [moneyPositions, setMoneyPositions] = useState<MoneyPosition[]>(() => buildMoneyPositionsFromActionLog(readMoneyActionLog(actionLogStorageKey), currentDayKey));
-  const [moneyOrderIntents, setMoneyOrderIntents] = useState<MoneyOrderIntent[]>([]);
-  const [moneySignalLatches, setMoneySignalLatches] = useState<MoneySignalLatch[]>([]);
-  const [moneyAutoEnabled, setMoneyAutoEnabledState] = useState<boolean>(initialAutoEnabled);
-  const [moneyEntryReadyCount, setMoneyEntryReadyCount] = useState<number>(0);
-  const [moneySessionStartedAt, setMoneySessionStartedAt] = useState<number | null>(null);
-  const [moneySessionStoppedAt, setMoneySessionStoppedAt] = useState<number | null>(null);
-  const [moneySentOrdersCount, setMoneySentOrdersCount] = useState<number>(0);
-  const [moneyManualExecutionBusy, setMoneyManualExecutionBusy] = useState<boolean>(false);
+  const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>(() => readStreamActionLog(actionLogStorageKey));
+  const [streamPositions, setStreamPositions] = useState<StreamPosition[]>(() => buildStreamPositionsFromActionLog(readStreamActionLog(actionLogStorageKey), currentDayKey));
+  const [streamOrderIntents, setStreamOrderIntents] = useState<StreamOrderIntent[]>([]);
+  const [streamSignalLatches, setStreamSignalLatches] = useState<StreamSignalLatch[]>([]);
+  const [streamAutoEnabled, setStreamAutoEnabledState] = useState<boolean>(initialAutoEnabled);
+  const [streamEntryReadyCount, setStreamEntryReadyCount] = useState<number>(0);
+  const [streamSessionStartedAt, setStreamSessionStartedAt] = useState<number | null>(null);
+  const [streamSessionStoppedAt, setStreamSessionStoppedAt] = useState<number | null>(null);
+  const [streamSentOrdersCount, setStreamSentOrdersCount] = useState<number>(0);
+  const [streamManualExecutionBusy, setStreamManualExecutionBusy] = useState<boolean>(false);
   const [executionRevision, setExecutionRevision] = useState(0);
   const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
   const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
   const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
-  const pendingActionLogEntriesRef = useRef<Map<string, MoneyActionLogEntry[]>>(new Map());
-  const moneyAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
+  const pendingActionLogEntriesRef = useRef<Map<string, StreamActionLogEntry[]>>(new Map());
+  const streamAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
   const primaryStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
   const trackedStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
-  const moneyActionLogRef = useRef<MoneyActionLogEntry[]>(moneyActionLog);
+  const streamActionLogRef = useRef<StreamActionLogEntry[]>(streamActionLog);
   const localRefreshTimerRef = useRef<number | null>(null);
-  const moneyExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(moneyExecutionStore.getSnapshot());
+  const streamExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(streamExecutionStore.getSnapshot());
   const executionSnapshotSignatureRef = useRef<string>("");
   const actionLogVersionRef = useRef(0);
   const lastStatusRefreshAtRef = useRef<number>(0);
@@ -1692,24 +1744,28 @@ export function useMoneyEngine({
   const surgeGuardStableTicksRef = useRef<number>(0);
   const strategyAutoWasRunningRef = useRef<boolean>(false);
   const primeImmediateEntriesRef = useRef<boolean>(false);
+  const activeScannerTickersRef = useRef<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>(activeScannerTickers ?? []);
+  const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
+  const minuteSnapshotRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
-  const moneyPositionsRef = useRef<MoneyPosition[]>(moneyPositions);
-  const moneySignalLatchesRef = useRef<MoneySignalLatch[]>([]);
+  const streamPositionsRef = useRef<StreamPosition[]>(streamPositions);
+  const streamSignalLatchesRef = useRef<StreamSignalLatch[]>([]);
   const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
   const dispatchLoopActiveRef = useRef(false);
   const dispatchLoopReplayRef = useRef(false);
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
+  const onFetchActiveTickersRef = useRef<typeof onFetchActiveTickers>(onFetchActiveTickers);
 
-  const setMoneyAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
-    const resolved = typeof nextValue === "function" ? nextValue(moneyAutoEnabledRef.current) : nextValue;
-    moneyAutoEnabledRef.current = resolved;
-    setMoneyAutoEnabledState(resolved);
+  const setStreamAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
+    const resolved = typeof nextValue === "function" ? nextValue(streamAutoEnabledRef.current) : nextValue;
+    streamAutoEnabledRef.current = resolved;
+    setStreamAutoEnabledState(resolved);
   }, []);
 
-  const appendMoneyActionLogEntries = useCallback((entries: MoneyActionLogEntry[]) => {
+  const appendStreamActionLogEntries = useCallback((entries: StreamActionLogEntry[]) => {
     if (!entries.length) return;
-    const nextLog = pruneMoneyActionLog([...moneyActionLogRef.current, ...entries], Date.now());
+    const nextLog = pruneStreamActionLog([...streamActionLogRef.current, ...entries], Date.now());
     const entryLoggedTickers = new Set(
       entries
         .filter((row) => row.kind === "ENTRY" || row.kind === "ADD")
@@ -1721,10 +1777,10 @@ export function useMoneyEngine({
         .map((row) => row.ticker)
     );
     actionLogVersionRef.current += 1;
-    moneyActionLogRef.current = nextLog;
-    setMoneyActionLog(nextLog);
-    setMoneyPositions((prev) => mergeMoneyPositionsWithActionLog(prev, nextLog, localDayKey()));
-    setMoneyOrderIntents((prev) => prev.filter((intent) => {
+    streamActionLogRef.current = nextLog;
+    setStreamActionLog(nextLog);
+    setStreamPositions((prev) => mergeStreamPositionsWithActionLog(prev, nextLog, localDayKey()));
+    setStreamOrderIntents((prev) => prev.filter((intent) => {
       if (
         entryLoggedTickers.has(intent.ticker) &&
         (intent.intent === "ENTER_LONG_AGGRESSIVE" || intent.intent === "ENTER_SHORT_AGGRESSIVE")
@@ -1757,7 +1813,7 @@ export function useMoneyEngine({
   const flushConfirmedPendingActionLogEntries = useCallback((snapshot: TradingAppExecutionSnapshot | null) => {
     if (!snapshot || pendingActionLogEntriesRef.current.size === 0) return;
 
-    const confirmedEntries: MoneyActionLogEntry[] = [];
+    const confirmedEntries: StreamActionLogEntry[] = [];
     const confirmedIntentIds: string[] = [];
 
     pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
@@ -1772,27 +1828,27 @@ export function useMoneyEngine({
       pendingActionLogEntriesRef.current.delete(intentId);
     }
 
-    appendMoneyActionLogEntries(confirmedEntries);
-  }, [appendMoneyActionLogEntries]);
+    appendStreamActionLogEntries(confirmedEntries);
+  }, [appendStreamActionLogEntries]);
 
-  const queuePendingActionLogEntries = useCallback((intentId: string, entries: MoneyActionLogEntry[]) => {
+  const queuePendingActionLogEntries = useCallback((intentId: string, entries: StreamActionLogEntry[]) => {
     if (!intentId || !entries.length) return;
     pendingActionLogEntriesRef.current.set(intentId, entries);
-    flushConfirmedPendingActionLogEntries(moneyExecutionSnapshotRef.current);
+    flushConfirmedPendingActionLogEntries(streamExecutionSnapshotRef.current);
   }, [flushConfirmedPendingActionLogEntries]);
 
   useEffect(() => {
-    return moneyExecutionStore.subscribe(() => {
-      const snapshot = moneyExecutionStore.getSnapshot();
-      moneyExecutionSnapshotRef.current = snapshot;
+    return streamExecutionStore.subscribe(() => {
+      const snapshot = streamExecutionStore.getSnapshot();
+      streamExecutionSnapshotRef.current = snapshot;
       flushConfirmedPendingActionLogEntries(snapshot);
       setExecutionRevision((prev) => prev + 1);
     });
   }, [flushConfirmedPendingActionLogEntries]);
 
   const openLoggedTickers = useMemo(
-    () => buildOpenTickersFromActionLog(moneyActionLog, currentDayKey),
-    [currentDayKey, moneyActionLog]
+    () => buildOpenTickersFromActionLog(streamActionLog, currentDayKey),
+    [currentDayKey, streamActionLog]
   );
 
   const snapshotTickers = exactSonarFilterSnapshot?.tickersFilterNorm?.trim() ?? "";
@@ -1811,7 +1867,7 @@ export function useMoneyEngine({
     maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
     minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
     maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
-    // Keep MONEY candidate coverage aligned with SONAR. Shared stream paging
+    // Keep STREAM candidate coverage aligned with SONAR. Shared stream paging
     // happens before local client-only filters, so a smaller upstream limit
     // can hide otherwise matching rows.
     limit: 500,
@@ -1865,22 +1921,22 @@ export function useMoneyEngine({
   ]);
 
   useEffect(() => {
-    const restoredLog = readMoneyActionLog(actionLogStorageKey);
-    moneyActionLogStore.clear();
-    moneyDecisionStore.clear();
-    moneyOrderIntentStore.clear();
-    moneyPositionStore.clear();
-    moneySignalStore.clear();
-    moneyUpdatedAtStore.clear();
+    const restoredLog = readStreamActionLog(actionLogStorageKey);
+    streamActionLogStore.clear();
+    streamDecisionStore.clear();
+    streamOrderIntentStore.clear();
+    streamPositionStore.clear();
+    streamSignalStore.clear();
+    streamUpdatedAtStore.clear();
     actionLogVersionRef.current += 1;
-    setMoneyActionLog(restoredLog);
-    setMoneyPositions(buildMoneyPositionsFromActionLog(restoredLog, localDayKey()));
-    setMoneySignalLatches([]);
-    setMoneyOrderIntents([]);
-    setMoneyEntryReadyCount(0);
-    setMoneySessionStartedAt(null);
-    setMoneySessionStoppedAt(null);
-    setMoneySentOrdersCount(0);
+    setStreamActionLog(restoredLog);
+    setStreamPositions(buildStreamPositionsFromActionLog(restoredLog, localDayKey()));
+    setStreamSignalLatches([]);
+    setStreamOrderIntents([]);
+    setStreamEntryReadyCount(0);
+    setStreamSessionStartedAt(null);
+    setStreamSessionStoppedAt(null);
+    setStreamSentOrdersCount(0);
     latchQualifiedSinceHistoryRef.current.clear();
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
@@ -1890,7 +1946,7 @@ export function useMoneyEngine({
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const next = pruneMoneyActionLog(moneyActionLog, Date.now());
+      const next = pruneStreamActionLog(streamActionLog, Date.now());
       if (!next.length) {
         window.localStorage.removeItem(actionLogStorageKey);
         return;
@@ -1899,7 +1955,7 @@ export function useMoneyEngine({
     } catch {
       // ignore storage issues
     }
-  }, [actionLogStorageKey, moneyActionLog]);
+  }, [actionLogStorageKey, streamActionLog]);
 
   const scheduleLocalRefresh = useCallback(() => {
     if (!enabled || typeof window === "undefined") return;
@@ -2025,14 +2081,14 @@ export function useMoneyEngine({
   }, [applyStreamDiffToRef, applyTrackedStreamPayload, enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
 
   useEffect(() => {
-    setMoneyPositions((prev) => {
-      return mergeMoneyPositionsWithActionLog(prev, moneyActionLog, currentDayKey);
+    setStreamPositions((prev) => {
+      return mergeStreamPositionsWithActionLog(prev, streamActionLog, currentDayKey);
     });
-  }, [currentDayKey, moneyActionLog]);
+  }, [currentDayKey, streamActionLog]);
 
   const refreshExecutionStatus = useCallback(async (force = false): Promise<TradingAppExecutionSnapshot | null> => {
     const now = Date.now();
-    const currentExecutionSnapshot = moneyExecutionSnapshotRef.current;
+    const currentExecutionSnapshot = streamExecutionSnapshotRef.current;
     if (!force && currentExecutionSnapshot && now - lastStatusRefreshAtRef.current < STATUS_REFRESH_INTERVAL_MS) {
       return currentExecutionSnapshot;
     }
@@ -2049,8 +2105,8 @@ export function useMoneyEngine({
       const signature = JSON.stringify(snapshot);
       if (signature !== executionSnapshotSignatureRef.current) {
         executionSnapshotSignatureRef.current = signature;
-        moneyExecutionSnapshotRef.current = snapshot;
-        moneyExecutionStore.applySnapshot(snapshot);
+        streamExecutionSnapshotRef.current = snapshot;
+        streamExecutionStore.applySnapshot(snapshot);
       }
       return snapshot;
     } catch {
@@ -2061,7 +2117,7 @@ export function useMoneyEngine({
     }
   }, []);
 
-  const bindMoneyActiveWindow = useCallback(async () => {
+  const bindStreamActiveWindow = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2073,7 +2129,7 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const bindMoneyWindows = useCallback(async () => {
+  const bindStreamWindows = useCallback(async () => {
     const activeResponse = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2095,7 +2151,7 @@ export function useMoneyEngine({
     await refreshExecutionStatus(true);
   }, [refreshExecutionStatus]);
 
-  const bindMoneyActiveWindowDelayed = useCallback(async (delayMs = 3000) => {
+  const bindStreamActiveWindowDelayed = useCallback(async (delayMs = 3000) => {
     const response = await fetch(`${tradingAppBridgeUrl("/bind-active-window-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2107,20 +2163,20 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const clearMoneyBoundWindow = useCallback(async () => {
+  const clearStreamBoundWindow = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/bound-window"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
     const json = await response.json().catch(() => ({}));
-    resetMoneyOcrStores();
+    resetStreamOcrStores();
     await refreshExecutionStatus(true);
     if (!response.ok || json?.ok === false) {
       throw new Error(json?.error || `Failed to clear bound window (${response.status})`);
     }
   }, [refreshExecutionStatus]);
 
-  const captureMoneyTickerPoint = useCallback(async () => {
+  const captureStreamTickerPoint = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/capture-ticker-point"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2132,7 +2188,7 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const captureMoneyTickerPointDelayed = useCallback(async (delayMs = 3000) => {
+  const captureStreamTickerPointDelayed = useCallback(async (delayMs = 3000) => {
     const response = await fetch(`${tradingAppBridgeUrl("/capture-ticker-point-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2144,7 +2200,7 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const clearMoneyTickerPoint = useCallback(async () => {
+  const clearStreamTickerPoint = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/ticker-point"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -2156,7 +2212,7 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const toggleMoneyPanicOff = useCallback(async (enabled: boolean) => {
+  const toggleStreamPanicOff = useCallback(async (enabled: boolean) => {
     const response = await fetch(`${tradingAppBridgeUrl("/panic-off")}?enabled=${enabled ? "true" : "false"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2168,8 +2224,8 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const startMoneyAutomation = useCallback(async () => {
-    const response = await fetch(bridgeUrl("/api/money/automation/start"), {
+  const startStreamAutomation = useCallback(async () => {
+    const response = await fetch(bridgeUrl("/api/stream/automation/start"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source: "workspace" }),
@@ -2181,7 +2237,7 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const clearMoneyExecutionQueue = useCallback(async () => {
+  const clearStreamExecutionQueue = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/queue"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -2193,29 +2249,29 @@ export function useMoneyEngine({
     }
   }, [refreshExecutionStatus]);
 
-  const resetMoneyAutomationState = useCallback(() => {
-    setMoneySignalLatches([]);
-    setMoneyPositions(buildMoneyPositionsFromActionLog(moneyActionLog, localDayKey()));
-    setMoneyOrderIntents([]);
-    setMoneySentOrdersCount(0);
+  const resetStreamAutomationState = useCallback(() => {
+    setStreamSignalLatches([]);
+    setStreamPositions(buildStreamPositionsFromActionLog(streamActionLog, localDayKey()));
+    setStreamOrderIntents([]);
+    setStreamSentOrdersCount(0);
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
-  }, [moneyActionLog]);
+  }, [streamActionLog]);
 
-  const dismissMoneyActivePositions = useCallback((tickers: string[]) => {
+  const dismissStreamActivePositions = useCallback((tickers: string[]) => {
     if (!tickers.length) return;
     const tickerSet = new Set(tickers.map((t) => t.toUpperCase()));
-    const nextLog = pruneMoneyActionLog(
-      moneyActionLogRef.current.filter((entry) => !tickerSet.has(entry.ticker)),
+    const nextLog = pruneStreamActionLog(
+      streamActionLogRef.current.filter((entry) => !tickerSet.has(entry.ticker)),
       Date.now()
     );
     actionLogVersionRef.current += 1;
-    moneyActionLogRef.current = nextLog;
-    setMoneyActionLog(nextLog);
-    setMoneyPositions((prev) => prev.filter((pos) => !tickerSet.has(pos.ticker)));
-    setMoneySignalLatches((prev) => prev.filter((latch) => !tickerSet.has(latch.ticker)));
-    setMoneyOrderIntents((prev) => prev.filter((intent) => !tickerSet.has(intent.ticker)));
+    streamActionLogRef.current = nextLog;
+    setStreamActionLog(nextLog);
+    setStreamPositions((prev) => prev.filter((pos) => !tickerSet.has(pos.ticker)));
+    setStreamSignalLatches((prev) => prev.filter((latch) => !tickerSet.has(latch.ticker)));
+    setStreamOrderIntents((prev) => prev.filter((intent) => !tickerSet.has(intent.ticker)));
     pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
       if (entries.some((e) => tickerSet.has(e.ticker))) {
         pendingActionLogEntriesRef.current.delete(intentId);
@@ -2226,7 +2282,7 @@ export function useMoneyEngine({
     });
   }, []);
 
-  const submitManualMoneyOrders = useCallback(async (tickersText: string, action: MoneyManualOrderAction) => {
+  const submitManualStreamOrders = useCallback(async (tickersText: string, action: StreamManualOrderAction) => {
     const tickers = Array.from(new Set(
       tickersText
         .split(/[\s,]+/)
@@ -2243,7 +2299,7 @@ export function useMoneyEngine({
         : action === "sell" ? "EnterShortAggressive"
           : "ExitActive";
 
-    setMoneyManualExecutionBusy(true);
+    setStreamManualExecutionBusy(true);
     try {
       for (const ticker of tickers) {
         const response = await fetch(tradingAppBridgeUrl("/queue"), {
@@ -2253,7 +2309,7 @@ export function useMoneyEngine({
             intentId: `manual|${action}|${ticker}|${Date.now()}`,
             ticker,
             type,
-            source: "money-manual",
+            source: "stream-manual",
             note: `manual ${action}`,
             delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
             delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
@@ -2268,7 +2324,7 @@ export function useMoneyEngine({
 
       await refreshExecutionStatus(true);
     } finally {
-      setMoneyManualExecutionBusy(false);
+      setStreamManualExecutionBusy(false);
     }
   }, [automationConfig?.queueDelayMaxSeconds, automationConfig?.queueDelayMinSeconds, refreshExecutionStatus]);
 
@@ -2286,16 +2342,17 @@ export function useMoneyEngine({
       normalizedByTicker.set(row.ticker, row);
     }
 
+    const nowMs = Date.now();
     const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
     const normalized = normalizedMerged;
     const executionSnapshot = refreshBridge
       ? await refreshExecutionStatus(false)
-      : moneyExecutionSnapshotRef.current;
+      : streamExecutionSnapshotRef.current;
     const filtered = exactSonarFilterSnapshot
       ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
       : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
-    const bookSnapshot = moneyBookStore.getState().snapshot;
-    const decisions = computeMoneyDecisionRows(
+    const bookSnapshot = streamBookStore.getState().snapshot;
+    const decisions = computeStreamDecisionRows(
       filtered,
       maxSpreadValue,
       automationConfig,
@@ -2303,7 +2360,7 @@ export function useMoneyEngine({
     );
 
     const autoEnabledNow =
-      moneyAutoEnabledRef.current &&
+      streamAutoEnabledRef.current &&
       Boolean(automationConfig?.strategyModeEnabled) &&
       !(executionSnapshot?.panicOff ?? false);
     const currentCount = filtered.length;
@@ -2318,7 +2375,6 @@ export function useMoneyEngine({
       currentCount >= prevCount * SIGNAL_SURGE_GUARD_MULTIPLIER;
     const absoluteSpike = currentCount >= absoluteSpikeThreshold;
 
-    const nowMs = Date.now();
     if (autoEnabledNow && (relativeSpike || absoluteSpike)) {
       surgeGuardUntilRef.current = nowMs + SIGNAL_SURGE_GUARD_HOLD_MS;
       surgeGuardStableTicksRef.current = 0;
@@ -2360,51 +2416,70 @@ export function useMoneyEngine({
     const displayDecisions = decisionsWithWindowGuard
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
+    // Update minute snapshot at each new minute boundary.
+    // New latches are only created when a ticker appears in this snapshot, ensuring
+    // STREAM's candidate qualification starts at a minute boundary — the same granularity
+    // as tape candles in SCANNER.
+    const currentMinuteIdx = Math.floor(nowMs / 60_000);
+    if (minuteSnapshotRef.current?.minuteIdx !== currentMinuteIdx && filtered.length > 0) {
+      const aboveSet = new Set<string>();
+      for (const row of decisionsWithWindowGuard) {
+        if (row.status !== "HOLD") aboveSet.add(`${row.ticker}|${row.side}`);
+      }
+      minuteSnapshotRef.current = { minuteIdx: currentMinuteIdx, aboveSet };
+    }
+
     const decisionsForAutomation = decisionsWithWindowGuard;
     const wantsPrime = primeImmediateEntriesRef.current;
-    const nextLatches = syncMoneySignalLatches(
-      moneySignalLatches,
+    const nextLatches = syncStreamSignalLatches(
+      streamSignalLatches,
       decisionsForAutomation,
       autoEnabledNow,
       automationConfig,
       entryCutoffEnabled,
       wantsPrime,
-      latchQualifiedSinceHistoryRef.current
+      latchQualifiedSinceHistoryRef.current,
+      wantsPrime ? primedFromScannerRef.current : undefined,
+      minuteSnapshotRef.current?.aboveSet
     );
     // Consume the prime flag only when automation is running AND there were signals
-    // to immediately qualify. If the stream wasn't ready yet (no ENTRY_READY decisions
-    // → no latches), keep the flag so the next refresh that finds signals will still prime.
+    // to latch. If the stream wasn't ready yet (no decisions → no latches), keep the
+    // flag so the next refresh that finds signals will still prime.
     // Also reset if automation is disabled — prime shouldn't outlive the enabled window.
     if (!wantsPrime || !autoEnabledNow || nextLatches.length > 0) {
       primeImmediateEntriesRef.current = false;
+      if (primedFromScannerRef.current.size > 0) primedFromScannerRef.current = new Set();
     }
-    // Update latch history so qualifiedSince survives brief signal bounces (> 1 tick).
-    // Entries expire after max(5min, minHoldMs) to avoid growing unboundedly.
-    const latchHistoryTTL = Math.max(300_000, Math.max(0, automationConfig?.minHoldMinutes ?? 0) * 1000);
+    // Update latch history so qualifiedSince survives brief signal bounces.
+    // TTL = 60s (1 tape candle) — matches SCANNER's consecutive-candle behavior.
+    // Any bounce lasting > 1 min resets the latch, just as a candle below threshold
+    // resets the SCANNER consecutive count.
+    const latchHistoryTTL = 60_000;
     for (const latch of nextLatches) {
       latchQualifiedSinceHistoryRef.current.set(latch.ticker, { qualifiedSince: latch.qualifiedSince, lastSeenAt: latch.lastSeenAt });
     }
     latchQualifiedSinceHistoryRef.current.forEach((v, k) => {
       if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
     });
-    const positionsBaseline = mergeMoneyPositionsWithActionLog(moneyPositions, moneyActionLog, currentDayKey);
-    const nextPositionsBase = syncMoneyPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
+    const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
     // Clear latch history for tickers whose positions just closed.
-    // This prevents MONEY from reusing a stale qualifiedSince on re-entry after close,
-    // which would cause MONEY to fire much faster than SCANNER (which requires fresh
+    // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
+    // which would cause STREAM to fire much faster than SCANNER (which requires fresh
     // consecutive tape candles after each episode close).
     for (const pos of nextPositionsBase) {
       if (pos.status === "CLOSED") {
         latchQualifiedSinceHistoryRef.current.delete(pos.ticker);
       }
     }
-    const minHoldMs = Math.max(0, (automationConfig?.minHoldMinutes ?? 0)) * 60_000;
+    const minHoldMinutesForDisplay = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
     const now2 = Date.now();
+    const now2MinuteIdx = Math.floor(now2 / 60_000);
     const entryReady = decisionsForAutomation.filter(d => d.status === "ENTRY_READY").length;
     const latched = nextLatches.length;
-    const qualifiedLatches = nextLatches.filter((l) => now2 - l.qualifiedSince >= minHoldMs);
+    const qualifiedLatches = nextLatches.filter((l) => now2MinuteIdx - Math.floor(l.qualifiedSince / 60_000) >= minHoldMinutesForDisplay);
     let nextPositions = nextPositionsBase;
-    let intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+    let intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
 
     if (
       autoEnabledNow &&
@@ -2419,7 +2494,7 @@ export function useMoneyEngine({
         automationConfig,
         entryCutoffEnabled,
       );
-      intents = buildMoneyOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+      intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
     }
 
     const qualified = qualifiedLatches.length;
@@ -2433,16 +2508,17 @@ export function useMoneyEngine({
 
     const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
     const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
-    console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} prime=${wantsPrime} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMs / 60000}min`);
+    console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} prime=${wantsPrime} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
 
     if (autoEnabledNow && entryReady > 0) {
       for (const d of decisionsForAutomation.filter(r => r.status === "ENTRY_READY")) {
         const latch = nextLatches.find(l => l.ticker === d.ticker);
         const holdedMs = latch ? now2 - latch.qualifiedSince : null;
-        const passesHold = holdedMs != null && holdedMs >= minHoldMs;
+        const holdedMinutes = latch ? now2MinuteIdx - Math.floor(latch.qualifiedSince / 60_000) : null;
+        const passesHold = holdedMinutes != null && holdedMinutes >= minHoldMinutesForDisplay;
         const pos = positionMap2.get(d.ticker);
         const addNum = pos ? pos.entryCount : 0;
-        const entryBase = pos?.entrySignal ?? pos?.lastScaleSignal;
+        const entryBase = pos?.entrySignal;
         const isShort = d.side === "Short";
         // trigger magnitude: |entrySignal| + addNum × step
         // Long: signal ≥ +trigger  |  Short: signal ≤ -trigger
@@ -2452,7 +2528,7 @@ export function useMoneyEngine({
           Math.abs(d.signal) >= addTriggerMag &&
           (entryBase == null || Math.sign(d.signal) === Math.sign(entryBase));
         const status = !latch ? "NO_LATCH"
-          : !passesHold ? `HOLD(${((minHoldMs - holdedMs!) / 1000).toFixed(0)}s left)`
+          : !passesHold ? `HOLD(${minHoldMinutesForDisplay - (holdedMinutes ?? 0)}min left)`
           : "READY";
         console.log(
           `  ${d.ticker}/${d.benchmark} ${d.side.toUpperCase()} | sig=${sig(d.signal)} netEdge=${sig(d.netEdge)} spread=${d.spread != null ? d.spread.toFixed(4) : "n/a"}` +
@@ -2490,21 +2566,21 @@ export function useMoneyEngine({
 
     console.groupEnd();
 
-    moneyDecisionStore.applySnapshot(displayDecisions);
-    moneySignalStore.applySnapshot(filtered);
-    moneyUpdatedAtStore.setValue(Date.now());
+    streamDecisionStore.applySnapshot(displayDecisions);
+    streamSignalStore.applySnapshot(filtered);
+    streamUpdatedAtStore.setValue(Date.now());
 
     // keep sync refs current so sendQueuedIntents can read signal/latch state without closure staleness
     const rawSigMap = new Map<string, ArbitrageSignal>();
     for (const sig of filtered) rawSigMap.set(sig.ticker, sig);
     rawSignalByTickerRef.current = rawSigMap;
-    moneySignalLatchesRef.current = nextLatches;
+    streamSignalLatchesRef.current = nextLatches;
 
     startTransition(() => {
-      setMoneyEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
-      setMoneySignalLatches(nextLatches);
-      setMoneyPositions(nextPositions);
-      setMoneyOrderIntents(intents);
+      setStreamEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
+      setStreamSignalLatches(nextLatches);
+      setStreamPositions(nextPositions);
+      setStreamOrderIntents(intents);
     });
     onUpdated?.();
     onError?.(null);
@@ -2524,10 +2600,10 @@ export function useMoneyEngine({
     minBeta,
     minCorr,
     minSigma,
-    moneyActionLog,
-    moneyPositions,
-    moneySignalLatches,
-    moneyAutoEnabled,
+    streamActionLog,
+    streamPositions,
+    streamSignalLatches,
+    streamAutoEnabled,
     currentDayKey,
     openLoggedTickers,
     onError,
@@ -2548,6 +2624,14 @@ export function useMoneyEngine({
     onErrorRef.current = onError;
   }, [onError]);
 
+  useEffect(() => {
+    onFetchActiveTickersRef.current = onFetchActiveTickers;
+  }, [onFetchActiveTickers]);
+
+  useEffect(() => {
+    activeScannerTickersRef.current = activeScannerTickers ?? [];
+  }, [activeScannerTickers]);
+
   useEffect(() => () => {
     if (localRefreshTimerRef.current != null) {
       window.clearTimeout(localRefreshTimerRef.current);
@@ -2556,8 +2640,8 @@ export function useMoneyEngine({
   }, []);
 
   useEffect(() => {
-    moneyActionLogRef.current = moneyActionLog;
-  }, [moneyActionLog]);
+    streamActionLogRef.current = streamActionLog;
+  }, [streamActionLog]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -2578,66 +2662,87 @@ export function useMoneyEngine({
 
   useEffect(() => {
     if (enabled) return;
-    moneyExecutionSnapshotRef.current = null;
+    streamExecutionSnapshotRef.current = null;
     executionSnapshotSignatureRef.current = "";
     lastStatusRefreshAtRef.current = 0;
     pendingActionLogEntriesRef.current.clear();
-    moneyExecutionStore.clear();
-    resetMoneyOcrStores();
-    moneyActionLogStore.clear();
-    moneyDecisionStore.clear();
-    moneyOrderIntentStore.clear();
-    moneyPositionStore.clear();
-    moneySignalStore.clear();
-    moneyUpdatedAtStore.clear();
+    streamExecutionStore.clear();
+    resetStreamOcrStores();
+    streamActionLogStore.clear();
+    streamDecisionStore.clear();
+    streamOrderIntentStore.clear();
+    streamPositionStore.clear();
+    streamSignalStore.clear();
+    streamUpdatedAtStore.clear();
   }, [enabled]);
 
   useEffect(() => {
     if (!enabled || !ocrEnabled) return;
-    return connectMoneyOcrStream();
+    return connectStreamOcrFeed();
   }, [enabled, ocrEnabled]);
 
   useEffect(() => {
     if (!enabled || ocrEnabled) return;
-    resetMoneyOcrStores();
+    resetStreamOcrStores();
   }, [enabled, ocrEnabled]);
 
   useEffect(() => {
-    moneyPositionStore.applySnapshot(moneyPositions);
-    moneyPositionsRef.current = moneyPositions;
-  }, [moneyPositions]);
+    streamPositionStore.applySnapshot(streamPositions);
+    streamPositionsRef.current = streamPositions;
+  }, [streamPositions]);
 
   useEffect(() => {
-    moneyOrderIntentStore.applySnapshot(moneyOrderIntents);
-  }, [moneyOrderIntents]);
+    streamOrderIntentStore.applySnapshot(streamOrderIntents);
+  }, [streamOrderIntents]);
 
   useEffect(() => {
     if (!enabled) return;
-    const strategyAutoRunning = moneyAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
+    const strategyAutoRunning = streamAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
     if (!strategyAutoRunning) {
       if (strategyAutoWasRunningRef.current) {
-        setMoneySessionStoppedAt((prev) => prev ?? Date.now());
+        setStreamSessionStoppedAt((prev) => prev ?? Date.now());
       }
       strategyAutoWasRunningRef.current = false;
       return;
     }
 
     if (!strategyAutoWasRunningRef.current) {
-      primeImmediateEntriesRef.current = true;
-      setMoneySessionStartedAt(Date.now());
-      setMoneySessionStoppedAt(null);
-      setMoneySentOrdersCount(0);
+      strategyAutoWasRunningRef.current = true;
+      setStreamSessionStartedAt(Date.now());
+      setStreamSessionStoppedAt(null);
+      setStreamSentOrdersCount(0);
+
+      void (async () => {
+        // Seed immediately from whatever activeRows the UI has right now so the
+        // first refresh cycle doesn't wait for the fetch.
+        const immediate = activeScannerTickersRef.current;
+        if (immediate.length > 0) {
+          primedFromScannerRef.current = new Set(immediate.map((r) => `${r.ticker}|${r.side}`));
+        }
+
+        // Fetch the authoritative active list from the tape API. This works even
+        // when the user is not on the "active" tab (activeRows would be empty).
+        const fetched = await onFetchActiveTickersRef.current?.().catch(() => null);
+        if (fetched && fetched.length > 0) {
+          primedFromScannerRef.current = new Set(fetched.map((r) => `${r.ticker}|${r.side}`));
+        }
+
+        primeImmediateEntriesRef.current = true;
+        void refreshRef.current?.({ refreshBridge: true }).catch((err: any) => {
+          onErrorRef.current?.(err?.message ?? String(err));
+        });
+      })();
+      return;
     }
-    strategyAutoWasRunningRef.current = true;
 
     void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
       onErrorRef.current?.(error?.message ?? String(error));
     });
-  }, [automationConfig?.minHoldMinutes, automationConfig?.strategyModeEnabled, enabled, moneyAutoEnabled]);
+  }, [automationConfig?.minHoldMinutes, automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
 
   useEffect(() => {
     const activeQueuedIds = new Set(
-      moneyOrderIntents
+      streamOrderIntents
         .filter((intent) => intent.status === "QUEUED")
         .map((intent) => intent.id)
     );
@@ -2646,7 +2751,7 @@ export function useMoneyEngine({
     const now = Date.now();
 
     // Do not evict an ID while it is still within the dispatch cooldown window.
-    // Evicting early creates a race where entryCount resets via mergeMoneyPositionsWithActionLog
+    // Evicting early creates a race where entryCount resets via mergeStreamPositionsWithActionLog
     // (before the action log confirms the ADD) and the same intent re-dispatches.
     dispatchedIntentIdsRef.current.forEach((id) => {
       if (!activeQueuedIds.has(id)) {
@@ -2670,14 +2775,14 @@ export function useMoneyEngine({
         recentDispatchAttemptsRef.current.delete(key);
       }
     });
-  }, [moneyOrderIntents]);
+  }, [streamOrderIntents]);
 
   useEffect(() => {
-    if (!enabled || !moneyAutoEnabled) {
-      console.log("[dispatch] blocked: enabled=", enabled, "moneyAutoEnabled=", moneyAutoEnabled);
+    if (!enabled || !streamAutoEnabled) {
+      console.log("[dispatch] blocked: enabled=", enabled, "streamAutoEnabled=", streamAutoEnabled);
       return;
     }
-    if (moneyExecutionSnapshotRef.current?.panicOff) {
+    if (streamExecutionSnapshotRef.current?.panicOff) {
       console.log("[dispatch] blocked: panicOff=true");
       return;
     }
@@ -2689,17 +2794,17 @@ export function useMoneyEngine({
       entryCutoffEnabled &&
       nowMinutes >= printStartMinutes;
 
-    const queued = moneyOrderIntents.filter((intent) => {
+    const queued = streamOrderIntents.filter((intent) => {
       if (intent.status !== "QUEUED") return false;
       if (!arkPrintLockActive) return true;
       return intent.intent === "CLOSE_ALL_PRINT";
     });
-    console.log("[dispatch] intents total=", moneyOrderIntents.length, "queued=", queued.length, "arkPrintLock=", arkPrintLockActive);
+    console.log("[dispatch] intents total=", streamOrderIntents.length, "queued=", queued.length, "arkPrintLock=", arkPrintLockActive);
     if (!queued.length) return;
 
-    // Use a ref snapshot so setMoneyPositions calls inside the loop don't abort and
-    // restart the effect (moneyPositions is excluded from deps for the same reason).
-    const positionsSnapshot = moneyPositionsRef.current;
+    // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and
+    // restart the effect (streamPositions is excluded from deps for the same reason).
+    const positionsSnapshot = streamPositionsRef.current;
     const positionByTicker = new Map(positionsSnapshot.map((row) => [row.ticker, row]));
     const openLoggedPositions = positionsSnapshot.filter((row) =>
       row.status !== "CLOSED" &&
@@ -2751,7 +2856,7 @@ export function useMoneyEngine({
         const lastAttemptAt = recentDispatchAttemptsRef.current.get(dispatchKey) ?? 0;
         if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
 
-        const correspondingDecision = getMoneyDecisionRow(intent.ticker);
+        const correspondingDecision = getStreamDecisionRow(intent.ticker);
         const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
         const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
 
@@ -2760,20 +2865,38 @@ export function useMoneyEngine({
           continue;
         }
 
+        const getNightHotkeyOverride = (intentType: string): string | undefined => {
+          if (signalClass !== "blue" && signalClass !== "pre") return undefined;
+          const h = new Date().getHours();
+          if (h >= 4) return undefined;
+          switch (intentType) {
+            case "EnterLongAggressive": return "Ctrl+F3";
+            case "EnterShortAggressive": return "Ctrl+F4";
+            case "ExitActive":
+            case "ExitPrint": return "Ctrl+B";
+            default: return undefined;
+          }
+        };
+
         const queueLeg = async (payload: {
           intentId: string;
           ticker: string;
           type: string;
           note: string;
+          hotkeyOverride?: string;
         }) => {
           const response = await fetch(tradingAppBridgeUrl("/queue"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              ...payload,
-              source: "money-auto",
+              intentId: payload.intentId,
+              ticker: payload.ticker,
+              type: payload.type,
+              note: payload.note,
+              source: "stream-auto",
               delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
               delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
+              ...(payload.hotkeyOverride ? { hotkeyOverride: payload.hotkeyOverride } : {}),
             }),
           });
 
@@ -2788,6 +2911,7 @@ export function useMoneyEngine({
           ticker: string;
           type: string;
           note: string;
+          hotkeyOverride?: string;
         }) => {
           let lastError: unknown = null;
           for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2811,7 +2935,7 @@ export function useMoneyEngine({
           const isAdd = intent.sequence > 1;
           const pos3 = correspondingPosition;
           const curSig3 = correspondingDecision?.signal;
-          const entryBase3 = pos3?.entrySignal ?? pos3?.lastScaleSignal;
+          const entryBase3 = pos3?.entrySignal;
           const dilution3 = automationConfig?.dilutionStep ?? 0.3;
           const addNum3 = intent.sequence - 1;
           const isShort3 = intent.side === "Short";
@@ -2835,29 +2959,64 @@ export function useMoneyEngine({
 
           // Pre-build structured log fields (shared between SENT and FAILED paths)
           const _rawSig = rawSignalByTickerRef.current.get(intent.ticker);
-          const _latch = moneySignalLatchesRef.current.find(l => l.ticker === intent.ticker);
+          const _latch = streamSignalLatchesRef.current.find(l => l.ticker === intent.ticker);
           const _fmtMs = (ts: number) => {
             const d = new Date(ts);
             return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
           };
           const _isLong = intent.side === "Long";
-          const _logEvent: MoneyLogEvent =
+          const _logEvent: StreamLogEvent =
             intent.intent === "CLOSE_ALL_PRINT" ? "CLOSE_ALL"
             : isExitIntent ? (intent.intent.includes("PRINT") ? "EXIT_PRINT" : "EXIT")
             : isAdd ? "ADD" : "ENTRY";
+          // Helper: read best-params enrichment fields from signal
+          const _bp = _rawSig ? (_rawSig.best_params ?? _rawSig.bestParams ?? _rawSig.BestParams ?? null) : null;
+          const _bpSt = _bp ? (_bp.static ?? _bp.Static ?? null) : null;
+          const _bpBest = _rawSig ? (_rawSig.best ?? _rawSig.Best ?? null) : null;
+          const _bpMeta = _rawSig ? (_rawSig.meta ?? _rawSig.Meta ?? null) : null;
+          const _readNum = (a: any, b: any, c: any, d: any) =>
+            toNum(a) ?? toNum(b) ?? toNum(c) ?? toNum(d) ?? null;
+          const _corr = _readNum(_bpBest?.corr ?? _bpBest?.Corr, _bpMeta?.corr ?? _bpMeta?.Corr, _bpSt?.corr ?? _bpSt?.Corr, null);
+          const _beta = _readNum(_rawSig?.beta ?? _rawSig?.Beta, _bpBest?.beta ?? _bpBest?.Beta, _bpMeta?.beta ?? _bpMeta?.Beta, _bpSt?.beta ?? _bpSt?.Beta);
+          const _stockSigma = _readNum(_bpBest?.sigma ?? _bpBest?.Sigma, _bpMeta?.sigma ?? _bpMeta?.Sigma, _bpSt?.sigma ?? _bpSt?.Sigma, null);
+          const _rating = toNum(_rawSig?._bestRating ?? _rawSig?.bestRating) ?? null;
+          const _ratingTotal = toNum(_rawSig?._bestTotal ?? _rawSig?.bestTotal ?? _bpBest?.total ?? _bpBest?.Total) ?? null;
+          // Build filters-ok summary string
+          const _cfg = automationConfig;
+          const _sigAbs = Math.abs(correspondingDecision?.signal ?? 0);
+          const _filterParts: string[] = [];
+          if (_cfg) {
+            if (_sigAbs > 0) _filterParts.push(`σ${_sigAbs.toFixed(2)}`);
+            if (_cfg.minNetEdge > 0 && correspondingDecision?.netEdge != null) _filterParts.push(`edge${(correspondingDecision.netEdge).toFixed(3)}`);
+            if (_cfg.noSpreadExit && correspondingDecision?.spread != null) _filterParts.push(`sprd${(correspondingDecision.spread).toFixed(3)}`);
+            if (_cfg.minHoldMinutes > 0) _filterParts.push(`hold≥${_cfg.minHoldMinutes}m`);
+            if (isAdd && triggerMag3 != null) _filterParts.push(`add#${addNum3}@${triggerMag3.toFixed(2)}`);
+          }
+          const _isBeta = automationConfig?.betaMode === true;
           const _logBase = {
             ts: dispatchAt,
             timeStr: _fmtMs(dispatchAt),
             event: _logEvent,
+            betaMode: _isBeta,
             ticker: intent.ticker,
             benchmark: intent.benchmark,
             side: intent.side as "Long" | "Short",
-            sigmaZap: correspondingDecision?.signal ?? null,
+            sigmaZap: _isLong
+              ? (toNum(_rawSig?.zapLsigma) ?? correspondingDecision?.signal ?? null)
+              : (toNum(_rawSig?.zapSsigma) ?? correspondingDecision?.signal ?? null),
+            zapSsigma: _rawSig?.zapSsigma ?? null,
+            zapLsigma: _rawSig?.zapLsigma ?? null,
             zapPct: _rawSig ? (_isLong ? (_rawSig.zapL ?? null) : (_rawSig.zapS ?? null)) : null,
             bidPct: _rawSig ? toNum(_rawSig["BidLstClsΔ%"]) : null,
             askPct: _rawSig ? toNum(_rawSig["AskLstClsΔ%"]) : null,
             benchBidPct: null as number | null,
             benchAskPct: null as number | null,
+            corr: _corr,
+            beta: _beta,
+            stockSigma: _stockSigma,
+            rating: _rating,
+            ratingTotal: _ratingTotal,
+            filtersOk: _filterParts.join(" | "),
             spread: correspondingDecision?.spread ?? null,
             netEdge: correspondingDecision?.netEdge ?? null,
             holdMs: _latch ? dispatchAt - _latch.qualifiedSince : null,
@@ -2872,16 +3031,23 @@ export function useMoneyEngine({
             scaleMode: automationConfig?.scaleMode ?? "n/a",
             minNetEdge: automationConfig?.minNetEdge ?? null,
             minHoldMinutes: automationConfig?.minHoldMinutes ?? null,
+            notionalUsd: automationConfig?.sizeValue ?? null,
             hedgeRequired: !!hedgeRequired,
             reason: intent.reason,
           };
 
+          // BETA MODE: simulate dispatch — skip real order, log as SIMULATED
+          if (_isBeta) {
+            streamLogStore.push({ ..._logBase, status: "SIMULATED" });
+            console.log(`[BETA SIM] ${intent.ticker} ${intent.intent} — no order sent`);
+          } else {
           try {
             await queueLegWithRetry({
               intentId: intent.id,
               ticker: intent.ticker,
               type,
               note: intent.reason,
+              hotkeyOverride: getNightHotkeyOverride(type),
             });
           } catch (err) {
             // Dispatch failed — roll back so it can be retried next cycle.
@@ -2889,34 +3055,45 @@ export function useMoneyEngine({
             recentDispatchAttemptsRef.current.delete(dispatchKey);
             sentDispatchKeys.delete(dispatchKey);
             console.error(`[SEND FAIL] ${intent.ticker} ${intent.intent}`, err);
-            moneyLogStore.push({ ..._logBase, status: "FAILED" });
+            streamLogStore.push({ ..._logBase, status: "FAILED" });
             throw err;
           }
-          moneyLogStore.push({ ..._logBase, status: "SENT" });
-          console.log(`[SENT OK] ${intent.ticker} → bridge queued`);
-          setMoneySentOrdersCount((prev) => prev + 1);
-          setMoneyPositions((prev) => prev.map((row) => {
+          streamLogStore.push({ ..._logBase, status: "SENT" });
+          } // end if (!_isBeta)
+          if (!_isBeta) console.log(`[SENT OK] ${intent.ticker} → bridge queued`);
+          if (!_isBeta) setStreamSentOrdersCount((prev) => prev + 1);
+          setStreamPositions((prev) => prev.map((row) => {
             if (row.ticker !== intent.ticker) return row;
             return {
               ...row,
-              // Entry orders: keep PENDING_ENTRY until the backend execution is confirmed
-              // via the action log flush (hasExecutionDispatchConfirmation). Only exit/print
-              // transitions happen immediately since they have no log-confirmation gate.
+              // Beta mode: immediately mark entries as OPEN (no backend confirmation to wait for).
+              // Real mode: keep PENDING_ENTRY until hasExecutionDispatchConfirmation.
               status: isEntryIntent
-                ? row.status
+                ? (_isBeta ? "OPEN" : row.status)
                 : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT"
                   ? "PRINT_PENDING"
                   : row.status,
               pendingIntent: isEntryIntent ? null : row.pendingIntent,
               entryDispatchedAt: row.entryDispatchedAt ?? dispatchAt,
-              reason: isEntryIntent && row.lastConfirmedActiveAt == null
+              lastDispatchedAt: isEntryIntent ? dispatchAt : row.lastDispatchedAt,
+              lastConfirmedActiveAt: _isBeta && isEntryIntent ? dispatchAt : row.lastConfirmedActiveAt,
+              reason: _isBeta ? `[BETA] ${intent.reason}` : isEntryIntent && row.lastConfirmedActiveAt == null
                 ? "order queued | waiting for execution confirmation"
                 : row.reason,
               updatedAt: dispatchAt,
             };
           }));
+          // In beta mode: immediately confirm action log entries (no backend to confirm them).
+          // In real mode: queue pending entries and wait for execution snapshot confirmation.
+          const _dispatchActionLog = (entries: StreamActionLogEntry[]) => {
+            if (_isBeta) {
+              appendStreamActionLogEntries(entries);
+            } else {
+              queuePendingActionLogEntries(intent.id, entries);
+            }
+          };
           if (intent.intent === "CLOSE_ALL_PRINT") {
-            queuePendingActionLogEntries(intent.id,
+            _dispatchActionLog(
               openLoggedPositions
                 .map((row) => ({
                   id: `${row.ticker}|CLOSE|${dispatchAt}`,
@@ -2936,7 +3113,7 @@ export function useMoneyEngine({
             const deviation = isAdd
               ? (correspondingPosition.lastScaleSignal ?? correspondingPosition.lastSignal ?? correspondingPosition.entrySignal)
               : (correspondingPosition.entrySignal ?? correspondingPosition.lastSignal);
-            queuePendingActionLogEntries(intent.id, [{
+            _dispatchActionLog([{
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
@@ -2949,7 +3126,7 @@ export function useMoneyEngine({
               reason: correspondingPosition.reason || undefined,
             }]);
           } else if (isExitIntent && correspondingPosition) {
-            queuePendingActionLogEntries(intent.id, [{
+            _dispatchActionLog([{
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: localDayKey(),
               ticker: intent.ticker,
@@ -2964,14 +3141,14 @@ export function useMoneyEngine({
           }
         }
 
-        if (hedgeRequired && !hedgeAlreadyDispatched) {
+        // Hedge leg: skip in beta mode — hedge is a real order
+        if (!_isBeta && hedgeRequired && !hedgeAlreadyDispatched) {
           const benchmarkType =
             isEntryIntent
               ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
               : type;
 
           console.log(`[HEDGE] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
-          // Hedge leg must follow every entry/add and every exit in hedged mode (1:1), without cooldown suppression.
           dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
           try {
             await queueLegWithRetry({
@@ -2979,12 +3156,13 @@ export function useMoneyEngine({
               ticker: intent.benchmark,
               type: benchmarkType,
               note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
+              hotkeyOverride: getNightHotkeyOverride(benchmarkType),
             });
           } catch (err) {
             dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);
             throw err;
           }
-          setMoneySentOrdersCount((prev) => prev + 1);
+          setStreamSentOrdersCount((prev) => prev + 1);
         }
       }
       // Single status refresh after the full batch — avoids one round-trip per intent.
@@ -3000,58 +3178,58 @@ export function useMoneyEngine({
         queueMicrotask(() => setExecutionRevision((prev) => prev + 1));
       }
     });
-  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, moneyAutoEnabled, moneyOrderIntents, onError, openLoggedTickers, queuePendingActionLogEntries, refreshExecutionStatus]);
+  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, streamAutoEnabled, streamOrderIntents, onError, openLoggedTickers, queuePendingActionLogEntries, appendStreamActionLogEntries, refreshExecutionStatus]);
 
   useEffect(() => {
     if (!enabled) return;
-    const strategyAutoRunning = moneyAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
+    const strategyAutoRunning = streamAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
     if (!strategyAutoRunning) return;
 
     const timer = window.setInterval(() => {
       void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
         onErrorRef.current?.(error?.message ?? String(error));
       });
-    }, MONEY_AUTOMATION_TICK_MS);
+    }, STREAM_AUTOMATION_TICK_MS);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [automationConfig?.strategyModeEnabled, enabled, moneyAutoEnabled]);
+  }, [automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
 
-  const todaysMoneyActionLog = useMemo(() => (
-    moneyActionLog
+  const todaysStreamActionLog = useMemo(() => (
+    streamActionLog
       .filter((row) => row.dayKey === currentDayKey)
       .sort((a, b) => b.at - a.at)
-  ), [currentDayKey, moneyActionLog]);
+  ), [currentDayKey, streamActionLog]);
 
   useEffect(() => {
-    moneyActionLogStore.applySnapshot(todaysMoneyActionLog);
-  }, [todaysMoneyActionLog]);
+    streamActionLogStore.applySnapshot(todaysStreamActionLog);
+  }, [todaysStreamActionLog]);
 
   return {
-    moneyEntryReadyCount,
-    moneyPositions,
-    moneyActionLog: todaysMoneyActionLog,
-    moneyOrderIntents,
-    moneyAutoEnabled,
-    moneySessionStartedAt,
-    moneySessionStoppedAt,
-    moneySentOrdersCount,
-    setMoneyAutoEnabled,
-    moneyManualExecutionBusy,
-    bindMoneyWindows,
-    bindMoneyActiveWindow,
-    bindMoneyActiveWindowDelayed,
-    clearMoneyBoundWindow,
-    captureMoneyTickerPoint,
-    captureMoneyTickerPointDelayed,
-    clearMoneyTickerPoint,
-    toggleMoneyPanicOff,
-    startMoneyAutomation,
-    clearMoneyExecutionQueue,
-    resetMoneyAutomationState,
-    dismissMoneyActivePositions,
-    submitManualMoneyOrders,
+    streamEntryReadyCount,
+    streamPositions,
+    streamActionLog: todaysStreamActionLog,
+    streamOrderIntents,
+    streamAutoEnabled,
+    streamSessionStartedAt,
+    streamSessionStoppedAt,
+    streamSentOrdersCount,
+    setStreamAutoEnabled,
+    streamManualExecutionBusy,
+    bindStreamWindows,
+    bindStreamActiveWindow,
+    bindStreamActiveWindowDelayed,
+    clearStreamBoundWindow,
+    captureStreamTickerPoint,
+    captureStreamTickerPointDelayed,
+    clearStreamTickerPoint,
+    toggleStreamPanicOff,
+    startStreamAutomation,
+    clearStreamExecutionQueue,
+    resetStreamAutomationState,
+    dismissStreamActivePositions,
+    submitManualStreamOrders,
     refresh,
   };
 }

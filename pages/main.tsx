@@ -40,6 +40,8 @@ function getAccent(theme: string, isDark: boolean): ThemeAccent {
     case "rain":     return { hex: "#e2e8f0", hex2: "#94a3b8", rgb: "226,232,240", bokeh: ["rgba(226,232,240,0.05)", "rgba(148,163,184,0.04)","rgba(200,210,220,0.04)"], muted: "rgba(226,232,240,0.3)"  };
     case "asher":    return { hex: "#d4d4d8", hex2: "#71717a", rgb: "212,212,216", bokeh: ["rgba(212,212,216,0.05)", "rgba(160,160,170,0.04)","rgba(180,180,190,0.04)"], muted: "rgba(212,212,216,0.3)"  };
     case "oceanic":  return { hex: "#22d3ee", hex2: "#0891b2", rgb: "34,211,238",  bokeh: ["rgba(34,211,238,0.07)",  "rgba(8,145,178,0.05)",  "rgba(80,220,250,0.04)"],  muted: "rgba(34,211,238,0.35)"  };
+    case "magma":    return { hex: "#ff5248", hex2: "#ff0060", rgb: "255,82,72",   bokeh: ["rgba(255,82,72,0.08)",   "rgba(200,0,60,0.05)",   "rgba(255,120,80,0.05)"],  muted: "rgba(255,82,72,0.35)"   };
+    case "mercury":  return { hex: "#b0b6be", hex2: "#78828c", rgb: "176,182,190", bokeh: ["rgba(176,182,190,0.06)", "rgba(120,130,140,0.04)","rgba(200,205,210,0.04)"], muted: "rgba(176,182,190,0.3)"  };
     default:         return { hex: "#00f0ff", hex2: "#0066ff", rgb: "0,240,255",   bokeh: ["rgba(0,240,255,0.06)",   "rgba(0,100,200,0.04)",  "rgba(0,200,255,0.04)"],   muted: "rgba(0,240,255,0.3)"    };
   }
 }

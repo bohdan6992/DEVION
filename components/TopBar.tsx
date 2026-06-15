@@ -175,6 +175,27 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         buttonText: "text-sky-200",
         buttonBorder: "border-sky-500/20",
       };
+    case "mercury":
+      return {
+        selectedItem: "bg-slate-400/10 text-slate-200 font-bold",
+        dot: "bg-slate-300 shadow-[0_0_8px_rgba(176,182,190,0.55)]",
+        buttonText: "text-slate-200",
+        buttonBorder: "border-slate-400/20",
+      };
+    case "oceanic":
+      return {
+        selectedItem: "bg-cyan-500/10 text-cyan-200 font-bold",
+        dot: "bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.65)]",
+        buttonText: "text-cyan-200",
+        buttonBorder: "border-cyan-500/20",
+      };
+    case "magma":
+      return {
+        selectedItem: "bg-rose-500/10 text-rose-200 font-bold",
+        dot: "bg-rose-400 shadow-[0_0_8px_rgba(255,82,72,0.65)]",
+        buttonText: "text-rose-200",
+        buttonBorder: "border-rose-500/22",
+      };
     case "light":
       return {
         selectedItem: "bg-amber-500/10 text-amber-200 font-bold",
@@ -337,6 +358,24 @@ export default function TopBar() {
           activeBg: "bg-sky-500/10 opacity-100 border border-transparent",
           activeLine: "bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.55)]",
         };
+      case "mercury":
+        return {
+          activeText: "text-slate-200 drop-shadow-[0_0_8px_rgba(176,182,190,0.28)]",
+          activeBg: "bg-slate-400/10 opacity-100 border border-transparent",
+          activeLine: "bg-slate-300 shadow-[0_0_10px_rgba(176,182,190,0.45)]",
+        };
+      case "oceanic":
+        return {
+          activeText: "text-cyan-300 drop-shadow-[0_0_8px_rgba(34,211,238,0.35)]",
+          activeBg: "bg-cyan-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)]",
+        };
+      case "magma":
+        return {
+          activeText: "text-rose-200 drop-shadow-[0_0_8px_rgba(255,82,72,0.35)]",
+          activeBg: "bg-rose-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-rose-400 shadow-[0_0_10px_rgba(255,82,72,0.6)]",
+        };
       case "light":
         return {
           activeText: "text-violet-700",
@@ -456,6 +495,7 @@ export default function TopBar() {
                 { key: "neon", label: "Neon" },
                 { key: "dark", label: "Dark" },
                 { key: "space", label: "Space" },
+                { key: "mercury", label: "Mercury" },
               ]}
               isDark={isDark}
               accentMode="theme"

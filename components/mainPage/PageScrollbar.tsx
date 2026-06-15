@@ -51,6 +51,8 @@ const ACCENT_MAP: Record<string, { hex: string; rgb: string }> = {
   asher:   { hex: "#d4d4d8", rgb: "212,212,216" },
   oceanic: { hex: "#22d3ee", rgb: "34,211,238"  },
   dark:    { hex: "#94a3b8", rgb: "148,163,184" },
+  magma:   { hex: "#ff5248", rgb: "255,82,72"   },
+  mercury: { hex: "#b0b6be", rgb: "176,182,190" },
 };
 const LIGHT_ACCENT   = { hex: "#6d28d9", rgb: "109,40,217" };
 const DEFAULT_ACCENT = { hex: "#00f0ff", rgb: "0,240,255"  };
@@ -66,6 +68,8 @@ const THEMES: { key: ThemeKey; label: string; dot: string }[] = [
   { key: "rain",    label: "Rain",    dot: "#e2e8f0" },
   { key: "asher",   label: "Asher",   dot: "#d4d4d8" },
   { key: "dark",    label: "Dark",    dot: "#94a3b8" },
+  { key: "magma",   label: "Magma",   dot: "#ff5248" },
+  { key: "mercury", label: "Mercury", dot: "#b0b6be" },
   { key: "light",   label: "Light",   dot: "#6d28d9" },
 ];
 const LANGS: { key: LangKey; label: string }[] = [

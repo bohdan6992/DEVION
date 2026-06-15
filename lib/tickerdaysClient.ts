@@ -1,4 +1,4 @@
-// lib/tickerdaysClient.ts
+﻿// lib/tickerdaysClient.ts
 import { bridgeUrl } from "@/lib/bridgeBase";
 
 export type TickerdaysAck = {
@@ -31,7 +31,7 @@ export type TickerdaysReportRequest = {
     }>;
     volatilityFilters?: any[];
     volumeFilters?: any[];
-    moneyTradedFilters?: any[];
+    streamTradedFilters?: any[];
     reportFilter?: { dayIndex?: number; reportFilterType?: number };
   };
 

@@ -1,4 +1,4 @@
-// components/sifter/SifterProvider.tsx
+﻿// components/sifter/SifterProvider.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -140,7 +140,7 @@ function buildTickerdaysRequest(state: SifterState): TickerdaysReportRequest {
       ],
       volatilityFilters: [],
       volumeFilters: [],
-      moneyTradedFilters: [],
+      streamTradedFilters: [],
       reportFilter: { dayIndex: 0, reportFilterType: 0 },
     },
     additionalPriceData: true,

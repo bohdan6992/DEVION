@@ -1,16 +1,16 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
 import type { ArbitrageSignal } from "../sonar/ArbitrageSonar";
 
-export type MoneySignalMeta = {
+export type StreamSignalMeta = {
   totalCount: number;
   countries: string[];
   exchanges: string[];
   sectors: string[];
 };
 
-const EMPTY_META: MoneySignalMeta = {
+const EMPTY_META: StreamSignalMeta = {
   totalCount: 0,
   countries: [],
   exchanges: [],
@@ -25,7 +25,7 @@ function sameStringArray(left: string[], right: string[]): boolean {
   return true;
 }
 
-function sameMeta(left: MoneySignalMeta, right: MoneySignalMeta): boolean {
+function sameMeta(left: StreamSignalMeta, right: StreamSignalMeta): boolean {
   return (
     left.totalCount === right.totalCount &&
     sameStringArray(left.countries, right.countries) &&
@@ -68,7 +68,7 @@ function extractSector(signal: ArbitrageSignal): string {
   return String(raw ?? "").trim().toUpperCase();
 }
 
-function buildMeta(signals: ArbitrageSignal[]): MoneySignalMeta {
+function buildMeta(signals: ArbitrageSignal[]): StreamSignalMeta {
   const countries = new Set<string>();
   const exchanges = new Set<string>();
   const sectors = new Set<string>();
@@ -90,11 +90,11 @@ function buildMeta(signals: ArbitrageSignal[]): MoneySignalMeta {
   };
 }
 
-class MoneySignalStore {
-  private meta: MoneySignalMeta = EMPTY_META;
+class StreamSignalStore {
+  private meta: StreamSignalMeta = EMPTY_META;
   private listeners = new Set<() => void>();
 
-  getMeta(): MoneySignalMeta {
+  getMeta(): StreamSignalMeta {
     return this.meta;
   }
 
@@ -119,12 +119,12 @@ class MoneySignalStore {
   };
 }
 
-export const moneySignalStore = new MoneySignalStore();
+export const streamSignalStore = new StreamSignalStore();
 
-export function useMoneySignalMeta(): MoneySignalMeta {
+export function useStreamSignalMeta(): StreamSignalMeta {
   return useSyncExternalStore(
-    moneySignalStore.subscribe,
-    () => moneySignalStore.getMeta(),
+    streamSignalStore.subscribe,
+    () => streamSignalStore.getMeta(),
     () => EMPTY_META
   );
 }

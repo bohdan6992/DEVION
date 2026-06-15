@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
 import type {
@@ -7,9 +7,9 @@ import type {
   MainWindowControlState,
   MarketMakerBookLevel,
   MarketMakerBookSnapshot,
-} from "./moneyEngine";
+} from "./streamEngine";
 
-export type MoneyOcrSnapshotState<T> = {
+export type StreamOcrSnapshotState<T> = {
   initialized: boolean;
   snapshot: T | null;
 };
@@ -30,12 +30,12 @@ type MainWindowPatch = {
   controls?: MainWindowControlState[];
 };
 
-const EMPTY_BOOK_STATE: MoneyOcrSnapshotState<MarketMakerBookSnapshot> = {
+const EMPTY_BOOK_STATE: StreamOcrSnapshotState<MarketMakerBookSnapshot> = {
   initialized: false,
   snapshot: null,
 };
 
-const EMPTY_MAIN_WINDOW_STATE: MoneyOcrSnapshotState<MainWindowDataSnapshot> = {
+const EMPTY_MAIN_WINDOW_STATE: StreamOcrSnapshotState<MainWindowDataSnapshot> = {
   initialized: false,
   snapshot: null,
 };
@@ -163,11 +163,11 @@ function normalizeMainWindowSnapshot(snapshot: MainWindowDataSnapshot): MainWind
   };
 }
 
-class MoneyBookStore {
-  private state: MoneyOcrSnapshotState<MarketMakerBookSnapshot> = EMPTY_BOOK_STATE;
+class StreamBookStore {
+  private state: StreamOcrSnapshotState<MarketMakerBookSnapshot> = EMPTY_BOOK_STATE;
   private listeners = new Set<() => void>();
 
-  getState(): MoneyOcrSnapshotState<MarketMakerBookSnapshot> {
+  getState(): StreamOcrSnapshotState<MarketMakerBookSnapshot> {
     return this.state;
   }
 
@@ -223,11 +223,11 @@ class MoneyBookStore {
   };
 }
 
-class MoneyMainWindowStore {
-  private state: MoneyOcrSnapshotState<MainWindowDataSnapshot> = EMPTY_MAIN_WINDOW_STATE;
+class StreamMainWindowStore {
+  private state: StreamOcrSnapshotState<MainWindowDataSnapshot> = EMPTY_MAIN_WINDOW_STATE;
   private listeners = new Set<() => void>();
 
-  getState(): MoneyOcrSnapshotState<MainWindowDataSnapshot> {
+  getState(): StreamOcrSnapshotState<MainWindowDataSnapshot> {
     return this.state;
   }
 
@@ -305,26 +305,26 @@ function mergeControls(previous: MainWindowControlState[], patchControls: MainWi
   return Array.from(controlMap.values());
 }
 
-export const moneyBookStore = new MoneyBookStore();
-export const moneyMainWindowStore = new MoneyMainWindowStore();
+export const streamBookStore = new StreamBookStore();
+export const streamMainWindowStore = new StreamMainWindowStore();
 
-export function resetMoneyOcrStores(): void {
-  moneyBookStore.reset();
-  moneyMainWindowStore.reset();
+export function resetStreamOcrStores(): void {
+  streamBookStore.reset();
+  streamMainWindowStore.reset();
 }
 
-export function useMoneyBookSnapshotState(): MoneyOcrSnapshotState<MarketMakerBookSnapshot> {
+export function useStreamBookSnapshotState(): StreamOcrSnapshotState<MarketMakerBookSnapshot> {
   return useSyncExternalStore(
-    moneyBookStore.subscribe,
-    () => moneyBookStore.getState(),
+    streamBookStore.subscribe,
+    () => streamBookStore.getState(),
     () => EMPTY_BOOK_STATE
   );
 }
 
-export function useMoneyMainWindowSnapshotState(): MoneyOcrSnapshotState<MainWindowDataSnapshot> {
+export function useStreamMainWindowSnapshotState(): StreamOcrSnapshotState<MainWindowDataSnapshot> {
   return useSyncExternalStore(
-    moneyMainWindowStore.subscribe,
-    () => moneyMainWindowStore.getState(),
+    streamMainWindowStore.subscribe,
+    () => streamMainWindowStore.getState(),
     () => EMPTY_MAIN_WINDOW_STATE
   );
 }

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -4914,7 +4914,7 @@ export default function OpenDoorSonar() {
 
           {/* ========================= MODE + ACTIVE FILTER ========================= */}
           <div className="flex items-center gap-3">
-            {/* Group 1: MONEY / SCANNER / SONAR */}
+            {/* Group 1: STREAM / SCANNER / SONAR */}
             <div className={secondaryGroupClass}>
               <Link
                 href="/stats/opendoor"

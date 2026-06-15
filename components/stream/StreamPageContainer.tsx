@@ -1,33 +1,33 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import ArbitrageScanner from "../scanner/ArbitrageScanner";
 import {
-  deriveMoneyExecutionDescriptor,
-  type MoneyAutomationConfig,
-  type MoneyExecutionDescriptor,
-  type MoneyRatingRule,
-} from "./moneyEngine";
+  deriveStreamExecutionDescriptor,
+  type StreamAutomationConfig,
+  type StreamExecutionDescriptor,
+  type StreamRatingRule,
+} from "./streamEngine";
 
-type MoneyTabKey = "active" | "episodes" | "analytics";
-type MoneyRuleBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
-type MoneySession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
+type StreamTabKey = "active" | "episodes" | "analytics";
+type StreamRuleBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 
-const MONEY_TAB_LS_KEY = "money.arbitrage.tab";
-const MONEY_SESSION_LS_KEY = "money.arbitrage.session";
-const MONEY_RULE_BAND_LS_KEY = "money.arbitrage.rule-band";
-const MONEY_AUTOMATION_LS_KEY = "money.arbitrage.automation";
-const MONEY_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
+const STREAM_TAB_LS_KEY = "stream.arbitrage.tab";
+const STREAM_SESSION_LS_KEY = "stream.arbitrage.session";
+const STREAM_RULE_BAND_LS_KEY = "stream.arbitrage.rule-band";
+const STREAM_AUTOMATION_LS_KEY = "stream.arbitrage.automation";
+const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
 
-function createMoneyPageClientId(): string {
+function createStreamPageClientId(): string {
   if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
   }
-  return `money-page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `stream-page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function ruleBandFromSession(session: MoneySession): MoneyRuleBand {
+function ruleBandFromSession(session: StreamSession): StreamRuleBand {
   switch (session) {
     case "BLUE":
       return "BLUE";
@@ -46,7 +46,7 @@ function ruleBandFromSession(session: MoneySession): MoneyRuleBand {
   }
 }
 
-function sessionFromRuleBand(band: MoneyRuleBand): MoneySession {
+function sessionFromRuleBand(band: StreamRuleBand): StreamSession {
   switch (band) {
     case "BLUE":
       return "BLUE";
@@ -65,7 +65,7 @@ function sessionFromRuleBand(band: MoneyRuleBand): MoneySession {
   }
 }
 
-function defaultAutomationConfig(): MoneyAutomationConfig {
+function defaultAutomationConfig(): StreamAutomationConfig {
   return {
     strategyModeEnabled: false,
     minNetEdge: 0,
@@ -80,17 +80,19 @@ function defaultAutomationConfig(): MoneyAutomationConfig {
     sizingMode: "USD",
     sizeValue: 30000,
     dilutionStep: 0.5,
+    addDelayMinutes: 0,
     minHoldMinutes: 1,
     exitMode: "print",
     printStartTime: "09:20",
     printCloseTime: "09:20",
     noSpreadExit: true,
+    betaMode: false,
   };
 }
 
-function sameMoneyAutomationConfig(
-  left: MoneyAutomationConfig,
-  right: MoneyAutomationConfig,
+function sameStreamAutomationConfig(
+  left: StreamAutomationConfig,
+  right: StreamAutomationConfig,
 ): boolean {
   return (
     left.strategyModeEnabled === right.strategyModeEnabled &&
@@ -110,7 +112,8 @@ function sameMoneyAutomationConfig(
     left.exitMode === right.exitMode &&
     left.printStartTime === right.printStartTime &&
     left.printCloseTime === right.printCloseTime &&
-    left.noSpreadExit === right.noSpreadExit
+    left.noSpreadExit === right.noSpreadExit &&
+    left.betaMode === right.betaMode
   );
 }
 
@@ -127,8 +130,8 @@ function sameShellStats(
 }
 
 function sameSharedRatingRules(
-  left: MoneyRatingRule[],
-  right: MoneyRatingRule[],
+  left: StreamRatingRule[],
+  right: StreamRatingRule[],
 ): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
@@ -143,10 +146,10 @@ function sameSharedRatingRules(
   return true;
 }
 
-function readInitialMoneyTab(): MoneyTabKey {
+function readInitialStreamTab(): StreamTabKey {
   if (typeof window === "undefined") return "active";
   try {
-    const raw = window.localStorage.getItem(MONEY_TAB_LS_KEY);
+    const raw = window.localStorage.getItem(STREAM_TAB_LS_KEY);
     if (raw === "active" || raw === "episodes" || raw === "analytics") return raw;
   } catch {
     // ignore storage issues
@@ -154,10 +157,10 @@ function readInitialMoneyTab(): MoneyTabKey {
   return "active";
 }
 
-function readInitialMoneyRuleBand(): MoneyRuleBand {
+function readInitialStreamRuleBand(): StreamRuleBand {
   if (typeof window === "undefined") return "GLOBAL";
   try {
-    const raw = window.localStorage.getItem(MONEY_RULE_BAND_LS_KEY);
+    const raw = window.localStorage.getItem(STREAM_RULE_BAND_LS_KEY);
     if (raw === "BLUE" || raw === "ARK" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
       return raw;
     }
@@ -167,10 +170,10 @@ function readInitialMoneyRuleBand(): MoneyRuleBand {
   return "GLOBAL";
 }
 
-function readInitialMoneySession(): MoneySession {
+function readInitialStreamSession(): StreamSession {
   if (typeof window === "undefined") return "GLOB";
   try {
-    const raw = window.localStorage.getItem(MONEY_SESSION_LS_KEY);
+    const raw = window.localStorage.getItem(STREAM_SESSION_LS_KEY);
     if (raw === "BLUE" || raw === "ARK" || raw === "OPEN" || raw === "INTRA" || raw === "POST" || raw === "NIGHT" || raw === "GLOB") {
       return raw;
     }
@@ -180,12 +183,12 @@ function readInitialMoneySession(): MoneySession {
   return "GLOB";
 }
 
-function readInitialAutomationConfig(): MoneyAutomationConfig {
+function readInitialAutomationConfig(): StreamAutomationConfig {
   if (typeof window === "undefined") return defaultAutomationConfig();
   try {
-    const raw = window.localStorage.getItem(MONEY_AUTOMATION_LS_KEY);
+    const raw = window.localStorage.getItem(STREAM_AUTOMATION_LS_KEY);
     if (!raw) return defaultAutomationConfig();
-    const parsed = JSON.parse(raw) as Partial<MoneyAutomationConfig>;
+    const parsed = JSON.parse(raw) as Partial<StreamAutomationConfig>;
     return {
       ...defaultAutomationConfig(),
       ...parsed,
@@ -198,6 +201,7 @@ function readInitialAutomationConfig(): MoneyAutomationConfig {
       queueDelayMaxSeconds: Math.max(0, Number(parsed.queueDelayMaxSeconds) || 0),
       sizeValue: Math.max(1, Number(parsed.sizeValue) || defaultAutomationConfig().sizeValue),
       dilutionStep: Math.max(0.1, Number(parsed.dilutionStep) || defaultAutomationConfig().dilutionStep),
+      addDelayMinutes: Math.max(0, Math.trunc(Number(parsed.addDelayMinutes) || 0)),
       minHoldMinutes: Math.max(0, Math.trunc(Number(parsed.minHoldMinutes) || defaultAutomationConfig().minHoldMinutes)),
       exitExecutionMode: parsed.exitExecutionMode === "passive" ? "passive" : "active",
       hedgeMode: parsed.hedgeMode === "hedged" ? "hedged" : "unhedged",
@@ -207,20 +211,21 @@ function readInitialAutomationConfig(): MoneyAutomationConfig {
       printStartTime: typeof parsed.printStartTime === "string" && parsed.printStartTime ? parsed.printStartTime : defaultAutomationConfig().printStartTime,
       printCloseTime: typeof parsed.printCloseTime === "string" && parsed.printCloseTime ? parsed.printCloseTime : defaultAutomationConfig().printCloseTime,
       noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig().noSpreadExit,
+      betaMode: typeof parsed.betaMode === "boolean" ? parsed.betaMode : false,
     };
   } catch {
     return defaultAutomationConfig();
   }
 }
 
-export default function MoneyPageContainer() {
-  const [tab, setTab] = useState<MoneyTabKey>(readInitialMoneyTab);
-  const [session, setSession] = useState<MoneySession>(readInitialMoneySession);
-  const [automationConfig, setAutomationConfig] = useState<MoneyAutomationConfig>(readInitialAutomationConfig);
-  const [moneyAutoEnabled, setMoneyAutoEnabled] = useState(false);
-  const [moneyPageClientId] = useState(createMoneyPageClientId);
+export default function StreamPageContainer() {
+  const [tab, setTab] = useState<StreamTabKey>(readInitialStreamTab);
+  const [session, setSession] = useState<StreamSession>(readInitialStreamSession);
+  const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(readInitialAutomationConfig);
+  const [streamAutoEnabled, setStreamAutoEnabled] = useState(false);
+  const [streamPageClientId] = useState(createStreamPageClientId);
   const remoteAutomationGuardUntilRef = useRef(0);
-  const [sharedRatingRules, setSharedRatingRules] = useState<MoneyRatingRule[]>([
+  const [sharedRatingRules, setSharedRatingRules] = useState<StreamRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
     { band: "OPEN", minRate: 0, minTotal: 0 },
@@ -238,7 +243,7 @@ export default function MoneyPageContainer() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(MONEY_TAB_LS_KEY, tab);
+      window.localStorage.setItem(STREAM_TAB_LS_KEY, tab);
     } catch {
       // ignore storage issues
     }
@@ -248,8 +253,8 @@ export default function MoneyPageContainer() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(MONEY_SESSION_LS_KEY, session);
-      window.localStorage.setItem(MONEY_RULE_BAND_LS_KEY, ruleBand);
+      window.localStorage.setItem(STREAM_SESSION_LS_KEY, session);
+      window.localStorage.setItem(STREAM_RULE_BAND_LS_KEY, ruleBand);
     } catch {
       // ignore storage issues
     }
@@ -257,7 +262,7 @@ export default function MoneyPageContainer() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(MONEY_AUTOMATION_LS_KEY, JSON.stringify(automationConfig));
+      window.localStorage.setItem(STREAM_AUTOMATION_LS_KEY, JSON.stringify(automationConfig));
     } catch {
       // ignore storage issues
     }
@@ -265,17 +270,17 @@ export default function MoneyPageContainer() {
 
   const applyLocalAutoEnabled = useCallback((enabled: boolean) => {
     remoteAutomationGuardUntilRef.current = Date.now() + 4000;
-    setMoneyAutoEnabled(enabled);
+    setStreamAutoEnabled(enabled);
   }, []);
 
-  const applyLocalAutomationConfigPatch = useCallback((patch: Partial<MoneyAutomationConfig>) => {
+  const applyLocalAutomationConfigPatch = useCallback((patch: Partial<StreamAutomationConfig>) => {
     remoteAutomationGuardUntilRef.current = Date.now() + 4000;
     setAutomationConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
   const pullRemoteState = useCallback(async () => {
     try {
-      const response = await fetch(bridgeUrl("/api/money/automation/state"), { cache: "no-store" });
+      const response = await fetch(bridgeUrl("/api/stream/automation/state"), { cache: "no-store" });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || json?.ok === false) return;
       const state = json?.state ?? {};
@@ -284,37 +289,37 @@ export default function MoneyPageContainer() {
       const guarded = Date.now() < remoteAutomationGuardUntilRef.current;
       if (
         guarded &&
-        (remoteAutoEnabled !== moneyAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
+        (remoteAutoEnabled !== streamAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
       ) {
         return;
       }
-      setMoneyAutoEnabled((prev) => (prev === remoteAutoEnabled ? prev : remoteAutoEnabled));
+      setStreamAutoEnabled((prev) => (prev === remoteAutoEnabled ? prev : remoteAutoEnabled));
       setAutomationConfig((prev) => {
         const next = {
           ...prev,
           strategyModeEnabled: remoteStrategyModeEnabled,
         };
-        return sameMoneyAutomationConfig(prev, next) ? prev : next;
+        return sameStreamAutomationConfig(prev, next) ? prev : next;
       });
     } catch {
       // keep local state if remote sync is unavailable
     }
-  }, [automationConfig.strategyModeEnabled, moneyAutoEnabled]);
+  }, [automationConfig.strategyModeEnabled, streamAutoEnabled]);
 
   const sendHeartbeat = useCallback(async () => {
     try {
-      await fetch(bridgeUrl("/api/money/automation/heartbeat"), {
+      await fetch(bridgeUrl("/api/stream/automation/heartbeat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clientId: moneyPageClientId,
-          source: "money-page",
+          clientId: streamPageClientId,
+          source: "stream-page",
         }),
       });
     } catch {
       // heartbeat is best-effort
     }
-  }, [moneyPageClientId]);
+  }, [streamPageClientId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -334,7 +339,7 @@ export default function MoneyPageContainer() {
     void syncNow();
     const heartbeatTimer = window.setInterval(() => {
       void sendHeartbeat();
-    }, MONEY_AUTOMATION_HEARTBEAT_INTERVAL_MS);
+    }, STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS);
     window.addEventListener("focus", onVisibilityOrFocus);
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
 
@@ -348,11 +353,11 @@ export default function MoneyPageContainer() {
 
   const headerBadgeValues = ["EXECUTION", "FILTERED", shellStats.autoEnabled ? "AUTO ON" : "AUTO OFF"];
   const headerMetaLabel = `signals ${shellStats.signals.toLocaleString("en-US")} | ready ${shellStats.ready.toLocaleString("en-US")} | open ${shellStats.open.toLocaleString("en-US")}`;
-  const moneyExecutionDescriptor: MoneyExecutionDescriptor = useMemo(
-    () => deriveMoneyExecutionDescriptor(ruleBand, sharedRatingRules),
+  const streamExecutionDescriptor: StreamExecutionDescriptor = useMemo(
+    () => deriveStreamExecutionDescriptor(ruleBand, sharedRatingRules),
     [ruleBand, sharedRatingRules]
   );
-  const handleMoneyShellStatsChange = useCallback((stats: {
+  const handleStreamShellStatsChange = useCallback((stats: {
     signals: number;
     ready: number;
     open: number;
@@ -360,34 +365,41 @@ export default function MoneyPageContainer() {
   }) => {
     setShellStats((prev) => sameShellStats(prev, stats) ? prev : stats);
   }, []);
-  const handleSharedRatingRulesChange = useCallback((rules: MoneyRatingRule[]) => {
+  const handleSharedRatingRulesChange = useCallback((rules: StreamRatingRule[]) => {
     setSharedRatingRules((prev) => sameSharedRatingRules(prev, rules) ? prev : rules);
   }, []);
 
+  // SIMULATOR tab always runs in betaMode (no real orders sent).
+  const automationConfigForTab = useMemo<StreamAutomationConfig>(
+    () => tab === "episodes" ? { ...automationConfig, betaMode: true } : automationConfig,
+    [automationConfig, tab]
+  );
+
   return (
     <ArbitrageScanner
-      initialPrimaryPanel="money"
-      shellMode="moneyOnly"
+      initialPrimaryPanel="stream"
+      shellMode="streamOnly"
       controlledTab={tab}
       onControlledTabChange={setTab}
       controlledSession={session}
       onControlledSessionChange={setSession}
       controlledRuleBand={ruleBand}
-      onControlledRuleBandChange={(band) => setSession(sessionFromRuleBand(band as MoneyRuleBand))}
-      moneyExecutionDescriptorOverride={moneyExecutionDescriptor}
-      moneyAutomationConfigOverride={automationConfig}
-      moneyAutoStartEnabledOverride={false}
-      moneyAutoEnabledOverride={moneyAutoEnabled}
-      moneyViewModeOverride="money-auto-tab"
-      onMoneyAutomationConfigChange={applyLocalAutomationConfigPatch}
-      onMoneyAutoEnabledChange={applyLocalAutoEnabled}
-      headerTitleOverride="ARBITRAGE MONEY"
+      onControlledRuleBandChange={(band) => setSession(sessionFromRuleBand(band as StreamRuleBand))}
+      streamExecutionDescriptorOverride={streamExecutionDescriptor}
+      streamAutomationConfigOverride={automationConfigForTab}
+      streamAutoStartEnabledOverride={false}
+      streamAutoEnabledOverride={streamAutoEnabled}
+      streamViewModeOverride="stream-auto-tab"
+      onStreamAutomationConfigChange={applyLocalAutomationConfigPatch}
+      onStreamAutoEnabledChange={applyLocalAutoEnabled}
+      headerTitleOverride="ARBITRAGE STREAM"
+      headerMinimal
       headerBadgeValuesOverride={headerBadgeValues}
       headerMetaLabelOverride={headerMetaLabel}
-      activeTabLabelOverride="CANDIDATES"
-      episodesTabLabelOverride="POSITIONS"
-      analyticsTabLabelOverride="AUTO"
-      onMoneyShellStatsChange={handleMoneyShellStatsChange}
+      activeTabLabelOverride="CONFIG"
+      episodesTabLabelOverride="SIMULATOR"
+      analyticsTabLabelOverride="EXECUTOR"
+      onStreamShellStatsChange={handleStreamShellStatsChange}
       onSharedRatingRulesChange={handleSharedRatingRulesChange}
     />
   );

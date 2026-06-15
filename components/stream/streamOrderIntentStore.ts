@@ -1,17 +1,17 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
-import type { MoneyOrderIntent } from "./moneyEngine";
+import type { StreamOrderIntent } from "./streamEngine";
 
-export type MoneyOrderIntentMeta = {
+export type StreamOrderIntentMeta = {
   queuedCount: number;
 };
 
-const EMPTY_META: MoneyOrderIntentMeta = {
+const EMPTY_META: StreamOrderIntentMeta = {
   queuedCount: 0,
 };
 
-function sameIntent(left: MoneyOrderIntent, right: MoneyOrderIntent): boolean {
+function sameIntent(left: StreamOrderIntent, right: StreamOrderIntent): boolean {
   return (
     left.id === right.id &&
     left.ticker === right.ticker &&
@@ -26,7 +26,7 @@ function sameIntent(left: MoneyOrderIntent, right: MoneyOrderIntent): boolean {
   );
 }
 
-function sameIntentArray(left: MoneyOrderIntent[], right: MoneyOrderIntent[]): boolean {
+function sameIntentArray(left: StreamOrderIntent[], right: StreamOrderIntent[]): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
     if (!sameIntent(left[index], right[index])) return false;
@@ -34,22 +34,22 @@ function sameIntentArray(left: MoneyOrderIntent[], right: MoneyOrderIntent[]): b
   return true;
 }
 
-class MoneyOrderIntentStore {
-  private rows: MoneyOrderIntent[] = [];
-  private meta: MoneyOrderIntentMeta = EMPTY_META;
+class StreamOrderIntentStore {
+  private rows: StreamOrderIntent[] = [];
+  private meta: StreamOrderIntentMeta = EMPTY_META;
   private listeners = new Set<() => void>();
 
-  getRows(): MoneyOrderIntent[] {
+  getRows(): StreamOrderIntent[] {
     return this.rows;
   }
 
-  getMeta(): MoneyOrderIntentMeta {
+  getMeta(): StreamOrderIntentMeta {
     return this.meta;
   }
 
-  applySnapshot(rows: MoneyOrderIntent[]): void {
+  applySnapshot(rows: StreamOrderIntent[]): void {
     const nextRows = rows.slice();
-    const nextMeta: MoneyOrderIntentMeta = {
+    const nextMeta: StreamOrderIntentMeta = {
       queuedCount: nextRows.filter((row) => row.status === "QUEUED").length,
     };
     const rowsChanged = !sameIntentArray(this.rows, nextRows);
@@ -75,20 +75,20 @@ class MoneyOrderIntentStore {
   };
 }
 
-export const moneyOrderIntentStore = new MoneyOrderIntentStore();
+export const streamOrderIntentStore = new StreamOrderIntentStore();
 
-export function useMoneyOrderIntentRows(): MoneyOrderIntent[] {
+export function useStreamOrderIntentRows(): StreamOrderIntent[] {
   return useSyncExternalStore(
-    moneyOrderIntentStore.subscribe,
-    () => moneyOrderIntentStore.getRows(),
+    streamOrderIntentStore.subscribe,
+    () => streamOrderIntentStore.getRows(),
     () => []
   );
 }
 
-export function useMoneyOrderIntentMeta(): MoneyOrderIntentMeta {
+export function useStreamOrderIntentMeta(): StreamOrderIntentMeta {
   return useSyncExternalStore(
-    moneyOrderIntentStore.subscribe,
-    () => moneyOrderIntentStore.getMeta(),
+    streamOrderIntentStore.subscribe,
+    () => streamOrderIntentStore.getMeta(),
     () => EMPTY_META
   );
 }

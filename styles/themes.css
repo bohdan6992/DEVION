@@ -731,6 +731,16 @@ html[data-theme] {
   box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 18px rgba(212, 212, 216, 0.1);
 }
 
+:root[data-theme="magma"] .tt-card:hover {
+  border-color: rgba(255, 82, 72, 0.32);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.95), 0 0 22px rgba(255, 82, 72, 0.16);
+}
+
+:root[data-theme="mercury"] .tt-card:hover {
+  border-color: rgba(176, 182, 190, 0.28);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 18px rgba(176, 182, 190, 0.1);
+}
+
 :root[data-theme="midnight"] .tt-card:hover {
   border-color: rgba(251, 191, 36, 0.36);
   box-shadow: 0 35px 98px rgba(0, 0, 0, 0.92), 0 0 22px rgba(245, 158, 11, 0.2);
@@ -839,6 +849,76 @@ html[data-theme="light"] .dashboard-scope [class*="bg-zinc"] {
   background: color-mix(in oklab, var(--dash-accent) 72%, transparent);
 }
 
+/* ---------------- MAGMA (Неонова Лава — Neon Lava) ---------------- */
+:root[data-theme="magma"] {
+  --bg: #030108;
+  --fg: #fde8d8;
+  --muted: #a0607a;
+  --color-primary: #ff5248;
+  --card-bg: rgba(255, 60, 80, 0.04);
+  --card-border: rgba(255, 82, 64, 0.16);
+  --shadow: 0 24px 72px rgba(180, 20, 60, 0.6);
+  --chart-grid: rgba(255, 82, 64, 0.08);
+  --chart-tooltip-bg: rgba(8, 2, 18, 0.96);
+
+  --dash-page-glow:
+    radial-gradient(circle at 20% 80%, rgba(255, 20, 80, 0.22), transparent 40%),
+    radial-gradient(circle at 78% 10%, rgba(255, 100, 40, 0.16), transparent 32%),
+    radial-gradient(circle at 50% 50%, rgba(140, 0, 200, 0.12), transparent 50%);
+  --dash-grid-line: rgba(255, 82, 64, 0.08);
+  --dash-scan-line: rgba(255, 60, 80, 0.05);
+
+  --dash-panel-bg: linear-gradient(135deg, rgba(12, 3, 22, 0.88), rgba(6, 1, 14, 0.94));
+  --dash-panel-border: rgba(255, 82, 64, 0.2);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(255, 20, 70, 0.5), inset 0 1px 0 rgba(255, 110, 70, 0.1);
+  --dash-topline: rgba(255, 90, 60, 0.55);
+
+  --dash-text-main: #fde8d8;
+  --dash-text-muted: rgba(255, 170, 148, 0.72);
+  --dash-chip-bg: rgba(255, 82, 64, 0.08);
+  --dash-chip-border: rgba(255, 82, 64, 0.24);
+
+  --dash-accent: #ff5248;
+  --dash-accent-soft: rgba(255, 82, 72, 0.14);
+  --dash-accent-border: rgba(255, 110, 80, 0.36);
+  --dash-accent-shadow: rgba(255, 72, 60, 0.42);
+}
+
+/* ---------------- MERCURY (Рідкий Графіт — Liquid Mercury) ---------------- */
+:root[data-theme="mercury"] {
+  --bg: #0f1011;
+  --fg: #e8e9ea;
+  --muted: #8a8d91;
+  --color-primary: #a8adb3;
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(180, 185, 192, 0.14);
+  --shadow: 0 24px 72px rgba(0, 0, 0, 0.9);
+  --chart-grid: rgba(180, 185, 192, 0.06);
+  --chart-tooltip-bg: rgba(20, 22, 24, 0.94);
+
+  --dash-page-glow:
+    radial-gradient(circle at 20% 15%, rgba(160, 168, 178, 0.12), transparent 38%),
+    radial-gradient(circle at 80% 8%,  rgba(140, 148, 158, 0.08), transparent 30%),
+    radial-gradient(circle at 50% 88%, rgba(120, 128, 138, 0.09), transparent 32%);
+  --dash-grid-line: rgba(180, 185, 192, 0.07);
+  --dash-scan-line: rgba(180, 185, 192, 0.04);
+
+  --dash-panel-bg: linear-gradient(135deg, rgba(18, 20, 22, 0.86), rgba(12, 13, 14, 0.92));
+  --dash-panel-border: rgba(168, 173, 179, 0.16);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(0, 0, 0, 0.92), inset 0 1px 0 rgba(200, 205, 210, 0.09);
+  --dash-topline: rgba(192, 196, 202, 0.48);
+
+  --dash-text-main: #dfe1e3;
+  --dash-text-muted: rgba(168, 173, 179, 0.78);
+  --dash-chip-bg: rgba(168, 173, 179, 0.07);
+  --dash-chip-border: rgba(168, 173, 179, 0.2);
+
+  --dash-accent: #b0b6be;
+  --dash-accent-soft: rgba(168, 173, 179, 0.12);
+  --dash-accent-border: rgba(192, 196, 202, 0.32);
+  --dash-accent-shadow: rgba(168, 173, 179, 0.28);
+}
+
 html.dark [class*="text-emerald-"] { color: #e4e4e7 !important; }
 html.dark [class*="border-emerald-"] { border-color: rgba(212, 212, 216, 0.28) !important; }
 html.dark [class*="bg-emerald-"] { background-color: rgba(228, 228, 231, 0.08) !important; }
@@ -846,4 +926,171 @@ html.dark [class*="ring-emerald-"] { --tw-ring-color: rgba(212, 212, 216, 0.28) 
 html.dark [class*="from-emerald-"] { --tw-gradient-from: rgba(228, 228, 231, 0.16) var(--tw-gradient-from-position) !important; }
 html.dark [class*="via-emerald-"] { --tw-gradient-via: rgba(228, 228, 231, 0.12) var(--tw-gradient-via-position) !important; }
 html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) var(--tw-gradient-to-position) !important; }
+
+/* =========================================================
+   INFERNO (Vulcan Core)
+   ========================================================= */
+:root[data-theme="inferno"] {
+  --bg: #050201;
+  --fg: #ffedd5;
+  --muted: #fb923c;
+  --color-primary: #f97316;
+  --card-bg: rgba(249, 115, 22, 0.04);
+  --card-border: rgba(249, 115, 22, 0.16);
+  --shadow: 0 24px 72px rgba(180, 40, 0, 0.6);
+  --chart-grid: rgba(249, 115, 22, 0.08);
+  --chart-tooltip-bg: rgba(8, 2, 0, 0.96);
+  --dash-page-glow:
+    radial-gradient(circle at 20% 14%, rgba(249, 115, 22, 0.24), transparent 38%),
+    radial-gradient(circle at 80% 8%, rgba(239, 68, 68, 0.18), transparent 30%),
+    radial-gradient(circle at 48% 88%, rgba(249, 115, 22, 0.14), transparent 32%);
+  --dash-grid-line: rgba(249, 115, 22, 0.08);
+  --dash-scan-line: rgba(249, 115, 22, 0.05);
+  --dash-panel-bg: linear-gradient(135deg, rgba(20, 5, 1, 0.90), rgba(10, 2, 0, 0.95));
+  --dash-panel-border: rgba(249, 115, 22, 0.20);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(249, 115, 22, 0.50), inset 0 1px 0 rgba(251, 146, 60, 0.10);
+  --dash-topline: rgba(251, 146, 60, 0.55);
+  --dash-text-main: #ffedd5;
+  --dash-text-muted: rgba(253, 186, 116, 0.72);
+  --dash-chip-bg: rgba(249, 115, 22, 0.10);
+  --dash-chip-border: rgba(249, 115, 22, 0.24);
+  --dash-accent: #f97316;
+  --dash-accent-soft: rgba(249, 115, 22, 0.14);
+  --dash-accent-border: rgba(249, 115, 22, 0.32);
+  --dash-accent-shadow: rgba(249, 115, 22, 0.42);
+  --dash-accent-rgb: 249, 115, 22;
+  --dash-accent-on: #ffffff;
+}
+
+/* =========================================================
+   OCEANIC (Deep Abyss)
+   ========================================================= */
+:root[data-theme="oceanic"] {
+  --bg: #000104;
+  --fg: #cffafe;
+  --muted: #67e8f9;
+  --color-primary: #22d3ee;
+  --card-bg: rgba(34, 211, 238, 0.03);
+  --card-border: rgba(34, 211, 238, 0.14);
+  --shadow: 0 24px 72px rgba(0, 30, 50, 0.9);
+  --chart-grid: rgba(34, 211, 238, 0.07);
+  --chart-tooltip-bg: rgba(0, 5, 15, 0.96);
+  --dash-page-glow:
+    radial-gradient(circle at 18% 16%, rgba(6, 182, 212, 0.18), transparent 36%),
+    radial-gradient(circle at 82% 8%, rgba(34, 211, 238, 0.12), transparent 30%),
+    radial-gradient(circle at 50% 88%, rgba(14, 165, 233, 0.12), transparent 32%);
+  --dash-grid-line: rgba(34, 211, 238, 0.07);
+  --dash-scan-line: rgba(34, 211, 238, 0.04);
+  --dash-panel-bg: linear-gradient(135deg, rgba(0, 20, 35, 0.88), rgba(0, 10, 20, 0.94));
+  --dash-panel-border: rgba(34, 211, 238, 0.18);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(6, 182, 212, 0.45), inset 0 1px 0 rgba(34, 211, 238, 0.08);
+  --dash-topline: rgba(34, 211, 238, 0.48);
+  --dash-text-main: #cffafe;
+  --dash-text-muted: rgba(103, 232, 249, 0.72);
+  --dash-chip-bg: rgba(34, 211, 238, 0.08);
+  --dash-chip-border: rgba(34, 211, 238, 0.22);
+  --dash-accent: #22d3ee;
+  --dash-accent-soft: rgba(34, 211, 238, 0.12);
+  --dash-accent-border: rgba(34, 211, 238, 0.30);
+  --dash-accent-shadow: rgba(34, 211, 238, 0.35);
+  --dash-accent-rgb: 34, 211, 238;
+  --dash-accent-on: #000104;
+}
+
+:root[data-theme="oceanic"] .tt-card:hover {
+  border-color: rgba(34, 211, 238, 0.28);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.95), 0 0 22px rgba(34, 211, 238, 0.12);
+}
+
+/* =========================================================
+   ACCENT RGB + ON — cascaded overrides for CSS utilities
+   Adding rgb/on to all existing themes without editing blocks
+   ========================================================= */
+:root                              { --dash-accent-rgb: 52, 211, 153;  --dash-accent-on: #ffffff; }
+:root[data-theme="light"]          { --dash-accent-rgb: 139, 92, 246;  --dash-accent-on: #ffffff; }
+:root[data-theme="dark"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
+:root[data-theme="rain"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
+:root[data-theme="neon"]           { --dash-accent-rgb: 255, 255, 255; --dash-accent-on: #000000; }
+:root[data-theme="matrix"]         { --dash-accent-rgb: 52, 211, 153;  --dash-accent-on: #ffffff; }
+:root[data-theme="sparkle"]        { --dash-accent-rgb: 253, 230, 138; --dash-accent-on: #1a1405; }
+:root[data-theme="asher"]          { --dash-accent-rgb: 212, 212, 216; --dash-accent-on: #0a0a0a; }
+:root[data-theme="midnight"]       { --dash-accent-rgb: 245, 158, 11;  --dash-accent-on: #ffffff; }
+:root[data-theme="space"]          { --dash-accent-rgb: 147, 197, 253; --dash-accent-on: #020318; }
+:root[data-theme="magma"]          { --dash-accent-rgb: 255, 82, 72;   --dash-accent-on: #ffffff; }
+:root[data-theme="mercury"]        { --dash-accent-rgb: 176, 182, 190; --dash-accent-on: #0f1011; }
+
+/* =========================================================
+   ACCENT UTILITY CLASSES
+   Components use these instead of JS-computed Tailwind strings.
+   Adding a new theme → only update themes.css, zero JS changes.
+   ========================================================= */
+
+/* Text */
+.accent-text       { color: var(--dash-accent) !important; }
+.accent-text-soft  { color: rgba(var(--dash-accent-rgb), 0.78) !important; }
+
+/* Dot indicator */
+.accent-dot        { background-color: var(--dash-accent) !important; }
+
+/* Line separator */
+.accent-line       { background-color: rgba(var(--dash-accent-rgb), 0.50) !important; }
+
+/* Text selection */
+.accent-selection *::selection { background: rgba(var(--dash-accent-rgb), 0.28) !important; }
+.accent-selection::selection   { background: rgba(var(--dash-accent-rgb), 0.28) !important; }
+
+/* Chip — subtle fill + border + accent text (FilterButton active, filter chips) */
+.accent-chip {
+  border: 1px solid rgba(var(--dash-accent-rgb), 0.32) !important;
+  background: rgba(var(--dash-accent-rgb), 0.10) !important;
+  color: var(--dash-accent) !important;
+  box-shadow: 0 0 10px rgba(var(--dash-accent-rgb), 0.15) !important;
+}
+
+/* Soft active — border + soft bg + accent text (session/mode buttons, panel toggles) */
+.accent-soft {
+  border: 1px solid rgba(var(--dash-accent-rgb), 0.28) !important;
+  background: rgba(var(--dash-accent-rgb), 0.10) !important;
+  color: var(--dash-accent) !important;
+  box-shadow: 0 0 10px -3px rgba(var(--dash-accent-rgb), 0.18) !important;
+}
+
+/* Solid fill — strong active state (σ/MKT/TIME toggle buttons) */
+.accent-fill {
+  background: rgba(var(--dash-accent-rgb), 0.72) !important;
+  color: var(--dash-accent-on) !important;
+  border-color: transparent !important;
+}
+
+/* Outline button */
+.accent-outline {
+  border: 1px solid rgba(var(--dash-accent-rgb), 0.42) !important;
+  color: var(--dash-accent) !important;
+}
+.accent-outline:hover {
+  background: rgba(var(--dash-accent-rgb), 0.10) !important;
+}
+
+/* Badge */
+.accent-badge {
+  border: 1px solid rgba(var(--dash-accent-rgb), 0.20) !important;
+  background: rgba(var(--dash-accent-rgb), 0.10) !important;
+  color: var(--dash-accent) !important;
+}
+
+/* Left-border accent panel */
+.accent-panel-l   { border-left-color: var(--dash-accent) !important; }
+
+/* Very subtle panel — thin border + near-transparent bg */
+.accent-panel-soft {
+  border-color: rgba(var(--dash-accent-rgb), 0.20) !important;
+  background: rgba(var(--dash-accent-rgb), 0.03) !important;
+}
+
+/* Soft-border container */
+.accent-soft-border {
+  border: 1px solid rgba(var(--dash-accent-rgb), 0.32) !important;
+  background: rgba(var(--dash-accent-rgb), 0.12) !important;
+  color: var(--dash-accent) !important;
+}
 

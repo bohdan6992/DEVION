@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
 
-class MoneyUpdatedAtStore {
+class StreamUpdatedAtStore {
   private updatedAt: number | null = null;
   private listeners = new Set<() => void>();
 
@@ -30,12 +30,12 @@ class MoneyUpdatedAtStore {
   };
 }
 
-export const moneyUpdatedAtStore = new MoneyUpdatedAtStore();
+export const streamUpdatedAtStore = new StreamUpdatedAtStore();
 
-export function useMoneyUpdatedAt(): number | null {
+export function useStreamUpdatedAt(): number | null {
   return useSyncExternalStore(
-    moneyUpdatedAtStore.subscribe,
-    () => moneyUpdatedAtStore.getValue(),
+    streamUpdatedAtStore.subscribe,
+    () => streamUpdatedAtStore.getValue(),
     () => null
   );
 }

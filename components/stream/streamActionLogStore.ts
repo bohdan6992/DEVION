@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useSyncExternalStore } from "react";
-import type { MoneyActionLogEntry } from "./moneyEngine";
+import type { StreamActionLogEntry } from "./streamEngine";
 
-function sameEntry(left: MoneyActionLogEntry, right: MoneyActionLogEntry): boolean {
+function sameEntry(left: StreamActionLogEntry, right: StreamActionLogEntry): boolean {
   return (
     left.id === right.id &&
     left.dayKey === right.dayKey &&
@@ -17,7 +17,7 @@ function sameEntry(left: MoneyActionLogEntry, right: MoneyActionLogEntry): boole
   );
 }
 
-function sameEntryArray(left: MoneyActionLogEntry[], right: MoneyActionLogEntry[]): boolean {
+function sameEntryArray(left: StreamActionLogEntry[], right: StreamActionLogEntry[]): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
     if (!sameEntry(left[index], right[index])) return false;
@@ -25,15 +25,15 @@ function sameEntryArray(left: MoneyActionLogEntry[], right: MoneyActionLogEntry[
   return true;
 }
 
-class MoneyActionLogStore {
-  private rows: MoneyActionLogEntry[] = [];
+class StreamActionLogStore {
+  private rows: StreamActionLogEntry[] = [];
   private listeners = new Set<() => void>();
 
-  getRows(): MoneyActionLogEntry[] {
+  getRows(): StreamActionLogEntry[] {
     return this.rows;
   }
 
-  applySnapshot(rows: MoneyActionLogEntry[]): void {
+  applySnapshot(rows: StreamActionLogEntry[]): void {
     const nextRows = rows.slice();
     if (sameEntryArray(this.rows, nextRows)) return;
     this.rows = nextRows;
@@ -54,12 +54,12 @@ class MoneyActionLogStore {
   };
 }
 
-export const moneyActionLogStore = new MoneyActionLogStore();
+export const streamActionLogStore = new StreamActionLogStore();
 
-export function useMoneyActionLogRows(): MoneyActionLogEntry[] {
+export function useStreamActionLogRows(): StreamActionLogEntry[] {
   return useSyncExternalStore(
-    moneyActionLogStore.subscribe,
-    () => moneyActionLogStore.getRows(),
+    streamActionLogStore.subscribe,
+    () => streamActionLogStore.getRows(),
     () => []
   );
 }

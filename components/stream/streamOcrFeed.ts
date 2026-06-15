@@ -1,8 +1,8 @@
-"use client";
+﻿"use client";
 
 import { bridgeUrl } from "../../lib/bridgeBase";
-import { moneyExecutionStore } from "./moneyExecutionStore";
-import { moneyBookStore, moneyMainWindowStore } from "./moneyOcrStores";
+import { streamExecutionStore } from "./streamExecutionStore";
+import { streamBookStore, streamMainWindowStore } from "./streamOcrStores";
 
 let streamSource: EventSource | null = null;
 let reconnectTimer: number | null = null;
@@ -23,35 +23,35 @@ function ensureConnected(): void {
 
   source.addEventListener("book_snapshot", (event) => {
     const payload = JSON.parse((event as MessageEvent).data);
-    moneyBookStore.applySnapshot(payload);
+    streamBookStore.applySnapshot(payload);
   });
 
   source.addEventListener("book_patch", (event) => {
     const payload = JSON.parse((event as MessageEvent).data);
-    moneyBookStore.applyPatch(payload);
+    streamBookStore.applyPatch(payload);
   });
 
   source.addEventListener("book_unbound", () => {
-    moneyBookStore.setUnbound();
+    streamBookStore.setUnbound();
   });
 
   source.addEventListener("mainwindow_snapshot", (event) => {
     const payload = JSON.parse((event as MessageEvent).data);
-    moneyMainWindowStore.applySnapshot(payload);
+    streamMainWindowStore.applySnapshot(payload);
   });
 
   source.addEventListener("mainwindow_patch", (event) => {
     const payload = JSON.parse((event as MessageEvent).data);
-    moneyMainWindowStore.applyPatch(payload);
+    streamMainWindowStore.applyPatch(payload);
   });
 
   source.addEventListener("mainwindow_unbound", () => {
-    moneyMainWindowStore.setUnbound();
+    streamMainWindowStore.setUnbound();
   });
 
   source.addEventListener("execution_snapshot", (event) => {
     const payload = JSON.parse((event as MessageEvent).data);
-    moneyExecutionStore.applySnapshot(payload);
+    streamExecutionStore.applySnapshot(payload);
   });
 
   source.onerror = () => {
@@ -77,7 +77,7 @@ function disconnectIfUnused(): void {
   streamSource = null;
 }
 
-export function connectMoneyOcrStream(): () => void {
+export function connectStreamOcrFeed(): () => void {
   subscriberCount += 1;
   ensureConnected();
 
