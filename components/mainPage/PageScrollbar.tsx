@@ -53,6 +53,9 @@ const ACCENT_MAP: Record<string, { hex: string; rgb: string }> = {
   dark:    { hex: "#94a3b8", rgb: "148,163,184" },
   magma:   { hex: "#ff5248", rgb: "255,82,72"   },
   mercury: { hex: "#b0b6be", rgb: "176,182,190" },
+  khaki:   { hex: "#8a9a52", rgb: "138,154,82"  },
+  zebra:    { hex: "#11100e",  rgb: "17,16,14"    },
+  flamingo: { hex: "#f45c7a",  rgb: "244,92,122"  },
 };
 const LIGHT_ACCENT   = { hex: "#6d28d9", rgb: "109,40,217" };
 const DEFAULT_ACCENT = { hex: "#00f0ff", rgb: "0,240,255"  };
@@ -70,7 +73,10 @@ const THEMES: { key: ThemeKey; label: string; dot: string }[] = [
   { key: "dark",    label: "Dark",    dot: "#94a3b8" },
   { key: "magma",   label: "Magma",   dot: "#ff5248" },
   { key: "mercury", label: "Mercury", dot: "#b0b6be" },
-  { key: "light",   label: "Light",   dot: "#6d28d9" },
+  { key: "khaki",   label: "Khaki",   dot: "#8a9a52" },
+  { key: "zebra",    label: "Zebra",    dot: "#11100e" },
+  { key: "flamingo", label: "Flamingo", dot: "#f45c7a" },
+  { key: "light",    label: "Light",    dot: "#6d28d9" },
 ];
 const LANGS: { key: LangKey; label: string }[] = [
   { key: "UA", label: "UA" },

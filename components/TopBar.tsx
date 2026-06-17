@@ -189,6 +189,27 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         buttonText: "text-cyan-200",
         buttonBorder: "border-cyan-500/20",
       };
+    case "khaki":
+      return {
+        selectedItem: "bg-[#8a9a52]/10 text-[#c8d49a] font-bold",
+        dot: "bg-[#8a9a52] shadow-[0_0_8px_rgba(138,154,82,0.60)]",
+        buttonText: "text-[#c8d49a]",
+        buttonBorder: "border-[#8a9a52]/20",
+      };
+    case "zebra":
+      return {
+        selectedItem: "bg-[#11100e]/10 text-[#11100e] font-bold",
+        dot: "bg-[#11100e] shadow-[0_0_8px_rgba(17,16,14,0.45)]",
+        buttonText: "text-[#11100e]",
+        buttonBorder: "border-[#11100e]/20",
+      };
+    case "flamingo":
+      return {
+        selectedItem: "bg-rose-400/12 text-rose-600 font-bold",
+        dot: "bg-rose-400 shadow-[0_0_8px_rgba(244,92,122,0.55)]",
+        buttonText: "text-rose-500",
+        buttonBorder: "border-rose-400/22",
+      };
     case "magma":
       return {
         selectedItem: "bg-rose-500/10 text-rose-200 font-bold",
@@ -369,6 +390,24 @@ export default function TopBar() {
           activeText: "text-cyan-300 drop-shadow-[0_0_8px_rgba(34,211,238,0.35)]",
           activeBg: "bg-cyan-500/10 opacity-100 border border-transparent",
           activeLine: "bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)]",
+        };
+      case "khaki":
+        return {
+          activeText: "text-[#c8d49a] drop-shadow-[0_0_8px_rgba(138,154,82,0.30)]",
+          activeBg: "bg-[#8a9a52]/10 opacity-100 border border-transparent",
+          activeLine: "bg-[#8a9a52] shadow-[0_0_10px_rgba(138,154,82,0.55)]",
+        };
+      case "zebra":
+        return {
+          activeText: "text-[#11100e] drop-shadow-none",
+          activeBg: "bg-[#11100e]/8 opacity-100 border border-transparent",
+          activeLine: "bg-[#11100e] shadow-none",
+        };
+      case "flamingo":
+        return {
+          activeText: "text-rose-500 drop-shadow-[0_0_8px_rgba(244,92,122,0.30)]",
+          activeBg: "bg-rose-400/10 opacity-100 border border-transparent",
+          activeLine: "bg-rose-400 shadow-[0_0_10px_rgba(244,92,122,0.50)]",
         };
       case "magma":
         return {

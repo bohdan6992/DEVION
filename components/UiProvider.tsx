@@ -7,7 +7,7 @@ export type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
   | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space" | "rain"
-  | "mercury" | "magma";
+  | "mercury" | "magma" | "khaki" | "zebra" | "flamingo";
 
 export type LangKey = "UA" | "EN" | "UK";
 
@@ -29,7 +29,7 @@ export function useUi() {
 }
 
 // Список світлих тем (всі інші будуть вважатися темними)
-const LIGHT_THEMES = new Set<ThemeKey>(["light", "pastel"]);
+const LIGHT_THEMES = new Set<ThemeKey>(["light", "pastel", "zebra", "flamingo"]);
 
 function normalizeThemeKey(theme?: string | null): ThemeKey {
   const value = (theme || "").toLowerCase().trim();
@@ -39,7 +39,8 @@ function normalizeThemeKey(theme?: string | null): ThemeKey {
     value === "solaris" || value === "cyberpunk" || value === "oceanic" || value === "sakura" ||
     value === "matrix" || value === "asher" || value === "inferno" || value === "desert" ||
     value === "midnight" || value === "forest" || value === "candy" || value === "monochrome" ||
-    value === "space" || value === "rain" || value === "mercury" || value === "magma"
+    value === "space" || value === "rain" || value === "mercury" || value === "magma" ||
+    value === "khaki" || value === "zebra" || value === "flamingo"
   ) {
     return value as ThemeKey;
   }

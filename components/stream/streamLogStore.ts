@@ -70,31 +70,91 @@ export type StreamLogEntry = {
 };
 
 const MAX_ENTRIES = 5000;
+const STORAGE_KEY = "stream.simulation-log.v1";
+
+function loadFromStorage(): StreamLogEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as StreamLogEntry[];
+  } catch {
+    return [];
+  }
+}
+
+function saveToStorage(entries: StreamLogEntry[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // quota exceeded — ignore
+  }
+}
 
 // ---- store ----------------------------------------------------------------
 
 class StreamLogStore {
-  private entries: StreamLogEntry[] = [];
+  private entries: StreamLogEntry[] | null = null;
   private seq = 0;
   private listeners = new Set<() => void>();
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyPending = false;
 
-  push(entry: Omit<StreamLogEntry, "seq">): void {
-    const full: StreamLogEntry = { seq: ++this.seq, ...entry };
-    if (this.entries.length >= MAX_ENTRIES) {
-      this.entries = this.entries.slice(this.entries.length - MAX_ENTRIES + 1);
+  private ensureLoaded(): StreamLogEntry[] {
+    if (this.entries === null) {
+      this.entries = loadFromStorage();
+      this.seq = this.entries.reduce((max, e) => Math.max(max, e.seq), 0);
     }
-    this.entries = [...this.entries, full];
-    this.listeners.forEach((l) => l());
-  }
-
-  getEntries(): StreamLogEntry[] {
     return this.entries;
   }
 
+  // Debounce localStorage write — at most once per 3 seconds.
+  // Prevents blocking the main thread when many entries are pushed in rapid succession
+  // (e.g. 27 CLOSE_ALL events in beta mode firing in the same tick).
+  private scheduleSave(): void {
+    if (this.saveTimer !== null) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      saveToStorage(this.entries ?? []);
+    }, 3000);
+  }
+
+  // Batch listener notifications via microtask so many pushes in the same
+  // synchronous execution cause only ONE React re-render, not N re-renders.
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    queueMicrotask(() => {
+      this.notifyPending = false;
+      this.listeners.forEach((l) => l());
+    });
+  }
+
+  push(entry: Omit<StreamLogEntry, "seq">): void {
+    const entries = this.ensureLoaded();
+    const full: StreamLogEntry = { seq: ++this.seq, ...entry };
+    if (entries.length >= MAX_ENTRIES) {
+      this.entries = entries.slice(entries.length - MAX_ENTRIES + 1);
+    }
+    this.entries = [...this.entries!, full];
+    this.scheduleSave();
+    this.scheduleNotify();
+  }
+
+  getEntries(): StreamLogEntry[] {
+    return this.ensureLoaded();
+  }
+
   clear(): void {
-    if (!this.entries.length) return;
+    const entries = this.ensureLoaded();
+    if (!entries.length) return;
     this.entries = [];
     this.seq = 0;
+    if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    saveToStorage([]);
     this.listeners.forEach((l) => l());
   }
 

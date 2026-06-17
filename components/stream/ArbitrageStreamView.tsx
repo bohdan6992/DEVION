@@ -643,6 +643,47 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   );
 });
 
+function fmtDuration(ms: number | null | undefined): string {
+  if (ms == null || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+function actionLogLabel(row: StreamActionLogEntry): string {
+  if (row.kind === "ADD") {
+    const n = row.sequence != null ? row.sequence - 1 : "?";
+    return `ADD #${n}`;
+  }
+  if (row.kind === "CLOSE") {
+    const adds = row.entryCount != null && row.entryCount > 1 ? `×${row.entryCount}` : "";
+    return adds ? `CLOSE${adds}` : "CLOSE";
+  }
+  return "ENTRY";
+}
+
+function actionLogTxtRow(row: StreamActionLogEntry): string {
+  const sinceOrHold = row.kind === "ADD"
+    ? (row.sinceLastMs != null ? fmtDuration(row.sinceLastMs) + (row.delayRequiredMs != null ? `/req ${Math.floor(row.delayRequiredMs / 60_000)}m` : "") : "—")
+    : row.kind === "CLOSE"
+      ? (row.holdMs != null ? `held ${fmtDuration(row.holdMs)}` : "—")
+      : "—";
+  const threshold = row.kind === "ADD" && row.addThreshold != null ? `${row.addThreshold.toFixed(3)}σ` : "—";
+  return [
+    formatActionLogTime(row.at).padEnd(10),
+    row.ticker.padEnd(8),
+    row.benchmark.padEnd(6),
+    row.side.padEnd(6),
+    actionLogLabel(row).padEnd(9),
+    (row.deviation != null ? row.deviation.toFixed(4) : "—").padEnd(10),
+    sinceOrHold.padEnd(14),
+    threshold.padEnd(10),
+    (row.filtersOk ?? "—").slice(0, 30).padEnd(32),
+    row.reason ?? "—",
+  ].join(" | ");
+}
+
 const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows: StreamActionLogEntry[] }) {
   const structuredLogEntries = useStreamLogEntries();
 
@@ -653,23 +694,15 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
   };
 
   const handleDownload = () => {
+    const header = ["Time".padEnd(10), "Ticker".padEnd(8), "Bench".padEnd(6), "Side".padEnd(6), "Action".padEnd(9), "σ".padEnd(10), "Since/Hold".padEnd(14), "Threshold".padEnd(10), "Filters".padEnd(32), "Reason"].join(" | ");
     const lines: string[] = [
       "=== STREAM ORDER LOG ===",
       `Generated: ${new Date().toLocaleString("en-US", { hour12: false })}`,
       `Total entries: ${rows.length}`,
       "",
-      ["Time".padEnd(10), "Ticker".padEnd(8), "Bench".padEnd(6), "Side".padEnd(6), "Action".padEnd(7), "Deviation".padEnd(10), "Intent".padEnd(26), "Reason"].join(" | "),
-      "-".repeat(110),
-      ...rows.map((row) => [
-        formatActionLogTime(row.at).padEnd(10),
-        row.ticker.padEnd(8),
-        row.benchmark.padEnd(6),
-        row.side.padEnd(6),
-        row.kind.padEnd(7),
-        (row.deviation != null ? row.deviation.toFixed(4) : "-").padEnd(10),
-        row.intent.padEnd(26),
-        row.reason ?? "-",
-      ].join(" | ")),
+      header,
+      "-".repeat(130),
+      ...rows.map(actionLogTxtRow),
     ];
     const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -681,11 +714,11 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
   };
 
   return (
-    <div className="scanner-panel-surface flex h-[284px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+    <div className="scanner-panel-surface flex h-[320px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
       <div className="flex items-start justify-between gap-4 px-3 py-3">
         <div>
           <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
-            Log
+            Order Log
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -704,7 +737,7 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
               className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors"
               title="Download log as text file"
             >
-              Download
+              TXT
             </button>
           )}
           <div className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400">
@@ -714,58 +747,90 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
       </div>
       <div className="border-t border-white/[0.06]" />
       <div className="flex-1 overflow-y-auto overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <table className="min-w-[1100px] w-full text-xs font-mono">
-        <thead className="sticky top-0 z-10 bg-[#0a0a0a]/45 text-zinc-300 backdrop-blur-xl">
-          <tr>
-            <th className="text-left p-2.5 whitespace-nowrap">Time</th>
-            <th className="text-left p-2.5 whitespace-nowrap">Ticker</th>
-            <th className="text-left p-2.5 whitespace-nowrap">Bench</th>
-            <th className="text-left p-2.5 whitespace-nowrap">Side</th>
-            <th className="text-left p-2.5 whitespace-nowrap">Action</th>
-            <th className="text-right p-2.5 whitespace-nowrap">Deviation</th>
-            <th className="text-left p-2.5 whitespace-nowrap">Intent</th>
-            <th className="text-left p-2.5 w-full">Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={row.id}
-              className={clsx(
-                "transition-colors",
-                i % 2 === 0 ? "bg-white/[0.015]" : "bg-transparent",
-                "hover:bg-white/[0.03]"
-              )}
-            >
-              <td className="p-2.5 text-zinc-400 whitespace-nowrap">{formatActionLogTime(row.at)}</td>
-              <td className="p-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
-              <td className="p-2.5 text-zinc-400 whitespace-nowrap">{row.benchmark}</td>
-              <td className="p-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
-              <td className="p-2.5 whitespace-nowrap">
-                <span className={clsx(
-                  "inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border",
-                  row.kind === "CLOSE"
-                    ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
-                    : row.kind === "ADD"
-                      ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
-                      : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
-                )}>
-                  {row.kind}
-                </span>
-              </td>
-              <td className="p-2.5 text-right tabular-nums text-zinc-200 whitespace-nowrap">{num(row.deviation, 4)}</td>
-              <td className="p-2.5 text-zinc-500 whitespace-nowrap text-[10px]">{row.intent}</td>
-              <td className="p-2.5 text-zinc-400 max-w-[240px] truncate" title={row.reason}>{row.reason ?? "-"}</td>
-            </tr>
-          ))}
-          {!rows.length && (
+        <table className="min-w-[1480px] w-full text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/45 text-zinc-500 backdrop-blur-xl">
             <tr>
-              <td colSpan={8} className="p-8 text-center text-zinc-500">
-                No STREAM actions recorded for today yet.
-              </td>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal">Time</th>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal">Ticker</th>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal">Bench</th>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal">Side</th>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal">Action</th>
+              <th className="text-right p-2.5 whitespace-nowrap font-normal text-violet-500">σ</th>
+              <th className="text-right p-2.5 whitespace-nowrap font-normal text-sky-600">Since / Hold</th>
+              <th className="text-right p-2.5 whitespace-nowrap font-normal text-sky-600">Threshold</th>
+              <th className="text-left p-2.5 whitespace-nowrap font-normal text-amber-600">Filters</th>
+              <th className="text-left p-2.5 w-full font-normal">Reason</th>
             </tr>
-          )}
-        </tbody>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const isAdd = row.kind === "ADD";
+              const isClose = row.kind === "CLOSE";
+              const addNum = isAdd && row.sequence != null ? row.sequence - 1 : null;
+              const hasDelay = isAdd && (row.delayRequiredMs ?? 0) > 0;
+              const delayOk = !hasDelay || (row.sinceLastMs != null && row.sinceLastMs >= (row.delayRequiredMs ?? 0));
+              const sinceCell = isAdd
+                ? (() => {
+                    if (row.sinceLastMs == null) return { text: "—", sub: "", cls: "text-zinc-600" };
+                    const elapsed = fmtDuration(row.sinceLastMs);
+                    const reqMin = row.delayRequiredMs != null ? Math.floor(row.delayRequiredMs / 60_000) : 0;
+                    const sub = reqMin > 0 ? `req ${reqMin}m` : "no delay";
+                    const cls = reqMin === 0 ? "text-zinc-500" : delayOk ? "text-emerald-400" : "text-amber-400";
+                    return { text: elapsed, sub, cls };
+                  })()
+                : isClose
+                  ? { text: row.holdMs != null ? fmtDuration(row.holdMs) : "—", sub: "held", cls: "text-teal-400" }
+                  : { text: "—", sub: "", cls: "text-zinc-600" };
+              return (
+                <tr
+                  key={row.id}
+                  className={clsx(
+                    "transition-colors",
+                    i % 2 === 0 ? "bg-white/[0.012]" : "bg-transparent",
+                    "hover:bg-white/[0.025]"
+                  )}
+                >
+                  <td className="p-2.5 text-zinc-500 whitespace-nowrap tabular-nums">{formatActionLogTime(row.at)}</td>
+                  <td className="p-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
+                  <td className="p-2.5 text-zinc-500 whitespace-nowrap">{row.benchmark}</td>
+                  <td className="p-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
+                  <td className="p-2.5 whitespace-nowrap">
+                    <span className={clsx(
+                      "inline-flex rounded-md px-2 py-0.5 text-[10px] font-mono font-bold uppercase border tracking-wide",
+                      isClose
+                        ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                        : isAdd
+                          ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+                          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                    )}>
+                      {isAdd && addNum != null ? `ADD #${addNum}` : isClose && row.entryCount != null && row.entryCount > 1 ? `CLOSE ×${row.entryCount}` : row.kind}
+                    </span>
+                  </td>
+                  <td className="p-2.5 text-right tabular-nums text-violet-300 whitespace-nowrap">{num(row.deviation, 4)}</td>
+                  <td className="p-2.5 text-right whitespace-nowrap tabular-nums">
+                    {sinceCell.text !== "—" ? (
+                      <span className="flex flex-col items-end leading-tight gap-px">
+                        <span className={sinceCell.cls}>{sinceCell.text}</span>
+                        {sinceCell.sub ? <span className="text-[9px] text-zinc-600">{sinceCell.sub}</span> : null}
+                      </span>
+                    ) : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className="p-2.5 text-right tabular-nums text-sky-400 whitespace-nowrap">
+                    {isAdd && row.addThreshold != null ? `${row.addThreshold.toFixed(3)}σ` : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className="p-2.5 text-amber-600/80 max-w-[200px] truncate text-[10px]" title={row.filtersOk}>{row.filtersOk || <span className="text-zinc-700">—</span>}</td>
+                  <td className="p-2.5 text-zinc-500 w-full max-w-[200px] truncate" title={row.reason}>{row.reason ?? "—"}</td>
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr>
+                <td colSpan={10} className="p-8 text-center text-zinc-600">
+                  No STREAM actions recorded for today yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
         </table>
       </div>
     </div>

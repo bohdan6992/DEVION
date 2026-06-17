@@ -18,6 +18,7 @@ import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
+import { streamFilterPassLogStore, downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
@@ -189,6 +190,39 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         buttonBorder: "border-cyan-500/20",
         outlineButton: "accent-outline",
       };
+    case "khaki":
+      return {
+        selection: "accent-selection",
+        dot: "accent-dot",
+        activeButton: "accent-soft",
+        activeText: "accent-text",
+        activeBorder: "accent-panel-soft",
+        activeSoft: "accent-soft",
+        buttonBorder: "border-[#8a9a52]/20",
+        outlineButton: "accent-outline",
+      };
+    case "zebra":
+      return {
+        selection: "selection:bg-zinc-900/20",
+        dot: "bg-zinc-900",
+        activeButton: "border border-zinc-900/30 text-zinc-900 bg-zinc-900/8 shadow-none",
+        activeText: "text-zinc-900",
+        activeBorder: "border-zinc-900/15 bg-zinc-900/[0.04]",
+        activeSoft: "bg-zinc-900/8 text-zinc-900 border-zinc-900/20 shadow-none",
+        buttonBorder: "border-zinc-900/18",
+        outlineButton: "border-zinc-900/30 text-zinc-900 hover:bg-zinc-900/8 shadow-none",
+      };
+    case "flamingo":
+      return {
+        selection: "accent-selection",
+        dot: "accent-dot",
+        activeButton: "accent-soft",
+        activeText: "accent-text",
+        activeBorder: "accent-panel-soft",
+        activeSoft: "accent-soft",
+        buttonBorder: "border-rose-400/22",
+        outlineButton: "accent-outline",
+      };
     default:
       return {
         selection: "selection:bg-zinc-200/24",
@@ -244,6 +278,9 @@ type PaperArbActiveRow = {
   start: PaperArbSnap;
   peak: PaperArbSnap;
   last: PaperArbSnap;
+
+  rating?: number | null;
+  ratingTotal?: number | null;
 
   // config echoed back (optional but we show if present)
   closeMode?: PaperArbCloseMode;
@@ -961,25 +998,36 @@ function scannerRealtimePnlUsd(args: {
   let rawSum = 0, rawAny = false;
   let benchSum = 0, benchAny = false;
 
-  const exitStockPct = priceMode === "BidAsk" && !isPassive
-    ? (normalizedSide === "Long" ? (last.bidPct ?? last.lstPrcLstClsPct) : (last.askPct ?? last.lstPrcLstClsPct))
-    : (isPassive ? (gapPct ?? null) : last.lstPrcLstClsPct);
-  const exitBenchPct = priceMode === "BidAsk" && !isPassive
-    ? (hedgeSide === "Long" ? (last.benchBidPct ?? last.benchLstPrcLstClsPct) : (last.benchAskPct ?? last.benchLstPrcLstClsPct))
-    : (isPassive ? (benchGapPct ?? null) : last.benchLstPrcLstClsPct);
+  // Exit: Passive → GapPct/benchGapPct. BidAsk+Active → bid/ask. Print+Active → lstPrcLstClsPct.
+  const exitStockPct = isPassive
+    ? (gapPct ?? null)
+    : (priceMode === "BidAsk"
+      ? (normalizedSide === "Long" ? (last.bidPct ?? last.lstPrcLstClsPct) : (last.askPct ?? last.lstPrcLstClsPct))
+      : last.lstPrcLstClsPct);
+  const exitBenchPct = isPassive
+    ? (benchGapPct ?? null)
+    : (priceMode === "BidAsk"
+      ? (hedgeSide === "Long" ? (last.benchBidPct ?? last.benchLstPrcLstClsPct) : (last.benchAskPct ?? last.benchLstPrcLstClsPct))
+      : last.benchLstPrcLstClsPct);
 
   for (const entry of snaps) {
-    const entryStockPct = priceMode === "BidAsk" && !isPassive
+    // Entry: BidAsk → bid/ask (regardless of Passive/Active). Print → lstPrcLstClsPct.
+    const entryStockPct = priceMode === "BidAsk"
       ? (normalizedSide === "Long" ? (entry.askPct ?? entry.lstPrcLstClsPct) : (entry.bidPct ?? entry.lstPrcLstClsPct))
       : entry.lstPrcLstClsPct;
-    const stockFrac = scannerLastPriceReturnFrac(entryStockPct, exitStockPct, normalizedSide);
+    // BidAsk: delta formula (pct diff). Print: ratio.
+    const stockFrac = priceMode === "BidAsk"
+      ? scannerBidAskPctDelta(entryStockPct, exitStockPct, normalizedSide)
+      : scannerLastPriceReturnFrac(entryStockPct, exitStockPct, normalizedSide);
     if (stockFrac != null) { rawSum += Number(trancheAmountUsd) * stockFrac; rawAny = true; }
 
     if (pnlMode === "Hedged" && Number.isFinite(beta ?? NaN)) {
-      const entryBenchPct = priceMode === "BidAsk" && !isPassive
+      const entryBenchPct = priceMode === "BidAsk"
         ? (hedgeSide === "Long" ? (entry.benchAskPct ?? entry.benchLstPrcLstClsPct) : (entry.benchBidPct ?? entry.benchLstPrcLstClsPct))
         : entry.benchLstPrcLstClsPct;
-      const benchFrac = scannerLastPriceReturnFrac(entryBenchPct, exitBenchPct, hedgeSide);
+      const benchFrac = priceMode === "BidAsk"
+        ? scannerBidAskPctDelta(entryBenchPct, exitBenchPct, hedgeSide)
+        : scannerLastPriceReturnFrac(entryBenchPct, exitBenchPct, hedgeSide);
       if (benchFrac != null) { benchSum += Number(trancheAmountUsd) * Number(beta) * benchFrac; benchAny = true; }
     }
   }
@@ -1010,6 +1058,17 @@ function scannerLastPriceReturnFrac(
   const exitFactor = 1 + Number(exitPct) / 100;
   if (entryFactor <= 0 || exitFactor <= 0) return null;
   return side === "Long" ? exitFactor / entryFactor - 1 : entryFactor / exitFactor - 1;
+}
+// BidAsk mode: pct delta — consistent with ZAP units (bidPct − benchAskPct × beta).
+function scannerBidAskPctDelta(
+  entryPct: number | null | undefined,
+  exitPct: number | null | undefined,
+  side: "Long" | "Short"
+): number | null {
+  if (!Number.isFinite(entryPct ?? NaN) || !Number.isFinite(exitPct ?? NaN)) return null;
+  return side === "Long"
+    ? (Number(exitPct) - Number(entryPct)) / 100
+    : (Number(entryPct) - Number(exitPct)) / 100;
 }
 function intn(x: number | null | undefined): string {
   if (x === null || x === undefined) return "-";
@@ -3616,6 +3675,9 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "magma") return "rose";
   if (theme === "mercury") return "zinc";
   if (theme === "oceanic") return "cyan";
+  if (theme === "khaki") return "amber";
+  if (theme === "zebra") return "zinc";
+  if (theme === "flamingo") return "rose";
   return "emerald";
 };
 
@@ -7155,12 +7217,6 @@ export default function ArbitrageScanner({
   const sessionSelectWrapperRef = useRef<HTMLDivElement | null>(null);
   const [sideFilter, setSideFilter] = useState<"" | "Long" | "Short">("");
 
-  useEffect(() => {
-    if (sideFilter !== "") {
-      setSideFilter("");
-    }
-  }, [sideFilter]);
-
   const [selExchanges, setSelExchanges] = useState<Set<string>>(new Set());
   const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
   const [selSectors, setSelSectors] = useState<Set<string>>(new Set());
@@ -7550,7 +7606,7 @@ export default function ArbitrageScanner({
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
     return e;
-  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
+  }, [dateMode, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -8753,6 +8809,7 @@ export default function ArbitrageScanner({
   const streamSignalMeta = useStreamSignalMeta();
   const tapeMeta = useTapeMeta();
   const streamPositionMeta = useStreamPositionMeta();
+  const streamFilterPassLogCount = useStreamFilterPassLogCount();
   const [streamAutoStartLocked, setStreamAutoStartLocked] = useState(false);
   const [streamAutomationTogglePending, setStreamAutomationTogglePending] = useState<null | "start" | "stop">(null);
   const [streamWindowCaptureBusy, setStreamWindowCaptureBusy] = useState(false);
@@ -8881,7 +8938,7 @@ export default function ArbitrageScanner({
 
   // ========= Build query params for GET /active & /episodes
   function buildGetParams(d: string) {
-    const mh = Math.max(0, Math.min(60, clampInt(minHoldCandles, 0)));
+    const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const reqTickers = requestScopedTickers;
 
     return {
@@ -8907,9 +8964,12 @@ export default function ArbitrageScanner({
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
-      exchanges: selExchanges.size ? Array.from(selExchanges) : null,
-      countries: selCountries.size ? Array.from(selCountries) : null,
-      sectorsL3: selSectors.size ? Array.from(selSectors) : null,
+      exchanges: exchangeEnabled === "include" && selExchanges.size ? Array.from(selExchanges) : null,
+      countries: countryEnabled === "include" && selCountries.size ? Array.from(selCountries) : null,
+      sectorsL3: sectorEnabled === "include" && selSectors.size ? Array.from(selSectors) : null,
+      excludeExchanges: exchangeEnabled === "exclude" && selExchanges.size ? Array.from(selExchanges) : null,
+      excludeCountries: countryEnabled === "exclude" && selCountries.size ? Array.from(selCountries) : null,
+      excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
 
       minTierBp: optNumOrNull(minTierBp),
       maxTierBp: optNumOrNull(maxTierBp),
@@ -10072,6 +10132,16 @@ export default function ArbitrageScanner({
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
+      if (ratingMode === "SESSION") {
+        const effMinRate = Math.max(0, Number(activeBinRule.minRate) || 0);
+        const effMinTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
+        if (effMinRate > 0 || effMinTotal > 0) {
+          const epRating = typeof r.rating === "number" ? r.rating : null;
+          const epTotal = typeof r.ratingTotal === "number" ? r.ratingTotal : null;
+          if (epRating == null || epTotal == null) return false;
+          if (epRating < effMinRate || epTotal < effMinTotal) return false;
+        }
+      }
       if (!passesScannerBinRatingFilter({
         enabled: useBinRatingFilter,
         row: r,
@@ -10124,6 +10194,16 @@ export default function ArbitrageScanner({
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
+      if (ratingMode === "SESSION") {
+        const effMinRate = Math.max(0, Number(episodeBinRule.minRate) || 0);
+        const effMinTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
+        if (effMinRate > 0 || effMinTotal > 0) {
+          const epRating = typeof r.rating === "number" ? r.rating : null;
+          const epTotal = typeof r.ratingTotal === "number" ? r.ratingTotal : null;
+          if (epRating == null || epTotal == null) return false;
+          if (epRating < effMinRate || epTotal < effMinTotal) return false;
+        }
+      }
       if (!passesScannerBinRatingFilter({
         enabled: useBinRatingFilter,
         row: r,
@@ -10809,6 +10889,14 @@ export default function ArbitrageScanner({
     a.click();
     URL.revokeObjectURL(url);
   }, [filteredEpisodes, metric, startAbs, endAbs, session, closeMode, minHoldCandles, priceMode, pnlMode, dilutionMode, dilutionStep, maxAdds, dateFrom, dateTo]);
+
+  const downloadStreamFilterPassLog = useCallback(() => {
+    const entries = streamFilterPassLogStore.getEntries();
+    if (!entries.length) return;
+    const suffix = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+    downloadFilterPassLog(entries, `stream-filter-pass-${suffix}.csv`);
+  }, []);
+
   const episodeEntryCount = (row: PaperArbClosedDto) => {
     const count = Math.trunc(row.entryCount ?? 1);
     return Number.isFinite(count) && count > 0 ? count : 1;
@@ -12803,6 +12891,17 @@ export default function ArbitrageScanner({
                 title={`Download ${filteredEpisodes.length} episodes as JSONL`}
               >
                 ↓ LOG
+              </button>
+            )}
+
+            {streamFilterPassLogCount > 0 && (
+              <button
+                type="button"
+                onClick={downloadStreamFilterPassLog}
+                className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+                title={`Download ${streamFilterPassLogCount} stream filter-pass entries as CSV (tickers that first appeared as ENTRY_READY)`}
+              >
+                ↓ STREAM LOG ({streamFilterPassLogCount})
               </button>
             )}
 

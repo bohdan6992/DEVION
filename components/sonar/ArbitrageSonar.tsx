@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import clsx from "clsx";
@@ -891,17 +891,25 @@ function getSignalBenchPct(signal: ArbitrageSignal): number | null {
 }
 
 function currentMarketTimeBand(bandMinutes: number): string | null {
-  // Approximate US Eastern time: UTC-4 (EDT) or UTC-5 (EST)
-  // Use UTC-4 as default (EDT covers most trading season Apr-Oct)
-  const now = new Date();
-  const etMs = now.getTime() - 4 * 60 * 60 * 1000;
-  const et = new Date(etMs);
-  const h = et.getUTCHours();
-  const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
-  const totalEnd = h * 60 + m + bandMinutes;
-  const eh = Math.floor(totalEnd / 60) % 24;
-  const em = totalEnd % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(now);
+    const h = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
+    const min = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
+    if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+    const m = Math.floor(min / bandMinutes) * bandMinutes;
+    const totalEnd = h * 60 + m + bandMinutes;
+    const eh = Math.floor(totalEnd / 60) % 24;
+    const em = totalEnd % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+  } catch {
+    return null;
+  }
 }
 
 function passesTopWindowFilter(
@@ -1325,6 +1333,9 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "mercury") return "zinc";
   if (theme === "magma") return "rose";
   if (theme === "oceanic") return "cyan";
+  if (theme === "khaki") return "amber";
+  if (theme === "zebra") return "zinc";
+  if (theme === "flamingo") return "rose";
   return "emerald";
 };
 
@@ -2391,11 +2402,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     if (!tk) continue;
     const posActive = isActiveByPositionBp(s);
 
-    if (f.activeMode === "onlyActive") {
-      if (!posActive) continue;
-      out.push(s);
-      continue;
-    }
+    if (f.activeMode === "onlyActive" && !posActive) continue;
 
     if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
     if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
@@ -2421,13 +2428,9 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
     } else if (useSigBinFilter) {
       const binStats = getSessionBinRating(s, f.cls as ArbClass);
-      if (binStats !== null) {
-        if (mr != null && binStats.rate < mr) continue;
-        if (mt != null && binStats.total < mt) continue;
-      } else {
-        if (mr != null) { const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null; if (r == null || r < mr) continue; }
-        if (mt != null) { const t = getBestTotalByType(s, f.type as any); if (t == null || t < mt) continue; }
-      }
+      if (binStats === null) continue;
+      if (mr != null && binStats.rate < mr) continue;
+      if (mt != null && binStats.total < mt) continue;
     } else {
       if (mr != null) {
         const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
@@ -4291,10 +4294,10 @@ export default function ArbitrageSonar() {
       .map(normalizeSignal)
       .filter(Boolean) as ArbitrageSignal[];
 
-    const filtered = applyAllClientFilters(normalized, f);
-    setAllItems(normalized);
-    setItems(filtered);
-    setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
+    startTransition(() => {
+      setAllItems(normalized);
+      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
+    });
   }, [applyAllClientFilters]);
 
   const applySignalsDiff = useCallback((payload: any, f: typeof snapshot) => {
@@ -4316,27 +4319,27 @@ export default function ArbitrageSonar() {
         .filter((ticker): ticker is string => Boolean(ticker))
     );
 
-    setAllItems((prev) => {
-      const nextMap = new Map(prev.map((item) => [item.ticker, item] as const));
+    startTransition(() => {
+      setAllItems((prev) => {
+        const nextMap = new Map(prev.map((item) => [item.ticker, item] as const));
 
-      for (const ticker of removedTickers) {
-        nextMap.delete(ticker);
-      }
+        for (const ticker of removedTickers) {
+          nextMap.delete(ticker);
+        }
 
-      for (const item of normalizedAdded) {
-        nextMap.set(item.ticker, item);
-      }
+        for (const item of normalizedAdded) {
+          nextMap.set(item.ticker, item);
+        }
 
-      for (const item of normalizedUpdated) {
-        nextMap.set(item.ticker, item);
-      }
+        for (const item of normalizedUpdated) {
+          nextMap.set(item.ticker, item);
+        }
 
-      const next = Array.from(nextMap.values());
-      setItems(applyAllClientFilters(next, f));
-      return next;
+        return Array.from(nextMap.values());
+      });
+
+      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
     });
-
-    setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
   }, [applyAllClientFilters]);
 
   const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
@@ -4432,7 +4435,10 @@ export default function ArbitrageSonar() {
   // Re-apply client filters immediately on any local filter change.
   useEffect(() => {
     if (isEditingRef.current) return;
-    setItems(applyAllClientFilters(allItems, snapshot));
+    const filtered = applyAllClientFilters(allItems, snapshot);
+    startTransition(() => {
+      setItems(filtered);
+    });
   }, [allItems, snapshot, applyAllClientFilters, isEditing]);
 
   /* =========================

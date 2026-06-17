@@ -15,6 +15,7 @@ import { streamPositionStore } from "./streamPositionStore";
 import { streamSignalStore } from "./streamSignalStore";
 import { streamUpdatedAtStore } from "./streamUpdatedAtStore";
 import { streamLogStore, type StreamLogEvent } from "./streamLogStore";
+import { streamFilterPassLogStore } from "./streamFilterPassLogStore";
 
 export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -66,6 +67,14 @@ export type StreamActionLogEntry = {
   at: number;
   intent: StreamOrderIntentType | "MANUAL";
   reason?: string;
+  // Extended display fields (optional — absent in entries restored from localStorage)
+  sequence?: number;             // 1=initial entry, 2=add#1, 3=add#2 …
+  addThreshold?: number | null;  // ADD: σ trigger threshold for this add
+  sinceLastMs?: number | null;   // ADD: ms elapsed since previous dispatch (entry or last add)
+  delayRequiredMs?: number | null; // ADD: configured addDelayMinutes × 60 000
+  holdMs?: number | null;        // CLOSE: position hold duration ms (from entry dispatch)
+  entryCount?: number | null;    // CLOSE: total dispatched entries+adds for this position
+  filtersOk?: string;            // filters summary at dispatch time
 };
 
 export type StreamOrderIntentType =
@@ -792,10 +801,11 @@ function syncStreamSignalLatches(
     // If this ticker was already active in SCANNER when STREAM started, pre-seed its
     // qualifiedSince so it qualifies immediately (matching SCANNER candidate list).
     const isPrimed = !existing && !historic && !!primedTickers?.has(`${row.ticker}|${row.side}`);
-    // For brand-new latches (no existing, no history, not primed): only create if the
-    // ticker was above threshold at the last minute boundary. This mirrors tape behavior
-    // where a new episode can only start at a candle (minute) boundary.
-    if (!existing && !historic && !isPrimed) {
+    // For latches without a live predecessor (new or recovering from history): require the
+    // signal to have been above threshold at the last minute boundary. This mirrors tape
+    // behavior where a candle below threshold resets the consecutive streak — even a brief
+    // sub-minute bounce must not survive a minute boundary that showed the signal below.
+    if (!existing && !isPrimed) {
       const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${row.ticker}|${row.side}`);
       if (!isMinuteQualified) continue;
     }
@@ -1133,7 +1143,9 @@ export function syncStreamPositions(
         reason = currentAbs == null
           ? "holding | awaiting live deviation"
           : belowEndThreshold
-            ? "passive mode | waiting for print exit"
+            ? activeExitMode
+              ? `below end threshold | confirming exit (${belowThresholdTicks}/${exitConfirmTicks})`
+              : "passive mode | holding below end threshold"
             : atOrAboveEndThreshold
               ? "holding above end threshold"
               : "holding";
@@ -1167,7 +1179,12 @@ export function syncStreamPositions(
             Math.sign(filteredSigned) === Math.sign(entryBase);
           const addDelayMs = Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000;
           const lastDispatch = existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt;
-          const addDelayPassed = addDelayMs === 0 || now - lastDispatch >= addDelayMs;
+          // delay=0: block if an entry intent is already pending (one add per tick).
+          // delay>0: use time-based check; also block if pending to prevent double-fire
+          //          before the async dispatch updates lastDispatchedAt.
+          const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
+            ? false
+            : addDelayMs === 0 || now - lastDispatch >= addDelayMs;
           if (filteredAbs != null && filteredAbs >= trigger && sameSign && addDelayPassed) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
@@ -1253,7 +1270,7 @@ export function syncStreamPositions(
         entryDispatchedAt: null,
         lastDispatchedAt: null,
         lastConfirmedActiveAt: null,
-        openedAt: now,
+        openedAt: latch.qualifiedSince,
         updatedAt: now,
       });
       openCount += 1;
@@ -1573,7 +1590,7 @@ function buildFallbackPendingEntryPositions(
       entryDispatchedAt: null,
       lastDispatchedAt: null,
       lastConfirmedActiveAt: null,
-      openedAt: now,
+      openedAt: latch.qualifiedSince,
       updatedAt: now,
     });
 
@@ -1929,6 +1946,7 @@ export function useStreamEngine({
     streamPositionStore.clear();
     streamSignalStore.clear();
     streamUpdatedAtStore.clear();
+    streamFilterPassLogStore.clear();
     actionLogVersionRef.current += 1;
     setStreamActionLog(restoredLog);
     setStreamPositions(buildStreamPositionsFromActionLog(restoredLog, localDayKey()));
@@ -2500,49 +2518,16 @@ export function useStreamEngine({
 
     const qualified = qualifiedLatches.length;
     const pendingEntry = nextPositions.filter(p => p.status === "PENDING_ENTRY").length;
-    const ts = () => new Date().toTimeString().slice(0, 8);
-    const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
-    const secAgo = (ms: number) => ((now2 - ms) / 1000).toFixed(1) + "s ago";
     const dilutionStep = automationConfig?.dilutionStep ?? 0.3;
-    const decisionMap2 = new Map(decisionsForAutomation.map(d => [d.ticker, d]));
-    const positionMap2 = new Map(nextPositions.map(p => [p.ticker, p]));
-
-    const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
-    const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
-    console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} prime=${wantsPrime} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
-
-    if (autoEnabledNow && entryReady > 0) {
-      for (const d of decisionsForAutomation.filter(r => r.status === "ENTRY_READY")) {
-        const latch = nextLatches.find(l => l.ticker === d.ticker);
-        const holdedMs = latch ? now2 - latch.qualifiedSince : null;
-        const holdedMinutes = latch ? now2MinuteIdx - Math.floor(latch.qualifiedSince / 60_000) : null;
-        const passesHold = holdedMinutes != null && holdedMinutes >= minHoldMinutesForDisplay;
-        const pos = positionMap2.get(d.ticker);
-        const addNum = pos ? pos.entryCount : 0;
-        const entryBase = pos?.entrySignal;
-        const isShort = d.side === "Short";
-        // trigger magnitude: |entrySignal| + addNum × step
-        // Long: signal ≥ +trigger  |  Short: signal ≤ -trigger
-        const addTriggerMag = entryBase != null ? Math.abs(entryBase) + dilutionStep * addNum : null;
-        const addTriggerSigned = addTriggerMag != null ? (isShort ? -addTriggerMag : addTriggerMag) : null;
-        const dilutionMet = d.signal != null && addTriggerMag != null &&
-          Math.abs(d.signal) >= addTriggerMag &&
-          (entryBase == null || Math.sign(d.signal) === Math.sign(entryBase));
-        const status = !latch ? "NO_LATCH"
-          : !passesHold ? `HOLD(${minHoldMinutesForDisplay - (holdedMinutes ?? 0)}min left)`
-          : "READY";
-        console.log(
-          `  ${d.ticker}/${d.benchmark} ${d.side.toUpperCase()} | sig=${sig(d.signal)} netEdge=${sig(d.netEdge)} spread=${d.spread != null ? d.spread.toFixed(4) : "n/a"}` +
-          ` | ${status}${latch ? ` qualifiedSince=${secAgo(latch.qualifiedSince)}` : ""}` +
-          `${addNum > 0
-            ? ` | add#${addNum} entry=${sig(entryBase)} threshold=${addTriggerSigned != null ? (isShort ? "≤" : "≥") + addTriggerSigned.toFixed(3) + "σ" : "n/a"} (|${sig(entryBase)}|+${addNum}×${dilutionStep})${dilutionMet ? " ✓FIRE" : " ✗waiting"}`
-            : ""}` +
-          ` | reason="${d.reason}"`
-        );
-      }
-    }
 
     if (intents.length > 0) {
+      const ts = () => new Date().toTimeString().slice(0, 8);
+      const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
+      const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
+      const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
+      const decisionMap2 = new Map(decisionsForAutomation.map(d => [d.ticker, d]));
+      const positionMap2 = new Map(nextPositions.map(p => [p.ticker, p]));
+      console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
       console.group(`  INTENTS (${intents.length}):`);
       for (const intent of intents) {
         const d2 = decisionMap2.get(intent.ticker);
@@ -2563,18 +2548,72 @@ export function useStreamEngine({
         );
       }
       console.groupEnd();
+      console.groupEnd();
     }
-
-    console.groupEnd();
 
     streamDecisionStore.applySnapshot(displayDecisions);
     streamSignalStore.applySnapshot(filtered);
     streamUpdatedAtStore.setValue(Date.now());
 
     // keep sync refs current so sendQueuedIntents can read signal/latch state without closure staleness
+    // Use normalized (all signals) as base so open-position tickers that dropped out of
+    // filtered (e.g. spread/edge gate closed temporarily) still have signal data for log entries.
+    // filtered overrides normalized where both are present.
     const rawSigMap = new Map<string, ArbitrageSignal>();
+    for (const sig of normalized) rawSigMap.set(sig.ticker, sig);
     for (const sig of filtered) rawSigMap.set(sig.ticker, sig);
     rawSignalByTickerRef.current = rawSigMap;
+
+    // Log every ticker the first time it becomes ENTRY_READY — for comparison with Scanner backtest.
+    const filterPassNow = Date.now();
+    const readN = (...args: unknown[]): number | null => {
+      for (const a of args) { const n = toNum(a); if (n != null) return n; }
+      return null;
+    };
+    for (const decision of displayDecisions) {
+      if (decision.status !== "ENTRY_READY") continue;
+      const sig = rawSigMap.get(decision.ticker);
+      const bp = sig ? (sig.best_params ?? sig.bestParams ?? sig.BestParams ?? null) : null;
+      const bpBest = bp ? (bp.best ?? bp.Best ?? null) : null;
+      const bpMeta = bp ? (bp.meta ?? bp.Meta ?? null) : null;
+      const bpSt = bp ? (bp.static ?? bp.Static ?? null) : null;
+      streamFilterPassLogStore.tryLog({
+        ts: filterPassNow,
+        ticker: decision.ticker,
+        benchmark: decision.benchmark,
+        side: decision.side,
+        signal: decision.signal,
+        zapLsigma: toNum(sig?.zapLsigma) ?? null,
+        zapSsigma: toNum(sig?.zapSsigma) ?? null,
+        zapL: toNum(sig?.zapL) ?? null,
+        zapS: toNum(sig?.zapS) ?? null,
+        spread: decision.spread,
+        netEdge: decision.netEdge,
+        safePrice: decision.safePrice,
+        bidPct: toNum(sig?.["BidLstClsΔ%"]) ?? toNum(sig?.bidPct) ?? null,
+        askPct: toNum(sig?.["AskLstClsΔ%"]) ?? toNum(sig?.askPct) ?? null,
+        benchBidPct: toNum(sig?.["BenchBidLstClsΔ%"]) ?? toNum(sig?.benchBidPct) ?? null,
+        benchAskPct: toNum(sig?.["BenchAskLstClsΔ%"]) ?? toNum(sig?.benchAskPct) ?? null,
+        lstCls: toNum(sig?.LstCls ?? sig?.lstCls) ?? null,
+        yCls: toNum(sig?.YCls ?? sig?.yCls) ?? null,
+        vwap: toNum(sig?.VWAP ?? sig?.vwap) ?? null,
+        lstPrcL: toNum(sig?.LstPrcL ?? sig?.lstPrcL) ?? null,
+        rating: readN(sig?._bestRating, sig?.bestRating, bpBest?.rating, bpBest?.Rating),
+        ratingTotal: readN(sig?._bestTotal, sig?.bestTotal, bpBest?.total, bpBest?.Total),
+        corr: readN(bpBest?.corr, bpBest?.Corr, bpMeta?.corr, bpMeta?.Corr, bpSt?.corr, bpSt?.Corr),
+        beta: readN(sig?.beta, sig?.Beta, bpBest?.beta, bpBest?.Beta, bpMeta?.beta, bpMeta?.Beta),
+        sigma: readN(bpBest?.sigma, bpBest?.Sigma, bpMeta?.sigma, bpMeta?.Sigma, bpSt?.sigma, bpSt?.Sigma),
+        adv20: toNum(sig?.ADV20 ?? sig?.adv20) ?? null,
+        adv20NF: toNum(sig?.ADV20NF ?? sig?.adv20NF) ?? null,
+        adv90: toNum(sig?.ADV90 ?? sig?.adv90) ?? null,
+        marketCapM: toNum(sig?.MarketCapM ?? sig?.marketCapM) ?? null,
+        avPreMhv: toNum(sig?.AvPreMhv ?? sig?.avPreMhv) ?? null,
+        country: String(sig?.country ?? sig?.Country ?? sig?.CountryCode ?? "").trim() || null,
+        exchange: String(sig?.exchange ?? sig?.Exchange ?? "").trim() || null,
+        sectorL3: String(sig?.sectorL3 ?? sig?.SectorL3 ?? sig?.sector ?? "").trim() || null,
+        decisionStatus: decision.status,
+      });
+    }
     streamSignalLatchesRef.current = nextLatches;
 
     startTransition(() => {
@@ -2675,6 +2714,7 @@ export function useStreamEngine({
     streamPositionStore.clear();
     streamSignalStore.clear();
     streamUpdatedAtStore.clear();
+    streamFilterPassLogStore.clear();
   }, [enabled]);
 
   useEffect(() => {
@@ -2779,14 +2819,8 @@ export function useStreamEngine({
   }, [streamOrderIntents]);
 
   useEffect(() => {
-    if (!enabled || !streamAutoEnabled) {
-      console.log("[dispatch] blocked: enabled=", enabled, "streamAutoEnabled=", streamAutoEnabled);
-      return;
-    }
-    if (streamExecutionSnapshotRef.current?.panicOff) {
-      console.log("[dispatch] blocked: panicOff=true");
-      return;
-    }
+    if (!enabled || !streamAutoEnabled) return;
+    if (streamExecutionSnapshotRef.current?.panicOff) return;
 
     const nowMinutes = currentMinutesLocal();
     const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
@@ -2800,7 +2834,6 @@ export function useStreamEngine({
       if (!arkPrintLockActive) return true;
       return intent.intent === "CLOSE_ALL_PRINT";
     });
-    console.log("[dispatch] intents total=", streamOrderIntents.length, "queued=", queued.length, "arkPrintLock=", arkPrintLockActive);
     if (!queued.length) return;
 
     // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and
@@ -2991,7 +3024,7 @@ export function useStreamEngine({
             if (_cfg.minNetEdge > 0 && correspondingDecision?.netEdge != null) _filterParts.push(`edge${(correspondingDecision.netEdge).toFixed(3)}`);
             if (_cfg.noSpreadExit && correspondingDecision?.spread != null) _filterParts.push(`sprd${(correspondingDecision.spread).toFixed(3)}`);
             if (_cfg.minHoldMinutes > 0) _filterParts.push(`hold≥${_cfg.minHoldMinutes}m`);
-            if (isAdd && triggerMag3 != null) _filterParts.push(`add#${addNum3}@${triggerMag3.toFixed(2)}`);
+            if (isEntryIntent && isAdd && triggerMag3 != null) _filterParts.push(`add#${addNum3}@${triggerMag3.toFixed(2)}`);
           }
           const _isBeta = automationConfig?.betaMode === true;
           const _logBase = {
@@ -3010,8 +3043,8 @@ export function useStreamEngine({
             zapPct: _rawSig ? (_isLong ? (_rawSig.zapL ?? null) : (_rawSig.zapS ?? null)) : null,
             bidPct: _rawSig ? toNum(_rawSig["BidLstClsΔ%"]) : null,
             askPct: _rawSig ? toNum(_rawSig["AskLstClsΔ%"]) : null,
-            benchBidPct: null as number | null,
-            benchAskPct: null as number | null,
+            benchBidPct: _rawSig ? toNum(_rawSig["BenchBidLstClsΔ%"]) : null,
+            benchAskPct: _rawSig ? toNum(_rawSig["BenchAskLstClsΔ%"]) : null,
             corr: _corr,
             beta: _beta,
             stockSigma: _stockSigma,
@@ -3114,6 +3147,7 @@ export function useStreamEngine({
             const deviation = isAdd
               ? (correspondingPosition.lastScaleSignal ?? correspondingPosition.lastSignal ?? correspondingPosition.entrySignal)
               : (correspondingPosition.entrySignal ?? correspondingPosition.lastSignal);
+            const _prevDispatch = correspondingPosition.lastDispatchedAt ?? correspondingPosition.entryDispatchedAt ?? null;
             _dispatchActionLog([{
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: localDayKey(),
@@ -3125,6 +3159,11 @@ export function useStreamEngine({
               at: dispatchAt,
               intent: intent.intent,
               reason: correspondingPosition.reason || undefined,
+              sequence: intent.sequence,
+              addThreshold: isAdd ? (triggerMag3 ?? null) : null,
+              sinceLastMs: isAdd && _prevDispatch != null ? Math.max(0, dispatchAt - _prevDispatch) : null,
+              delayRequiredMs: isAdd ? Math.max(0, (automationConfig?.addDelayMinutes ?? 0) * 60_000) : null,
+              filtersOk: _filterParts.join(" | ") || undefined,
             }]);
           } else if (isExitIntent && correspondingPosition) {
             _dispatchActionLog([{
@@ -3138,32 +3177,97 @@ export function useStreamEngine({
               at: dispatchAt,
               intent: intent.intent,
               reason: correspondingPosition.reason || undefined,
+              sequence: intent.sequence,
+              holdMs: correspondingPosition.entryDispatchedAt != null
+                ? Math.max(0, dispatchAt - correspondingPosition.entryDispatchedAt)
+                : null,
+              entryCount: correspondingPosition.entryCount ?? null,
+              filtersOk: _filterParts.join(" | ") || undefined,
             }]);
           }
         }
 
-        // Hedge leg: skip in beta mode — hedge is a real order
-        if (!automationConfig?.betaMode && hedgeRequired && !hedgeAlreadyDispatched) {
+        // Hedge leg: simulate in beta mode (log without sending), send real order otherwise
+        if (hedgeRequired && !hedgeAlreadyDispatched) {
+          const hedgeIsBeta = automationConfig?.betaMode === true;
           const benchmarkType =
             isEntryIntent
               ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
               : type;
-
-          console.log(`[HEDGE] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
+          const hedgeSide: "Long" | "Short" = isEntryIntent
+            ? (intent.side === "Long" ? "Short" : "Long")
+            : intent.side;
           dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
-          try {
-            await queueLegWithRetry({
-              intentId: hedgeIntentId,
+          if (hedgeIsBeta) {
+            const hedgeNow = Date.now();
+            const hedgeRaw = rawSignalByTickerRef.current.get(intent.benchmark);
+            const hedgeIsLong = hedgeSide === "Long";
+            const hedgeLogEvent: StreamLogEvent =
+              intent.intent === "CLOSE_ALL_PRINT" ? "CLOSE_ALL"
+              : isExitIntent ? (intent.intent.includes("PRINT") ? "EXIT_PRINT" : "EXIT")
+              : intent.sequence > 1 ? "ADD" : "ENTRY";
+            const fmtHedgeMs = (ts: number) => {
+              const d = new Date(ts);
+              return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
+            };
+            streamLogStore.push({
+              ts: hedgeNow,
+              timeStr: fmtHedgeMs(hedgeNow),
+              event: hedgeLogEvent,
+              betaMode: true,
+              status: "SIMULATED",
               ticker: intent.benchmark,
-              type: benchmarkType,
-              note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
-              hotkeyOverride: getNightHotkeyOverride(benchmarkType),
+              benchmark: intent.ticker,
+              side: hedgeSide,
+              sigmaZap: hedgeIsLong ? (toNum(hedgeRaw?.zapLsigma) ?? null) : (toNum(hedgeRaw?.zapSsigma) ?? null),
+              zapSsigma: toNum(hedgeRaw?.zapSsigma) ?? null,
+              zapLsigma: toNum(hedgeRaw?.zapLsigma) ?? null,
+              zapPct: hedgeRaw ? (hedgeIsLong ? (hedgeRaw.zapL ?? null) : (hedgeRaw.zapS ?? null)) : null,
+              bidPct: hedgeRaw ? toNum(hedgeRaw["BidLstClsΔ%"]) : null,
+              askPct: hedgeRaw ? toNum(hedgeRaw["AskLstClsΔ%"]) : null,
+              benchBidPct: null,
+              benchAskPct: null,
+              spread: null,
+              netEdge: null,
+              corr: null,
+              beta: null,
+              stockSigma: null,
+              rating: null,
+              ratingTotal: null,
+              filtersOk: "",
+              holdMs: null,
+              qualifiedAtStr: null,
+              sequence: intent.sequence,
+              entrySignal: null,
+              addThreshold: null,
+              dilutionStep: automationConfig?.dilutionStep ?? null,
+              maxAdds: automationConfig?.maxAdds ?? null,
+              exitMode: automationConfig?.exitExecutionMode ?? "n/a",
+              hedgeMode: automationConfig?.hedgeMode ?? "n/a",
+              scaleMode: automationConfig?.scaleMode ?? "n/a",
+              minNetEdge: automationConfig?.minNetEdge ?? null,
+              minHoldMinutes: automationConfig?.minHoldMinutes ?? null,
+              notionalUsd: automationConfig?.sizeValue ?? null,
+              hedgeRequired: true,
+              reason: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
             });
-          } catch (err) {
-            dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);
-            throw err;
+            console.log(`[BETA HEDGE SIM] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
+          } else {
+            console.log(`[HEDGE] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
+            try {
+              await queueLegWithRetry({
+                intentId: hedgeIntentId,
+                ticker: intent.benchmark,
+                type: benchmarkType,
+                note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
+                hotkeyOverride: getNightHotkeyOverride(benchmarkType),
+              });
+            } catch (err) {
+              dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);
+              throw err;
+            }
+            setStreamSentOrdersCount((prev) => prev + 1);
           }
-          setStreamSentOrdersCount((prev) => prev + 1);
         }
       }
       // Single status refresh after the full batch — avoids one round-trip per intent.

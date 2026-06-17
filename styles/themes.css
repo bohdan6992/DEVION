@@ -928,6 +928,125 @@ html.dark [class*="via-emerald-"] { --tw-gradient-via: rgba(228, 228, 231, 0.12)
 html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) var(--tw-gradient-to-position) !important; }
 
 /* =========================================================
+   KHAKI (Military Matrix)
+   ========================================================= */
+:root[data-theme="khaki"] {
+  --bg: #050602;
+  --fg: #c8d49a;
+  --muted: #7a8a4a;
+  --color-primary: #8a9a52;
+  --card-bg: rgba(138, 154, 82, 0.04);
+  --card-border: rgba(138, 154, 82, 0.16);
+  --shadow: 0 24px 72px rgba(20, 30, 5, 0.85);
+  --chart-grid: rgba(138, 154, 82, 0.08);
+  --chart-tooltip-bg: rgba(5, 6, 2, 0.96);
+  --dash-page-glow:
+    radial-gradient(circle at 14% 16%, rgba(100, 120, 40, 0.20), transparent 36%),
+    radial-gradient(circle at 84% 8%, rgba(138, 154, 82, 0.14), transparent 30%),
+    radial-gradient(circle at 50% 90%, rgba(80, 100, 30, 0.12), transparent 32%);
+  --dash-grid-line: rgba(138, 154, 82, 0.08);
+  --dash-scan-line: rgba(138, 154, 82, 0.05);
+  --dash-panel-bg: linear-gradient(135deg, rgba(10, 14, 4, 0.90), rgba(5, 8, 2, 0.95));
+  --dash-panel-border: rgba(138, 154, 82, 0.20);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(100, 130, 30, 0.45), inset 0 1px 0 rgba(160, 180, 90, 0.10);
+  --dash-topline: rgba(160, 180, 90, 0.55);
+  --dash-text-main: #c8d49a;
+  --dash-text-muted: rgba(170, 190, 110, 0.72);
+  --dash-chip-bg: rgba(138, 154, 82, 0.10);
+  --dash-chip-border: rgba(138, 154, 82, 0.24);
+  --dash-accent: #8a9a52;
+  --dash-accent-soft: rgba(138, 154, 82, 0.14);
+  --dash-accent-border: rgba(138, 154, 82, 0.32);
+  --dash-accent-shadow: rgba(138, 154, 82, 0.40);
+  --dash-accent-rgb: 138, 154, 82;
+  --dash-accent-on: #050602;
+}
+
+:root[data-theme="khaki"] .tt-card:hover {
+  border-color: rgba(138, 154, 82, 0.30);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.95), 0 0 20px rgba(138, 154, 82, 0.14);
+}
+
+/* =========================================================
+   ZEBRA (Liquid Organic — натуральний крем-алебастр)
+   ========================================================= */
+:root[data-theme="zebra"] {
+  --bg: #f6f4ee;
+  --fg: #11100e;
+  --muted: #5a5850;
+  --color-primary: #11100e;
+  --card-bg: rgba(255, 255, 255, 0.80);
+  --card-border: rgba(17, 16, 14, 0.12);
+  --shadow: 0 16px 40px rgba(17, 16, 14, 0.10), 0 8px 24px rgba(17, 16, 14, 0.06);
+  --chart-grid: rgba(17, 16, 14, 0.08);
+  --chart-tooltip-bg: rgba(246, 244, 238, 0.96);
+  --dash-page-glow:
+    radial-gradient(900px 600px at 10% 6%, rgba(255, 255, 255, 0.50), transparent 62%),
+    radial-gradient(800px 500px at 88% 4%, rgba(200, 195, 180, 0.18), transparent 58%);
+  --dash-grid-line: rgba(17, 16, 14, 0.08);
+  --dash-scan-line: rgba(17, 16, 14, 0.04);
+  --dash-panel-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(248, 246, 240, 0.88));
+  --dash-panel-border: rgba(17, 16, 14, 0.14);
+  --dash-panel-shadow: 0 16px 36px -26px rgba(17, 16, 14, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.90);
+  --dash-topline: rgba(17, 16, 14, 0.55);
+  --dash-text-main: #11100e;
+  --dash-text-muted: rgba(58, 56, 48, 0.80);
+  --dash-chip-bg: rgba(17, 16, 14, 0.06);
+  --dash-chip-border: rgba(17, 16, 14, 0.20);
+  --dash-accent: #11100e;
+  --dash-accent-soft: rgba(17, 16, 14, 0.08);
+  --dash-accent-border: rgba(17, 16, 14, 0.24);
+  --dash-accent-shadow: rgba(17, 16, 14, 0.20);
+  --dash-accent-rgb: 17, 16, 14;
+  --dash-accent-on: #f6f4ee;
+}
+
+:root[data-theme="zebra"] .tt-card:hover {
+  border-color: rgba(17, 16, 14, 0.22);
+  box-shadow: 0 24px 60px rgba(17, 16, 14, 0.12), 0 0 16px rgba(17, 16, 14, 0.06);
+}
+
+/* =========================================================
+   FLAMINGO (Poudre Rose — ніжний пудровий рожевий)
+   ========================================================= */
+:root[data-theme="flamingo"] {
+  --bg: #fff1f3;
+  --fg: #5c1a28;
+  --muted: #b05070;
+  --color-primary: #f45c7a;
+  --card-bg: rgba(255, 255, 255, 0.82);
+  --card-border: rgba(244, 92, 122, 0.16);
+  --shadow: 0 16px 40px rgba(210, 60, 90, 0.10), 0 8px 24px rgba(210, 60, 90, 0.06);
+  --chart-grid: rgba(244, 92, 122, 0.08);
+  --chart-tooltip-bg: rgba(255, 241, 243, 0.96);
+  --dash-page-glow:
+    radial-gradient(900px 600px at 10% 6%, rgba(255, 255, 255, 0.55), transparent 62%),
+    radial-gradient(800px 500px at 88% 4%, rgba(255, 180, 200, 0.18), transparent 58%),
+    radial-gradient(700px 400px at 50% 90%, rgba(255, 160, 180, 0.12), transparent 50%);
+  --dash-grid-line: rgba(244, 92, 122, 0.07);
+  --dash-scan-line: rgba(244, 92, 122, 0.04);
+  --dash-panel-bg: linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 245, 248, 0.88));
+  --dash-panel-border: rgba(244, 92, 122, 0.18);
+  --dash-panel-shadow: 0 16px 36px -26px rgba(200, 50, 80, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --dash-topline: rgba(244, 92, 122, 0.55);
+  --dash-text-main: #5c1a28;
+  --dash-text-muted: rgba(140, 60, 85, 0.82);
+  --dash-chip-bg: rgba(244, 92, 122, 0.08);
+  --dash-chip-border: rgba(244, 92, 122, 0.24);
+  --dash-accent: #f45c7a;
+  --dash-accent-soft: rgba(244, 92, 122, 0.12);
+  --dash-accent-border: rgba(244, 92, 122, 0.30);
+  --dash-accent-shadow: rgba(244, 92, 122, 0.28);
+  --dash-accent-rgb: 244, 92, 122;
+  --dash-accent-on: #ffffff;
+}
+
+:root[data-theme="flamingo"] .tt-card:hover {
+  border-color: rgba(244, 92, 122, 0.26);
+  box-shadow: 0 24px 60px rgba(210, 60, 90, 0.10), 0 0 18px rgba(244, 92, 122, 0.08);
+}
+
+/* =========================================================
    INFERNO (Vulcan Core)
    ========================================================= */
 :root[data-theme="inferno"] {
@@ -1018,6 +1137,9 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 :root[data-theme="space"]          { --dash-accent-rgb: 147, 197, 253; --dash-accent-on: #020318; }
 :root[data-theme="magma"]          { --dash-accent-rgb: 255, 82, 72;   --dash-accent-on: #ffffff; }
 :root[data-theme="mercury"]        { --dash-accent-rgb: 176, 182, 190; --dash-accent-on: #0f1011; }
+:root[data-theme="khaki"]          { --dash-accent-rgb: 138, 154, 82;  --dash-accent-on: #050602; }
+:root[data-theme="zebra"]          { --dash-accent-rgb: 17, 16, 14;    --dash-accent-on: #f6f4ee; }
+:root[data-theme="flamingo"]       { --dash-accent-rgb: 244, 92, 122;  --dash-accent-on: #ffffff; }
 
 /* =========================================================
    ACCENT UTILITY CLASSES
