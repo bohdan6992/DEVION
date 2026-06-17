@@ -14,6 +14,8 @@ import OceanicThemeBackground from "@/components/theme/OceanicThemeBackground";
 import KhakiThemeBackground from "@/components/theme/KhakiThemeBackground";
 import ZebraThemeBackground from "@/components/theme/ZebraThemeBackground";
 import FlamingoThemeBackground from "@/components/theme/FlamingoThemeBackground";
+import MoneyThemeBackground from "@/components/theme/MoneyThemeBackground";
+import MatrixThemeBackground from "@/components/theme/MatrixThemeBackground";
 
 export default function AppThemeBackground() {
   const { theme } = useUi();
@@ -50,6 +52,10 @@ export default function AppThemeBackground() {
     return <OceanicThemeBackground />;
   }
 
+  if (theme === "matrix") {
+    return <MatrixThemeBackground />;
+  }
+
   if (theme === "khaki") {
     return <KhakiThemeBackground />;
   }
@@ -60,6 +66,10 @@ export default function AppThemeBackground() {
 
   if (theme === "flamingo") {
     return <FlamingoThemeBackground />;
+  }
+
+  if (theme === "money") {
+    return <MoneyThemeBackground />;
   }
 
   return <ThemeStarfieldCanvas />;

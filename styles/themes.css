@@ -181,41 +181,42 @@
 
 /* ---------------- MATRIX (Terminal Grid â€” ÐÐ³Ñ€ÐµÑÐ¸Ð²Ð½Ð¸Ð¹ Ð¢Ñ€ÐµÐ¹Ð´ HUD) ---------------- */
 :root[data-theme="matrix"] {
-  --bg: #020805;
-  --fg: #d1fae5;
-  --muted: #6ee7b7;
-  --color-primary: #34d399;
+  --bg: #010a04;
+  --fg: #8fcca0;
+  --muted: #4a8a5e;
+  --color-primary: #34a863;
 
   --bg-image:
-    radial-gradient(1400px 760px at 8% -16%, rgba(16, 185, 129, 0.34), transparent 60%),
-    radial-gradient(1200px 760px at 92% -8%, rgba(34, 197, 94, 0.24), transparent 58%),
-    radial-gradient(980px 620px at 50% 112%, rgba(5, 150, 105, 0.22), transparent 64%),
-    conic-gradient(from 210deg at 50% 48%, rgba(6, 78, 59, 0.22), rgba(4, 120, 87, 0.04), rgba(16, 185, 129, 0.2), rgba(6, 78, 59, 0.22)),
-    linear-gradient(180deg, #010503 0%, #010a06 42%, #010705 100%);
+    radial-gradient(1400px 760px at 8% -16%, rgba(45, 106, 64, 0.20), transparent 60%),
+    radial-gradient(1200px 760px at 92% -8%, rgba(52, 168, 99, 0.14), transparent 58%),
+    radial-gradient(980px 620px at 50% 112%, rgba(30, 80, 48, 0.16), transparent 64%),
+    linear-gradient(180deg, #010a04 0%, #010d05 42%, #010803 100%);
 
-  --card-bg: rgba(3, 19, 13, 0.75);
-  --card-border: rgba(52, 211, 153, 0.22);
-  --shadow: 0 25px 80px rgba(16, 185, 129, 0.18), 0 30px 100px rgba(0, 0, 0, 0.85);
-  --chart-grid: rgba(52, 211, 153, 0.12);
-  --chart-tooltip-bg: rgba(3, 21, 13, 0.94);
+  --card-bg: rgba(1, 14, 6, 0.80);
+  --card-border: rgba(52, 168, 99, 0.18);
+  --shadow: 0 25px 80px rgba(30, 80, 48, 0.14), 0 30px 100px rgba(0, 0, 0, 0.88);
+  --chart-grid: rgba(52, 168, 99, 0.09);
+  --chart-tooltip-bg: rgba(1, 12, 5, 0.96);
   --dash-page-glow:
-    radial-gradient(circle at 12% 18%, rgba(16, 185, 129, 0.26), transparent 36%),
-    radial-gradient(circle at 88% 6%, rgba(52, 211, 153, 0.2), transparent 30%),
-    radial-gradient(circle at 45% 90%, rgba(5, 150, 105, 0.18), transparent 32%);
-  --dash-grid-line: rgba(52, 211, 153, 0.12);
-  --dash-scan-line: rgba(16, 185, 129, 0.1);
-  --dash-panel-bg: linear-gradient(135deg, rgba(4, 20, 12, 0.9), rgba(2, 10, 7, 0.95));
-  --dash-panel-border: rgba(52, 211, 153, 0.3);
-  --dash-panel-shadow: 0 24px 80px -40px rgba(16, 185, 129, 0.55), inset 0 1px 0 rgba(52, 211, 153, 0.24);
-  --dash-topline: rgba(110, 231, 183, 0.72);
-  --dash-text-main: #d1fae5;
-  --dash-text-muted: rgba(167, 243, 208, 0.78);
-  --dash-chip-bg: rgba(16, 185, 129, 0.16);
-  --dash-chip-border: rgba(52, 211, 153, 0.42);
-  --dash-accent: #34d399;
-  --dash-accent-soft: rgba(16, 185, 129, 0.2);
-  --dash-accent-border: rgba(110, 231, 183, 0.5);
-  --dash-accent-shadow: rgba(16, 185, 129, 0.5);
+    radial-gradient(circle at 12% 18%, rgba(45, 106, 64, 0.18), transparent 36%),
+    radial-gradient(circle at 88% 6%, rgba(52, 168, 99, 0.13), transparent 30%),
+    radial-gradient(circle at 45% 90%, rgba(30, 80, 48, 0.12), transparent 32%);
+  --dash-grid-line: rgba(52, 168, 99, 0.09);
+  --dash-scan-line: rgba(45, 106, 64, 0.07);
+  --dash-panel-bg: linear-gradient(135deg, rgba(2, 16, 8, 0.92), rgba(1, 10, 4, 0.96));
+  --dash-panel-border: rgba(52, 168, 99, 0.22);
+  --dash-panel-shadow: 0 24px 80px -40px rgba(45, 106, 64, 0.38), inset 0 1px 0 rgba(52, 168, 99, 0.14);
+  --dash-topline: rgba(78, 168, 102, 0.55);
+  --dash-text-main: #8fcca0;
+  --dash-text-muted: rgba(120, 185, 145, 0.72);
+  --dash-chip-bg: rgba(45, 106, 64, 0.12);
+  --dash-chip-border: rgba(52, 168, 99, 0.28);
+  --dash-accent: #34a863;
+  --dash-accent-soft: rgba(45, 106, 64, 0.16);
+  --dash-accent-border: rgba(78, 168, 102, 0.36);
+  --dash-accent-shadow: rgba(45, 106, 64, 0.38);
+  --dash-accent-rgb: 52, 168, 99;
+  --dash-accent-on: #010a04;
 }
 
 /* ---------------- SPARKLE (Soft Lemon) ---------------- */
@@ -717,8 +718,8 @@ html[data-theme] {
 }
 
 :root[data-theme="matrix"] .tt-card:hover {
-  border-color: rgba(110, 231, 183, 0.4);
-  box-shadow: 0 35px 100px rgba(0, 0, 0, 0.95), 0 0 22px rgba(16, 185, 129, 0.22);
+  border-color: rgba(52, 168, 99, 0.30);
+  box-shadow: 0 35px 100px rgba(0, 0, 0, 0.95), 0 0 18px rgba(45, 106, 64, 0.20);
 }
 
 :root[data-theme="sparkle"] .tt-card:hover {
@@ -1047,6 +1048,46 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 }
 
 /* =========================================================
+   MONEY (Premium Dark Green — смарагдово-золотий)
+   ========================================================= */
+:root[data-theme="money"] {
+  --bg: #030a08;
+  --fg: #9fe2c2;
+  --muted: #4a9e7a;
+  --color-primary: #e5a910;
+  --card-bg: rgba(26, 80, 59, 0.08);
+  --card-border: rgba(229, 169, 16, 0.18);
+  --shadow: 0 24px 72px rgba(3, 10, 8, 0.90);
+  --chart-grid: rgba(229, 169, 16, 0.07);
+  --chart-tooltip-bg: rgba(3, 10, 8, 0.96);
+  --dash-page-glow:
+    radial-gradient(circle at 20% 10%, rgba(110, 255, 184, 0.10), transparent 38%),
+    radial-gradient(circle at 80% 8%,  rgba(229, 169, 16, 0.12), transparent 32%),
+    radial-gradient(circle at 50% 88%, rgba(28, 80, 59, 0.14), transparent 36%);
+  --dash-grid-line: rgba(229, 169, 16, 0.07);
+  --dash-scan-line: rgba(229, 169, 16, 0.04);
+  --dash-panel-bg: linear-gradient(135deg, rgba(8, 20, 14, 0.92), rgba(3, 10, 8, 0.96));
+  --dash-panel-border: rgba(229, 169, 16, 0.22);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(180, 130, 0, 0.40), inset 0 1px 0 rgba(229, 169, 16, 0.10);
+  --dash-topline: rgba(229, 169, 16, 0.60);
+  --dash-text-main: #c8e8d0;
+  --dash-text-muted: rgba(159, 226, 194, 0.70);
+  --dash-chip-bg: rgba(229, 169, 16, 0.09);
+  --dash-chip-border: rgba(229, 169, 16, 0.26);
+  --dash-accent: #e5a910;
+  --dash-accent-soft: rgba(229, 169, 16, 0.12);
+  --dash-accent-border: rgba(229, 169, 16, 0.32);
+  --dash-accent-shadow: rgba(229, 169, 16, 0.38);
+  --dash-accent-rgb: 229, 169, 16;
+  --dash-accent-on: #030a08;
+}
+
+:root[data-theme="money"] .tt-card:hover {
+  border-color: rgba(229, 169, 16, 0.32);
+  box-shadow: 0 35px 96px rgba(0, 0, 0, 0.95), 0 0 22px rgba(229, 169, 16, 0.14);
+}
+
+/* =========================================================
    INFERNO (Vulcan Core)
    ========================================================= */
 :root[data-theme="inferno"] {
@@ -1130,7 +1171,7 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 :root[data-theme="dark"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
 :root[data-theme="rain"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
 :root[data-theme="neon"]           { --dash-accent-rgb: 255, 255, 255; --dash-accent-on: #000000; }
-:root[data-theme="matrix"]         { --dash-accent-rgb: 52, 211, 153;  --dash-accent-on: #ffffff; }
+:root[data-theme="matrix"]         { --dash-accent-rgb: 52, 168, 99;   --dash-accent-on: #010a04; }
 :root[data-theme="sparkle"]        { --dash-accent-rgb: 253, 230, 138; --dash-accent-on: #1a1405; }
 :root[data-theme="asher"]          { --dash-accent-rgb: 212, 212, 216; --dash-accent-on: #0a0a0a; }
 :root[data-theme="midnight"]       { --dash-accent-rgb: 245, 158, 11;  --dash-accent-on: #ffffff; }
@@ -1140,6 +1181,7 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 :root[data-theme="khaki"]          { --dash-accent-rgb: 138, 154, 82;  --dash-accent-on: #050602; }
 :root[data-theme="zebra"]          { --dash-accent-rgb: 17, 16, 14;    --dash-accent-on: #f6f4ee; }
 :root[data-theme="flamingo"]       { --dash-accent-rgb: 244, 92, 122;  --dash-accent-on: #ffffff; }
+:root[data-theme="money"]          { --dash-accent-rgb: 229, 169, 16;  --dash-accent-on: #030a08; }
 
 /* =========================================================
    ACCENT UTILITY CLASSES

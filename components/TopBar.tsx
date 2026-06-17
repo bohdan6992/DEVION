@@ -156,10 +156,10 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
       };
     case "matrix":
       return {
-        selectedItem: "bg-zinc-200/10 text-zinc-200 font-bold",
-        dot: "bg-zinc-300 shadow-[0_0_8px_rgba(212,212,216,0.35)]",
-        buttonText: "text-zinc-200",
-        buttonBorder: "border-zinc-400/20",
+        selectedItem: "bg-[#34a863]/10 text-[#6dbf8b] font-bold",
+        dot: "bg-[#34a863] shadow-[0_0_8px_rgba(52,168,99,0.50)]",
+        buttonText: "text-[#6dbf8b]",
+        buttonBorder: "border-[#34a863]/22",
       };
     case "neon":
       return {
@@ -209,6 +209,13 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         dot: "bg-rose-400 shadow-[0_0_8px_rgba(244,92,122,0.55)]",
         buttonText: "text-rose-500",
         buttonBorder: "border-rose-400/22",
+      };
+    case "money":
+      return {
+        selectedItem: "bg-yellow-500/10 text-yellow-300 font-bold",
+        dot: "bg-yellow-400 shadow-[0_0_8px_rgba(229,169,16,0.65)]",
+        buttonText: "text-yellow-300",
+        buttonBorder: "border-yellow-500/22",
       };
     case "magma":
       return {
@@ -357,9 +364,9 @@ export default function TopBar() {
         };
       case "matrix":
         return {
-          activeText: "text-zinc-200 drop-shadow-[0_0_8px_rgba(212,212,216,0.18)]",
-          activeBg: "bg-zinc-200/10 opacity-100 border border-transparent",
-          activeLine: "bg-zinc-300 shadow-[0_0_10px_rgba(212,212,216,0.3)]",
+          activeText: "text-[#6dbf8b] drop-shadow-[0_0_8px_rgba(52,168,99,0.28)]",
+          activeBg: "bg-[#34a863]/10 opacity-100 border border-transparent",
+          activeLine: "bg-[#34a863] shadow-[0_0_10px_rgba(52,168,99,0.48)]",
         };
       case "rain":
         return {
@@ -408,6 +415,12 @@ export default function TopBar() {
           activeText: "text-rose-500 drop-shadow-[0_0_8px_rgba(244,92,122,0.30)]",
           activeBg: "bg-rose-400/10 opacity-100 border border-transparent",
           activeLine: "bg-rose-400 shadow-[0_0_10px_rgba(244,92,122,0.50)]",
+        };
+      case "money":
+        return {
+          activeText: "text-yellow-300 drop-shadow-[0_0_8px_rgba(229,169,16,0.40)]",
+          activeBg: "bg-yellow-500/10 opacity-100 border border-transparent",
+          activeLine: "bg-yellow-400 shadow-[0_0_10px_rgba(229,169,16,0.65)]",
         };
       case "magma":
         return {

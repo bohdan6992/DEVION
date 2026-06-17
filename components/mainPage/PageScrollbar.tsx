@@ -44,7 +44,7 @@ const onAnyScroll = (cb: () => void) => {
 const ACCENT_MAP: Record<string, { hex: string; rgb: string }> = {
   sparkle: { hex: "#f5d200", rgb: "245,210,0"   },
   inferno: { hex: "#fb923c", rgb: "251,146,60"  },
-  matrix:  { hex: "#00ff41", rgb: "0,255,65"    },
+  matrix:  { hex: "#34a863", rgb: "52,168,99"   },
   neon:    { hex: "#d946ef", rgb: "217,70,239"  },
   space:   { hex: "#38bdf8", rgb: "56,189,248"  },
   rain:    { hex: "#e2e8f0", rgb: "226,232,240" },
@@ -56,6 +56,7 @@ const ACCENT_MAP: Record<string, { hex: string; rgb: string }> = {
   khaki:   { hex: "#8a9a52", rgb: "138,154,82"  },
   zebra:    { hex: "#11100e",  rgb: "17,16,14"    },
   flamingo: { hex: "#f45c7a",  rgb: "244,92,122"  },
+  money:    { hex: "#e5a910",  rgb: "229,169,16"  },
 };
 const LIGHT_ACCENT   = { hex: "#6d28d9", rgb: "109,40,217" };
 const DEFAULT_ACCENT = { hex: "#00f0ff", rgb: "0,240,255"  };
@@ -66,7 +67,7 @@ const THEMES: { key: ThemeKey; label: string; dot: string }[] = [
   { key: "inferno", label: "Inferno", dot: "#fb923c" },
   { key: "neon",    label: "Neon",    dot: "#d946ef" },
   { key: "space",   label: "Space",   dot: "#38bdf8" },
-  { key: "matrix",  label: "Matrix",  dot: "#00ff41" },
+  { key: "matrix",  label: "Matrix",  dot: "#34a863" },
   { key: "oceanic", label: "Oceanic", dot: "#22d3ee" },
   { key: "rain",    label: "Rain",    dot: "#e2e8f0" },
   { key: "asher",   label: "Asher",   dot: "#d4d4d8" },
@@ -76,6 +77,7 @@ const THEMES: { key: ThemeKey; label: string; dot: string }[] = [
   { key: "khaki",   label: "Khaki",   dot: "#8a9a52" },
   { key: "zebra",    label: "Zebra",    dot: "#11100e" },
   { key: "flamingo", label: "Flamingo", dot: "#f45c7a" },
+  { key: "money",    label: "Money",    dot: "#e5a910" },
   { key: "light",    label: "Light",    dot: "#6d28d9" },
 ];
 const LANGS: { key: LangKey; label: string }[] = [

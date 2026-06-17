@@ -50,6 +50,7 @@ export type StreamPosition = {
   entryDispatchedAt: number | null;
   lastDispatchedAt: number | null;
   lastConfirmedActiveAt: number | null;
+  lastAboveAddCapAt: number | null;  // last time add signal exceeded ADD_MAX_SIGMA (resets add delay)
   openedAt: number;
   updatedAt: number;
 };
@@ -560,6 +561,7 @@ function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayK
         entryDispatchedAt: entry.at,
         lastDispatchedAt: entry.at,
         lastConfirmedActiveAt: entry.at,
+        lastAboveAddCapAt: null,
         openedAt: entry.at,
         updatedAt: entry.at,
       });
@@ -1037,6 +1039,7 @@ export function syncStreamPositions(
       let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
       let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
+      let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
       const decision = decisionMap.get(existing.ticker);
       const entryStillReady = decision?.status === "ENTRY_READY";
       const hasUndispatchedEntry =
@@ -1072,8 +1075,12 @@ export function syncStreamPositions(
         // dropped before sendQueuedIntents can fire, so only the first ticker
         // in the batch ever dispatches.
         const pendingEntryAgeMs = now - (existing.openedAt ?? now);
-        const withinGrace = pendingEntryAgeMs < 30000;
-        if (inPrintWindow || (!entryStillReady && !withinGrace)) {
+        // Grace period only applies to temporary blocks (spread/edge) — NOT to HOLD
+        // (signal out of the entry window). If signal is HOLD, cancel immediately so
+        // entries don't fire at deviations far outside the configured startAbsMax cap.
+        const entryIsHold = decision?.status === "HOLD";
+        const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
+        if (inPrintWindow || entryIsHold || (!entryStillReady && !withinGrace)) {
           continue;
         }
 
@@ -1163,6 +1170,13 @@ export function syncStreamPositions(
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
+          // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
+          // and restart the add delay timer (same hold protection as entry window).
+          const ADD_MAX_SIGMA = 4.0;
+          if (filteredAbs != null && filteredAbs > ADD_MAX_SIGMA) {
+            lastAboveAddCapAt = now;
+            if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
+          }
           // Trigger base is always the FIRST entry signal (never lastScaleSignal).
           // Each add threshold: |entrySignal| + addNumber × dilutionStep.
           // Example: entry=1.2σ, step=0.3 → add#1 at 1.5σ, add#2 at 1.8σ, add#3 at 2.1σ.
@@ -1178,14 +1192,21 @@ export function syncStreamPositions(
             filteredSigned !== 0 &&
             Math.sign(filteredSigned) === Math.sign(entryBase);
           const addDelayMs = Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000;
-          const lastDispatch = existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt;
+          // Add delay restarts from the last cap breach — same protection as entry minHold.
+          // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
+          // the delay runs fresh after the signal returns into range.
+          const lastDispatchOrBreach = Math.max(
+            existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt,
+            lastAboveAddCapAt ?? 0
+          );
           // delay=0: block if an entry intent is already pending (one add per tick).
           // delay>0: use time-based check; also block if pending to prevent double-fire
           //          before the async dispatch updates lastDispatchedAt.
           const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
             ? false
-            : addDelayMs === 0 || now - lastDispatch >= addDelayMs;
-          if (filteredAbs != null && filteredAbs >= trigger && sameSign && addDelayPassed) {
+            : addDelayMs === 0 || now - lastDispatchOrBreach >= addDelayMs;
+          const belowAddCap = filteredAbs == null || filteredAbs <= ADD_MAX_SIGMA;
+          if (filteredAbs != null && filteredAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
             lastScaleSignal = filteredSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
@@ -1223,6 +1244,7 @@ export function syncStreamPositions(
         pendingIntent,
         entryDispatchedAt,
         lastConfirmedActiveAt,
+        lastAboveAddCapAt,
         updatedAt: now,
       });
       seen.add(existing.ticker);
@@ -1270,6 +1292,7 @@ export function syncStreamPositions(
         entryDispatchedAt: null,
         lastDispatchedAt: null,
         lastConfirmedActiveAt: null,
+        lastAboveAddCapAt: null,
         openedAt: latch.qualifiedSince,
         updatedAt: now,
       });
@@ -1590,6 +1613,7 @@ function buildFallbackPendingEntryPositions(
       entryDispatchedAt: null,
       lastDispatchedAt: null,
       lastConfirmedActiveAt: null,
+      lastAboveAddCapAt: null,
       openedAt: latch.qualifiedSince,
       updatedAt: now,
     });
@@ -2480,6 +2504,20 @@ export function useStreamEngine({
     latchQualifiedSinceHistoryRef.current.forEach((v, k) => {
       if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
     });
+    // If a ticker's signal left the valid entry window [startAbsMin, startAbsMax] in
+    // either direction, clear it from latch history so the hold timer restarts from
+    // zero when the signal returns to range. The 60s TTL recovery is only meant for
+    // brief spread/edge blocks (BLOCKED_SPREAD/BLOCKED_EDGE), not for signals that
+    // exited the window — those must re-qualify from scratch.
+    for (const row of decisionsWithWindowGuard) {
+      if (row.status !== "HOLD") continue;
+      const absSignal = Math.abs(row.signal ?? 0);
+      const exitedBelow = absSignal < startAbsMin;
+      const exitedAbove = hasEntryWindowUpperBound && startAbsMax != null && absSignal > startAbsMax;
+      if (exitedBelow || exitedAbove) {
+        latchQualifiedSinceHistoryRef.current.delete(row.ticker);
+      }
+    }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
     const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
     // Clear latch history for tickers whose positions just closed.
@@ -2967,6 +3005,41 @@ export function useStreamEngine({
           const dispatchTs = new Date(dispatchAt).toTimeString().slice(0, 8);
           const sigStr = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
           const isAdd = intent.sequence > 1;
+
+          // Dispatch-time entry window check: cancel initial ENTRY (not ADD) if the live
+          // signal has moved outside [startAbsMin, startAbsMax] since the tick that
+          // created the PENDING_ENTRY. SSE can update rawSignalByTickerRef between ticks.
+          if (isAdd && isEntryIntent) {
+            const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
+            const _liveSigned = intent.side === "Long"
+              ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
+              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS));
+            const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
+            if (_liveAbs != null && _liveAbs > 4.0) {
+              console.log(`[CANCEL ADD] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} above ADD_MAX_SIGMA 4.0 at dispatch`);
+              continue;
+            }
+          }
+          if (!isAdd && isEntryIntent) {
+            const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
+            const _liveSigned = intent.side === "Long"
+              ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
+              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS));
+            const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
+            const _dispatchStartMin = Math.max(0, toNum(exactSonarFilterSnapshot?.zapShowAbs) ?? 0);
+            const _dispatchStartMaxRaw = toNum(exactSonarFilterSnapshot?.zapSilverAbs);
+            const _dispatchStartMax = _dispatchStartMaxRaw != null && _dispatchStartMaxRaw > 0 ? _dispatchStartMaxRaw : null;
+            if (_liveAbs != null) {
+              if (_liveAbs < _dispatchStartMin) {
+                console.log(`[CANCEL ENTRY] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} below min ${_dispatchStartMin} at dispatch`);
+                continue;
+              }
+              if (_dispatchStartMax != null && _liveAbs > _dispatchStartMax) {
+                console.log(`[CANCEL ENTRY] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} above max ${_dispatchStartMax} at dispatch`);
+                continue;
+              }
+            }
+          }
           const pos3 = correspondingPosition;
           const curSig3 = correspondingDecision?.signal;
           const entryBase3 = pos3?.entrySignal;

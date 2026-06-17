@@ -1336,6 +1336,8 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "khaki") return "amber";
   if (theme === "zebra") return "zinc";
   if (theme === "flamingo") return "rose";
+  if (theme === "money") return "amber";
+  if (theme === "matrix") return "emerald";
   return "emerald";
 };
 

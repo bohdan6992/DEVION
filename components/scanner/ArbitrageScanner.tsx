@@ -223,6 +223,28 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
         buttonBorder: "border-rose-400/22",
         outlineButton: "accent-outline",
       };
+    case "money":
+      return {
+        selection: "accent-selection",
+        dot: "accent-dot",
+        activeButton: "accent-soft",
+        activeText: "accent-text",
+        activeBorder: "accent-panel-soft",
+        activeSoft: "accent-soft",
+        buttonBorder: "border-yellow-500/22",
+        outlineButton: "accent-outline",
+      };
+    case "matrix":
+      return {
+        selection: "accent-selection",
+        dot: "accent-dot",
+        activeButton: "accent-soft",
+        activeText: "accent-text",
+        activeBorder: "accent-panel-soft",
+        activeSoft: "accent-soft",
+        buttonBorder: "border-[#34a863]/22",
+        outlineButton: "accent-outline",
+      };
     default:
       return {
         selection: "selection:bg-zinc-200/24",
@@ -3678,6 +3700,8 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "khaki") return "amber";
   if (theme === "zebra") return "zinc";
   if (theme === "flamingo") return "rose";
+  if (theme === "money") return "amber";
+  if (theme === "matrix") return "emerald";
   return "emerald";
 };
 

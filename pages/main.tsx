@@ -28,24 +28,29 @@ type ThemeAccent = {
 };
 
 function getAccent(theme: string, isDark: boolean): ThemeAccent {
-  if (!isDark) {
-    return { hex: "#6d28d9", hex2: "#a855f7", rgb: "109,40,217", bokeh: ["rgba(109,40,217,0.07)", "rgba(139,92,246,0.05)", "rgba(196,181,253,0.08)"], muted: "rgba(0,0,0,0.35)" };
-  }
+  // Per-theme match FIRST — bypasses the isDark guard so light themes with custom
+  // backgrounds (zebra, flamingo) get their own accent, not the generic violet.
   switch (theme) {
     case "sparkle":  return { hex: "#f5d200", hex2: "#ff8800", rgb: "245,210,0",   bokeh: ["rgba(245,210,0,0.07)",   "rgba(200,160,0,0.04)",  "rgba(255,220,50,0.05)"],  muted: "rgba(245,210,0,0.35)"   };
     case "inferno":  return { hex: "#fb923c", hex2: "#ef4444", rgb: "251,146,60",  bokeh: ["rgba(251,80,20,0.07)",   "rgba(200,60,0,0.05)",   "rgba(255,140,60,0.04)"],  muted: "rgba(251,146,60,0.35)"  };
-    case "matrix":   return { hex: "#00ff41", hex2: "#00aa20", rgb: "0,255,65",    bokeh: ["rgba(0,255,65,0.06)",    "rgba(0,180,40,0.04)",   "rgba(0,220,60,0.05)"],    muted: "rgba(0,255,65,0.35)"    };
+    case "matrix":   return { hex: "#34a863", hex2: "#1a5c38", rgb: "52,168,99",   bokeh: ["rgba(52,168,99,0.07)",   "rgba(26,92,56,0.05)",   "rgba(78,168,102,0.04)"],  muted: "rgba(52,168,99,0.32)"   };
     case "neon":     return { hex: "#d946ef", hex2: "#7c3aed", rgb: "217,70,239",  bokeh: ["rgba(217,70,239,0.07)",  "rgba(150,0,200,0.05)",  "rgba(240,120,255,0.04)"], muted: "rgba(217,70,239,0.35)"  };
     case "space":    return { hex: "#38bdf8", hex2: "#0066ff", rgb: "56,189,248",  bokeh: ["rgba(56,189,248,0.07)",  "rgba(14,116,189,0.05)", "rgba(100,200,255,0.04)"], muted: "rgba(56,189,248,0.35)"  };
+    case "dark":     return { hex: "#a1a1aa", hex2: "#52525b", rgb: "161,161,170", bokeh: ["rgba(161,161,170,0.05)", "rgba(82,82,91,0.04)",   "rgba(180,180,190,0.04)"], muted: "rgba(161,161,170,0.30)"  };
     case "rain":     return { hex: "#e2e8f0", hex2: "#94a3b8", rgb: "226,232,240", bokeh: ["rgba(226,232,240,0.05)", "rgba(148,163,184,0.04)","rgba(200,210,220,0.04)"], muted: "rgba(226,232,240,0.3)"  };
     case "asher":    return { hex: "#d4d4d8", hex2: "#71717a", rgb: "212,212,216", bokeh: ["rgba(212,212,216,0.05)", "rgba(160,160,170,0.04)","rgba(180,180,190,0.04)"], muted: "rgba(212,212,216,0.3)"  };
     case "oceanic":  return { hex: "#22d3ee", hex2: "#0891b2", rgb: "34,211,238",  bokeh: ["rgba(34,211,238,0.07)",  "rgba(8,145,178,0.05)",  "rgba(80,220,250,0.04)"],  muted: "rgba(34,211,238,0.35)"  };
     case "magma":    return { hex: "#ff5248", hex2: "#ff0060", rgb: "255,82,72",   bokeh: ["rgba(255,82,72,0.08)",   "rgba(200,0,60,0.05)",   "rgba(255,120,80,0.05)"],  muted: "rgba(255,82,72,0.35)"   };
     case "mercury":  return { hex: "#b0b6be", hex2: "#78828c", rgb: "176,182,190", bokeh: ["rgba(176,182,190,0.06)", "rgba(120,130,140,0.04)","rgba(200,205,210,0.04)"], muted: "rgba(176,182,190,0.3)"  };
+    case "midnight": return { hex: "#f59e0b", hex2: "#b45309", rgb: "245,158,11",  bokeh: ["rgba(245,158,11,0.08)",  "rgba(180,83,9,0.05)",   "rgba(255,190,50,0.05)"],  muted: "rgba(245,158,11,0.35)"  };
     case "khaki":    return { hex: "#8a9a52", hex2: "#556b2f", rgb: "138,154,82",  bokeh: ["rgba(138,154,82,0.07)",  "rgba(85,107,47,0.05)",  "rgba(160,180,90,0.04)"],  muted: "rgba(138,154,82,0.35)"  };
     case "zebra":    return { hex: "#11100e", hex2: "#3a3830", rgb: "17,16,14",    bokeh: ["rgba(17,16,14,0.06)",    "rgba(58,56,48,0.04)",   "rgba(17,16,14,0.03)"],    muted: "rgba(17,16,14,0.25)"    };
     case "flamingo": return { hex: "#f45c7a", hex2: "#c42d50", rgb: "244,92,122",  bokeh: ["rgba(244,92,122,0.08)", "rgba(255,160,180,0.05)", "rgba(220,60,90,0.04)"],   muted: "rgba(244,92,122,0.30)"  };
-    default:         return { hex: "#00f0ff", hex2: "#0066ff", rgb: "0,240,255",   bokeh: ["rgba(0,240,255,0.06)",   "rgba(0,100,200,0.04)",  "rgba(0,200,255,0.04)"],   muted: "rgba(0,240,255,0.3)"    };
+    case "money":    return { hex: "#e5a910", hex2: "#9c6e00", rgb: "229,169,16",  bokeh: ["rgba(229,169,16,0.08)", "rgba(255,220,80,0.05)",  "rgba(180,120,0,0.04)"],   muted: "rgba(229,169,16,0.32)"  };
+    default:
+      // Light themes without specific background (light, pastel, …) → violet
+      if (!isDark) return { hex: "#6d28d9", hex2: "#a855f7", rgb: "109,40,217", bokeh: ["rgba(109,40,217,0.07)", "rgba(139,92,246,0.05)", "rgba(196,181,253,0.08)"], muted: "rgba(0,0,0,0.35)" };
+      return { hex: "#00f0ff", hex2: "#0066ff", rgb: "0,240,255", bokeh: ["rgba(0,240,255,0.06)", "rgba(0,100,200,0.04)", "rgba(0,200,255,0.04)"], muted: "rgba(0,240,255,0.3)" };
   }
 }
 
