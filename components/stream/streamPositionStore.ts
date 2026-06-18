@@ -17,6 +17,7 @@ export type StreamActiveDecisionRow = {
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
+  spreadBidPct: number | null;
   netEdge: number | null;
   status: StreamDecisionRow["status"] | StreamPosition["status"];
 };
@@ -69,6 +70,7 @@ function sameActiveRow(left: StreamActiveDecisionRow, right: StreamActiveDecisio
     left.side === right.side &&
     sameNullableNumber(left.signal, right.signal) &&
     sameNullableNumber(left.spread, right.spread) &&
+    sameNullableNumber(left.spreadBidPct, right.spreadBidPct) &&
     sameNullableNumber(left.netEdge, right.netEdge) &&
     left.status === right.status
   );
@@ -117,6 +119,7 @@ function buildActiveRows(positions: StreamPosition[]): StreamActiveDecisionRow[]
       side: decision?.side ?? position.side,
       signal,
       spread,
+      spreadBidPct: decision?.spreadBidPct ?? null,
       netEdge,
       status: position.status,
     });
