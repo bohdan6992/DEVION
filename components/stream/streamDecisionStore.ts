@@ -8,6 +8,7 @@ export type StreamDecisionStoreRow = {
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
+  spreadBidPct: number | null;
   safePrice: number | null;
   netEdge: number | null;
   positionBp: number | null;
@@ -29,6 +30,7 @@ function sameDecisionRow(a: StreamDecisionStoreRow | undefined, b: StreamDecisio
     a.side === b.side &&
     sameNullableNumber(a.signal, b.signal) &&
     sameNullableNumber(a.spread, b.spread) &&
+    sameNullableNumber(a.spreadBidPct, b.spreadBidPct) &&
     sameNullableNumber(a.safePrice, b.safePrice) &&
     sameNullableNumber(a.netEdge, b.netEdge) &&
     sameNullableNumber(a.positionBp, b.positionBp) &&

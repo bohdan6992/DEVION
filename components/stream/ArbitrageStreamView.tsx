@@ -31,6 +31,7 @@ type StreamDecisionTableRow = {
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
+  spreadBidPct: number | null;
   netEdge: number | null;
   status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
 };
