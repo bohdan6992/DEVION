@@ -397,7 +397,7 @@ function StreamDecisionVirtualRow({
       <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
       <div className="px-2.5"><SideBadge side={row.side} /></div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
       <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
@@ -428,7 +428,7 @@ function StreamDecisionStoreVirtualRow({
       <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
       <div className="px-2.5"><SideBadge side={row.side} /></div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
       <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
@@ -490,7 +490,7 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
             <div className="p-2.5 text-left">Bench</div>
             <div className="p-2.5 text-left">Side</div>
             <div className="p-2.5 text-right">Signal</div>
-            <div className="p-2.5 text-right">Spread</div>
+            <div className="p-2.5 text-right">SpreadBid%</div>
             <div className="p-2.5 text-right">Net Edge</div>
             <div className="p-2.5 text-left">Status</div>
             {hasDismiss && <div className="p-2.5" />}
@@ -531,7 +531,7 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
                   <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
                   <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
                   <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   {hasDismiss && (
@@ -587,7 +587,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
             <div className="p-2.5 text-left">Bench</div>
             <div className="p-2.5 text-left">Side</div>
             <div className="p-2.5 text-right">Signal</div>
-            <div className="p-2.5 text-right">Spread</div>
+            <div className="p-2.5 text-right">SpreadBid%</div>
             <div className="p-2.5 text-right">Net Edge</div>
             <div className="p-2.5 text-left">Status</div>
           </div>
@@ -629,7 +629,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
                     <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
                     <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</div>
+                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
                     <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   </div>
@@ -1754,7 +1754,7 @@ export default function ArbitrageStreamView({
                 <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
                 <td className="p-2.5"><SideBadge side={row.side} /></td>
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</td>
-                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spread, 3)}</td>
+                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</td>
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.safePrice, 3)}</td>
                 <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
                 <td className="p-2.5"><StreamStatusBadge status={row.status} /></td>

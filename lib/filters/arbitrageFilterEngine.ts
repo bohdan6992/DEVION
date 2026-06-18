@@ -10,7 +10,7 @@ const BOUND_ALIASES: Partial<Record<string, string[]>> = {
   AvPreMhv: ["AvPreMhv", "avPreMhv", "AvPreMh", "avPreMh", "avPreMhv"],
   RoundLot: ["RoundLot", "roundLot"],
   VWAP: ["VWAP", "vwap"],
-  Spread: ["Spread", "spread"],
+  SpreadBidPct: ["SpreadBid%", "spreadBidPct", "SpreadBidPct"],
   LstPrcL: ["LstPrcL", "lstPrcL", "LastPriceL", "lastPriceL", "LstPrc", "lstPrc"],
   LstCls: ["LstCls", "lstCls", "LastClose", "lastClose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "Close", "close"],
   YCls: ["YCls", "yCls", "YClose", "yClose"],

@@ -5,6 +5,7 @@ import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { applyExactSonarClientFilters, buildSignalsStreamUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamActionLogStore } from "./streamActionLogStore";
 import { getStreamDecisionRow, streamDecisionStore } from "./streamDecisionStore";
 import { streamExecutionStore } from "./streamExecutionStore";
@@ -25,6 +26,7 @@ export type StreamDecisionRow = {
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
+  spreadBidPct: number | null;
   safePrice: number | null;
   netEdge: number | null;
   positionBp: number | null;
@@ -41,6 +43,7 @@ export type StreamPosition = {
   lastSignal: number | null;
   lastScaleSignal: number | null;
   spread: number | null;
+  spreadBidPct: number | null;
   status: "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
   reason: string;
   entryCount: number;
@@ -271,7 +274,7 @@ export type StreamFilterBuilderArgs = {
     AvPreMhv?: StreamMinMax;
     RoundLot?: StreamMinMax;
     VWAP?: StreamMinMax;
-    Spread?: StreamMinMax;
+    SpreadBidPct?: StreamMinMax;
     LstPrcL?: StreamMinMax;
     LstCls?: StreamMinMax;
     YCls?: StreamMinMax;
@@ -424,6 +427,11 @@ function signalSpread(row: ArbitrageSignal | null | undefined): number | null {
   return toNum(row.Spread ?? row.spread);
 }
 
+function signalSpreadBidPct(row: ArbitrageSignal | null | undefined): number | null {
+  if (!row) return null;
+  return toNum((row as any)["SpreadBid%"] ?? (row as any).spreadBidPct ?? (row as any).SpreadBidPct);
+}
+
 function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
   return (signalClass ?? "").trim().toLowerCase() === "ark";
 }
@@ -553,6 +561,7 @@ function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayK
         lastScaleSignal: entry.deviation,
         belowThresholdTicks: 0,
         spread: null,
+        spreadBidPct: null,
         status: "OPEN",
         reason: entry.kind === "ADD" ? "restored add from action log" : "restored entry from action log",
         entryCount: entry.kind === "ADD" ? 2 : 1,
@@ -707,6 +716,7 @@ function mergeStreamPositionsWithActionLog(
     merged.set(ticker, existing ? {
       ...row,
       spread: existing.spread ?? row.spread,
+      spreadBidPct: existing.spreadBidPct ?? row.spreadBidPct,
       status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
       reason: existing.reason || row.reason,
       pendingIntent: isExitOrderIntent(existing.pendingIntent) ? existing.pendingIntent : null,
@@ -926,6 +936,7 @@ export function computeStreamDecisionRows(
       side,
       signal,
       spread,
+      spreadBidPct: signalSpreadBidPct(row),
       safePrice,
       netEdge,
       positionBp,
@@ -979,6 +990,7 @@ export function syncStreamPositions(
           lastSignal: currentSignal,
           lastScaleSignal: existing.lastScaleSignal ?? existing.entrySignal ?? currentSignal,
           spread: signalSpread(raw) ?? existing.spread,
+          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
           status: inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN"),
           reason: inPrintWindow ? "09:20 print exit armed" : "restored active STREAM position from action log",
           lockedForPrint: inPrintWindow,
@@ -1055,6 +1067,7 @@ export function syncStreamPositions(
           ...existing,
           lastSignal: currentSigned ?? currentAbs ?? existing.lastSignal,
           spread: currentSpread ?? existing.spread,
+          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
           status: "PENDING_ENTRY",
           reason: "order dispatched | awaiting execution confirmation",
           pendingIntent: null,
@@ -1095,6 +1108,7 @@ export function syncStreamPositions(
           lastSignal: currentSigned ?? currentAbs ?? existing.lastSignal,
           lastScaleSignal,
           spread: currentSpread,
+          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
           status,
           reason,
           entryCount,
@@ -1237,6 +1251,7 @@ export function syncStreamPositions(
         lastScaleSignal,
         belowThresholdTicks,
         spread: currentSpread,
+        spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
         status,
         reason,
         entryCount,
@@ -1284,6 +1299,7 @@ export function syncStreamPositions(
         lastScaleSignal: currentSigned,
         belowThresholdTicks: 0,
         spread: currentSpread,
+        spreadBidPct: signalSpreadBidPct(raw),
         status: "PENDING_ENTRY",
         reason: `entered after hold ${automationConfig.minHoldMinutes ?? 0}min`,
         entryCount: 1,
@@ -1346,6 +1362,7 @@ export function syncStreamPositions(
         openedAt: existing.openedAt,
         lastSignal: current.signal,
         spread: current.spread,
+        spreadBidPct: current.spreadBidPct,
         status: automationConfig?.noSpreadExit === false ? "CLOSED" : "EXIT_BLOCKED",
         reason: automationConfig?.noSpreadExit === false ? "forced exit despite spread" : "exit blocked by spread",
         updatedAt: now,
@@ -1360,6 +1377,7 @@ export function syncStreamPositions(
       lastScaleSignal: existing.lastScaleSignal,
       lastSignal: current.signal,
       spread: current.spread,
+      spreadBidPct: current.spreadBidPct,
       status: printWindowEnabled && nowMinutes >= printStartMinutes ? "PRINT_PENDING" : "OPEN",
       reason:
         printWindowEnabled
@@ -1605,6 +1623,7 @@ function buildFallbackPendingEntryPositions(
       lastScaleSignal: signed,
       belowThresholdTicks: 0,
       spread: signalSpread(raw),
+      spreadBidPct: signalSpreadBidPct(raw),
       status: "PENDING_ENTRY",
       reason: `fallback pending entry after hold ${automationConfig?.minHoldMinutes ?? 0}m`,
       entryCount: 1,
@@ -1634,6 +1653,15 @@ type UseStreamEngineArgs = {
   ratingType: string | null | undefined;
   metric: "SigmaZap" | "ZapPct";
   ratingRule: { minRate: number; minTotal: number };
+  startAbs?: number | null;
+  startAbsMax?: number | null;
+  endAbs?: number | null;
+  closeMode?: "Active" | "Passive";
+  minHoldCandles?: number | null;
+  ratingMode?: string | null;
+  session?: string | null;
+  ratingMinRate?: number | null;
+  ratingMinTotal?: number | null;
   tickersCsv?: string;
   minCorr?: number | null;
   maxCorr?: number | null;
@@ -1730,6 +1758,15 @@ export function useStreamEngine({
   ratingType,
   metric,
   ratingRule,
+  startAbs,
+  startAbsMax,
+  endAbs,
+  closeMode,
+  minHoldCandles,
+  ratingMode,
+  session,
+  ratingMinRate,
+  ratingMinTotal,
   tickersCsv,
   minCorr,
   maxCorr,
@@ -1790,6 +1827,12 @@ export function useStreamEngine({
   const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
   const minuteSnapshotRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
+  // Tracks when each ticker first qualified above startAbs — always active, independent of automation.
+  // Used for minHoldCandles display filter (same consecutive-candle logic as tape Scanner).
+  const displayQualifiedSinceRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
+  // Tracks signals that passed minHoldCandles — stays alive (visible) until sigma < endAbs or >60s gap.
+  // Mirrors Scanner Active list: signal stays shown even when sigma decays below startAbs to [endAbs, startAbs).
+  const signalDisplayedRef = useRef<Map<string, number>>(new Map());
   const streamPositionsRef = useRef<StreamPosition[]>(streamPositions);
   const streamSignalLatchesRef = useRef<StreamSignalLatch[]>([]);
   const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
@@ -1893,25 +1936,26 @@ export function useStreamEngine({
     [currentDayKey, streamActionLog]
   );
 
-  const snapshotTickers = exactSonarFilterSnapshot?.tickersFilterNorm?.trim() ?? "";
   const primarySignalsStreamUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
-    type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
+    cls: signalClass as any,
+    type: (ratingType ?? "any") as any,
     mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-    ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+    ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
     zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-    minRate: toNum(exactSonarFilterSnapshot?.minRate) ?? ratingRule.minRate,
-    minTotal: toNum(exactSonarFilterSnapshot?.minTotal) ?? ratingRule.minTotal,
-    tickers: snapshotTickers || tickersCsv || undefined,
-    minCorr: toNum(exactSonarFilterSnapshot?.corrMin) ?? minCorr ?? undefined,
-    maxCorr: toNum(exactSonarFilterSnapshot?.corrMax) ?? maxCorr ?? undefined,
-    minBeta: toNum(exactSonarFilterSnapshot?.betaMin) ?? minBeta ?? undefined,
-    maxBeta: toNum(exactSonarFilterSnapshot?.betaMax) ?? maxBeta ?? undefined,
-    minSigma: toNum(exactSonarFilterSnapshot?.sigmaMin) ?? minSigma ?? undefined,
-    maxSigma: toNum(exactSonarFilterSnapshot?.sigmaMax) ?? maxSigma ?? undefined,
-    // Keep STREAM candidate coverage aligned with SONAR. Shared stream paging
-    // happens before local client-only filters, so a smaller upstream limit
-    // can hide otherwise matching rows.
+    minRate: ratingMinRate ?? ratingRule.minRate,
+    minTotal: ratingMinTotal ?? ratingRule.minTotal,
+    // Active mode: lower server threshold to endAbs so decaying signals (sigma in [endAbs, startAbs)) are returned.
+    // Passive mode: endAbs is not a sigma threshold (exit = gap reversal) — keep server threshold at startAbs.
+    startAbs: (closeMode !== "Passive" && endAbs != null && endAbs > 0 && endAbs < (startAbs ?? Infinity))
+      ? endAbs
+      : (startAbs ?? undefined),
+    tickers: tickersCsv || undefined,
+    minCorr: minCorr ?? undefined,
+    maxCorr: maxCorr ?? undefined,
+    minBeta: minBeta ?? undefined,
+    maxBeta: maxBeta ?? undefined,
+    minSigma: minSigma ?? undefined,
+    maxSigma: maxSigma ?? undefined,
     limit: 500,
     includeAll: false,
   }), [
@@ -1923,11 +1967,16 @@ export function useStreamEngine({
     minBeta,
     minCorr,
     minSigma,
+    ratingMinRate,
+    ratingMinTotal,
     ratingRule.minRate,
     ratingRule.minTotal,
     ratingType,
     signalClass,
-    snapshotTickers,
+    startAbs,
+    endAbs,
+    closeMode,
+    ratingMode,
     tickersCsv,
   ]);
 
@@ -1936,10 +1985,10 @@ export function useStreamEngine({
     const activeTrackedTickers = Array.from(openLoggedTickers);
     if (!activeTrackedTickers.length) return null;
     return buildSignalsStreamUrl({
-      cls: (exactSonarFilterSnapshot?.cls ?? signalClass) as any,
-      type: (exactSonarFilterSnapshot?.type ?? ratingType ?? "any") as any,
+      cls: signalClass as any,
+      type: (ratingType ?? "any") as any,
       mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-      ratingMode: (exactSonarFilterSnapshot?.ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+      ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
       zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
       minRate: 0,
       minTotal: 1,
@@ -1981,6 +2030,8 @@ export function useStreamEngine({
     setStreamSessionStoppedAt(null);
     setStreamSentOrdersCount(0);
     latchQualifiedSinceHistoryRef.current.clear();
+    displayQualifiedSinceRef.current.clear();
+    signalDisplayedRef.current.clear();
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
@@ -2394,9 +2445,27 @@ export function useStreamEngine({
     const filtered = exactSonarFilterSnapshot
       ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
       : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
+
+    // Apply BIN/BINS rating filter using best_params attached to each signal.
+    // SESSION mode is handled server-side (EligibilityPolicy applies minRate/minTotal).
+    const ratingModeUpper = (ratingMode ?? "SESSION").toUpperCase();
+    const effectiveMinRate = ratingMinRate ?? ratingRule.minRate;
+    const effectiveMinTotal = ratingMinTotal ?? ratingRule.minTotal;
+    const ratingFiltered = (ratingModeUpper === "BIN" || ratingModeUpper === "BINS")
+      ? filtered.filter(row => passesStreamRatingFilter({
+          ratingMode: ratingModeUpper,
+          signal: row,
+          session: session ?? "GLOB",
+          side: row.direction === "down" ? "Short" : "Long",
+          sigmaAbs: Math.abs(toNum(row.zapSsigma ?? row.sig ?? row.zapS ?? row.zapL) ?? 0) || null,
+          minRate: effectiveMinRate,
+          minTotal: effectiveMinTotal,
+        }))
+      : filtered;
+
     const bookSnapshot = streamBookStore.getState().snapshot;
     const decisions = computeStreamDecisionRows(
-      filtered,
+      ratingFiltered,
       maxSpreadValue,
       automationConfig,
       bookSnapshot
@@ -2439,10 +2508,9 @@ export function useStreamEngine({
       }
     }
 
-    const startAbsMin = Math.max(0, toNum(exactSonarFilterSnapshot?.zapShowAbs) ?? 0);
-    const startAbsMaxRaw = toNum(exactSonarFilterSnapshot?.zapSilverAbs);
-    const startAbsMax = startAbsMaxRaw != null && startAbsMaxRaw > 0 ? startAbsMaxRaw : null;
-    const hasEntryWindowUpperBound = startAbsMax != null;
+    const startAbsMin = Math.max(0, startAbs ?? 0);
+    const effectiveStartAbsMax = (startAbsMax != null && startAbsMax > 0) ? startAbsMax : null;
+    const hasEntryWindowUpperBound = effectiveStartAbsMax != null;
 
     const decisionsWithWindowGuard = decisions.map((row) => {
       if (row.status !== "ENTRY_READY") return row;
@@ -2450,13 +2518,68 @@ export function useStreamEngine({
       if (absSignal < startAbsMin) {
         return { ...row, status: "HOLD" as const, reason: `entry guard: below start min ${startAbsMin.toFixed(2)}` };
       }
-      if (hasEntryWindowUpperBound && startAbsMax != null && absSignal > startAbsMax) {
-        return { ...row, status: "HOLD" as const, reason: `entry guard: above start max ${startAbsMax.toFixed(2)}` };
+      if (hasEntryWindowUpperBound && effectiveStartAbsMax != null && absSignal > effectiveStartAbsMax) {
+        return { ...row, status: "HOLD" as const, reason: `entry guard: above start max ${effectiveStartAbsMax.toFixed(2)}` };
       }
       return row;
     });
 
+    // Track display qualification time for minHoldCandles filter (always active, no automation needed).
+    // Mirrors Scanner's consecutive-candle logic: timer resets if signal exits [startAbs, startAbsMax] for >60s.
+    const nowForDisplay = Date.now();
+    const currentMinuteAligned = Math.floor(nowForDisplay / 60_000) * 60_000;
+    const effectiveMinHoldMs = Math.max(0, minHoldCandles ?? 0) * 60_000;
+    // endAbs close threshold — only applies in Active close mode (Passive exit = gap reversal, not sigma).
+    const effectiveEndAbs = (closeMode !== "Passive" && endAbs != null && endAbs > 0) ? endAbs : 0;
+
+    for (const row of decisionsWithWindowGuard) {
+      const key = `${row.ticker}|${row.side}`;
+      const absSignal = Math.abs(row.signal ?? 0);
+      const isAboveStartAbs = absSignal >= (startAbs ?? 0) && row.status !== "HOLD";
+      const isAboveEndAbs = absSignal >= effectiveEndAbs;
+
+      if (isAboveStartAbs) {
+        // Fresh/strong signal: track timing for minHoldCandles
+        if (!displayQualifiedSinceRef.current.has(key)) {
+          displayQualifiedSinceRef.current.set(key, { qualifiedSince: currentMinuteAligned, lastSeenAt: nowForDisplay });
+        } else {
+          displayQualifiedSinceRef.current.get(key)!.lastSeenAt = nowForDisplay;
+        }
+        // Promote to "displayed" once minHoldCandles is met
+        const history = displayQualifiedSinceRef.current.get(key)!;
+        if (nowForDisplay - history.qualifiedSince >= effectiveMinHoldMs) {
+          signalDisplayedRef.current.set(key, nowForDisplay);
+        }
+      } else if (isAboveEndAbs && signalDisplayedRef.current.has(key)) {
+        // Decaying signal: sigma in [endAbs, startAbs) — still above endAbs close threshold, keep alive
+        signalDisplayedRef.current.set(key, nowForDisplay);
+      }
+    }
+    // Evict: not seen >60s — same reset as Scanner consecutive count.
+    displayQualifiedSinceRef.current.forEach((v, k) => {
+      if (nowForDisplay - v.lastSeenAt > 60_000) displayQualifiedSinceRef.current.delete(k);
+    });
+    // Evict displayed: not seen >60s = dropped below endAbs or disappeared.
+    signalDisplayedRef.current.forEach((lastSeen, k) => {
+      if (nowForDisplay - lastSeen > 60_000) signalDisplayedRef.current.delete(k);
+    });
+
     const displayDecisions = decisionsWithWindowGuard
+      .filter(row => {
+        const absSignal = Math.abs(row.signal ?? 0);
+        // Never show above startAbsMax
+        if (effectiveStartAbsMax != null && absSignal > effectiveStartAbsMax) return false;
+        const key = `${row.ticker}|${row.side}`;
+        // Decaying signals: below startAbs but above endAbs, previously passed minHoldCandles
+        if (absSignal < (startAbs ?? 0)) {
+          return signalDisplayedRef.current.has(key);
+        }
+        // Fresh signals: apply minHoldCandles
+        if (effectiveMinHoldMs <= 0) return true;
+        const history = displayQualifiedSinceRef.current.get(key);
+        if (!history) return false;
+        return nowForDisplay - history.qualifiedSince >= effectiveMinHoldMs;
+      })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
     // Update minute snapshot at each new minute boundary.
@@ -3026,9 +3149,8 @@ export function useStreamEngine({
               ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
               : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS));
             const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
-            const _dispatchStartMin = Math.max(0, toNum(exactSonarFilterSnapshot?.zapShowAbs) ?? 0);
-            const _dispatchStartMaxRaw = toNum(exactSonarFilterSnapshot?.zapSilverAbs);
-            const _dispatchStartMax = _dispatchStartMaxRaw != null && _dispatchStartMaxRaw > 0 ? _dispatchStartMaxRaw : null;
+            const _dispatchStartMin = Math.max(0, startAbs ?? 0);
+            const _dispatchStartMax = (startAbsMax != null && startAbsMax > 0) ? startAbsMax : null;
             if (_liveAbs != null) {
               if (_liveAbs < _dispatchStartMin) {
                 console.log(`[CANCEL ENTRY] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} below min ${_dispatchStartMin} at dispatch`);

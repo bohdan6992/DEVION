@@ -14,7 +14,7 @@ export const SHARED_FILTER_PRESET_FIELDS = [
   { key: "avpremhv", scannerMin: "minAvPreMhv", scannerMax: "maxAvPreMhv", sonarMode: "AvPreMhv", sonarMin: "avPreMhvMin", sonarMax: "avPreMhvMax" },
   { key: "roundlot", scannerMin: "minRoundLot", scannerMax: "maxRoundLot", sonarMode: "RoundLot", sonarMin: "roundLotMin", sonarMax: "roundLotMax" },
   { key: "vwap", scannerMin: "minVWAP", scannerMax: "maxVWAP", sonarMode: "VWAP", sonarMin: "vwapMin", sonarMax: "vwapMax" },
-  { key: "spread", scannerMin: "minSpread", scannerMax: "maxSpread", sonarMode: "Spread", sonarMin: "spreadMin", sonarMax: "spreadMax" },
+  { key: "spread", scannerMin: "minSpread", scannerMax: "maxSpread", sonarMode: "SpreadBidPct", sonarMin: "spreadMin", sonarMax: "spreadMax" },
   { key: "lstprcl", scannerMin: "minLstPrcL", scannerMax: "maxLstPrcL", sonarMode: "LstPrcL", sonarMin: "lstPrcLMin", sonarMax: "lstPrcLMax" },
   { key: "lstcls", scannerMin: "minLstCls", scannerMax: "maxLstCls", sonarMode: "LstCls", sonarMin: "lstClsMin", sonarMax: "lstClsMax" },
   { key: "ycls", scannerMin: "minYCls", scannerMax: "maxYCls", sonarMode: "YCls", sonarMin: "yClsMin", sonarMax: "yClsMax" },

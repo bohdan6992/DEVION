@@ -43,7 +43,7 @@ export type ArbitrageFilterConfigV1 = {
     | "AvPreMhv"
     | "RoundLot"
     | "VWAP"
-    | "Spread"
+    | "SpreadBidPct"
     | "LstPrcL"
     | "LstCls"
     | "YCls"

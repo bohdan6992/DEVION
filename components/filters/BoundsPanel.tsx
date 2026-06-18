@@ -12,7 +12,7 @@ const KEYS: Array<{ key: string; label: string; step?: number }> = [
   { key: "AvPreMhv", label: "AvPreMhv", step: 1 },
   { key: "RoundLot", label: "RoundLot", step: 1 },
   { key: "VWAP", label: "VWAP", step: 0.001 },
-  { key: "Spread", label: "Spread", step: 0.001 },
+  { key: "SpreadBidPct", label: "SpreadBid%", step: 0.001 },
   { key: "LstPrcL", label: "LstPrcL", step: 0.001 },
   { key: "LstCls", label: "LstCls", step: 0.001 },
   { key: "YCls", label: "YCls", step: 0.001 },

@@ -378,11 +378,13 @@ type PaperArbClosedDto = {
   roundLot?: number | null;
   vwap?: number | null;
   spread?: number | null;
+  spreadBidPct?: number | null;
   lstPrcL?: number | null;
   lstCls?: number | null;
   yCls?: number | null;
   tCls?: number | null;
   clsToClsPct?: number | null;
+  gapPct?: number | null;
   lo?: number | null;
   newsCnt?: number | null;
   marketCapM?: number | null;
@@ -411,6 +413,8 @@ type PaperArbClosedDto = {
   endBenchLstPrcLstClsPct?: number | null;
   startBidPct?: number | null;
   startAskPct?: number | null;
+  peakBidPct?: number | null;
+  peakAskPct?: number | null;
   endBidPct?: number | null;
   endAskPct?: number | null;
   imbExch925?: number | null;
@@ -1166,7 +1170,7 @@ function downloadEpisodesCsv(rows: PaperArbClosedDto[], filename?: string): void
       f4(r.sigma),
       f4(r.rating),
       f4(r.ratingTotal),
-      f4(r.spread),
+      f4(r.spreadBidPct),
       f4(r.vwap),
       f4(r.lstCls),
       f4(r.yCls),
@@ -1650,7 +1654,7 @@ const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchP
   { value: "avPreMhv", label: "AvPreMhv", format: "number" },
   { value: "roundLot", label: "RoundLot", format: "number" },
   { value: "vwap", label: "VWAP", format: "number" },
-  { value: "spread", label: "Spread", format: "number" },
+  { value: "spread", label: "SpreadBid%", format: "number" },
   { value: "lstPrcL", label: "LstPrcL", format: "number" },
   { value: "lstCls", label: "LstCls", format: "number" },
   { value: "yCls", label: "YCls", format: "number" },
@@ -1805,7 +1809,7 @@ const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "avpremhv", label: "AvPreMhv", group: "TAPE FILTERS", scenarioParameter: "AvPreMhv" },
   { key: "roundlot", label: "RoundLot", group: "TAPE FILTERS", scenarioParameter: "RoundLot" },
   { key: "vwap", label: "VWAP", group: "TAPE FILTERS", scenarioParameter: "VWAP" },
-  { key: "spread", label: "Spread", group: "TAPE FILTERS", scenarioParameter: "Spread" },
+  { key: "spread", label: "SpreadBid%", group: "TAPE FILTERS", scenarioParameter: "SpreadBidPct" },
   { key: "lstprcl", label: "LstPrcL", group: "TAPE FILTERS", scenarioParameter: "LstPrcL" },
   { key: "lstcls", label: "LstCls", group: "TAPE FILTERS", scenarioParameter: "LstCls" },
   { key: "ycls", label: "YCls", group: "TAPE FILTERS", scenarioParameter: "YCls" },
@@ -1986,7 +1990,7 @@ function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchP
     case "vwap":
       return row.vwap ?? null;
     case "spread":
-      return row.spread ?? null;
+      return row.spreadBidPct ?? null;
     case "lstPrcL":
       return row.lstPrcL ?? null;
     case "lstCls":
@@ -6970,7 +6974,7 @@ function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; p
               <th className="text-right px-2.5 py-1 text-amber-300" rowSpan={2}>Total</th>
               <th className="text-right px-2.5 py-1" rowSpan={2}>Hold</th>
               <th className="text-right px-2.5 py-1" rowSpan={2}>Entries</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>Spread</th>
+              <th className="text-right px-2.5 py-1" rowSpan={2}>SpreadBid%</th>
               <th colSpan={3} className="text-center px-2.5 py-1 text-emerald-400 border-l border-white/10">P&amp;L</th>
             </tr>
             <tr>
@@ -7022,7 +7026,7 @@ function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; p
                   <td className="px-2.5 py-1.5 text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
                   <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
                   <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-500">{r.entryCount ?? "—"}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{num(r.spread, 4)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{num(r.spreadBidPct, 4)}</td>
                   <td className={clsx(
                     "px-2.5 py-1.5 text-right tabular-nums border-l border-white/10",
                     (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-400"
@@ -8043,8 +8047,8 @@ export default function ArbitrageScanner({
       maxPreMktVol,
       minPreMktVolNF,
       maxPreMktVolNF,
-      minSpread,
-      maxSpread,
+      minSpreadBidPct: minSpread ? Number(minSpread) : undefined,
+      maxSpreadBidPct: maxSpread ? Number(maxSpread) : undefined,
       minSpreadBps,
       maxSpreadBps,
       minGap,
@@ -8802,6 +8806,15 @@ export default function ArbitrageScanner({
     ratingType,
     metric,
     ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
+    startAbs,
+    startAbsMax: optNumOrNull(startAbsMax),
+    endAbs,
+    closeMode,
+    minHoldCandles,
+    ratingMode,
+    session,
+    ratingMinRate: streamRatingRule.minRate,
+    ratingMinTotal: streamRatingRule.minTotal,
     tickersCsv: splitListUpper(tickersText).join(",") || undefined,
     minCorr: optNumOrNull(minCorr),
     maxCorr: optNumOrNull(maxCorr),
@@ -9534,7 +9547,7 @@ export default function ArbitrageScanner({
     pushRangeScenarios("avpremhv", "AvPreMhv", minAvPreMhv, maxAvPreMhv, "minAvPreMhv", "maxAvPreMhv");
     pushRangeScenarios("roundlot", "RoundLot", minRoundLot, maxRoundLot, "minRoundLot", "maxRoundLot");
     pushRangeScenarios("vwap", "VWAP", minVWAP, maxVWAP, "minVWAP", "maxVWAP");
-    pushRangeScenarios("spread", "Spread", minSpread, maxSpread, "minSpread", "maxSpread");
+    pushRangeScenarios("spread", "SpreadBid%", minSpread, maxSpread, "minSpread", "maxSpread");
     pushRangeScenarios("lstprcl", "LstPrcL", minLstPrcL, maxLstPrcL, "minLstPrcL", "maxLstPrcL");
     pushRangeScenarios("lstcls", "LstCls", minLstCls, maxLstCls, "minLstCls", "maxLstCls");
     pushRangeScenarios("ycls", "YCls", minYCls, maxYCls, "minYCls", "maxYCls");
@@ -12343,7 +12356,7 @@ export default function ArbitrageScanner({
               <MinMaxRow label="AvPreMhv" filterKey="avpremhv" mode={sharedRangeFilterModes.avpremhv} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhv} maxValue={maxAvPreMhv} setMin={setMinAvPreMhv} setMax={setMaxAvPreMhv} card clearable />
               <MinMaxRow label="RoundLot" filterKey="roundlot" mode={sharedRangeFilterModes.roundlot} onToggleMode={toggleSharedRangeFilterMode} minValue={minRoundLot} maxValue={maxRoundLot} setMin={setMinRoundLot} setMax={setMaxRoundLot} card clearable />
               <MinMaxRow label="VWAP" filterKey="vwap" mode={sharedRangeFilterModes.vwap} onToggleMode={toggleSharedRangeFilterMode} minValue={minVWAP} maxValue={maxVWAP} setMin={setMinVWAP} setMax={setMaxVWAP} card clearable />
-              <MinMaxRow label="Spread" filterKey="spread" mode={sharedRangeFilterModes.spread} onToggleMode={toggleSharedRangeFilterMode} minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable />
+              <MinMaxRow label="SpreadBid%" filterKey="spread" mode={sharedRangeFilterModes.spread} onToggleMode={toggleSharedRangeFilterMode} minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable />
               <MinMaxRow label="LstPrcL" filterKey="lstprcl" mode={sharedRangeFilterModes.lstprcl} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcL} maxValue={maxLstPrcL} setMin={setMinLstPrcL} setMax={setMaxLstPrcL} card clearable />
               <MinMaxRow label="LstCls" filterKey="lstcls" mode={sharedRangeFilterModes.lstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstCls} maxValue={maxLstCls} setMin={setMinLstCls} setMax={setMaxLstCls} card clearable />
               <MinMaxRow label="YCls" filterKey="ycls" mode={sharedRangeFilterModes.ycls} onToggleMode={toggleSharedRangeFilterMode} minValue={minYCls} maxValue={maxYCls} setMin={setMinYCls} setMax={setMaxYCls} card clearable />
@@ -15627,8 +15640,20 @@ export default function ArbitrageScanner({
                       <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
                         Ticker %
                       </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-amber-500/70" colSpan={3}>
+                        Bid %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-orange-500/70" colSpan={3}>
+                        Ask %
+                      </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
                         Bench %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-violet-400/70" rowSpan={2}>
+                        Gap%
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-pink-400/70" rowSpan={2}>
+                        SpreadBid%
                       </th>
                     </tr>
                     <tr className="text-zinc-400">
@@ -15644,6 +15669,12 @@ export default function ArbitrageScanner({
                       <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
                       <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
                       <th className="text-right p-2.5 text-emerald-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-amber-500/70">Start</th>
+                      <th className="text-right p-2.5 text-amber-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-amber-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-orange-500/70">Start</th>
+                      <th className="text-right p-2.5 text-orange-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-orange-500/70">End</th>
                       <th className="text-right p-2.5 border-l border-white/10 text-sky-500/70">Start</th>
                       <th className="text-right p-2.5 text-sky-500/70">Peak</th>
                       <th className="text-right p-2.5 text-sky-500/70">End</th>
@@ -15712,9 +15743,17 @@ export default function ArbitrageScanner({
                               <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.lstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.peakLstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.endLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startAskPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakAskPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endAskPct)}</td>
                               <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBenchLstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.peakBenchLstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.endBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-violet-300">{fP(r.gapPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-pink-300">{fP(r.spreadBidPct)}</td>
                             </>);
                           })()}
                         </tr>
@@ -15722,7 +15761,7 @@ export default function ArbitrageScanner({
                     })}
                     {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={19} className="p-8 text-center text-zinc-500">
+                        <td colSpan={27} className="p-8 text-center text-zinc-500">
                           No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>

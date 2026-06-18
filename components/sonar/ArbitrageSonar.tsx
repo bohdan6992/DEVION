@@ -415,7 +415,7 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 /* =========================
    Numeric field getters (centralized)
 ========================= */
-const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
+const numSpreadBidPct = (s: any) => getNumAny(s, ["SpreadBid%", "spreadBidPct", "SpreadBidPct"]);
 const numLastClose = (s: any) =>
   getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
 
@@ -494,7 +494,7 @@ const RANGE_VALUE_GETTERS = {
   AvPreMhv: numAvPreMh,
   RoundLot: numRoundLot,
   VWAP: numVWAP,
-  Spread: numSpread,
+  SpreadBidPct: numSpreadBidPct,
   LstPrcL: numLstPrcL,
   LstCls: numLastClose,
   YCls: numYCls,
@@ -954,6 +954,7 @@ export function buildSignalsUrl(args: {
   zapMode: "zap" | "sigma" | "delta" | "off";
   minRate: number;
   minTotal: number;
+  startAbs?: number | null;
   limit?: number;
   tickers?: string;
   minCorr?: number | null;
@@ -972,6 +973,7 @@ export function buildSignalsUrl(args: {
     zapMode,
     minRate,
     minTotal,
+    startAbs,
     limit,
     tickers,
     minCorr,
@@ -1006,6 +1008,7 @@ export function buildSignalsUrl(args: {
     }
   };
 
+  setOptional("startAbs", startAbs);
   setOptional("minCorr", minCorr);
   setOptional("maxCorr", maxCorr);
   setOptional("minBeta", minBeta);
@@ -1232,7 +1235,7 @@ type MinMaxProps = {
 
 const RANGE_BOUND_KEYS = [
   "Corr", "Beta", "Sigma",
-  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "Spread", "LstPrcL",
+  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "SpreadBidPct", "LstPrcL",
   "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
   "VolNFfromLstCls", "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
   "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90", "PreMhMDV20NF", "PreMhMDV90NF",
@@ -2194,6 +2197,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
           </div>
         </div>
       </div>
+
     </button>
   );
 };
@@ -4118,7 +4122,7 @@ export default function ArbitrageSonar() {
       AvPreMhv: mm("AvPreMhv", avPreMhvMin, avPreMhvMax),
       RoundLot: mm("RoundLot", roundLotMin, roundLotMax),
       VWAP: mm("VWAP", vwapMin, vwapMax),
-      Spread: mm("Spread", spreadMin, spreadMax),
+      SpreadBidPct: mm("SpreadBidPct", spreadMin, spreadMax),
       LstPrcL: mm("LstPrcL", lstPrcLMin, lstPrcLMax),
       LstCls: mm("LstCls", lstClsMin, lstClsMax),
       YCls: mm("YCls", yClsMin, yClsMax),
@@ -4537,9 +4541,11 @@ export default function ArbitrageSonar() {
       "AvPreMhVol90NF","AvPreMhValue20NF","AvPreMhValue90NF",
       "PreMhMDV90NF","PreMhMDV20NF","AvPostMhVol90NF",
       "Volatility20","Volatility90","VolRel",
+      "LstPrcLstClsΔ%",
       "PreMhBidLstPrcΔ%","PreMhLoLstPrcΔ%","PreMhHiLstClsΔ%","PreMhLoLstClsΔ%",
       "ImbExch9:25","ImbExch15:55",
       "PreMhVol","PreMhVolNF",
+      "SpreadBid%",
     ].join(",");
     fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
       .then((r) => r.json())
@@ -5591,7 +5597,7 @@ export default function ArbitrageSonar() {
             <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="SpreadBid%" filterKey="SpreadBidPct" mode={rangeModes.SpreadBidPct} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
             <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
@@ -6454,8 +6460,18 @@ export default function ArbitrageSonar() {
             {!activePanelCollapsed && (
               <div className="relative p-4 space-y-4">
                 {(() => {
+                  const isUsableLive = (v: any) => {
+                    if (v == null) return false;
+                    if (typeof v === "string") { const t = v.trim(); return t.length > 0 && t !== "-" && t !== "—"; }
+                    return true;
+                  };
+                  const liveSnapFiltered = liveSnap
+                    ? Object.fromEntries(Object.entries(liveSnap).filter(([, v]) => isUsableLive(v)))
+                    : null;
                   const s = activeData
-                    ? (liveSnap ? { ...activeData, ...liveSnap } : activeData)
+                    ? (liveSnapFiltered && Object.keys(liveSnapFiltered).length > 0
+                        ? { ...activeData, ...liveSnapFiltered }
+                        : activeData)
                     : null;
                   const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
                   const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
@@ -6492,7 +6508,7 @@ export default function ArbitrageSonar() {
                       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
                         {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : activeSector2) : "-")}
                         {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
-                        {renderCell("Spread", s ? (numSpread(s) == null ? "-" : fmtNum(numSpread(s)!, 4)) : "-")}
+                        {renderCell("SpreadBid%", s ? (numSpreadBidPct(s) == null ? "-" : fmtNum(numSpreadBidPct(s)!, 4)) : "-")}
                         {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
                         {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
                         {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
