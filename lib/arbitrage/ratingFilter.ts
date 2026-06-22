@@ -148,6 +148,8 @@ export type RatingFilterArgs = {
   minRate: number;
   /** Minimum trade total threshold (e.g. 3). */
   minTotal: number;
+  /** Which total bucket to check in SESSION mode: "hard" | "soft" | "any" (default "any"). */
+  ratingType?: string | null;
 };
 
 /**
@@ -158,20 +160,55 @@ export type RatingFilterArgs = {
  * BINS:    checks sigma_bin_stats bucket at current sigma; returns false if no data.
  */
 export function passesStreamRatingFilter(args: RatingFilterArgs): boolean {
-  const { ratingMode, signal, session, side, sigmaAbs, minRate, minTotal } = args;
+  const { ratingMode, signal, session, side, sigmaAbs, minRate, minTotal, ratingType } = args;
   const mode = (ratingMode ?? "SESSION").toUpperCase();
 
-  // SESSION: filtering is done server-side via EligibilityPolicy (minRate/minTotal in URL).
-  if (mode === "SESSION") return true;
+  const effRate = Math.max(0, Number(minRate) || 0);
+  const effTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
+
+  if (mode === "SESSION") {
+    // Server already pre-filters by minRate/minTotal, but client re-checks for consistency with Sonar/Scanner.
+    if (effRate === 0 && effTotal === 0) return true;
+    // Sonar SESSION mode reads signal.best.rating (session-specific, server pre-computes for requested cls).
+    // _bestRating is normalizeSignal's capture of signal.best.rating — use it as primary source.
+    // best_params.best is a fallback (may be global, not session-specific).
+    const bestParams = getBestParamsRaw(signal);
+    const bpBest = safeObj(bestParams?.best ?? bestParams?.Best);
+    const r = optNum(
+      signal?._bestRating ?? signal?.bestRating ??
+      bpBest?.rating ?? bpBest?.Rating ?? bpBest?.rate ?? bpBest?.Rate ??
+      signal?.rating ?? signal?.Rating
+    );
+    // Respect ratingType (hard/soft/any) matching Sonar's getBestTotalByType behavior.
+    const type = (ratingType ?? "any").toLowerCase();
+    let t: number | null;
+    // Fallback chain for total: type-specific → aggregate best → flat ratingTotal from server row.
+    // The ratingTotal fallback keeps Scanner active rows (which lack best_params) working correctly.
+    const anyTotal = (() => {
+      const hardV = optNum(signal?._bestHard ?? bpBest?.hard ?? bpBest?.Hard);
+      const softV = optNum(signal?._bestSoft ?? bpBest?.soft ?? bpBest?.Soft);
+      return hardV != null || softV != null
+        ? (hardV ?? 0) + (softV ?? 0)
+        : optNum(signal?._bestTotal ?? signal?.bestTotal ?? bpBest?.total ?? bpBest?.Total ?? bpBest?.count ?? bpBest?.Count ?? signal?.ratingTotal ?? signal?.RatingTotal);
+    })();
+    if (type === "hard") {
+      t = optNum(signal?._bestHard ?? bpBest?.hard ?? bpBest?.Hard) ?? anyTotal;
+    } else if (type === "soft") {
+      t = optNum(signal?._bestSoft ?? bpBest?.soft ?? bpBest?.Soft) ?? anyTotal;
+    } else {
+      t = anyTotal;
+    }
+    if (r == null || t == null) return false;
+    if (r < effRate) return false;
+    if (t < effTotal) return false;
+    return true;
+  }
 
   if (sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
   const signKey = sideToSignKey(side);
   if (!signKey) return false;
   const classKey = sessionToClassKey(session);
   const bestParams = getBestParamsRaw(signal);
-
-  const effRate = Math.max(0, Number(minRate) || 0);
-  const effTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
 
   if (mode === "BIN") {
     const snap = binRatingSnapshotFromBestParams(bestParams, classKey, signKey, sigmaAbs);

@@ -385,13 +385,13 @@ function intentId(parts: Array<string | number>): string {
 
 function signalAbs(row: ArbitrageSignal | null | undefined): number | null {
   if (!row) return null;
-  const raw = toNum(row.sig ?? row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS);
+  const raw = toNum(row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS ?? row.sig);
   return raw == null ? null : Math.abs(raw);
 }
 
 function signalSigned(row: ArbitrageSignal | null | undefined): number | null {
   if (!row) return null;
-  return toNum(row.sig ?? row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS);
+  return toNum(row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS ?? row.sig);
 }
 
 function numPositionBp(row: ArbitrageSignal | null | undefined): number | null {
@@ -429,7 +429,13 @@ function signalSpread(row: ArbitrageSignal | null | undefined): number | null {
 
 function signalSpreadBidPct(row: ArbitrageSignal | null | undefined): number | null {
   if (!row) return null;
-  return toNum((row as any)["SpreadBid%"] ?? (row as any).spreadBidPct ?? (row as any).SpreadBidPct);
+  return toNum(
+    (row as any)["SpreadBid%"] ??
+    (row as any).spreadBidPct ??
+    (row as any).SpreadBidPct ??
+    (row as any).Spread ??
+    (row as any).spread
+  );
 }
 
 function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
@@ -530,6 +536,13 @@ function readStreamActionLog(storageKey: string): StreamActionLogEntry[] {
             row.intent === "MANUAL"
               ? row.intent
               : "MANUAL",
+          ...(row.sequence != null ? { sequence: Math.trunc(Number(row.sequence)) } : {}),
+          ...(toNum(row.addThreshold) != null ? { addThreshold: toNum(row.addThreshold) } : {}),
+          ...(toNum(row.sinceLastMs) != null ? { sinceLastMs: toNum(row.sinceLastMs) } : {}),
+          ...(toNum(row.delayRequiredMs) != null ? { delayRequiredMs: toNum(row.delayRequiredMs) } : {}),
+          ...(toNum(row.holdMs) != null ? { holdMs: toNum(row.holdMs) } : {}),
+          ...(toNum(row.entryCount) != null ? { entryCount: toNum(row.entryCount) } : {}),
+          ...(typeof row.filtersOk === "string" && row.filtersOk ? { filtersOk: row.filtersOk } : {}),
         } satisfies StreamActionLogEntry;
       })
       .filter((row): row is StreamActionLogEntry => row !== null), Date.now());
@@ -898,13 +911,19 @@ export function computeStreamDecisionRows(
   signals: ArbitrageSignal[],
   maxSpreadValue: unknown,
   automationConfig?: StreamAutomationConfig,
-  bookSnapshot?: MarketMakerBookSnapshot | null
+  bookSnapshot?: MarketMakerBookSnapshot | null,
+  metric: "SigmaZap" | "ZapPct" = "SigmaZap"
 ): StreamDecisionRow[] {
   const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const canApplyBook = signals.length === 1 && (bookSnapshot?.bestBid != null || bookSnapshot?.bestAsk != null);
 
-  return signals.map((row) => {
+  return signals.flatMap((row) => {
     const side: "Long" | "Short" = row.direction === "down" ? "Short" : "Long";
+    // Direction-specific and metric-specific signal. null = no data → exclude candidate.
+    const signal = metric === "SigmaZap"
+      ? (side === "Long" ? toNum(row.zapLsigma) : toNum(row.zapSsigma))
+      : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
+    if (signal == null) return []; // no data for this mode/direction → not a candidate
     const bid = toNum(row.Bid ?? row.bidStock ?? row.bid);
     const ask = toNum(row.Ask ?? row.askStock ?? row.ask);
     const bookBid = canApplyBook ? toNum(bookSnapshot?.bestBid) : null;
@@ -915,7 +934,6 @@ export function computeStreamDecisionRows(
     const spread = effectiveBid != null && effectiveAsk != null
       ? Math.max(0, effectiveAsk - effectiveBid)
       : rawSpread ?? (bid != null && ask != null ? Math.max(0, ask - bid) : null);
-    const signal = toNum(row.sig ?? row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS);
     const safePrice = side === "Long" ? effectiveBid : effectiveAsk;
     const edge = signal == null ? null : Math.abs(signal);
     const netEdge = edge == null ? null : Math.max(0, edge - Math.max(0, spread ?? 0));
@@ -1669,6 +1687,7 @@ type UseStreamEngineArgs = {
   maxBeta?: number | null;
   minSigma?: number | null;
   maxSigma?: number | null;
+  sideFilter?: "" | "Long" | "Short" | null;
   filterConfig: ArbitrageFilterConfigV1;
   exactSonarFilterSnapshot?: SonarExactFilterSnapshot;
   maxSpreadValue: unknown;
@@ -1774,6 +1793,7 @@ export function useStreamEngine({
   maxBeta,
   minSigma,
   maxSigma,
+  sideFilter,
   filterConfig,
   exactSonarFilterSnapshot,
   maxSpreadValue,
@@ -1791,7 +1811,15 @@ export function useStreamEngine({
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
   const actionLogStorageKey = streamActionLogStorageKey(signalClass);
-  const currentDayKey = localDayKey();
+  const [currentDayKey, setCurrentDayKey] = useState<string>(() => localDayKey());
+  useEffect(() => {
+    // Re-check day key every minute so the log resets at midnight without page reload.
+    const timer = setInterval(() => {
+      const next = localDayKey();
+      setCurrentDayKey((prev) => (prev === next ? prev : next));
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>(() => readStreamActionLog(actionLogStorageKey));
   const [streamPositions, setStreamPositions] = useState<StreamPosition[]>(() => buildStreamPositionsFromActionLog(readStreamActionLog(actionLogStorageKey), currentDayKey));
   const [streamOrderIntents, setStreamOrderIntents] = useState<StreamOrderIntent[]>([]);
@@ -2442,33 +2470,53 @@ export function useStreamEngine({
     const executionSnapshot = refreshBridge
       ? await refreshExecutionStatus(false)
       : streamExecutionSnapshotRef.current;
-    const filtered = exactSonarFilterSnapshot
+    const preFiltered = exactSonarFilterSnapshot
       ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
       : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
 
-    // Apply BIN/BINS rating filter using best_params attached to each signal.
-    // SESSION mode is handled server-side (EligibilityPolicy applies minRate/minTotal).
-    const ratingModeUpper = (ratingMode ?? "SESSION").toUpperCase();
+    const filtered = sideFilter
+      ? preFiltered.filter(row => {
+          const dir = (row.direction ?? "").toLowerCase();
+          const isLong = dir === "up" || dir === "long";
+          const isShort = dir === "down" || dir === "short";
+          if (sideFilter === "Long") return isLong;
+          if (sideFilter === "Short") return isShort;
+          return true;
+        })
+      : preFiltered;
+
+    // Apply BIN / BINS / SESSION rating filter using best_params attached to each signal.
+    // BIN/BINS only apply when metric is SigmaZap (same guard as Sonar zapMode=sigma / Scanner metric=SigmaZap).
+    const ratingModeRaw = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")).toUpperCase();
+    const ratingModeUpper = (ratingModeRaw === "BIN" || ratingModeRaw === "BINS") && metric !== "SigmaZap"
+      ? "SESSION"
+      : ratingModeRaw;
     const effectiveMinRate = ratingMinRate ?? ratingRule.minRate;
     const effectiveMinTotal = ratingMinTotal ?? ratingRule.minTotal;
-    const ratingFiltered = (ratingModeUpper === "BIN" || ratingModeUpper === "BINS")
-      ? filtered.filter(row => passesStreamRatingFilter({
-          ratingMode: ratingModeUpper,
-          signal: row,
-          session: session ?? "GLOB",
-          side: row.direction === "down" ? "Short" : "Long",
-          sigmaAbs: Math.abs(toNum(row.zapSsigma ?? row.sig ?? row.zapS ?? row.zapL) ?? 0) || null,
-          minRate: effectiveMinRate,
-          minTotal: effectiveMinTotal,
-        }))
-      : filtered;
+    const ratingFiltered = filtered.filter(row => {
+      const rowSide = row.direction === "down" ? "Short" : "Long";
+      const rawSigma = rowSide === "Short"
+        ? toNum(row.zapSsigma ?? row.zapS)
+        : toNum(row.zapLsigma ?? row.zapL);
+      return passesStreamRatingFilter({
+        ratingMode: ratingModeUpper,
+        signal: row,
+        session: session ?? "GLOB",
+        side: rowSide,
+        sigmaAbs: rawSigma != null ? Math.abs(rawSigma) : null,
+        minRate: effectiveMinRate,
+        minTotal: effectiveMinTotal,
+        ratingType: ratingType ?? "any",
+      });
+    });
 
     const bookSnapshot = streamBookStore.getState().snapshot;
     const decisions = computeStreamDecisionRows(
       ratingFiltered,
       maxSpreadValue,
       automationConfig,
-      bookSnapshot
+      bookSnapshot,
+      metric
     );
 
     const autoEnabledNow =

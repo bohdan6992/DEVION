@@ -2,79 +2,102 @@
 
 import { useEffect, useRef } from "react";
 
-const SYMBOLS =
-  "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ" +
-  "ΨΩΦΞΘΛΣ" +
-  "ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒ" +
-  "0123456789+*-%&@#$≠≈∞√";
+const CAMO_W = 2560;
+const CAMO_H = 1600;
 
-const PRIMARY = "#8a9a52";   // khaki olive
-const HEAD    = "#d4df9e";   // light khaki flash
-const GLOW    = "rgba(138,154,82,0.55)";
+const COLORS = [
+  "#847c61", // base khaki
+  "#ded6b8", // light tan
+  "#424831", // ranger green
+  "#55473d", // earth brown
+  "#21231a", // dark charcoal
+];
 
-function hexToRgba(hex: string, alpha: number) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
+function drawBlob(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, color: string) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const d = r * (0.3 + Math.random() * 0.4);
+    ctx.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d, r * (0.5 + Math.random() * 0.6), 0, Math.PI * 2);
+  }
+  ctx.fill();
 }
 
-class MatrixCell {
-  x: number; y: number; char: string;
-  baseOpacity: number; opacity: number; isHead: boolean;
+function buildCamoTexture(): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = CAMO_W; c.height = CAMO_H;
+  const x = c.getContext("2d")!;
 
-  constructor(x: number, y: number) {
-    this.x = x; this.y = y;
-    this.char = SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
-    this.baseOpacity = 0.03 + Math.random() * 0.13;
-    this.opacity = this.baseOpacity;
-    this.isHead = false;
+  x.fillStyle = COLORS[0];
+  x.fillRect(0, 0, CAMO_W, CAMO_H);
+
+  const area = CAMO_W * CAMO_H;
+  for (let i = 0; i < area / 32000; i++)
+    drawBlob(x, Math.random() * CAMO_W, Math.random() * CAMO_H, Math.random() * 140 + 80, COLORS[2]);
+  for (let i = 0; i < area / 24000; i++)
+    drawBlob(x, Math.random() * CAMO_W, Math.random() * CAMO_H, Math.random() * 90 + 50, COLORS[3]);
+  for (let i = 0; i < area / 40000; i++)
+    drawBlob(x, Math.random() * CAMO_W, Math.random() * CAMO_H, Math.random() * 60 + 30, COLORS[4]);
+
+  for (let i = 0; i < 4500; i++) {
+    x.fillStyle = Math.random() > 0.4 ? COLORS[1] : COLORS[4];
+    x.globalAlpha = Math.random() * 0.7 + 0.3;
+    x.beginPath();
+    x.arc(Math.random() * CAMO_W, Math.random() * CAMO_H, Math.random() * 3 + 1, 0, Math.PI * 2);
+    x.fill();
+  }
+  x.globalAlpha = 1;
+
+  x.strokeStyle = "rgba(0,0,0,0.08)";
+  x.lineWidth = 1;
+  for (let i = 0; i < 80000; i++) {
+    const tx = Math.random() * CAMO_W, ty = Math.random() * CAMO_H;
+    const l = Math.random() * 3 + 2;
+    x.beginPath(); x.moveTo(tx, ty);
+    Math.random() > 0.5 ? x.lineTo(tx + l, ty) : x.lineTo(tx, ty + l);
+    x.stroke();
+  }
+  x.strokeStyle = "rgba(255,255,255,0.04)";
+  for (let i = 0; i < 40000; i++) {
+    const tx = Math.random() * CAMO_W, ty = Math.random() * CAMO_H;
+    const l = Math.random() * 2 + 1;
+    x.beginPath(); x.moveTo(tx, ty); x.lineTo(tx + l, ty); x.stroke();
   }
 
-  update() {
-    this.opacity *= 0.92;
-    if (this.opacity < this.baseOpacity) this.opacity = this.baseOpacity;
-    if (Math.random() < 0.002) this.char = SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
+  const rs = 22;
+  x.strokeStyle = "rgba(255,255,255,0.05)";
+  x.beginPath();
+  for (let px = 0; px < CAMO_W; px += rs) {
+    x.moveTo(px, 0); x.lineTo(px, CAMO_H);
+    x.moveTo(px + 1.5, 0); x.lineTo(px + 1.5, CAMO_H);
   }
+  for (let py = 0; py < CAMO_H; py += rs) {
+    x.moveTo(0, py); x.lineTo(CAMO_W, py);
+    x.moveTo(0, py + 1.5); x.lineTo(CAMO_W, py + 1.5);
+  }
+  x.stroke();
 
-  draw(ctx: CanvasRenderingContext2D) {
-    if (this.opacity <= 0.01) return;
-    if (this.isHead) {
-      ctx.shadowColor = GLOW;
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = hexToRgba(HEAD, this.opacity);
-    } else {
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = hexToRgba(PRIMARY, this.opacity);
-    }
-    ctx.fillText(this.char, this.x, this.y);
+  x.strokeStyle = "rgba(0,0,0,0.08)";
+  x.beginPath();
+  for (let px = 0.5; px < CAMO_W; px += rs) {
+    x.moveTo(px + 3, 0); x.lineTo(px + 3, CAMO_H);
   }
+  for (let py = 0; py < CAMO_H; py += rs) {
+    x.moveTo(0, py + 3); x.lineTo(CAMO_W, py + 3);
+  }
+  x.stroke();
+
+  return c;
 }
 
-class Sweep {
-  col: number; y: number; speed: number; length: number;
-  private cols: number; private rows: number;
-
-  constructor(cols: number, rows: number, randomY = false) {
-    this.cols = cols; this.rows = rows;
-    this.col = Math.floor(Math.random() * cols);
-    this.y = randomY ? Math.random() * rows : -Math.random() * 20 - 5;
-    this.speed = Math.random() * 0.3 + 0.15;
-    this.length = Math.floor(Math.random() * 15 + 8);
-  }
-
-  update() {
-    this.y += this.speed;
-    if (this.y - this.length > this.rows) {
-      this.col = Math.floor(Math.random() * this.cols);
-      this.y = -Math.random() * 15 - 5;
-      this.speed = Math.random() * 0.3 + 0.15;
-      this.length = Math.floor(Math.random() * 15 + 8);
-    }
-  }
+function waveH(x: number, t: number): number {
+  return (
+    Math.sin(x * 0.003 - t * 1.2) * 34 +
+    Math.cos(x * 0.0075 - t * 2.3) * 10 +
+    Math.sin(x * 0.018 - t * 3.8) * 3
+  );
 }
-
-const FONT_SIZE = 15;
 
 export default function KhakiThemeBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -82,57 +105,60 @@ export default function KhakiThemeBackground() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: false })!;
+    const ctx = canvas.getContext("2d")!;
 
-    let grid: MatrixCell[] = [];
-    let sweeps: Sweep[] = [];
-    let cols = 0, rows = 0;
+    const camo = buildCamoTexture();
+    let w = 0, h = 0;
     let raf = 0;
 
-    const init = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      ctx.font = `bold ${FONT_SIZE}px 'Fira Code', monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      cols = Math.floor(canvas.width / FONT_SIZE) + 1;
-      rows = Math.floor(canvas.height / FONT_SIZE) + 1;
-      grid = [];
-      for (let c = 0; c < cols; c++)
-        for (let r = 0; r < rows; r++)
-          grid.push(new MatrixCell(c * FONT_SIZE + FONT_SIZE / 2, r * FONT_SIZE + FONT_SIZE / 2));
-      sweeps = Array.from({ length: Math.floor(cols * 0.25) }, () => new Sweep(cols, rows, true));
+    const setup = () => {
+      const dpr = window.devicePixelRatio || 1;
+      w = window.innerWidth; h = window.innerHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      ctx.scale(dpr, dpr);
     };
 
-    const loop = () => {
-      ctx.fillStyle = "#050602";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const draw = (time: number) => {
+      raf = requestAnimationFrame(draw);
+      const t = time * 0.0011;
 
-      for (const cell of grid) { cell.isHead = false; cell.update(); }
+      ctx.fillStyle = "#0a0b08";
+      ctx.fillRect(0, 0, w, h);
 
-      for (const sw of sweeps) {
-        sw.update();
-        const headRow = Math.floor(sw.y);
-        for (let j = 0; j < sw.length; j++) {
-          const r = headRow - j;
-          if (r < 0 || r >= rows) continue;
-          const cell = grid[sw.col * rows + r];
-          if (!cell) continue;
-          const intensity = 1 - j / sw.length;
-          if (intensity > cell.opacity) cell.opacity = intensity;
-          if (j === 0) cell.isHead = true;
-        }
+      const step = 3;
+      const blX = 40, blY = 100;
+
+      for (let x = -blX; x < w + blX; x += step) {
+        const h1 = waveH(x, t);
+        const nx = x + step;
+        const h2 = waveH(nx, t);
+
+        const dx1 = x + Math.sin(x * 0.003 - t * 1.2) * 18;
+        const dx2 = nx + Math.sin(nx * 0.003 - t * 1.2) * 18;
+        const dw = dx2 - dx1;
+        const dy = -blY + h1;
+        const dh = h + blY * 2;
+
+        const rel = (x + blX) / (w + blX * 2);
+        const sx = Math.max(0, Math.min(CAMO_W - step, rel * (CAMO_W - 240) + 120));
+
+        ctx.drawImage(camo, sx, 120, step, CAMO_H - 240, dx1, dy, dw + 0.7, dh);
+
+        const slope = (h2 - h1) / step;
+        const li = slope * 5.5;
+        ctx.fillStyle = li > 0
+          ? `rgba(255,255,255,${Math.min(0.24, li * 0.8)})`
+          : `rgba(0,0,0,${Math.min(0.58, -li * 0.9)})`;
+        ctx.fillRect(dx1, dy, dw + 0.7, dh);
       }
-
-      for (const cell of grid) cell.draw(ctx);
-      raf = requestAnimationFrame(loop);
     };
 
     let resizeTimer = 0;
-    const onResize = () => { clearTimeout(resizeTimer); resizeTimer = window.setTimeout(init, 200); };
+    const onResize = () => { clearTimeout(resizeTimer); resizeTimer = window.setTimeout(setup, 200); };
     window.addEventListener("resize", onResize);
-    init();
-    loop();
+    setup();
+    raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
@@ -141,9 +167,17 @@ export default function KhakiThemeBackground() {
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ position: "fixed", inset: 0, width: "100vw", height: "100vh", zIndex: 0, display: "block" }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        style={{ position: "fixed", inset: 0, width: "100vw", height: "100vh", zIndex: 0, display: "block" }}
+      />
+      <div
+        style={{
+          position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
+          background: "radial-gradient(circle at 50% 50%, transparent 25%, rgba(0,0,0,0.7) 100%)",
+        }}
+      />
+    </>
   );
 }

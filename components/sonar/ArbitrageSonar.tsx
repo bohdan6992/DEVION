@@ -415,7 +415,7 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 /* =========================
    Numeric field getters (centralized)
 ========================= */
-const numSpreadBidPct = (s: any) => getNumAny(s, ["SpreadBid%", "spreadBidPct", "SpreadBidPct"]);
+const numSpreadBidPct = (s: any) => getNumAny(s, ["SpreadBid%", "spreadBidPct", "SpreadBidPct", "Spread", "spread"]);
 const numLastClose = (s: any) =>
   getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
 
@@ -2433,6 +2433,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     if (useBinRatingFilter) {
       if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
     } else if (useSigBinFilter) {
+      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
       const binStats = getSessionBinRating(s, f.cls as ArbClass);
       if (binStats === null) continue;
       if (mr != null && binStats.rate < mr) continue;

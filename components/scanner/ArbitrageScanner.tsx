@@ -18,6 +18,7 @@ import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
+import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamFilterPassLogStore, downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
@@ -8822,6 +8823,7 @@ export default function ArbitrageScanner({
     maxBeta: optNumOrNull(maxBeta),
     minSigma: optNumOrNull(minSigma),
     maxSigma: optNumOrNull(maxSigma),
+    sideFilter: sideFilter || undefined,
     filterConfig: streamFilterConfig,
     exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
     maxSpreadValue: maxSpread,
@@ -10170,14 +10172,16 @@ export default function ArbitrageScanner({
         printMedianNeg: r.printMedianNeg,
       })) return false;
       if (ratingMode === "SESSION") {
-        const effMinRate = Math.max(0, Number(activeBinRule.minRate) || 0);
-        const effMinTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
-        if (effMinRate > 0 || effMinTotal > 0) {
-          const epRating = typeof r.rating === "number" ? r.rating : null;
-          const epTotal = typeof r.ratingTotal === "number" ? r.ratingTotal : null;
-          if (epRating == null || epTotal == null) return false;
-          if (epRating < effMinRate || epTotal < effMinTotal) return false;
-        }
+        if (!passesStreamRatingFilter({
+          ratingMode: "SESSION",
+          signal: r,
+          session,
+          side: normalizeSide(r.side).isLong ? "Long" : "Short",
+          sigmaAbs: null,
+          minRate: activeBinRule.minRate,
+          minTotal: activeBinRule.minTotal,
+          ratingType,
+        })) return false;
       }
       if (!passesScannerBinRatingFilter({
         enabled: useBinRatingFilter,
@@ -10189,6 +10193,15 @@ export default function ArbitrageScanner({
         minTotal: activeBinRule.minTotal,
       })) return false;
       if (useSigBinFilter) {
+        if (!passesScannerBinRatingFilter({
+          enabled: true,
+          row: r,
+          session,
+          side: r.side,
+          sigmaAbs: r.last?.metricAbs ?? r.start?.metricAbs,
+          minRate: activeBinRule.minRate,
+          minTotal: activeBinRule.minTotal,
+        })) return false;
         const snap = scannerSigBinSnapshot({ row: r, session, side: r.side, sigmaAbs: r.last?.metricAbs ?? r.start?.metricAbs });
         if (!snap) return false;
         const effRate = Math.max(0, Number(activeBinRule.minRate) || 0);
@@ -10232,14 +10245,16 @@ export default function ArbitrageScanner({
         printMedianNeg: r.printMedianNeg,
       })) return false;
       if (ratingMode === "SESSION") {
-        const effMinRate = Math.max(0, Number(episodeBinRule.minRate) || 0);
-        const effMinTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
-        if (effMinRate > 0 || effMinTotal > 0) {
-          const epRating = typeof r.rating === "number" ? r.rating : null;
-          const epTotal = typeof r.ratingTotal === "number" ? r.ratingTotal : null;
-          if (epRating == null || epTotal == null) return false;
-          if (epRating < effMinRate || epTotal < effMinTotal) return false;
-        }
+        if (!passesStreamRatingFilter({
+          ratingMode: "SESSION",
+          signal: r,
+          session,
+          side: normalizeSide(r.side).isLong ? "Long" : "Short",
+          sigmaAbs: null,
+          minRate: episodeBinRule.minRate,
+          minTotal: episodeBinRule.minTotal,
+          ratingType,
+        })) return false;
       }
       if (!passesScannerBinRatingFilter({
         enabled: useBinRatingFilter,
@@ -10251,6 +10266,15 @@ export default function ArbitrageScanner({
         minTotal: episodeBinRule.minTotal,
       })) return false;
       if (useSigBinFilter) {
+        if (!passesScannerBinRatingFilter({
+          enabled: true,
+          row: r,
+          session,
+          side: r.side,
+          sigmaAbs: r.peakMetricAbs ?? r.startMetricAbs,
+          minRate: episodeBinRule.minRate,
+          minTotal: episodeBinRule.minTotal,
+        })) return false;
         const snap = scannerSigBinSnapshot({ row: r, session, side: r.side, sigmaAbs: r.peakMetricAbs ?? r.startMetricAbs });
         if (!snap) return false;
         const effRate = Math.max(0, Number(episodeBinRule.minRate) || 0);

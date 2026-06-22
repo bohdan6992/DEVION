@@ -10,7 +10,7 @@ const BOUND_ALIASES: Partial<Record<string, string[]>> = {
   AvPreMhv: ["AvPreMhv", "avPreMhv", "AvPreMh", "avPreMh", "avPreMhv"],
   RoundLot: ["RoundLot", "roundLot"],
   VWAP: ["VWAP", "vwap"],
-  SpreadBidPct: ["SpreadBid%", "spreadBidPct", "SpreadBidPct"],
+  SpreadBidPct: ["SpreadBid%", "spreadBidPct", "SpreadBidPct", "Spread", "spread"],
   LstPrcL: ["LstPrcL", "lstPrcL", "LastPriceL", "lastPriceL", "LstPrc", "lstPrc"],
   LstCls: ["LstCls", "lstCls", "LastClose", "lastClose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "Close", "close"],
   YCls: ["YCls", "yCls", "YClose", "yClose"],
@@ -32,6 +32,13 @@ const BOUND_ALIASES: Partial<Record<string, string[]>> = {
   PreMhMDV20NF: ["PreMhMDV20NF", "preMhMDV20NF", "premhmdv20nf", "pre_mh_mdv_20_nf", "PreMktMDV20NF", "preMktMDV20NF"],
   PreMhMDV90NF: ["PreMhMDV90NF", "preMhMDV90NF", "premhmdv90nf", "pre_mh_mdv_90_nf", "PreMktMDV90NF", "preMktMDV90NF"],
   VolRel: ["VolRel", "volRel", "vol_rel"],
+  PreMhBidLstPrcPct: ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"],
+  PreMhLoLstPrcPct: ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"],
+  PreMhHiLstClsPct: ["PreMhHiLstClsΔ%", "PreMhHiLstClsPct", "preMhHiLstClsPct"],
+  PreMhLoLstClsPct: ["PreMhLoLstClsΔ%", "PreMhLoLstClsPct", "preMhLoLstClsPct"],
+  LstPrcLstClsPct: ["LstPrcLstClsΔ%", "LstPrcLstClsPct", "lstPrcLstClsPct", "LstPrcLstClsDeltaPct"],
+  ImbExch925: ["ImbExch9:25", "ImbExch925", "imbExch925"],
+  ImbExch1555: ["ImbExch15:55", "ImbExch1555", "imbExch1555"],
 };
 
 function normUpperList(xs?: string[]): string[] {
@@ -241,11 +248,11 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
 
     // exclude flags
     if (exclude.dividend) {
-      const hasDiv = !!(r.HasDividend ?? r.hasDividend);
+      const hasDiv = !!(r.HasDividend ?? r.hasDividend ?? r.Dividend ?? r.dividend);
       if (hasDiv) return false;
     }
     if (exclude.news) {
-      const cnt = Number(getField(r, "LstClsNewsCnt") ?? getField(r, "newsCount") ?? getField(r, "NewsCount") ?? 0);
+      const cnt = Number(getField(r, "LstClsNewsCnt") ?? getField(r, "newsCount") ?? getField(r, "NewsCount") ?? getField(r, "news") ?? getField(r, "News") ?? 0);
       if (cnt > 0) return false;
     }
     if (exclude.ptp) {
@@ -261,8 +268,9 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       if (hasRep) return false;
     }
     if (exclude.etf) {
-      const isEtf = !!(r.isEtf ?? r.IsETF ?? r.isETF);
-      if (isEtf) return false;
+      const isEtf = !!(r.isEtf ?? r.IsETF ?? r.isETF ?? r.etf ?? r.ETF ?? r.IsEtf);
+      const eqt = String(getField(r, "EquityType") ?? getField(r, "equityType") ?? "").toLowerCase();
+      if (isEtf || (eqt && eqt.includes("etf"))) return false;
     }
     if (exclude.crap) {
       const lastClose = Number(getField(r, "LstCls") ?? getField(r, "LastClose") ?? getField(r, "lastClose") ?? NaN);
