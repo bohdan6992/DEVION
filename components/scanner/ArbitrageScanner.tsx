@@ -10301,9 +10301,7 @@ export default function ArbitrageScanner({
           if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
         } else if (topSigmaOn && !tw.sigma) return false;
         if (topBenchOn && tw.bench) {
-          const bid = optNumOrNull(r.benchBidPct);
-          const ask = optNumOrNull(r.benchAskPct);
-          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
+          const bp = optNumOrNull(r.peakBenchLstPrcLstClsPct);
           if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
         } else if (topBenchOn && !tw.bench) return false;
         if (topTimeOn && tw.time) {
