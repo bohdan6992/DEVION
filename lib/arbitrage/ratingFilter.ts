@@ -211,16 +211,27 @@ export function passesStreamRatingFilter(args: RatingFilterArgs): boolean {
   const bestParams = getBestParamsRaw(signal);
 
   if (mode === "BIN") {
-    const snap = binRatingSnapshotFromBestParams(bestParams, classKey, signKey, sigmaAbs);
-    if (!snap) return false; // no data = exclude (matches Scanner behavior)
-    return snap.rate >= effRate && snap.total >= effTotal;
+    // pass if sigma falls in ANY interval that satisfies minRate/minTotal
+    const bwa = safeObj(bestParams?.best_windows_any ?? bestParams?.BestWindowsAny);
+    const stitched = safeObj(bwa?.stitched ?? bwa?.Stitched);
+    const sigmaPeakBins = safeObj(stitched?.sigma_peak_bins ?? stitched?.SigmaPeakBins);
+    const classBins = safeObj(sigmaPeakBins?.[classKey]);
+    const intervals = parseBinIntervals(classBins?.[signKey]);
+    if (!intervals.length) return false;
+    const abs = Math.abs(sigmaAbs);
+    return intervals.some(iv => abs >= iv.lo && abs <= iv.hi && iv.rate >= effRate && iv.total >= effTotal);
   }
 
   if (mode === "BINS") {
-    // BIN interval check first (same as BIN mode)
-    const binSnap = binRatingSnapshotFromBestParams(bestParams, classKey, signKey, sigmaAbs);
-    if (!binSnap) return false;
-    if (binSnap.rate < effRate || binSnap.total < effTotal) return false;
+    // BIN interval check: pass if sigma falls in ANY interval that satisfies minRate/minTotal
+    const bwa = safeObj(bestParams?.best_windows_any ?? bestParams?.BestWindowsAny);
+    const stitched = safeObj(bwa?.stitched ?? bwa?.Stitched);
+    const sigmaPeakBins = safeObj(stitched?.sigma_peak_bins ?? stitched?.SigmaPeakBins);
+    const classBins = safeObj(sigmaPeakBins?.[classKey]);
+    const intervals = parseBinIntervals(classBins?.[signKey]);
+    if (!intervals.length) return false;
+    const abs = Math.abs(sigmaAbs);
+    if (!intervals.some(iv => abs >= iv.lo && abs <= iv.hi && iv.rate >= effRate && iv.total >= effTotal)) return false;
     // Additional BINS sigma-bucket check
     const sigSnap = sigBinSnapshotFromBestParams(bestParams, classKey, signKey, sigmaAbs);
     if (!sigSnap) return false;

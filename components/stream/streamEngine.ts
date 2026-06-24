@@ -1984,7 +1984,7 @@ export function useStreamEngine({
     maxBeta: maxBeta ?? undefined,
     minSigma: minSigma ?? undefined,
     maxSigma: maxSigma ?? undefined,
-    limit: 500,
+    limit: 5000,
     includeAll: false,
   }), [
     exactSonarFilterSnapshot,
@@ -2487,13 +2487,15 @@ export function useStreamEngine({
 
     // Apply BIN / BINS / SESSION rating filter using best_params attached to each signal.
     // BIN/BINS only apply when metric is SigmaZap (same guard as Sonar zapMode=sigma / Scanner metric=SigmaZap).
+    // When exactSonarFilterSnapshot is present, BIN/BINS were already applied by applyExactSonarClientFilters — skip.
     const ratingModeRaw = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")).toUpperCase();
     const ratingModeUpper = (ratingModeRaw === "BIN" || ratingModeRaw === "BINS") && metric !== "SigmaZap"
       ? "SESSION"
       : ratingModeRaw;
     const effectiveMinRate = ratingMinRate ?? ratingRule.minRate;
     const effectiveMinTotal = ratingMinTotal ?? ratingRule.minTotal;
-    const ratingFiltered = filtered.filter(row => {
+    const skipRatingFilter = exactSonarFilterSnapshot && (ratingModeUpper === "BIN" || ratingModeUpper === "BINS");
+    const ratingFiltered = skipRatingFilter ? filtered : filtered.filter(row => {
       const rowSide = row.direction === "down" ? "Short" : "Long";
       const rawSigma = rowSide === "Short"
         ? toNum(row.zapSsigma ?? row.zapS)

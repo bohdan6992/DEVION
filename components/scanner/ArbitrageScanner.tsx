@@ -1469,7 +1469,7 @@ function scannerTopWindowSnapshot(args: {
   session: PaperArbSession;
   side: TapeArbSide;
   sigmaAbs: number | null | undefined;
-}): { sigma: { lo: number; hi: number } | null; time: { band: string } | null } | null {
+}): { sigma: { lo: number; hi: number } | null; bench: { lo: number; hi: number } | null; time: { band: string } | null } | null {
   const { row, session, side, sigmaAbs } = args;
   const signKey = binSignKeyForSide(side);
   if (!signKey) return null;
@@ -1479,10 +1479,14 @@ function scannerTopWindowSnapshot(args: {
   const entry = safeObj(tw?.[signKey]);
   if (!entry) return null;
   const sigmaTw = safeObj(entry.sigma);
+  const benchTw = safeObj(entry.bench);
   const timeTw = safeObj(entry.time);
   return {
     sigma: sigmaTw && optNumOrNull(sigmaTw.lo) != null && optNumOrNull(sigmaTw.hi) != null
       ? { lo: Number(sigmaTw.lo), hi: Number(sigmaTw.hi) }
+      : null,
+    bench: benchTw && optNumOrNull(benchTw.lo) != null && optNumOrNull(benchTw.hi) != null
+      ? { lo: Number(benchTw.lo), hi: Number(benchTw.hi) }
       : null,
     time: timeTw && typeof timeTw.band === "string" ? { band: timeTw.band } : null,
   };
@@ -1511,11 +1515,16 @@ function passesScannerBinRatingFilter(args: {
 }) {
   const { enabled, row, session, side, sigmaAbs, minRate, minTotal } = args;
   if (!enabled) return true;
-  const snapshot = scannerBinRatingSnapshot({ row, session, side, sigmaAbs });
-  if (!snapshot) return false;
-  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
-  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
-  return snapshot.rate >= effectiveMinRate && snapshot.total >= effectiveMinTotal;
+  const signKey = binSignKeyForSide(side);
+  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
+  return passesBinRatingByBestParams({
+    bestParams: getBestParams(row),
+    classKey,
+    signKey,
+    sigmaAbs,
+    minRate,
+    minTotal,
+  });
 }
 
 function passesDeltaZapGate(args: {
@@ -10139,10 +10148,7 @@ export default function ArbitrageScanner({
       if (minValue == null && maxValue == null) continue;
 
       const value = getOptimizerFallbackValue(row, filter.key, tickerMeta);
-      if (value == null) {
-        if (arbitrageTickerMetaLoading || !arbitrageTickerMetaLoadedRef.current) continue;
-        return false;
-      }
+      if (value == null) return false;
       if (minValue != null && value < minValue) return false;
       if (maxValue != null && value > maxValue) return false;
     }
@@ -10215,6 +10221,12 @@ export default function ArbitrageScanner({
         if (topSigmaOn && tw.sigma) {
           if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
         } else if (topSigmaOn && !tw.sigma) return false;
+        if (topBenchOn && tw.bench) {
+          const bid = optNumOrNull(r.last?.benchBidPct ?? r.start?.benchBidPct);
+          const ask = optNumOrNull(r.last?.benchAskPct ?? r.start?.benchAskPct);
+          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
+          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
+        } else if (topBenchOn && !tw.bench) return false;
         if (topTimeOn && tw.time) {
           if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
         } else if (topTimeOn && !tw.time) return false;
@@ -10288,6 +10300,12 @@ export default function ArbitrageScanner({
         if (topSigmaOn && tw.sigma) {
           if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
         } else if (topSigmaOn && !tw.sigma) return false;
+        if (topBenchOn && tw.bench) {
+          const bid = optNumOrNull(r.benchBidPct);
+          const ask = optNumOrNull(r.benchAskPct);
+          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
+          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
+        } else if (topBenchOn && !tw.bench) return false;
         if (topTimeOn && tw.time) {
           if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
         } else if (topTimeOn && !tw.time) return false;

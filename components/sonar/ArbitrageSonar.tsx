@@ -919,12 +919,11 @@ function passesTopWindowFilter(
   topBenchOn: boolean,
   topTimeOn: boolean
 ): boolean {
-  if (!topSigmaOn && !topBenchOn && !topTimeOn) return true;
   const signKey = sonarBinSignKey(signal);
-  if (!signKey) return true;
+  if (!signKey) return false;
   const tw = getTopWindows(signal, cls);
   const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
-  if (!entry) return true; // no data — don't filter
+  if (!entry) return false;
 
   if (topSigmaOn && entry.sigma) {
     const sa = getSignalSigmaAbs(signal);
@@ -1026,7 +1025,7 @@ export function buildSignalsStreamUrl(args: Parameters<typeof buildSignalsUrl>[0
   const snapshotUrl = new URL(buildSignalsUrl(args));
   snapshotUrl.pathname = snapshotUrl.pathname.replace("/api/arbitrage/signals/", "/api/arbitrage/signals-stream/");
   // Stream payloads stay intentionally smaller than one-shot snapshots.
-  snapshotUrl.searchParams.set("limit", String(Number.isFinite(args.limit as number) ? Math.max(1, Math.trunc(args.limit as number)) : 500));
+  snapshotUrl.searchParams.set("limit", String(Number.isFinite(args.limit as number) ? Math.max(1, Math.trunc(args.limit as number)) : 5000));
   return snapshotUrl.toString();
 }
 
@@ -2390,16 +2389,8 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
   };
 
   const boundKeys = Object.keys(RANGE_VALUE_GETTERS) as Array<keyof typeof RANGE_VALUE_GETTERS>;
-  const hasAnyRangeValue = Object.fromEntries(
-    boundKeys.map((key) => {
-      const bounds = f.bounds[key];
-      const isActive = bounds.min != null || bounds.max != null;
-      return [key, !isActive || (arr ?? []).some((s) => RANGE_VALUE_GETTERS[key](s) != null)];
-    })
-  ) as Record<keyof typeof RANGE_VALUE_GETTERS, boolean>;
   const passesRangeBound = (key: keyof typeof RANGE_VALUE_GETTERS, signal: ArbitrageSignal) => {
     const bounds = f.bounds[key];
-    if (!hasAnyRangeValue[key]) return true;
     return passMinMaxLocal(RANGE_VALUE_GETTERS[key](signal), bounds.min, bounds.max);
   };
 
@@ -2439,13 +2430,17 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (mr != null && binStats.rate < mr) continue;
       if (mt != null && binStats.total < mt) continue;
     } else {
-      if (mr != null) {
-        const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-        if (r == null || r < mr) continue;
-      }
-      if (mt != null) {
-        const t = getBestTotalByType(s, f.type as any);
-        if (t == null || t < mt) continue;
+      const effMr = Math.max(0, Number(mr) || 0);
+      const effMt = Math.max(0, Math.trunc(Number(mt) || 0));
+      if (effMr > 0 || effMt > 0) {
+        if (mr != null) {
+          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+          if (r == null || r < mr) continue;
+        }
+        if (mt != null) {
+          const t = getBestTotalByType(s, f.type as any);
+          if (t == null || t < mt) continue;
+        }
       }
     }
 
