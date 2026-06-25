@@ -127,14 +127,14 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
     case "asher":
     case "rain":
       return {
-        selection: "selection:bg-zinc-200/25",
-        dot: "bg-zinc-300",
-        activeButton: "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/8",
-        activeText: "text-zinc-200",
-        activeBorder: "border-zinc-300/25 bg-zinc-200/[0.04]",
-        activeSoft: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.1)]",
-        buttonBorder: "border-zinc-300/18",
-        outlineButton: "border-zinc-300/30 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.06)]",
+        selection: "selection:bg-yellow-600/25",
+        dot: "bg-[#c2b465]",
+        activeButton: "border border-[#c2b465]/45 text-[#c2b465] shadow-[0_0_10px_rgba(194,180,101,0.18)] bg-[#c2b465]/10",
+        activeText: "text-[#c2b465]",
+        activeBorder: "border-[#c2b465]/25 bg-[#c2b465]/[0.05]",
+        activeSoft: "bg-[#c2b465]/10 text-[#c2b465] border-[#c2b465]/20 shadow-[0_0_10px_-3px_rgba(194,180,101,0.16)]",
+        buttonBorder: "border-[#c2b465]/18",
+        outlineButton: "border-[#c2b465]/30 text-[#c2b465] hover:bg-[#c2b465]/10 shadow-[0_0_10px_rgba(194,180,101,0.10)]",
       };
     case "neon":
       return {
@@ -171,14 +171,14 @@ function getScannerAccent(theme?: string | null): ScannerAccent {
       };
     case "mercury":
       return {
-        selection: "selection:bg-slate-400/25",
-        dot: "bg-slate-300",
-        activeButton: "border border-slate-300/60 text-slate-200 shadow-[0_0_10px_rgba(176,182,190,0.2)] bg-slate-400/10",
-        activeText: "text-slate-200",
-        activeBorder: "border-slate-300/28 bg-slate-400/[0.05]",
-        activeSoft: "bg-slate-400/10 text-slate-200 border-slate-300/22 shadow-[0_0_10px_-3px_rgba(176,182,190,0.14)]",
-        buttonBorder: "border-slate-300/20",
-        outlineButton: "border-slate-300/45 text-slate-200 hover:bg-slate-400/10 shadow-[0_0_10px_rgba(176,182,190,0.08)]",
+        selection: "selection:bg-slate-200/25",
+        dot: "bg-slate-200",
+        activeButton: "border border-slate-200/65 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.28)] bg-slate-200/12",
+        activeText: "text-slate-100",
+        activeBorder: "border-slate-200/30 bg-slate-200/[0.06]",
+        activeSoft: "bg-slate-200/12 text-slate-100 border-slate-200/24 shadow-[0_0_10px_-3px_rgba(212,216,228,0.22)]",
+        buttonBorder: "border-slate-200/22",
+        outlineButton: "border-slate-200/50 text-slate-100 hover:bg-slate-200/12 shadow-[0_0_10px_rgba(212,216,228,0.12)]",
       };
     case "oceanic":
       return {
@@ -264,12 +264,12 @@ function getScannerHeaderButtonActiveClass(theme?: string | null): string {
   if (theme === "sparkle") return "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10";
   if (theme === "inferno") return "border border-orange-300/80 text-orange-100 shadow-[0_0_14px_rgba(249,115,22,0.26)] bg-red-500/14";
   if (theme === "asher") return "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10";
-  if (theme === "rain") return "border border-zinc-300/45 text-zinc-100 shadow-[0_0_10px_rgba(228,228,231,0.14)] bg-zinc-200/10";
+  if (theme === "rain") return "border border-[#c2b465]/45 text-[#c2b465] shadow-[0_0_10px_rgba(194,180,101,0.18)] bg-[#c2b465]/10";
   if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
   if (theme === "magma") return "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.28)] bg-rose-500/10";
-  if (theme === "mercury") return "border border-slate-400 text-slate-200 shadow-[0_0_10px_rgba(176,182,190,0.18)] bg-slate-400/10";
+  if (theme === "mercury") return "border border-slate-200/55 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.24)] bg-slate-200/12";
   if (theme === "oceanic") return "accent-soft";
   return "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10";
 }
@@ -3575,6 +3575,7 @@ function GlassSelect({
   panelOffsetX = 0,
   panelWidth,
   panelAnchorRef,
+  onDelete,
 }: {
   value: string;
   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
@@ -3584,12 +3585,14 @@ function GlassSelect({
   panelOffsetX?: number;
   panelWidth?: number;
   panelAnchorRef?: React.RefObject<HTMLDivElement | null>;
+  onDelete?: (value: string) => void;
 }) {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
+  const [pendingDeleteValue, setPendingDeleteValue] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const flatOptions = useMemo(
@@ -3646,6 +3649,10 @@ function GlassSelect({
     const active = panelRef.current?.querySelector<HTMLButtonElement>("[data-selected='true']");
     active?.scrollIntoView({ block: "nearest" });
   }, [open, value]);
+
+  useEffect(() => {
+    if (!open) setPendingDeleteValue(null);
+  }, [open]);
 
   const emitChange = (nextValue: string) => {
     onChange({ target: { value: nextValue } } as React.ChangeEvent<HTMLSelectElement>);
@@ -3733,7 +3740,11 @@ function GlassSelect({
                         type="button"
                         data-selected={opt.value === value}
                         disabled={opt.disabled}
-                        onClick={() => !opt.disabled && emitChange(opt.value)}
+                        onClick={() => {
+                          if (pendingDeleteValue === opt.value) { setPendingDeleteValue(null); return; }
+                          !opt.disabled && emitChange(opt.value);
+                        }}
+                        onContextMenu={onDelete ? (e) => { e.preventDefault(); setPendingDeleteValue(opt.value); } : undefined}
                         className={clsx(
                           "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
                           opt.disabled
@@ -3744,7 +3755,16 @@ function GlassSelect({
                         )}
                       >
                         <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                        {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
+                        {pendingDeleteValue === opt.value && onDelete ? (
+                          <span
+                            role="button"
+                            onClick={(e) => { e.stopPropagation(); onDelete(opt.value); setPendingDeleteValue(null); setOpen(false); }}
+                            className="ml-1 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded text-[11px] leading-none text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors"
+                            title={`Delete ${opt.label}`}
+                          >✕</span>
+                        ) : opt.value === value ? (
+                          <span className={clsx("w-1.5 h-1.5 rounded-full flex-shrink-0", "accent-dot")} />
+                        ) : null}
                       </button>
                     </div>
                   )
@@ -3799,7 +3819,7 @@ type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
 const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "sparkle") return "amber";
   if (theme === "asher") return "zinc";
-  if (theme === "rain") return "zinc";
+  if (theme === "rain") return "amber";
   if (theme === "inferno") return "amber";
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
@@ -3897,6 +3917,7 @@ const MultiSelectFilter = ({
   color = "amber",
   hideArrow = false,
   onMainClick,
+  panelWidth,
 }: {
   label: string;
   options: string[];
@@ -3907,6 +3928,7 @@ const MultiSelectFilter = ({
   color?: MsColor;
   hideArrow?: boolean;
   onMainClick?: () => void;
+  panelWidth?: number;
 }) => {
   const { theme } = useUi();
   const [open, setOpen] = useState(false);
@@ -3927,7 +3949,7 @@ const MultiSelectFilter = ({
     const el = wrapRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 8, width: Math.max(220, r.width) });
+    setPos({ left: r.left, top: r.bottom + 8, width: panelWidth ?? r.width });
   };
 
   useEffect(() => {
@@ -7896,6 +7918,23 @@ export default function ArbitrageScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleDeleteDay = async (d: string) => {
+    try {
+      const res = await fetch(`/api/tape/day?dateNy=${encodeURIComponent(d)}`, { method: "DELETE" });
+      if (!res.ok) return;
+      const fresh = await loadDaysApi();
+      setDays(fresh);
+      if (dateNy === d) {
+        const next = fresh[0] ?? "";
+        setDateNy(next);
+        setDateFrom(next);
+        setDateTo(next);
+      }
+    } catch {
+      // silently ignore
+    }
+  };
+
   const sortedDaysAsc = useMemo(() => {
     return [...(days ?? [])].filter((d) => toYmd(d)).sort((a, b) => a.localeCompare(b));
   }, [days]);
@@ -11483,64 +11522,43 @@ export default function ArbitrageScanner({
 
   const renderShellTabIcon = useCallback((tabKey: TabKey, active: boolean) => {
     const iconClassName = clsx("shrink-0", active ? shellTabActiveIconClass : shellTabIconClass);
-    switch (tabKey) {
-      case "active":
-        return (
-          <svg
-            aria-hidden="true"
-            className={iconClassName}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
-          </svg>
-        );
-      case "episodes":
-        return (
-          <svg
-            aria-hidden="true"
-            className={iconClassName}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z" />
-          </svg>
-        );
-      case "analytics":
-      default:
-        return (
-          <svg
-            aria-hidden="true"
-            className={iconClassName}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M4 20V10" />
-            <path d="M10 20V4" />
-            <path d="M16 20v-7" />
-            <path d="M22 20v-12" />
-          </svg>
-        );
+    const svg = (children: React.ReactNode) => (
+      <svg aria-hidden="true" className={iconClassName} width="12" height="12" viewBox="0 0 24 24"
+        fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        {children}
+      </svg>
+    );
+
+    if (isStreamOnlyShell) {
+      switch (tabKey) {
+        case "active": // CONFIG — sliders
+          return svg(<>
+            <line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="6" y2="3"/>
+            <line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="6" y2="3"/>
+            <line x1="20" x2="20" y1="21" y2="18"/><line x1="20" x2="20" y1="12" y2="3"/>
+            <line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/>
+            <line x1="17" x2="23" y1="18" y2="18"/>
+          </>);
+        case "episodes": // SIMULATOR — play triangle
+          return svg(<polygon points="6 3 20 12 6 21 6 3"/>);
+        case "analytics": // EXECUTOR — send arrow
+          return svg(<><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></>);
+      }
     }
-  }, [shellTabActiveIconClass, shellTabIconClass]);
+
+    switch (tabKey) {
+      case "active": // ACTIVE — lightning bolt
+        return svg(<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>);
+      case "episodes": // SCOPE — bookmark
+        return svg(<path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z"/>);
+      case "analytics": // ANALYTICS — bar chart
+      default:
+        return svg(<>
+          <path d="M4 20V10"/><path d="M10 20V4"/>
+          <path d="M16 20v-7"/><path d="M22 20v-12"/>
+        </>);
+    }
+  }, [shellTabActiveIconClass, shellTabIconClass, isStreamOnlyShell]);
 
   // ========= UI
   return (
@@ -11558,35 +11576,46 @@ export default function ArbitrageScanner({
               <Link
                 href="/stream/arbitrage"
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
                   primaryPanel === "stream"
                     ? "accent-soft"
                     : headerNavInactiveClass
                 )}
                 title={primaryPanel === "stream" ? "STREAM (current)" : "Open STREAM"}
               >
+                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
                 STREAM
               </Link>
               <Link
                 href="/paper/arbitrage"
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
                   primaryPanel === "scanner"
                     ? "accent-soft"
                     : headerNavInactiveClass
                 )}
                 title={primaryPanel === "scanner" ? "SCANNER (current)" : "Open SCANNER"}
               >
+                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                </svg>
                 SCANNER
               </Link>
               <Link
                 href="/signals/arbitrage"
                 className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
                   headerNavInactiveClass
                 )}
                 title="Open /signals/arbitrage"
               >
+                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="2"/>
+                  <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
                 SONAR
               </Link>
             </div>
@@ -12646,7 +12675,7 @@ export default function ArbitrageScanner({
         <div className="flex flex-col gap-3">
         <GlassCard className="order-2 p-3">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
               {[
                 { key: "Active", label: "ACTIVE" },
                 { key: "Passive", label: "PASSIVE" },
@@ -12656,7 +12685,7 @@ export default function ArbitrageScanner({
                   type="button"
                   onClick={() => setCloseMode(m.key as PaperArbCloseMode)}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     closeMode === m.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -12667,7 +12696,7 @@ export default function ArbitrageScanner({
               ))}
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
               {[
                 { key: "Hedged", label: "HEDGED" },
                 { key: "RawOnly", label: "RAWONLY" },
@@ -12677,7 +12706,7 @@ export default function ArbitrageScanner({
                   type="button"
                   onClick={() => setPnlMode(m.key as PaperArbPnlMode)}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     pnlMode === m.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -12688,7 +12717,7 @@ export default function ArbitrageScanner({
               ))}
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
               {[
                 { key: "LastPrint", label: "PRINT" },
                 { key: "BidAsk", label: "BIDASK" },
@@ -12698,7 +12727,7 @@ export default function ArbitrageScanner({
                   type="button"
                   onClick={() => setPriceMode(m.key as PaperArbPriceMode)}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     priceMode === m.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -12709,7 +12738,7 @@ export default function ArbitrageScanner({
               ))}
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
               {[
                 { key: "Notional", label: "USD" },
                 { key: "Tier", label: "TIER" },
@@ -12727,7 +12756,7 @@ export default function ArbitrageScanner({
                     );
                   }}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     sizingMode === m.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -12775,7 +12804,7 @@ export default function ArbitrageScanner({
               </div>
             </div>
 
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
               {[
                 { key: "Undiluted", label: "UNDILUTED" },
                 { key: "Diluted", label: "DILUTED" },
@@ -12785,7 +12814,7 @@ export default function ArbitrageScanner({
                   type="button"
                   onClick={() => setDilutionMode(m.key as PaperArbDilutionMode)}
                   className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     dilutionMode === m.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
@@ -12956,43 +12985,6 @@ export default function ArbitrageScanner({
               </div>
             </div>
 
-            <div ref={sessionSelectWrapperRef} className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg", SCANNER_CONTROL_SURFACE)}>
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">SESSION</span>
-              <GlassSelect
-                value={session}
-                onChange={(e) => {
-                  const nextSession = e.target.value as PaperArbSession;
-                  setSession(nextSession);
-                  const band = ratingBandFromSession(nextSession);
-                  if (controlledSession == null) {
-                    setRuleBand(band);
-                  }
-                  setRatingEnabledBands({
-                    BLUE: band === "BLUE",
-                    ARK: band === "ARK" || band === "PRE",
-                    PRE: band === "PRE",
-                    OPEN: band === "OPEN",
-                    INTRA: band === "INTRA",
-                    PRINT: band === "PRINT",
-                    POST: band === "POST",
-                    GLOBAL: band === "GLOBAL",
-                  });
-                }}
-                options={[
-                  { value: "GLOB", label: "GLOB" },
-                  { value: "BLUE", label: "BLUE" },
-                  { value: "PRE", label: "PRE" },
-                  { value: "ARK", label: "ARK" },
-                  { value: "OPEN", label: "OPEN" },
-                  { value: "INTRA", label: "INTRA" },
-                  { value: "POST", label: "POST" },
-                  { value: "NIGHT", label: "NIGHT" },
-                ]}
-                compact
-                panelAnchorRef={sessionSelectWrapperRef}
-                className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-              />
-            </div>
 
             <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
               <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
@@ -13163,40 +13155,6 @@ export default function ArbitrageScanner({
               </button>
             )}
 
-            {tab === "episodes" && (
-              <div className="flex h-7 items-center gap-2 px-2 rounded-lg bg-black/20">
-                <span className="text-[10px] font-mono text-zinc-500 uppercase">EP MODE</span>
-                <div className="flex h-7 items-center gap-1 rounded-lg bg-transparent">
-                  <button
-                    type="button"
-                    onClick={() => setEpisodesUseSearch(false)}
-                    className={clsx(
-                      "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
-                      !episodesUseSearchEffective
-                        ? "accent-soft"
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                    title={forceEpisodesSearch ? "Disabled: extended filters require SEARCH(POST)" : "GET /api/paper/arbitrage/episodes (single day)"}
-                    disabled={forceEpisodesSearch}
-                  >
-                    GET
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEpisodesUseSearch(true)}
-                    className={clsx(
-                      "px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all border",
-                      episodesUseSearchEffective
-                        ? "accent-soft"
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                    title="POST /api/paper/arbitrage/episodes/search (date range + filters)"
-                  >
-                    SEARCH
-                  </button>
-                </div>
-              </div>
-            )}
 
             {!isStreamOnlyShell && (
               <div className="flex items-center gap-2">
@@ -13259,6 +13217,7 @@ export default function ArbitrageScanner({
                         className="!inline-flex !w-[112px] !min-w-[112px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                         panelWidth={112}
                         panelAnchorRef={daySelectWrapperRef}
+                        onDelete={handleDeleteDay}
                       />
                     </div>
                   ) : dateMode === "last" ? (
@@ -13455,6 +13414,7 @@ export default function ArbitrageScanner({
                 enabled={sectorEnabled}
                 toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
                 color="amber"
+                panelWidth={220}
               />
             </div>
 

@@ -12,7 +12,7 @@ interface GlitchTitleProps {
 
 export function GlitchTitle({
   text,
-  accentHex = "rgba(255,255,255,0.35)",
+  accentHex,
   fontSize = "clamp(22px, 2.8vw, 40px)",
 }: GlitchTitleProps) {
   const [letters, setLetters] = useState(text.split(""));
@@ -52,9 +52,19 @@ export function GlitchTitle({
     return () => clearTimeout(t);
   }, [text]);
 
-  const G = "#ff2244";
-  const C = "#00eeff";
   const shiftX = phase === 1 ? 5 : 4;
+
+  // If explicit accentHex supplied (legacy), use it; otherwise rely on CSS vars
+  const accentColor  = accentHex ?? "var(--dash-accent)";
+  const accentShadow = accentHex
+    ? `0 0 30px ${accentHex}, 2px 0 0 ${accentHex}44, -2px 0 0 ${accentHex}33`
+    : "0 0 30px var(--dash-accent), 2px 0 0 rgba(var(--dash-accent-rgb),0.26), -2px 0 0 rgba(var(--dash-accent-rgb),0.18)";
+  const idleShadow = accentHex
+    ? `0 0 50px ${accentHex}88, 0 1px 0 rgba(0,0,0,0.5)`
+    : "0 0 50px rgba(var(--dash-accent-rgb),0.40), 0 1px 0 rgba(0,0,0,0.5)";
+  const glitchFilter = accentHex
+    ? `drop-shadow(0 0 6px ${accentHex})`
+    : "drop-shadow(0 0 6px var(--dash-accent))";
 
   const fontStyle: React.CSSProperties = {
     fontFamily: "'Bebas Neue','Rajdhani',system-ui,sans-serif",
@@ -66,23 +76,33 @@ export function GlitchTitle({
 
   return (
     <div className="relative" style={{ lineHeight: 1, userSelect: "none" }}>
+      {/* Ghost channel 1 — accent hue +120° */}
       {rgbShift && (
         <div
           className="absolute inset-0 pointer-events-none flex items-center"
-          style={{ transform: `translateX(-${shiftX}px) translateY(1px)`, mixBlendMode: "screen" }}
+          style={{
+            transform: `translateX(-${shiftX}px) translateY(1px)`,
+            mixBlendMode: "screen",
+            filter: "hue-rotate(120deg) saturate(2)",
+          }}
         >
-          <span style={{ ...fontStyle, color: G, opacity: 0.55 }}>
+          <span style={{ ...fontStyle, color: accentColor, opacity: 0.58 }}>
             {letters.join("")}
           </span>
         </div>
       )}
 
+      {/* Ghost channel 2 — accent hue −120° */}
       {rgbShift && (
         <div
           className="absolute inset-0 pointer-events-none flex items-center"
-          style={{ transform: `translateX(${shiftX}px) translateY(-1px)`, mixBlendMode: "screen" }}
+          style={{
+            transform: `translateX(${shiftX}px) translateY(-1px)`,
+            mixBlendMode: "screen",
+            filter: "hue-rotate(-120deg) saturate(2)",
+          }}
         >
-          <span style={{ ...fontStyle, color: C, opacity: 0.38 }}>
+          <span style={{ ...fontStyle, color: accentColor, opacity: 0.40 }}>
             {letters.join("")}
           </span>
         </div>
@@ -93,24 +113,22 @@ export function GlitchTitle({
           ...fontStyle,
           margin: 0,
           color: rgbShift ? "rgba(255,255,255,0.98)" : "rgba(255,255,255,0.94)",
-          textShadow: rgbShift
-            ? `0 0 30px ${accentHex}, 2px 0 0 ${G}33, -2px 0 0 ${C}33`
-            : `0 0 50px ${accentHex}, 0 1px 0 rgba(0,0,0,0.5)`,
+          textShadow: rgbShift ? accentShadow : idleShadow,
           transition: rgbShift ? "none" : "text-shadow 0.3s ease",
-          filter: rgbShift ? `drop-shadow(0 0 6px ${accentHex})` : "none",
+          filter: rgbShift ? glitchFilter : "none",
         }}
       >
         {letters.map((ch, i) => (
           <span
             key={i}
             style={{
-              color: rgbShift && ch !== text[i] ? "rgba(255,255,255,0.9)" : undefined,
+              color: rgbShift && ch !== text[i] ? accentColor : undefined,
               display: "inline-block",
               transition: "none",
               marginRight: ch === " " ? "0.06em" : undefined,
             }}
           >
-            {ch === " " ? " " : ch}
+            {ch === " " ? " " : ch}
           </span>
         ))}
       </h1>

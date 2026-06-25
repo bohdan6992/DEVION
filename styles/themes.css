@@ -135,10 +135,12 @@
   --dash-text-muted: rgba(212, 212, 216, 0.78);
   --dash-chip-bg: rgba(228, 228, 231, 0.05);
   --dash-chip-border: rgba(212, 212, 216, 0.16);
-  --dash-accent: #e4e4e7;
-  --dash-accent-soft: rgba(228, 228, 231, 0.1);
-  --dash-accent-border: rgba(212, 212, 216, 0.34);
-  --dash-accent-shadow: rgba(228, 228, 231, 0.22);
+  --dash-accent: #c2b465;
+  --dash-accent-soft: rgba(194, 180, 101, 0.16);
+  --dash-accent-border: rgba(194, 180, 101, 0.36);
+  --dash-accent-shadow: rgba(194, 180, 101, 0.24);
+  --dash-accent-rgb: 194, 180, 101;
+  --dash-accent-on: #0f0d02;
 }
 
 /* ---------------- NEON (Cyber Pulse â€” Ð¤Ñ–Ð¾Ð»ÐµÑ‚Ð¾Ð²Ð¸Ð¹ Ð’Ð¸Ð±ÑƒÑ…) ---------------- */
@@ -173,10 +175,10 @@
   --dash-text-muted: rgba(255, 240, 247, 0.82);
   --dash-chip-bg: rgba(255, 255, 255, 0.12);
   --dash-chip-border: rgba(255, 255, 255, 0.34);
-  --dash-accent: #ffffff;
-  --dash-accent-soft: rgba(255, 255, 255, 0.18);
-  --dash-accent-border: rgba(255, 255, 255, 0.42);
-  --dash-accent-shadow: rgba(255, 255, 255, 0.24);
+  --dash-accent: #d946ef;
+  --dash-accent-soft: rgba(217, 70, 239, 0.18);
+  --dash-accent-border: rgba(217, 70, 239, 0.42);
+  --dash-accent-shadow: rgba(217, 70, 239, 0.24);
 }
 
 /* ---------------- MATRIX (Terminal Grid â€” ÐÐ³Ñ€ÐµÑÐ¸Ð²Ð½Ð¸Ð¹ Ð¢Ñ€ÐµÐ¹Ð´ HUD) ---------------- */
@@ -898,26 +900,26 @@ html[data-theme="light"] .dashboard-scope [class*="bg-zinc"] {
   --chart-tooltip-bg: rgba(20, 22, 24, 0.94);
 
   --dash-page-glow:
-    radial-gradient(circle at 20% 15%, rgba(160, 168, 178, 0.12), transparent 38%),
-    radial-gradient(circle at 80% 8%,  rgba(140, 148, 158, 0.08), transparent 30%),
-    radial-gradient(circle at 50% 88%, rgba(120, 128, 138, 0.09), transparent 32%);
-  --dash-grid-line: rgba(180, 185, 192, 0.07);
-  --dash-scan-line: rgba(180, 185, 192, 0.04);
+    radial-gradient(circle at 20% 15%, rgba(212, 216, 228, 0.10), transparent 38%),
+    radial-gradient(circle at 80% 8%,  rgba(190, 196, 210, 0.07), transparent 30%),
+    radial-gradient(circle at 50% 88%, rgba(170, 176, 192, 0.08), transparent 32%);
+  --dash-grid-line: rgba(212, 216, 228, 0.07);
+  --dash-scan-line: rgba(212, 216, 228, 0.04);
 
-  --dash-panel-bg: linear-gradient(135deg, rgba(18, 20, 22, 0.86), rgba(12, 13, 14, 0.92));
-  --dash-panel-border: rgba(168, 173, 179, 0.16);
-  --dash-panel-shadow: 0 24px 72px -40px rgba(0, 0, 0, 0.92), inset 0 1px 0 rgba(200, 205, 210, 0.09);
-  --dash-topline: rgba(192, 196, 202, 0.48);
+  --dash-panel-bg: linear-gradient(135deg, rgba(20, 22, 26, 0.88), rgba(12, 13, 16, 0.93));
+  --dash-panel-border: rgba(212, 216, 228, 0.14);
+  --dash-panel-shadow: 0 24px 72px -40px rgba(0, 0, 0, 0.92), inset 0 1px 0 rgba(212, 216, 228, 0.12);
+  --dash-topline: rgba(212, 216, 228, 0.50);
 
   --dash-text-main: #dfe1e3;
   --dash-text-muted: rgba(168, 173, 179, 0.78);
   --dash-chip-bg: rgba(168, 173, 179, 0.07);
   --dash-chip-border: rgba(168, 173, 179, 0.2);
 
-  --dash-accent: #b0b6be;
-  --dash-accent-soft: rgba(168, 173, 179, 0.12);
-  --dash-accent-border: rgba(192, 196, 202, 0.32);
-  --dash-accent-shadow: rgba(168, 173, 179, 0.28);
+  --dash-accent: #d4d8e4;
+  --dash-accent-soft: rgba(212, 216, 228, 0.14);
+  --dash-accent-border: rgba(212, 216, 228, 0.40);
+  --dash-accent-shadow: rgba(212, 216, 228, 0.32);
 }
 
 html.dark [class*="text-emerald-"] { color: #e4e4e7 !important; }
@@ -1170,14 +1172,14 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 :root[data-theme="light"]          { --dash-accent-rgb: 139, 92, 246;  --dash-accent-on: #ffffff; }
 :root[data-theme="dark"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
 :root[data-theme="rain"]           { --dash-accent-rgb: 228, 228, 231; --dash-accent-on: #111112; }
-:root[data-theme="neon"]           { --dash-accent-rgb: 255, 255, 255; --dash-accent-on: #000000; }
+:root[data-theme="neon"]           { --dash-accent-rgb: 217, 70, 239;  --dash-accent-on: #1a001e; }
 :root[data-theme="matrix"]         { --dash-accent-rgb: 52, 168, 99;   --dash-accent-on: #010a04; }
 :root[data-theme="sparkle"]        { --dash-accent-rgb: 253, 230, 138; --dash-accent-on: #1a1405; }
 :root[data-theme="asher"]          { --dash-accent-rgb: 212, 212, 216; --dash-accent-on: #0a0a0a; }
 :root[data-theme="midnight"]       { --dash-accent-rgb: 245, 158, 11;  --dash-accent-on: #ffffff; }
 :root[data-theme="space"]          { --dash-accent-rgb: 147, 197, 253; --dash-accent-on: #020318; }
 :root[data-theme="magma"]          { --dash-accent-rgb: 255, 82, 72;   --dash-accent-on: #ffffff; }
-:root[data-theme="mercury"]        { --dash-accent-rgb: 176, 182, 190; --dash-accent-on: #0f1011; }
+:root[data-theme="mercury"]        { --dash-accent-rgb: 212, 216, 228; --dash-accent-on: #0a0b0e; }
 :root[data-theme="khaki"]          { --dash-accent-rgb: 138, 154, 82;  --dash-accent-on: #050602; }
 :root[data-theme="zebra"]          { --dash-accent-rgb: 17, 16, 14;    --dash-accent-on: #f6f4ee; }
 :root[data-theme="flamingo"]       { --dash-accent-rgb: 244, 92, 122;  --dash-accent-on: #ffffff; }
@@ -1213,8 +1215,8 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 
 /* Soft active — border + soft bg + accent text (session/mode buttons, panel toggles) */
 .accent-soft {
-  border: 1px solid rgba(var(--dash-accent-rgb), 0.28) !important;
-  background: rgba(var(--dash-accent-rgb), 0.10) !important;
+  border-color: transparent !important;
+  background: rgba(var(--dash-accent-rgb), 0.16) !important;
   color: var(--dash-accent) !important;
   box-shadow: 0 0 10px -3px rgba(var(--dash-accent-rgb), 0.18) !important;
 }

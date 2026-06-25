@@ -2584,6 +2584,19 @@ export function useStreamEngine({
     // endAbs close threshold — only applies in Active close mode (Passive exit = gap reversal, not sigma).
     const effectiveEndAbs = (closeMode !== "Passive" && endAbs != null && endAbs > 0) ? endAbs : 0;
 
+    const currentMinuteIdx = Math.floor(nowForDisplay / 60_000);
+    // Mirror Scanner (TapeArbitrageEngine) exactly: at each minute boundary, any ticker whose
+    // sigma was below startAbs at that boundary has its hold streak broken (pending-start reset).
+    // Scanner checks the tape snapshot at HH:MM:00; we use minuteSnapshotRef which captures the
+    // same boundary moment. Evict before the main loop so evicted tickers can be re-added with
+    // a fresh qualifiedSince (counter=0), matching Scanner's "new pending start" semantics.
+    const prevMinSnap = minuteSnapshotRef.current;
+    if (prevMinSnap != null && prevMinSnap.minuteIdx === currentMinuteIdx - 1) {
+      displayQualifiedSinceRef.current.forEach((_, k) => {
+        if (!prevMinSnap.aboveSet.has(k)) displayQualifiedSinceRef.current.delete(k);
+      });
+    }
+
     for (const row of decisionsWithWindowGuard) {
       const key = `${row.ticker}|${row.side}`;
       const absSignal = Math.abs(row.signal ?? 0);
@@ -2607,9 +2620,10 @@ export function useStreamEngine({
         signalDisplayedRef.current.set(key, nowForDisplay);
       }
     }
-    // Evict: not seen >60s — same reset as Scanner consecutive count.
+    // Fallback eviction for data gaps: clear entries not seen for >2 minutes.
+    // The primary eviction happens at each minute boundary via prevMinSnap above.
     displayQualifiedSinceRef.current.forEach((v, k) => {
-      if (nowForDisplay - v.lastSeenAt > 60_000) displayQualifiedSinceRef.current.delete(k);
+      if (nowForDisplay - v.lastSeenAt > 120_000) displayQualifiedSinceRef.current.delete(k);
     });
     // Evict displayed: not seen >60s = dropped below endAbs or disappeared.
     signalDisplayedRef.current.forEach((lastSeen, k) => {
@@ -2638,7 +2652,6 @@ export function useStreamEngine({
     // New latches are only created when a ticker appears in this snapshot, ensuring
     // STREAM's candidate qualification starts at a minute boundary — the same granularity
     // as tape candles in SCANNER.
-    const currentMinuteIdx = Math.floor(nowMs / 60_000);
     if (minuteSnapshotRef.current?.minuteIdx !== currentMinuteIdx && filtered.length > 0) {
       const aboveSet = new Set<string>();
       for (const row of decisionsWithWindowGuard) {

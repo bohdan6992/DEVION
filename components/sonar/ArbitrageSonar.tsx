@@ -2962,7 +2962,7 @@ export default function ArbitrageSonar() {
   const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
   const secondaryButtonSoftActiveClass = isLightTheme
     ? "bg-slate-900/10 text-slate-900 border-slate-900/10 shadow-none"
-    : "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]";
+    : accentButtonClass;
   const secondaryIconButtonClass =
     "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
