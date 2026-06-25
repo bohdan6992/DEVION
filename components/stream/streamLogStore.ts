@@ -13,6 +13,11 @@ export type StreamLogEntry = {
   event: StreamLogEvent;
   status: "SENT" | "FAILED" | "SIMULATED";
   betaMode: boolean;
+  session: string | null;
+  ruleBand: string | null;
+  signalClass: string | null;
+  ratingMode: string | null;
+  ratingType: string | null;
 
   ticker: string;
   benchmark: string;
@@ -72,6 +77,22 @@ export type StreamLogEntry = {
 const MAX_ENTRIES = 5000;
 const STORAGE_KEY = "stream.simulation-log.v1";
 
+function localDayKey(timestamp = Date.now()): string {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isSameLocalDay(timestamp: number, dayKey = localDayKey()): boolean {
+  return localDayKey(timestamp) === dayKey;
+}
+
+function filterEntriesToCurrentDay(entries: StreamLogEntry[], dayKey = localDayKey()): StreamLogEntry[] {
+  return entries.filter((entry) => Number.isFinite(entry.ts) && isSameLocalDay(entry.ts, dayKey));
+}
+
 function loadFromStorage(): StreamLogEntry[] {
   if (typeof window === "undefined") return [];
   try {
@@ -79,7 +100,7 @@ function loadFromStorage(): StreamLogEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed as StreamLogEntry[];
+    return filterEntriesToCurrentDay(parsed as StreamLogEntry[]);
   } catch {
     return [];
   }
@@ -107,6 +128,14 @@ class StreamLogStore {
     if (this.entries === null) {
       this.entries = loadFromStorage();
       this.seq = this.entries.reduce((max, e) => Math.max(max, e.seq), 0);
+      saveToStorage(this.entries);
+      return this.entries;
+    }
+    const filtered = filterEntriesToCurrentDay(this.entries);
+    if (filtered.length !== this.entries.length) {
+      this.entries = filtered;
+      this.seq = this.entries.reduce((max, e) => Math.max(max, e.seq), 0);
+      saveToStorage(this.entries);
     }
     return this.entries;
   }
@@ -135,9 +164,13 @@ class StreamLogStore {
 
   push(entry: Omit<StreamLogEntry, "seq">): void {
     const entries = this.ensureLoaded();
+    const currentDayEntries = filterEntriesToCurrentDay(entries, localDayKey(entry.ts));
+    if (currentDayEntries.length !== entries.length) {
+      this.entries = currentDayEntries;
+    }
     const full: StreamLogEntry = { seq: ++this.seq, ...entry };
-    if (entries.length >= MAX_ENTRIES) {
-      this.entries = entries.slice(entries.length - MAX_ENTRIES + 1);
+    if (this.entries!.length >= MAX_ENTRIES) {
+      this.entries = this.entries!.slice(this.entries!.length - MAX_ENTRIES + 1);
     }
     this.entries = [...this.entries!, full];
     this.scheduleSave();
@@ -179,7 +212,7 @@ export function useStreamLogEntries(): StreamLogEntry[] {
 // ---- CSV export -----------------------------------------------------------
 
 const CSV_HEADERS = [
-  "seq", "time", "event", "status", "betaMode",
+  "seq", "time", "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
   "ticker", "benchmark", "side",
   "sigmaZap", "zapSsigma", "zapLsigma", "zapPct",
   "bidPct", "askPct", "benchBidPct", "benchAskPct",
@@ -188,8 +221,9 @@ const CSV_HEADERS = [
   "spread", "netEdge",
   "holdSec", "qualifiedAt",
   "sequence", "entrySignal", "addThreshold", "dilutionStep", "maxAdds",
-  "exitMode", "hedgeMode", "scaleMode", "minNetEdge", "minHoldMin",
+  "exitMode", "hedgeMode", "scaleMode", "minNetEdge", "minHoldMin", "notionalUsd",
   "hedgeRequired",
+  "decisionContext", "gateContext", "scaleContext", "executionContext",
   "reason",
 ];
 
@@ -209,12 +243,45 @@ function fmt4(v: number | null): string {
 export function streamLogToCsv(entries: StreamLogEntry[]): string {
   const rows: string[] = [CSV_HEADERS.join(",")];
   for (const e of entries) {
+    const decisionContext = [
+      `session=${e.session ?? "-"}`,
+      `band=${e.ruleBand ?? "-"}`,
+      `class=${e.signalClass ?? "-"}`,
+      `mode=${e.ratingMode ?? "-"}`,
+      `type=${e.ratingType ?? "-"}`,
+    ].join(" | ");
+    const gateContext = [
+      `netEdge>=${e.minNetEdge != null ? e.minNetEdge.toFixed(3) : "-"}`,
+      `hold>=${e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "-"}`,
+      `spread=${e.spread != null ? e.spread.toFixed(3) : "-"}`,
+      `edge=${e.netEdge != null ? e.netEdge.toFixed(3) : "-"}`,
+      `qualified=${e.qualifiedAtStr ?? "-"}`,
+    ].join(" | ");
+    const scaleContext = [
+      `seq=${e.sequence}`,
+      `entryσ=${e.entrySignal != null ? e.entrySignal.toFixed(3) : "-"}`,
+      `add@=${e.addThreshold != null ? e.addThreshold.toFixed(3) : "-"}`,
+      `step=${e.dilutionStep != null ? e.dilutionStep.toFixed(3) : "-"}`,
+      `maxAdds=${e.maxAdds ?? "-"}`,
+    ].join(" | ");
+    const executionContext = [
+      `exit=${e.exitMode}`,
+      `hedge=${e.hedgeMode}`,
+      `scale=${e.scaleMode}`,
+      `usd=${e.notionalUsd != null ? e.notionalUsd.toFixed(0) : "-"}`,
+      `beta=${e.betaMode ? "on" : "off"}`,
+    ].join(" | ");
     rows.push([
       e.seq,
       csvCell(e.timeStr),
       e.event,
       e.status,
       e.betaMode ? "1" : "0",
+      csvCell(e.session ?? ""),
+      csvCell(e.ruleBand ?? ""),
+      csvCell(e.signalClass ?? ""),
+      csvCell(e.ratingMode ?? ""),
+      csvCell(e.ratingType ?? ""),
       csvCell(e.ticker),
       csvCell(e.benchmark),
       e.side,
@@ -246,7 +313,12 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
       csvCell(e.scaleMode),
       fmt4(e.minNetEdge),
       e.minHoldMinutes ?? "",
+      e.notionalUsd != null ? e.notionalUsd.toFixed(2) : "",
       e.hedgeRequired ? "1" : "0",
+      csvCell(decisionContext),
+      csvCell(gateContext),
+      csvCell(scaleContext),
+      csvCell(executionContext),
       csvCell(e.reason),
     ].join(","));
   }

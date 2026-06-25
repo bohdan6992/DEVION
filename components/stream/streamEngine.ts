@@ -1668,6 +1668,7 @@ type UseStreamEngineArgs = {
   trackedSignalsEnabled?: boolean;
   initialAutoEnabled?: boolean;
   signalClass: string;
+  ruleBand?: string | null;
   ratingType: string | null | undefined;
   metric: "SigmaZap" | "ZapPct";
   ratingRule: { minRate: number; minTotal: number };
@@ -1774,6 +1775,7 @@ export function useStreamEngine({
   trackedSignalsEnabled = true,
   initialAutoEnabled = true,
   signalClass,
+  ruleBand,
   ratingType,
   metric,
   ratingRule,
@@ -3272,11 +3274,18 @@ export function useStreamEngine({
             if (isEntryIntent && isAdd && triggerMag3 != null) _filterParts.push(`add#${addNum3}@${triggerMag3.toFixed(2)}`);
           }
           const _isBeta = automationConfig?.betaMode === true;
+          const _effectiveRatingMode = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null;
+          const _effectiveRatingType = ratingType ?? "any";
           const _logBase = {
             ts: dispatchAt,
             timeStr: _fmtMs(dispatchAt),
             event: _logEvent,
             betaMode: _isBeta,
+            session: session ?? null,
+            ruleBand: ruleBand ?? null,
+            signalClass: signalClass ?? null,
+            ratingMode: _effectiveRatingMode,
+            ratingType: _effectiveRatingType,
             ticker: intent.ticker,
             benchmark: intent.benchmark,
             side: intent.side as "Long" | "Short",
@@ -3461,6 +3470,11 @@ export function useStreamEngine({
               event: hedgeLogEvent,
               betaMode: true,
               status: "SIMULATED",
+              session: session ?? null,
+              ruleBand: ruleBand ?? null,
+              signalClass: signalClass ?? null,
+              ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null,
+              ratingType: ratingType ?? "any",
               ticker: intent.benchmark,
               benchmark: intent.ticker,
               side: hedgeSide,

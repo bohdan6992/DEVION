@@ -11,13 +11,14 @@ type AutoRuleBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST"
 const AUTO_TAB_LS_KEY = "auto.arbitrage.tab";
 const AUTO_RULE_BAND_LS_KEY = "auto.arbitrage.rule-band";
 const AUTO_AUTOMATION_LS_KEY = "auto.arbitrage.automation";
+const LEGACY_STREAM_AUTOMATION_LS_KEY = "stream.arbitrage.automation";
 
 function defaultAutomationConfig(): StreamAutomationConfig {
   return {
     strategyModeEnabled: true,
     minNetEdge: 0.05,
     endSignalThreshold: 0.25,
-    maxOpenPositions: 5,
+    maxOpenPositions: 20,
     maxAdds: 3,
     queueDelayMinSeconds: 0,
     queueDelayMaxSeconds: 0,
@@ -65,7 +66,9 @@ function readInitialAutoRuleBand(): AutoRuleBand {
 function readInitialAutomationConfig(): StreamAutomationConfig {
   if (typeof window === "undefined") return defaultAutomationConfig();
   try {
-    const raw = window.localStorage.getItem(AUTO_AUTOMATION_LS_KEY);
+    const raw =
+      window.localStorage.getItem(AUTO_AUTOMATION_LS_KEY) ??
+      window.localStorage.getItem(LEGACY_STREAM_AUTOMATION_LS_KEY);
     if (!raw) return defaultAutomationConfig();
     const parsed = JSON.parse(raw) as Partial<StreamAutomationConfig>;
     return {

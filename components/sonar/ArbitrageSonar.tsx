@@ -760,7 +760,9 @@ function safeRecord(value: any): Record<string, any> | null {
 }
 
 function sonarClassToBinClassKey(cls: ArbClass): string {
-  return cls === "global" ? "global" : cls;
+  if (cls === "global") return "global";
+  if (cls === "pre") return "ark"; // PRE session shares the "ark" bin class (same as Scanner/ratingFilter)
+  return cls;
 }
 
 function sonarBinSignKey(signal: ArbitrageSignal): "pos" | "neg" | null {

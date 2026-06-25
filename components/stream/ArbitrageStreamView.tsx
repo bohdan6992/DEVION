@@ -695,11 +695,16 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
   };
 
   const handleDownload = () => {
+    const latestCtx = structuredLogEntries[0] ?? null;
+    const ctxLine = latestCtx
+      ? `CTX: session=${latestCtx.session ?? "-"} | ruleBand=${latestCtx.ruleBand ?? "-"} | signalClass=${latestCtx.signalClass ?? "-"} | ratingMode=${latestCtx.ratingMode ?? "-"} | ratingType=${latestCtx.ratingType ?? "-"}`
+      : null;
     const header = ["Time".padEnd(10), "Ticker".padEnd(8), "Bench".padEnd(6), "Side".padEnd(6), "Action".padEnd(9), "σ".padEnd(10), "Since/Hold".padEnd(14), "Threshold".padEnd(10), "Filters".padEnd(32), "Reason"].join(" | ");
     const lines: string[] = [
       "=== STREAM ORDER LOG ===",
       `Generated: ${new Date().toLocaleString("en-US", { hour12: false })}`,
       `Total entries: ${rows.length}`,
+      ...(ctxLine ? [ctxLine] : []),
       "",
       header,
       "-".repeat(130),
@@ -984,6 +989,47 @@ export function StreamSimLog() {
     return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
   }
 
+  function buildDecisionContext(e: (typeof entries)[number]): string {
+    return [
+      `session=${e.session ?? "-"}`,
+      `band=${e.ruleBand ?? "-"}`,
+      `class=${e.signalClass ?? "-"}`,
+      `mode=${e.ratingMode ?? "-"}`,
+      `type=${e.ratingType ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildGateContext(e: (typeof entries)[number], tickPct: number | null, benchPct: number | null): string {
+    return [
+      `tick=${fmtPct(tickPct)}`,
+      `bench=${fmtPct(benchPct)}`,
+      `edge=${e.netEdge != null ? e.netEdge.toFixed(3) : "-"}`,
+      `spread=${e.spread != null ? e.spread.toFixed(3) : "-"}`,
+      `hold>=${e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "-"}`,
+      `qualified=${e.qualifiedAtStr ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildScaleContext(e: (typeof entries)[number]): string {
+    return [
+      `seq=${e.sequence}`,
+      `entryσ=${fmt2(e.entrySignal)}`,
+      `add@=${fmt2(e.addThreshold)}`,
+      `step=${fmt2(e.dilutionStep)}`,
+      `max=${e.maxAdds ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildExecContext(e: (typeof entries)[number]): string {
+    return [
+      `exit=${e.exitMode}`,
+      `hedge=${e.hedgeMode}`,
+      `scale=${e.scaleMode}`,
+      `usd=${e.notionalUsd != null ? e.notionalUsd.toFixed(0) : "-"}`,
+      `beta=${e.betaMode ? "on" : "off"}`,
+    ].join(" | ");
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -1004,7 +1050,7 @@ export function StreamSimLog() {
         .stream-log-table th, .stream-log-table td { padding: 3px 5px !important; }
       `}</style>
       <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <table className="stream-log-table min-w-[1520px] w-full text-[10px] font-mono">
+        <table className="stream-log-table min-w-[2280px] w-full text-[10px] font-mono">
           <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
             <tr>
               <th className="text-left text-violet-400">Date</th>
@@ -1013,6 +1059,7 @@ export function StreamSimLog() {
               <th className="text-left">Ticker</th>
               <th className="text-left">Bench</th>
               <th className="text-left">Side</th>
+              <th className="text-left text-cyan-300">DecisionCtx</th>
               <th className="text-right text-violet-400">σZap</th>
               <th className="text-right text-violet-300">ZAPL</th>
               <th className="text-right text-violet-300">ZAPS</th>
@@ -1025,6 +1072,9 @@ export function StreamSimLog() {
               <th className="text-right text-amber-300">Total</th>
               <th className="text-right">Hold</th>
               <th className="text-right">MinHold</th>
+              <th className="text-left text-sky-300">GateCtx</th>
+              <th className="text-left text-fuchsia-300">ScaleCtx</th>
+              <th className="text-left text-emerald-300">ExecCtx</th>
               <th className="text-left">Filters</th>
               <th className="text-left">Reason</th>
               <th className="text-right text-emerald-400">P&amp;L</th>
@@ -1043,6 +1093,10 @@ export function StreamSimLog() {
               const tickPct = e.side === "Long" ? e.askPct : e.bidPct;
               const benchPct = e.side === "Long" ? e.benchAskPct : e.benchBidPct;
               const pnl = isExit ? computeStreamExitPnl(entries, e) : null;
+              const decisionCtx = buildDecisionContext(e);
+              const gateCtx = buildGateContext(e, tickPct, benchPct);
+              const scaleCtx = buildScaleContext(e);
+              const execCtx = buildExecContext(e);
               return (
                 <tr key={e.seq} className={rowCls}>
                   <td className="text-zinc-600 whitespace-nowrap">{fmtDate(e.ts)}</td>
@@ -1051,6 +1105,7 @@ export function StreamSimLog() {
                   <td className="text-zinc-100 font-semibold">{e.ticker}</td>
                   <td className="text-zinc-400">{e.benchmark}</td>
                   <td><SideBadge side={e.side} /></td>
+                  <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
                   <td className="text-right tabular-nums text-violet-300">{fmt2(e.sigmaZap)}</td>
                   <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapLsigma)}</td>
                   <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapSsigma)}</td>
@@ -1063,6 +1118,9 @@ export function StreamSimLog() {
                   <td className="text-right tabular-nums text-amber-200">{e.ratingTotal ?? "—"}</td>
                   <td className="text-right tabular-nums text-zinc-400">{fmtMs(e.holdMs)}</td>
                   <td className="text-right tabular-nums text-zinc-500">{e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "—"}</td>
+                  <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
+                  <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
+                  <td className="text-emerald-200 max-w-[220px] truncate" title={execCtx}>{execCtx}</td>
                   <td className="text-zinc-500 max-w-[160px] truncate">{e.filtersOk || "—"}</td>
                   <td className="text-zinc-500 max-w-[180px] truncate">{e.reason}</td>
                   <td className={clsx(
@@ -1076,7 +1134,7 @@ export function StreamSimLog() {
             })}
             {!entries.length && (
               <tr>
-                <td colSpan={21} className="px-4 py-10 text-center text-zinc-600">
+                <td colSpan={25} className="px-4 py-10 text-center text-zinc-600">
                   No entries yet. Enable AUTO (or BETA mode) and let STREAM run.
                 </td>
               </tr>

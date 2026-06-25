@@ -369,6 +369,9 @@ type PaperArbClosedDto = {
   tierBp?: number | null;
   positionNotionalUsd?: number | null;
   entryCount?: number | null;
+  entryMinuteIdxs?: number[] | null;
+  entryMetrics?: Array<number | null> | null;
+  entryMetricAbs?: Array<number | null> | null;
   best_params?: any;
 
   adv20?: number | null;
@@ -427,6 +430,26 @@ type PaperArbClosedDto = {
   sectorL3?: string | null;
   sectorL4?: string | null;
   sectorL5?: string | null;
+};
+
+type ScannerLogContext = {
+  session: string;
+  ruleBand: string;
+  metric: string;
+  closeMode: string;
+  priceMode: string;
+  pnlMode: string;
+  scopeMode: string;
+  topN: number;
+  offset: number;
+  startAbs: number;
+  startAbsMax: string;
+  endAbs: number;
+  minHoldCandles: number;
+  dilutionMode: string;
+  dilutionStep: number;
+  maxAdds: number;
+  zapMode: string;
 };
 
 // Big request: Analytics + EpisodesSearch
@@ -1120,13 +1143,22 @@ function minuteIdxToClockLabel(x: number | null | undefined): string {
   const mm = ((((totalMin % 1440) + 1440) % 1440) % 60).toString().padStart(2, "0");
   return `${hh}:${mm}`;
 }
-function downloadEpisodesCsv(rows: PaperArbClosedDto[], filename?: string): void {
+function downloadEpisodesCsv(
+  rows: PaperArbClosedDto[],
+  filename?: string,
+  priceMode: PaperArbPriceMode = "LastPrint",
+  context?: ScannerLogContext | null
+): void {
   const HEADERS = [
     "date","ticker","bench","side",
     "startTime","peakTime","endTime",
+    "addTimes","addSigmas",
+    "event",
+    "decisionContext","gateContext","scaleContext","execContext",
     "startSigma","peakSigma","endSigma",
+    "tickPct","benchPct",
     "startSigmaAbs","peakSigmaAbs","endSigmaAbs",
-    "holdCandles","entryCount","minHoldCandles","closeMode",
+    "holdCandles","entryCount","addsCount","minHoldCandles","filtersOk","reason","closeMode",
     "totalPnlUsd","rawPnlUsd","hedgedPnlUsd",
     "positionNotionalUsd","tierBp","corr","beta","sigma",
     "rating","ratingTotal",
@@ -1143,6 +1175,59 @@ function downloadEpisodesCsv(rows: PaperArbClosedDto[], filename?: string): void
   const lines: string[] = [HEADERS.join(",")];
   for (const r of rows) {
     const dateKey = r.dateNy ?? r.date ?? r.day ?? r.tradeDate ?? r.sessionDate ?? "";
+    const entryCount = Number.isFinite(r.entryCount ?? NaN) ? Math.max(1, Math.trunc(r.entryCount as number)) : 1;
+    const addsCount = Math.max(0, entryCount - 1);
+    const addMinuteIdxs = (r.entryMinuteIdxs ?? []).slice(1);
+    const addMetricsAbs = (r.entryMetricAbs ?? r.entryMetrics ?? []).slice(1);
+    const addTimes = addMinuteIdxs.map((idx) => minuteIdxToClockLabel(idx)).join(" | ");
+    const addSigmas = addMetricsAbs
+      .map((value) => value == null || !Number.isFinite(value) ? "-" : Number(value).toFixed(2))
+      .join(" | ");
+    const isLong = r.side === "Long";
+    const entryPct = priceMode === "BidAsk"
+      ? (isLong ? (r.startAskPct ?? r.lstPrcLstClsPct) : (r.startBidPct ?? r.lstPrcLstClsPct))
+      : r.lstPrcLstClsPct;
+    const exitPct = priceMode === "BidAsk"
+      ? (isLong ? (r.endBidPct ?? r.endLstPrcLstClsPct) : (r.endAskPct ?? r.endLstPrcLstClsPct))
+      : r.endLstPrcLstClsPct;
+    const filtersOk = `entries=${entryCount} | adds=${addsCount} | spread=${num(r.spreadBidPct, 4)}`;
+    const decisionContext = context
+      ? [
+          `session=${context.session}`,
+          `band=${context.ruleBand}`,
+          `metric=${context.metric}`,
+          `close=${context.closeMode}`,
+          `price=${context.priceMode}`,
+          `pnl=${context.pnlMode}`,
+        ].join(" | ")
+      : "";
+    const gateContext = context
+      ? [
+          `start>=${context.startAbs.toFixed(2)}`,
+          `start<=${context.startAbsMax || "-"}`,
+          `end<=${context.endAbs.toFixed(2)}`,
+          `hold>=${context.minHoldCandles}m`,
+          `tick=${f4(entryPct) || "-"}`,
+          `bench=${f4(exitPct) || "-"}`,
+        ].join(" | ")
+      : "";
+    const scaleContext = context
+      ? [
+          `mode=${context.dilutionMode}`,
+          `step=${context.dilutionStep.toFixed(2)}`,
+          `max=${context.maxAdds}`,
+          `entries=${entryCount}`,
+          `adds=${addsCount}`,
+        ].join(" | ")
+      : "";
+    const execContext = context
+      ? [
+          `scope=${context.scopeMode}`,
+          `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
+          `offset=${context.offset}`,
+          `zap=${context.zapMode}`,
+        ].join(" | ")
+      : "";
     lines.push([
       cell(dateKey),
       cell(r.ticker),
@@ -1151,15 +1236,26 @@ function downloadEpisodesCsv(rows: PaperArbClosedDto[], filename?: string): void
       cell(minuteIdxToClockLabel(r.startMinuteIdx)),
       cell(minuteIdxToClockLabel(r.peakMinuteIdx)),
       cell(minuteIdxToClockLabel(r.endMinuteIdx)),
+      cell(addTimes),
+      cell(addSigmas),
+      "EPISODE",
+      cell(decisionContext),
+      cell(gateContext),
+      cell(scaleContext),
+      cell(execContext),
       f4(r.startMetric),
       f4(r.peakMetric),
       f4(r.endMetric),
+      f4(entryPct),
+      f4(exitPct),
       f4(r.startMetricAbs),
       f4(r.peakMetricAbs),
       f4(r.endMetricAbs),
       r.endMinuteIdx != null && r.startMinuteIdx != null ? String(r.endMinuteIdx - r.startMinuteIdx) : "",
-      r.entryCount ?? "",
+      entryCount,
+      addsCount,
       r.minHoldCandles ?? "",
+      cell(filtersOk),
       cell(r.closeMode ?? ""),
       f2(r.totalPnlUsd),
       f2(r.rawPnlUsd),
@@ -6938,13 +7034,74 @@ type ArbitrageScannerProps = {
   onSharedRatingRulesChange?: (rules: Array<{ band: PaperArbRatingBand; minRate: number; minTotal: number }>) => void;
 };
 
-function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; priceMode: PaperArbPriceMode }) {
+function ScannerAnalyticsLog({
+  rows,
+  priceMode,
+  context,
+}: {
+  rows: PaperArbClosedDto[];
+  priceMode: PaperArbPriceMode;
+  context: ScannerLogContext;
+}) {
   const sorted = useMemo(() => [...rows].sort((a, b) => b.startMinuteIdx - a.startMinuteIdx), [rows]);
 
   function fmtTime(tsNy: string | null | undefined): string {
     if (!tsNy) return "—";
     const m = tsNy.match(/(\d{2}:\d{2}:\d{2})/);
     return m ? m[1] : tsNy;
+  }
+
+  function fmtDateLabel(dateValue: string | null | undefined): string {
+    if (!dateValue) return "—";
+    const m = String(dateValue).match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return String(dateValue);
+    return `${m[2]}/${m[3]}`;
+  }
+
+  function fmtPct(value: number | null | undefined): string {
+    if (value == null || !Number.isFinite(value)) return "—";
+    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+  }
+
+  function buildDecisionContext(): string {
+    return [
+      `session=${context.session}`,
+      `band=${context.ruleBand}`,
+      `metric=${context.metric}`,
+      `close=${context.closeMode}`,
+      `price=${context.priceMode}`,
+      `pnl=${context.pnlMode}`,
+    ].join(" | ");
+  }
+
+  function buildGateContext(entryPct: number | null | undefined, exitPct: number | null | undefined): string {
+    return [
+      `start>=${context.startAbs.toFixed(2)}`,
+      `start<=${context.startAbsMax || "-"}`,
+      `end<=${context.endAbs.toFixed(2)}`,
+      `hold>=${context.minHoldCandles}m`,
+      `tick=${fmtPct(entryPct)}`,
+      `bench=${fmtPct(exitPct)}`,
+    ].join(" | ");
+  }
+
+  function buildScaleContext(entryCount: number, addsCount: number): string {
+    return [
+      `mode=${context.dilutionMode}`,
+      `step=${context.dilutionStep.toFixed(2)}`,
+      `max=${context.maxAdds}`,
+      `entries=${entryCount}`,
+      `adds=${addsCount}`,
+    ].join(" | ");
+  }
+
+  function buildExecContext(): string {
+    return [
+      `scope=${context.scopeMode}`,
+      `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
+      `offset=${context.offset}`,
+      `zap=${context.zapMode}`,
+    ].join(" | ");
   }
 
   return (
@@ -6956,41 +7113,51 @@ function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; p
         </div>
         <button
           type="button"
-          onClick={() => downloadEpisodesCsv(rows, `scanner-analytics-log-${new Date().toISOString().slice(0, 10)}.csv`)}
+          onClick={() => downloadEpisodesCsv(rows, `scanner-analytics-log-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, context)}
           className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
         >
           ↓ CSV
         </button>
       </div>
+
+      <style jsx global>{`
+        .scanner-analytics-log-table th, .scanner-analytics-log-table td { padding: 3px 5px !important; }
+      `}</style>
       <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <table className="min-w-[2000px] w-full text-[11px] font-mono">
+        <table className="scanner-analytics-log-table min-w-[2600px] w-full text-[10px] font-mono">
           <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
             <tr>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Date</th>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Time</th>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Mode</th>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Ticker</th>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Bench</th>
-              <th className="text-left px-2.5 py-1" rowSpan={2}>Side</th>
-              <th className="text-right px-2.5 py-1 text-violet-400" rowSpan={2}>σEntry</th>
-              <th className="text-right px-2.5 py-1 text-violet-300" rowSpan={2}>σPeak</th>
-              <th className="text-right px-2.5 py-1 text-violet-200" rowSpan={2}>σEnd</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>EntryPrc%</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>ExitPrc%</th>
-              <th className="text-right px-2.5 py-1 text-sky-400" rowSpan={2}>Corr</th>
-              <th className="text-right px-2.5 py-1 text-sky-400" rowSpan={2}>Beta</th>
-              <th className="text-right px-2.5 py-1 text-sky-300" rowSpan={2}>σHist</th>
-              <th className="text-right px-2.5 py-1 text-amber-400" rowSpan={2}>Rating</th>
-              <th className="text-right px-2.5 py-1 text-amber-300" rowSpan={2}>Total</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>Hold</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>Entries</th>
-              <th className="text-right px-2.5 py-1" rowSpan={2}>SpreadBid%</th>
-              <th colSpan={3} className="text-center px-2.5 py-1 text-emerald-400 border-l border-white/10">P&amp;L</th>
-            </tr>
-            <tr>
-              <th className="text-right px-2.5 py-1 text-emerald-300 border-l border-white/10">Ticker</th>
-              <th className="text-right px-2.5 py-1 text-emerald-200">Bench</th>
-              <th className="text-right px-2.5 py-1 text-emerald-400">Total</th>
+              <th className="text-left text-violet-400">Date</th>
+              <th className="text-left">Time</th>
+              <th className="text-left">AddTimes</th>
+              <th className="text-left">Addσ</th>
+              <th className="text-left">Event</th>
+              <th className="text-left">Ticker</th>
+              <th className="text-left">Bench</th>
+              <th className="text-left">Side</th>
+              <th className="text-left text-cyan-300">DecisionCtx</th>
+              <th className="text-right text-violet-400">σZap</th>
+              <th className="text-right text-violet-300">ZAPL</th>
+              <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right">Tick%</th>
+              <th className="text-right">Bench%</th>
+              <th className="text-right text-sky-400">Corr</th>
+              <th className="text-right text-sky-400">Beta</th>
+              <th className="text-right text-sky-300">σHist</th>
+              <th className="text-right text-amber-400">Rating</th>
+              <th className="text-right text-amber-300">Total</th>
+              <th className="text-right">Hold</th>
+              <th className="text-right">MinHold</th>
+              <th className="text-left text-sky-300">GateCtx</th>
+              <th className="text-left text-fuchsia-300">ScaleCtx</th>
+              <th className="text-left text-emerald-300">ExecCtx</th>
+              <th className="text-left">Filters</th>
+              <th className="text-left">Reason</th>
+              <th className="text-right text-emerald-400">P&amp;L</th>
+              <th className="text-left">Peak</th>
+              <th className="text-left">End</th>
+              <th className="text-right">Entries</th>
+              <th className="text-right">Adds</th>
             </tr>
           </thead>
           <tbody>
@@ -7007,54 +7174,67 @@ function ScannerAnalyticsLog({ rows, priceMode }: { rows: PaperArbClosedDto[]; p
                 : r.endLstPrcLstClsPct;
               const holdMin = r.endMinuteIdx - r.startMinuteIdx;
               const pnl = r.totalPnlUsd ?? null;
+              const entryCount = Number.isFinite(r.entryCount ?? NaN) ? Math.max(1, Math.trunc(r.entryCount as number)) : 1;
+              const addsCount = Math.max(0, entryCount - 1);
+              const addMinuteIdxs = (r.entryMinuteIdxs ?? []).slice(1);
+              const addMetricsAbs = (r.entryMetricAbs ?? r.entryMetrics ?? []).slice(1);
+              const addTimesLabel = addMinuteIdxs.length
+                ? addMinuteIdxs.map((idx) => minuteIdxToClockLabel(idx)).join(" | ")
+                : "—";
+              const addSigmasLabel = addMetricsAbs.length
+                ? addMetricsAbs.map((value) => value == null || !Number.isFinite(value) ? "-" : `${Number(value).toFixed(2)}σ`).join(" | ")
+                : "—";
+              const filtersLabel = `entries=${entryCount} | adds=${addsCount} | spread=${num(r.spreadBidPct, 4)}`;
+              const decisionCtx = buildDecisionContext();
+              const gateCtx = buildGateContext(entryPct, exitPct);
+              const scaleCtx = buildScaleContext(entryCount, addsCount);
+              const execCtx = buildExecContext();
               return (
                 <tr key={r.episodeId ?? i} className="border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]">
-                  <td className="px-2.5 py-1.5 text-zinc-600 whitespace-nowrap">{r.dateNy ?? r.date ?? r.tradeDateNy ?? "—"}</td>
-                  <td className="px-2.5 py-1.5 text-zinc-500 whitespace-nowrap">{fmtTime(r.startTsNy)}</td>
-                  <td className="px-2.5 py-1.5">
+                  <td className="text-zinc-600 whitespace-nowrap">{fmtDateLabel(r.dateNy ?? r.date ?? r.tradeDateNy ?? "—")}</td>
+                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.startTsNy)}</td>
+                  <td className="text-zinc-500 max-w-[160px] truncate" title={addTimesLabel}>{addTimesLabel}</td>
+                  <td className="text-zinc-500 max-w-[180px] truncate" title={addSigmasLabel}>{addSigmasLabel}</td>
+                  <td>
                     <span className={clsx(
-                      "inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
-                      r.closeMode === "Passive" ? "bg-violet-500/20 text-violet-300" : "bg-sky-500/20 text-sky-300"
-                    )}>{r.closeMode ?? "—"}</span>
+                      "inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider bg-zinc-500/20 text-zinc-300 border border-zinc-500/30"
+                    )}>EPISODE</span>
                   </td>
-                  <td className="px-2.5 py-1.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                  <td className="px-2.5 py-1.5 text-zinc-400">{r.benchTicker}</td>
-                  <td className="px-2.5 py-1.5"><SideBadge side={r.side} /></td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-300">{num(r.startMetric, 2)}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-200">{num(r.peakMetric, 2)}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-violet-200/70">{num(r.endMetric, 2)}</td>
-                  <td className={clsx("px-2.5 py-1.5 text-right tabular-nums", entryPct != null && entryPct < 0 ? "text-rose-300" : "text-emerald-300")}>
-                    {entryPct != null ? `${entryPct >= 0 ? "+" : ""}${entryPct.toFixed(2)}%` : "—"}
-                  </td>
-                  <td className={clsx("px-2.5 py-1.5 text-right tabular-nums", exitPct != null && exitPct < 0 ? "text-rose-300" : "text-emerald-300")}>
-                    {exitPct != null ? `${exitPct >= 0 ? "+" : ""}${exitPct.toFixed(2)}%` : "—"}
-                  </td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-300">{num(r.corr, 2)}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-300">{num(r.beta, 2)}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-sky-200">{num(r.sigma, 2)}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-500">{r.entryCount ?? "—"}</td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums text-zinc-400">{num(r.spreadBidPct, 4)}</td>
+                  <td className="text-zinc-100 font-semibold">{r.ticker}</td>
+                  <td className="text-zinc-400">{r.benchTicker}</td>
+                  <td><SideBadge side={r.side} /></td>
+                  <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
+                  <td className="text-right tabular-nums text-violet-300">{num(r.startMetric, 2)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{num(r.peakMetric, 2)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{num(r.endMetric, 2)}</td>
+                  <td className={clsx("text-right tabular-nums", entryPct != null && entryPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(entryPct)}</td>
+                  <td className={clsx("text-right tabular-nums", exitPct != null && exitPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(exitPct)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{num(r.corr, 2)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{num(r.beta, 2)}</td>
+                  <td className="text-right tabular-nums text-sky-200">{num(r.sigma, 2)}</td>
+                  <td className="text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
+                  <td className="text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-500">{r.minHoldCandles ?? "—"}</td>
+                  <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
+                  <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
+                  <td className="text-emerald-200 max-w-[220px] truncate" title={execCtx}>{execCtx}</td>
+                  <td className="text-zinc-500 max-w-[160px] truncate">{filtersLabel}</td>
+                  <td className="text-zinc-500 max-w-[180px] truncate">{r.closeMode ?? "—"}</td>
                   <td className={clsx(
-                    "px-2.5 py-1.5 text-right tabular-nums border-l border-white/10",
-                    (r.rawPnlUsd ?? 0) > 0 ? "text-emerald-300" : (r.rawPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-400"
-                  )}>{num(r.rawPnlUsd ?? null, 2)}</td>
-                  <td className={clsx(
-                    "px-2.5 py-1.5 text-right tabular-nums",
-                    (r.benchPnlUsd ?? 0) > 0 ? "text-emerald-200" : (r.benchPnlUsd ?? 0) < 0 ? "text-rose-300" : "text-zinc-400"
-                  )}>{num(r.benchPnlUsd ?? null, 2)}</td>
-                  <td className={clsx(
-                    "px-2.5 py-1.5 text-right tabular-nums font-semibold",
+                    "text-right tabular-nums font-semibold",
                     pnl != null && pnl > 0 ? "text-emerald-400" : pnl != null && pnl < 0 ? "text-rose-300" : "text-zinc-400"
                   )}>{num(pnl, 2)}</td>
+                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.peakTsNy)}</td>
+                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.endTsNy)}</td>
+                  <td className="text-right tabular-nums text-zinc-500">{entryCount}</td>
+                  <td className="text-right tabular-nums text-sky-300">{addsCount}</td>
                 </tr>
               );
             })}
             {!rows.length && (
               <tr>
-                <td colSpan={22} className="px-4 py-10 text-center text-zinc-600">
+                <td colSpan={31} className="px-4 py-10 text-center text-zinc-600">
                   No analytics trades yet. Run Analytics for a date range.
                 </td>
               </tr>
@@ -8813,6 +8993,7 @@ export default function ArbitrageScanner({
     trackedSignalsEnabled: streamTrackedSignalsEnabled,
     initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
     signalClass: streamSignalClass,
+    ruleBand,
     ratingType,
     metric,
     ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
@@ -13958,7 +14139,25 @@ export default function ArbitrageScanner({
               {filteredEpisodes.length > 0 ? (
                 <button
                   type="button"
-                  onClick={() => downloadEpisodesCsv(filteredEpisodes, `scanner-episodes-${new Date().toISOString().slice(0, 10)}.csv`)}
+                  onClick={() => downloadEpisodesCsv(filteredEpisodes, `scanner-episodes-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, {
+                    session,
+                    ruleBand,
+                    metric,
+                    closeMode,
+                    priceMode,
+                    pnlMode,
+                    scopeMode,
+                    topN,
+                    offset,
+                    startAbs,
+                    startAbsMax,
+                    endAbs,
+                    minHoldCandles,
+                    dilutionMode,
+                    dilutionStep,
+                    maxAdds,
+                    zapMode,
+                  })}
                   className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
                   title="Download filtered episodes as CSV"
                 >
@@ -15641,7 +15840,25 @@ export default function ArbitrageScanner({
                   {analyticsSorted.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => downloadEpisodesCsv(analyticsSorted, `scanner-analytics-${new Date().toISOString().slice(0, 10)}.csv`)}
+                      onClick={() => downloadEpisodesCsv(analyticsSorted, `scanner-analytics-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, {
+                        session,
+                        ruleBand,
+                        metric,
+                        closeMode,
+                        priceMode,
+                        pnlMode,
+                        scopeMode,
+                        topN,
+                        offset,
+                        startAbs,
+                        startAbsMax,
+                        endAbs,
+                        minHoldCandles,
+                        dilutionMode,
+                        dilutionStep,
+                        maxAdds,
+                        zapMode,
+                      })}
                       className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
                       title="Download analytics episodes as CSV"
                     >
@@ -15812,7 +16029,29 @@ export default function ArbitrageScanner({
 
             </div>
             )}
-            <ScannerAnalyticsLog rows={analyticsSorted} priceMode={priceMode} />
+            <ScannerAnalyticsLog
+              rows={analyticsSorted}
+              priceMode={priceMode}
+              context={{
+                session,
+                ruleBand,
+                metric,
+                closeMode,
+                priceMode,
+                pnlMode,
+                scopeMode,
+                topN,
+                offset,
+                startAbs,
+                startAbsMax,
+                endAbs,
+                minHoldCandles,
+                dilutionMode,
+                dilutionStep,
+                maxAdds,
+                zapMode,
+              }}
+            />
           </div>
         )}
 
@@ -16042,10 +16281,3 @@ export default function ArbitrageScanner({
     </div>
   );
 }
-
-
-
-
-
-
-

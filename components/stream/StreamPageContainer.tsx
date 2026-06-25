@@ -11,7 +11,7 @@ import {
 } from "./streamEngine";
 
 type StreamTabKey = "active" | "episodes" | "analytics";
-type StreamRuleBand = "BLUE" | "ARK" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
+type StreamRuleBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 
 const STREAM_TAB_LS_KEY = "stream.arbitrage.tab";
@@ -33,6 +33,8 @@ function ruleBandFromSession(session: StreamSession): StreamRuleBand {
       return "BLUE";
     case "ARK":
       return "ARK";
+    case "PRE":
+      return "PRE";
     case "OPEN":
       return "OPEN";
     case "INTRA":
@@ -52,6 +54,8 @@ function sessionFromRuleBand(band: StreamRuleBand): StreamSession {
       return "BLUE";
     case "ARK":
       return "ARK";
+    case "PRE":
+      return "PRE";
     case "OPEN":
       return "OPEN";
     case "INTRA":
@@ -162,7 +166,7 @@ function readInitialStreamRuleBand(): StreamRuleBand {
   if (typeof window === "undefined") return "GLOBAL";
   try {
     const raw = window.localStorage.getItem(STREAM_RULE_BAND_LS_KEY);
-    if (raw === "BLUE" || raw === "ARK" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
+    if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
       return raw;
     }
   } catch {
@@ -175,7 +179,7 @@ function readInitialStreamSession(): StreamSession {
   if (typeof window === "undefined") return "GLOB";
   try {
     const raw = window.localStorage.getItem(STREAM_SESSION_LS_KEY);
-    if (raw === "BLUE" || raw === "ARK" || raw === "OPEN" || raw === "INTRA" || raw === "POST" || raw === "NIGHT" || raw === "GLOB") {
+    if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "POST" || raw === "NIGHT" || raw === "GLOB") {
       return raw;
     }
   } catch {
@@ -222,6 +226,7 @@ function readInitialAutomationConfig(): StreamAutomationConfig {
 export default function StreamPageContainer() {
   const [tab, setTab] = useState<StreamTabKey>(readInitialStreamTab);
   const [session, setSession] = useState<StreamSession>(readInitialStreamSession);
+  const [ruleBand, setRuleBand] = useState<StreamRuleBand>(readInitialStreamRuleBand);
   const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(readInitialAutomationConfig);
   const [streamAutoEnabled, setStreamAutoEnabled] = useState(false);
   const [streamPageClientId] = useState(createStreamPageClientId);
@@ -229,6 +234,7 @@ export default function StreamPageContainer() {
   const [sharedRatingRules, setSharedRatingRules] = useState<StreamRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
+    { band: "PRE", minRate: 0, minTotal: 0 },
     { band: "OPEN", minRate: 0, minTotal: 0 },
     { band: "INTRA", minRate: 0, minTotal: 0 },
     { band: "PRINT", minRate: 0, minTotal: 0 },
@@ -249,8 +255,6 @@ export default function StreamPageContainer() {
       // ignore storage issues
     }
   }, [tab]);
-
-  const ruleBand = useMemo(() => ruleBandFromSession(session), [session]);
 
   useEffect(() => {
     try {
@@ -376,6 +380,19 @@ export default function StreamPageContainer() {
     [automationConfig, tab]
   );
 
+  const handleControlledSessionChange = useCallback((nextSession: StreamSession) => {
+    setSession(nextSession);
+    setRuleBand(ruleBandFromSession(nextSession));
+  }, []);
+
+  const handleControlledRuleBandChange = useCallback((nextBand: StreamRuleBand) => {
+    setRuleBand(nextBand);
+    if (nextBand === "PRINT") {
+      return;
+    }
+    setSession(sessionFromRuleBand(nextBand));
+  }, []);
+
   return (
     <ArbitrageScanner
       initialPrimaryPanel="stream"
@@ -383,9 +400,9 @@ export default function StreamPageContainer() {
       controlledTab={tab}
       onControlledTabChange={setTab}
       controlledSession={session}
-      onControlledSessionChange={setSession}
+      onControlledSessionChange={handleControlledSessionChange}
       controlledRuleBand={ruleBand}
-      onControlledRuleBandChange={(band) => setSession(sessionFromRuleBand(band as StreamRuleBand))}
+      onControlledRuleBandChange={(band) => handleControlledRuleBandChange(band as StreamRuleBand)}
       streamExecutionDescriptorOverride={streamExecutionDescriptor}
       streamAutomationConfigOverride={automationConfigForTab}
       streamAutoStartEnabledOverride={false}
