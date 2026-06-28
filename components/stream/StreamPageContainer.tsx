@@ -14,10 +14,7 @@ type StreamTabKey = "active" | "episodes" | "analytics";
 type StreamRuleBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
 type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 
-const STREAM_TAB_LS_KEY = "stream.arbitrage.tab";
-const STREAM_SESSION_LS_KEY = "stream.arbitrage.session";
-const STREAM_RULE_BAND_LS_KEY = "stream.arbitrage.rule-band";
-const STREAM_AUTOMATION_LS_KEY = "stream.arbitrage.automation";
+const DEFAULT_LS_PREFIX = "stream.arbitrage";
 const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
 
 function createStreamPageClientId(): string {
@@ -151,10 +148,10 @@ function sameSharedRatingRules(
   return true;
 }
 
-function readInitialStreamTab(): StreamTabKey {
+function readInitialStreamTab(key: string): StreamTabKey {
   if (typeof window === "undefined") return "active";
   try {
-    const raw = window.localStorage.getItem(STREAM_TAB_LS_KEY);
+    const raw = window.localStorage.getItem(key);
     if (raw === "active" || raw === "episodes" || raw === "analytics") return raw;
   } catch {
     // ignore storage issues
@@ -162,10 +159,10 @@ function readInitialStreamTab(): StreamTabKey {
   return "active";
 }
 
-function readInitialStreamRuleBand(): StreamRuleBand {
+function readInitialStreamRuleBand(key: string): StreamRuleBand {
   if (typeof window === "undefined") return "GLOBAL";
   try {
-    const raw = window.localStorage.getItem(STREAM_RULE_BAND_LS_KEY);
+    const raw = window.localStorage.getItem(key);
     if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
       return raw;
     }
@@ -175,10 +172,10 @@ function readInitialStreamRuleBand(): StreamRuleBand {
   return "GLOBAL";
 }
 
-function readInitialStreamSession(): StreamSession {
+function readInitialStreamSession(key: string): StreamSession {
   if (typeof window === "undefined") return "GLOB";
   try {
-    const raw = window.localStorage.getItem(STREAM_SESSION_LS_KEY);
+    const raw = window.localStorage.getItem(key);
     if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "POST" || raw === "NIGHT" || raw === "GLOB") {
       return raw;
     }
@@ -188,10 +185,10 @@ function readInitialStreamSession(): StreamSession {
   return "GLOB";
 }
 
-function readInitialAutomationConfig(): StreamAutomationConfig {
+function readInitialAutomationConfig(automationKey: string): StreamAutomationConfig {
   if (typeof window === "undefined") return defaultAutomationConfig();
   try {
-    const raw = window.localStorage.getItem(STREAM_AUTOMATION_LS_KEY);
+    const raw = window.localStorage.getItem(automationKey);
     if (!raw) return defaultAutomationConfig();
     const parsed = JSON.parse(raw) as Partial<StreamAutomationConfig>;
     return {
@@ -223,11 +220,30 @@ function readInitialAutomationConfig(): StreamAutomationConfig {
   }
 }
 
-export default function StreamPageContainer() {
-  const [tab, setTab] = useState<StreamTabKey>(readInitialStreamTab);
-  const [session, setSession] = useState<StreamSession>(readInitialStreamSession);
-  const [ruleBand, setRuleBand] = useState<StreamRuleBand>(readInitialStreamRuleBand);
-  const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(readInitialAutomationConfig);
+type StreamPageContainerProps = {
+  lsKeyPrefix?: string;
+  headerTitle?: string;
+  navStreamHref?: string;
+  navScannerHref?: string;
+  navSonarHref?: string;
+};
+
+export default function StreamPageContainer({
+  lsKeyPrefix = DEFAULT_LS_PREFIX,
+  headerTitle,
+  navStreamHref,
+  navScannerHref,
+  navSonarHref,
+}: StreamPageContainerProps = {}) {
+  const tabLsKey = `${lsKeyPrefix}.tab`;
+  const sessionLsKey = `${lsKeyPrefix}.session`;
+  const ruleBandLsKey = `${lsKeyPrefix}.rule-band`;
+  const automationLsKey = `${lsKeyPrefix}.automation`;
+
+  const [tab, setTab] = useState<StreamTabKey>(() => readInitialStreamTab(tabLsKey));
+  const [session, setSession] = useState<StreamSession>(() => readInitialStreamSession(sessionLsKey));
+  const [ruleBand, setRuleBand] = useState<StreamRuleBand>(() => readInitialStreamRuleBand(ruleBandLsKey));
+  const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(() => readInitialAutomationConfig(automationLsKey));
   const [streamAutoEnabled, setStreamAutoEnabled] = useState(false);
   const [streamPageClientId] = useState(createStreamPageClientId);
   const remoteAutomationGuardUntilRef = useRef(0);
@@ -250,28 +266,28 @@ export default function StreamPageContainer() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STREAM_TAB_LS_KEY, tab);
+      window.localStorage.setItem(tabLsKey, tab);
     } catch {
       // ignore storage issues
     }
-  }, [tab]);
+  }, [tab, tabLsKey]);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STREAM_SESSION_LS_KEY, session);
-      window.localStorage.setItem(STREAM_RULE_BAND_LS_KEY, ruleBand);
+      window.localStorage.setItem(sessionLsKey, session);
+      window.localStorage.setItem(ruleBandLsKey, ruleBand);
     } catch {
       // ignore storage issues
     }
-  }, [ruleBand, session]);
+  }, [ruleBand, session, sessionLsKey, ruleBandLsKey]);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STREAM_AUTOMATION_LS_KEY, JSON.stringify(automationConfig));
+      window.localStorage.setItem(automationLsKey, JSON.stringify(automationConfig));
     } catch {
       // ignore storage issues
     }
-  }, [automationConfig]);
+  }, [automationConfig, automationLsKey]);
 
   const applyLocalAutoEnabled = useCallback((enabled: boolean) => {
     remoteAutomationGuardUntilRef.current = Date.now() + 4000;
@@ -410,8 +426,11 @@ export default function StreamPageContainer() {
       streamViewModeOverride="stream-auto-tab"
       onStreamAutomationConfigChange={applyLocalAutomationConfigPatch}
       onStreamAutoEnabledChange={applyLocalAutoEnabled}
-      headerTitleOverride="ARBITRAGE STREAM"
+      headerTitleOverride={headerTitle ?? "ARBITRAGE STREAM"}
       headerMinimal
+      navStreamHref={navStreamHref}
+      navScannerHref={navScannerHref}
+      navSonarHref={navSonarHref}
       headerBadgeValuesOverride={headerBadgeValues}
       headerMetaLabelOverride={headerMetaLabel}
       activeTabLabelOverride="CONFIG"

@@ -1,16 +1,16 @@
 ﻿"use client";
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import clsx from "clsx";
 
 
 import { useUi } from "@/components/UiProvider";
+import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import PresetPicker from "@/components/presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
-import { getOpendoorBestParamsByTicker, getOpendoorSignals, getOpendoorTicker } from "@/lib/trapClient";
 import type { PresetDto } from "@/types/presets";
 
 /* =========================
@@ -79,6 +79,9 @@ export type ArbitrageSignal = {
   report?: any;
   Report?: any;
 
+  isStaticFallback?: boolean;
+  IsStaticFallback?: boolean;
+
   active?: any;
   Active?: any;
   isActive?: any;
@@ -111,13 +114,18 @@ export type ArbitrageSignal = {
 };
 
 type Mode = "top" | "all";
-type RatingMode = "SESSION" | "BIN";
+type RatingMode = "SESSION" | "BIN" | "BINS";
+type TriMode = "off" | "include" | "exclude";
+type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
+type TopWindowTime = { band: string; rate: number; total: number } | null;
+type TopWindowEntry = { sigma: TopWindow; bench: TopWindow; time: TopWindowTime };
+type TopWindows = Partial<Record<string, Partial<Record<"pos" | "neg", TopWindowEntry>>>>;
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
 type BenchBlock = { benchmark: string; buckets: BucketGroup[] };
 
-type ArbClass = "blue" | "ark" | "print" | "open" | "intra" | "post" | "global";
+type ArbClass = "blue" | "ark" | "pre" | "print" | "open" | "intra" | "post" | "global";
 type ArbType = "any" | "hard" | "soft";
 
 /* =========================
@@ -148,29 +156,12 @@ const BENCH_COLORS: Record<string, string> = {
   DEFAULT: "#94a3b8",
 };
 
-const clsOrder: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra", "post"];
+const clsOrder: ArbClass[] = ["global", "blue", "pre", "ark", "print", "open", "intra", "post"];
 const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
-
-const OPEN_DOOR_VISIBLE_CLASS_ORDER: ArbClass[] = ["global", "blue", "ark", "print", "open", "intra"];
-const OPEN_DOOR_CLASS_META: Record<ArbClass, { api: "glob" | "5m" | "10m" | "15m" | "20m" | "30m"; label: string }> = {
-  global: { api: "glob", label: "GLOB" },
-  blue: { api: "5m", label: "5M" },
-  ark: { api: "10m", label: "10M" },
-  print: { api: "15m", label: "15M" },
-  open: { api: "20m", label: "20M" },
-  intra: { api: "30m", label: "30M" },
-  post: { api: "30m", label: "30M" },
-};
-
-const OPEN_DOOR_TYPE_META: Record<ArbType, { api: "any" | "up" | "down"; label: string }> = {
-  any: { api: "any", label: "ANY" },
-  hard: { api: "up", label: "UP" },
-  soft: { api: "down", label: "DOWN" },
-};
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
-const IGNORE_LS_KEY = "bridge.opendoor.ignoreTickers.v1";
+const IGNORE_LS_KEY = "bridge.opendoor.ignoreTickers.v2";
 const APPLY_LS_KEY = "bridge.opendoor.applyOnlyTickers.v1";
 const PIN_LS_KEY = "bridge.opendoor.pinTickers.v1";
 const ACTIVE_PANEL_LS_KEY = "bridge.opendoor.activePanel.v1";
@@ -374,9 +365,12 @@ const getBestTotal = (d: any) =>
 
 const getBestTotalByType = (d: any, type: ArbType): number | null => {
   const best = getBestObj(d);
-  const anyTotal = toNum(best?.total ?? best?.Total ?? best?.count ?? best?.Count ?? (d as any)?._bestTotal ?? (d as any)?.total);
   const hardTotal = toNum(best?.hard ?? best?.Hard ?? (d as any)?._bestHard);
   const softTotal = toNum(best?.soft ?? best?.Soft ?? (d as any)?._bestSoft);
+  const anyTotal =
+    hardTotal != null || softTotal != null
+      ? (hardTotal ?? 0) + (softTotal ?? 0)
+      : toNum(best?.total ?? best?.Total ?? best?.count ?? best?.Count ?? (d as any)?._bestTotal ?? (d as any)?.total);
   if (type === "hard") return hardTotal;
   if (type === "soft") return softTotal;
   return anyTotal;
@@ -421,11 +415,11 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 /* =========================
    Numeric field getters (centralized)
 ========================= */
-const numSpread = (s: any) => getNumAny(s, ["spread", "Spread"]);
+const numSpreadBidPct = (s: any) => getNumAny(s, ["SpreadBid%", "spreadBidPct", "SpreadBidPct", "Spread", "spread"]);
 const numLastClose = (s: any) =>
   getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
 
-const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv"]);
+const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv", "PreMhVol", "preMhVol"]);
 const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
 const PRE_MH_VOL_NF_KEYS = ["preMktVolNF", "PreMktVolNF", "preMhVolNF", "PreMhVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"];
 const VOL_NF_FROM_LST_CLS_KEYS = ["VolNFFromLstCls", "volNFFromLstCls", "volnffromlstcls", "VolNFfromLstCls", "volNFfromLstCls", "vol_nf_from_lst_cls"];
@@ -492,6 +486,44 @@ const numPreMhMDV90NF = (s: any) =>
   getNumAny(s, PRE_MH_MDV_90_NF_KEYS);
 
 const numVolNFfromLstCls = (s: any) => getNumAny(s, VOL_NF_FROM_LST_CLS_KEYS);
+const RANGE_VALUE_GETTERS = {
+  ADV20: numADV20,
+  ADV20NF: numADV20NF,
+  ADV90: numADV90,
+  ADV90NF: numADV90NF,
+  AvPreMhv: numAvPreMh,
+  RoundLot: numRoundLot,
+  VWAP: numVWAP,
+  SpreadBidPct: numSpreadBidPct,
+  LstPrcL: numLstPrcL,
+  LstCls: numLastClose,
+  YCls: numYCls,
+  TCls: numTCls,
+  ClsToClsPct: numClsToClsPct,
+  Lo: numLo,
+  LstClsNewsCnt: numLstClsNewsCnt,
+  MarketCapM: numMarketCapM,
+  PreMhVolNF: numPreMktVolNF,
+  VolNFfromLstCls: numVolNFfromLstCls,
+  AvPostMhVol90NF: numAvPostMhVol90NF,
+  AvPreMhVol90NF: numAvPreMhVol90NF,
+  AvPreMhValue20NF: numAvPreMhValue20NF,
+  AvPreMhValue90NF: numAvPreMhValue90NF,
+  AvgDailyValue20: numAvgDailyValue20,
+  AvgDailyValue90: numAvgDailyValue90,
+  Volatility20: numVolatility20,
+  Volatility90: numVolatility90,
+  PreMhMDV20NF: numPreMhMDV20NF,
+  PreMhMDV90NF: numPreMhMDV90NF,
+  VolRel: numVolRel,
+  PreMhBidLstPrcPct: numPreMhBidLstPrcPct,
+  PreMhLoLstPrcPct: numPreMhLoLstPrcPct,
+  PreMhHiLstClsPct: numPreMhHiLstClsPct,
+  PreMhLoLstClsPct: numPreMhLoLstClsPct,
+  LstPrcLstClsPct: numLstPrcLstClsPctSafe,
+  ImbExch925: numImbExch925,
+  ImbExch1555: numImbExch1555,
+} as const;
 
 const strEquityType = (s: any) => getStrAny(s, ["equityType", "EquityType", "eqType", "EqType"], "");
 const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount"]);
@@ -533,6 +565,10 @@ const getRenderableDirection = (s: any): "up" | "down" | "none" => {
   return "none";
 };
 
+export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
+  return getRenderableDirection(s) === "down" ? "Short" : "Long";
+}
+
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
   zapMode: "zap" | "sigma" | "delta" | "off"
@@ -563,6 +599,62 @@ const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
     return toNum(best?.printMedianNeg ?? best?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
   }
   return null;
+};
+
+const getNewYorkMonthDay = (): { month: number; day: number } => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const month = Number(parts.find((part) => part.type === "month")?.value ?? NaN);
+    const day = Number(parts.find((part) => part.type === "day")?.value ?? NaN);
+    if (Number.isFinite(month) && Number.isFinite(day)) return { month, day };
+  } catch {
+  }
+  const now = new Date();
+  return { month: now.getMonth() + 1, day: now.getDate() };
+};
+
+const parseTodayReportFlag = (value: any): boolean | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
+  if (iso) {
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    const today = getNewYorkMonthDay();
+    return month === today.month && day === today.day;
+  }
+
+  const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
+  if (slash) {
+    const left = Number(slash[2]);
+    const right = Number(slash[3]);
+    let day = left;
+    let month = right;
+    if (left <= 12 && right > 12) {
+      month = left;
+      day = right;
+    }
+    const today = getNewYorkMonthDay();
+    return month === today.month && day === today.day;
+  }
+
+  return toBool(value);
+};
+
+const hasTodayReport = (s: ArbitrageSignal): boolean => {
+  const parsed =
+    parseTodayReportFlag((s as any).report) ??
+    parseTodayReportFlag((s as any).Report) ??
+    parseTodayReportFlag((s as any).meta?.report) ??
+    parseTodayReportFlag((s as any).meta?.Report) ??
+    toBool((s as any)._reportBool);
+
+  return parsed === true;
 };
 
 const isSignalGoldActive = (
@@ -668,7 +760,9 @@ function safeRecord(value: any): Record<string, any> | null {
 }
 
 function sonarClassToBinClassKey(cls: ArbClass): string {
-  return cls === "global" ? "global" : cls;
+  if (cls === "global") return "global";
+  if (cls === "pre") return "ark"; // PRE session shares the "ark" bin class (same as Scanner/ratingFilter)
+  return cls;
 }
 
 function sonarBinSignKey(signal: ArbitrageSignal): "pos" | "neg" | null {
@@ -743,6 +837,113 @@ function passesSonarBinRating(args: {
   );
 }
 
+function getSigmaBinParams(signal: ArbitrageSignal): { min: number; max: number; step: number } {
+  const root = safeRecord(getBestParams(signal));
+  const bwAny = safeRecord(root?.best_windows_any ?? root?.BestWindowsAny);
+  const p = safeRecord(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
+  return {
+    min: toNum(p?.min) ?? 0.5,
+    max: toNum(p?.max) ?? 10.0,
+    step: toNum(p?.step) ?? 0.5,
+  };
+}
+
+function computeSigmaBinKey(absVal: number, step: number, min: number, max: number): string | null {
+  if (!Number.isFinite(absVal) || step <= 0) return null;
+  const v = Math.max(min, Math.min(max, absVal));
+  const b = Math.floor(v / step) * step;
+  return b.toFixed(1);
+}
+
+function getSessionBinRating(
+  signal: ArbitrageSignal,
+  cls: ArbClass
+): { rate: number; total: number } | null {
+  const signKey = sonarBinSignKey(signal);
+  const sigmaAbs = getSignalSigmaAbs(signal);
+  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
+  const { min, max, step } = getSigmaBinParams(signal);
+  const binKey = computeSigmaBinKey(sigmaAbs, step, min, max);
+  if (!binKey) return null;
+  const root = safeRecord(getBestParams(signal));
+  const bwAny = safeRecord(root?.best_windows_any ?? root?.BestWindowsAny);
+  const stitched = safeRecord(bwAny?.stitched ?? bwAny?.Stitched);
+  const allStats = safeRecord(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
+  const clsStats = safeRecord(allStats?.[sonarClassToBinClassKey(cls)]);
+  const signStats = safeRecord(clsStats?.[signKey]);
+  const entry = safeRecord(signStats?.[binKey]);
+  if (!entry) return null;
+  const rate = toNum(entry.r ?? entry.rate ?? entry.Rate);
+  const total = toNum(entry.t ?? entry.total ?? entry.Total);
+  if (rate == null || total == null) return null;
+  return { rate, total };
+}
+
+function getTopWindows(signal: ArbitrageSignal, cls: ArbClass): TopWindows[string] | null {
+  const root = safeRecord(getBestParams(signal));
+  const tw = safeRecord(root?.top_windows ?? root?.TopWindows);
+  return safeRecord(tw?.[sonarClassToBinClassKey(cls)]) ?? null;
+}
+
+function getSignalBenchPct(signal: ArbitrageSignal): number | null {
+  const bid = toNum(signal?.bidBench);
+  const ask = toNum(signal?.askBench);
+  if (bid != null && ask != null) return (bid + ask) / 2;
+  return bid ?? ask ?? null;
+}
+
+function currentMarketTimeBand(bandMinutes: number): string | null {
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(now);
+    const h = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
+    const min = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
+    if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+    const m = Math.floor(min / bandMinutes) * bandMinutes;
+    const totalEnd = h * 60 + m + bandMinutes;
+    const eh = Math.floor(totalEnd / 60) % 24;
+    const em = totalEnd % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+  } catch {
+    return null;
+  }
+}
+
+function passesTopWindowFilter(
+  signal: ArbitrageSignal,
+  cls: ArbClass,
+  topSigmaOn: boolean,
+  topBenchOn: boolean,
+  topTimeOn: boolean
+): boolean {
+  const signKey = sonarBinSignKey(signal);
+  if (!signKey) return false;
+  const tw = getTopWindows(signal, cls);
+  const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
+  if (!entry) return false;
+
+  if (topSigmaOn && entry.sigma) {
+    const sa = getSignalSigmaAbs(signal);
+    if (sa == null) return false;
+    if (sa < entry.sigma.lo || sa > entry.sigma.hi) return false;
+  }
+  if (topBenchOn && entry.bench) {
+    const bp = getSignalBenchPct(signal);
+    if (bp == null) return false;
+    if (bp < entry.bench.lo || bp > entry.bench.hi) return false;
+  }
+  if (topTimeOn && entry.time) {
+    const band = currentMarketTimeBand(30);
+    if (!band || band !== entry.time.band) return false;
+  }
+  return true;
+}
+
 /* =========================
    URL builder
 ========================= */
@@ -754,6 +955,8 @@ export function buildSignalsUrl(args: {
   zapMode: "zap" | "sigma" | "delta" | "off";
   minRate: number;
   minTotal: number;
+  startAbs?: number | null;
+  limit?: number;
   tickers?: string;
   minCorr?: number | null;
   maxCorr?: number | null;
@@ -761,6 +964,7 @@ export function buildSignalsUrl(args: {
   maxBeta?: number | null;
   minSigma?: number | null;
   maxSigma?: number | null;
+  includeAll?: boolean;
 }) {
   const {
     cls,
@@ -770,6 +974,8 @@ export function buildSignalsUrl(args: {
     zapMode,
     minRate,
     minTotal,
+    startAbs,
+    limit,
     tickers,
     minCorr,
     maxCorr,
@@ -777,13 +983,12 @@ export function buildSignalsUrl(args: {
     maxBeta,
     minSigma,
     maxSigma,
+    includeAll,
   } = args;
 
-  const windowKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
-  const typeKey = OPEN_DOOR_TYPE_META[type]?.api ?? "any";
-  const u = new URL(`${BRIDGE_BASE}/api/opendoor/signals/${windowKey}/${typeKey}/${mode}`);
+  const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
 
-  const useBinRatingFilter = ratingMode === "BIN" && zapMode === "sigma";
+  const useBinRatingFilter = (ratingMode === "BIN" || ratingMode === "BINS") && zapMode === "sigma";
   const safeMinRate = useBinRatingFilter
     ? BIN_SERVER_MIN_RATE
     : Number.isFinite(minRate) ? Math.max(0, minRate) : BIN_SERVER_MIN_RATE;
@@ -793,7 +998,7 @@ export function buildSignalsUrl(args: {
 
   u.searchParams.set("minRate", String(safeMinRate));
   u.searchParams.set("minTotal", String(safeMinTotal));
-  u.searchParams.set("limit", "5000");
+  u.searchParams.set("limit", String(Number.isFinite(limit as number) ? Math.max(1, Math.trunc(limit as number)) : 5000));
 
   const t = (tickers ?? "").trim();
   if (t) u.searchParams.set("tickers", t);
@@ -804,14 +1009,26 @@ export function buildSignalsUrl(args: {
     }
   };
 
+  setOptional("startAbs", startAbs);
   setOptional("minCorr", minCorr);
   setOptional("maxCorr", maxCorr);
   setOptional("minBeta", minBeta);
   setOptional("maxBeta", maxBeta);
   setOptional("minSigma", minSigma);
   setOptional("maxSigma", maxSigma);
+  if (includeAll) {
+    u.searchParams.set("includeAll", "true");
+  }
 
   return u.toString();
+}
+
+export function buildSignalsStreamUrl(args: Parameters<typeof buildSignalsUrl>[0]) {
+  const snapshotUrl = new URL(buildSignalsUrl(args));
+  snapshotUrl.pathname = snapshotUrl.pathname.replace("/api/arbitrage/signals/", "/api/arbitrage/signals-stream/");
+  // Stream payloads stay intentionally smaller than one-shot snapshots.
+  snapshotUrl.searchParams.set("limit", String(Number.isFinite(args.limit as number) ? Math.max(1, Math.trunc(args.limit as number)) : 5000));
+  return snapshotUrl.toString();
 }
 
 /* =========================
@@ -894,6 +1111,22 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
   const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
   const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
   const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
+  const _positionBp = toNum(
+    raw?.PositionBp ??
+    raw?.positionBp ??
+    raw?.position_bp ??
+    raw?.posBp ??
+    raw?.PosBp ??
+    meta?.PositionBp ??
+    meta?.positionBp ??
+    meta?.position_bp ??
+    meta?.posBp ??
+    meta?.PosBp ??
+    raw?.PositionBpAbs ??
+    raw?.positionBpAbs ??
+    meta?.PositionBpAbs ??
+    meta?.positionBpAbs
+  );
 
   const canonical = { ...raw, meta };
   const volRel = numVolRel(canonical);
@@ -942,6 +1175,8 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     askStock,
     bidBench,
     askBench,
+    PositionBp: _positionBp,
+    positionBp: _positionBp,
 
     country,
     exchange,
@@ -977,6 +1212,7 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     _isPTP,
     _isSSR,
     _isActive,
+    isStaticFallback: !!(raw.isStaticFallback ?? raw.IsStaticFallback ?? false),
   };
 }
 
@@ -1000,7 +1236,7 @@ type MinMaxProps = {
 
 const RANGE_BOUND_KEYS = [
   "Corr", "Beta", "Sigma",
-  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "Spread", "LstPrcL",
+  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "SpreadBidPct", "LstPrcL",
   "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
   "VolNFfromLstCls", "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
   "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90", "PreMhMDV20NF", "PreMhMDV90NF",
@@ -1020,13 +1256,14 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
 
   return (
     <div
-      className={`group flex flex-col gap-1 rounded-xl border p-2 transition-all ${
+      className={clsx(
+        "group flex flex-col gap-1 rounded-xl border p-2 transition-all",
         hasValue
           ? isOff
             ? "border-rose-500/30 bg-rose-500/[0.05]"
             : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
           : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
-      }`}
+      )}
       onFocusCapture={props.startEditing}
       onBlurCapture={(e) => {
         const next = e.relatedTarget as Node | null;
@@ -1041,9 +1278,10 @@ export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
             <button
               type="button"
               onClick={() => props.onToggleMode?.(props.filterKey!)}
-              className={`text-[10px] font-mono transition-colors uppercase ${
+              className={clsx(
+                "text-[10px] font-mono transition-colors uppercase",
                 isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
-              }`}
+              )}
               title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
             >
               {isOff ? "OFF" : "ON"}
@@ -1096,7 +1334,26 @@ const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "light") return "fuchsia";
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
+  if (theme === "mercury") return "zinc";
+  if (theme === "magma") return "rose";
+  if (theme === "oceanic") return "cyan";
+  if (theme === "khaki") return "amber";
+  if (theme === "zebra") return "zinc";
+  if (theme === "flamingo") return "rose";
+  if (theme === "money") return "amber";
+  if (theme === "matrix") return "emerald";
   return "emerald";
+};
+
+const getSonarActiveButtonClass = (theme?: string | null): string => {
+  if (theme === "inferno") return "bg-orange-500/75 text-white";
+  const c = getSonarPrimaryMsColor(theme);
+  if (c === "amber") return "bg-yellow-300/75 text-black";
+  if (c === "zinc") return "bg-zinc-300/65 text-zinc-900";
+  if (c === "fuchsia") return "bg-fuchsia-500/75 text-white";
+  if (c === "cyan") return "bg-sky-500/75 text-white";
+  if (c === "rose") return "bg-rose-500/75 text-white";
+  return "bg-emerald-500/80 text-white";
 };
 
 const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor): MsColor =>
@@ -1228,6 +1485,22 @@ const getSonarAccent = (theme?: string | null) => {
       panelSoft: "border-fuchsia-500/20 bg-fuchsia-500/[0.03]",
     };
   }
+  if (primary === "rose") {
+    return {
+      selection: "selection:bg-rose-500/30",
+      dot: "bg-rose-400",
+      badge: "border-rose-500/20 bg-rose-500/10 text-rose-300",
+      button: "bg-rose-500/10 text-rose-300 border-rose-500/20 shadow-[0_0_10px_-3px_rgba(244,63,94,0.2)]",
+      outlineButton: "border-rose-500/50 text-rose-400 hover:bg-rose-500/10 shadow-[0_0_10px_rgba(244,63,94,0.1)]",
+      panel: "border-l-rose-500 shadow-[0_0_40px_-10px_rgba(244,63,94,0.06)]",
+      chip: "border-rose-500/30 bg-rose-500/10 text-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.18)]",
+      line: "bg-rose-400/50",
+      text: "text-rose-300",
+      textSoft: "text-rose-200/75",
+      softBorder: "border-rose-500/35 bg-rose-500/12 text-rose-300",
+      panelSoft: "border-rose-500/20 bg-rose-500/[0.03]",
+    };
+  }
   if (primary === "cyan") {
     return {
       selection: "selection:bg-sky-500/30",
@@ -1298,7 +1571,7 @@ const MultiSelectFilter = ({
   options: string[];
   selected: Set<string>;
   setSelected: (s: Set<string>) => void;
-  enabled: boolean;
+  enabled: TriMode;
   toggleEnabled: () => void;
   color?: MsColor;
   hideArrow?: boolean;
@@ -1398,14 +1671,22 @@ const MultiSelectFilter = ({
         <button
           type="button"
           onClick={toggleEnabled}
-          className={`inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full ${
-            enabled ? C.chipActive : C.chipInactive
-          }`}
+          className={clsx(
+            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
+            enabled === "off" && C.chipInactive,
+            enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+            enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
+          )}
         >
           <span>{label}</span>
           {selected.size > 0 && (
             <span
-              className={`ml-2 inline-flex min-w-5 items-center justify-center rounded-full border border-yellow-200/35 bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none ${getSonarAccent(theme).text}`}
+              className={clsx(
+                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
+                enabled === "off" && `border-yellow-200/35 accent-text`,
+                enabled === "include" && "border-emerald-400/50 text-emerald-400",
+                enabled === "exclude" && "border-red-400/50 text-red-400",
+              )}
             >
               {selected.size}
             </span>
@@ -1523,11 +1804,11 @@ const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
                     }}
                     className={[
                       "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                      active ? getSonarAccent(theme).textSoft : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
+                      active ? "accent-text-soft" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
                     ].join(" ")}
                   >
                     <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                    {active && <span className={["h-1.5 w-1.5 rounded-full", getSonarAccent(theme).dot].join(" ")} />}
+                    {active && <span className="h-1.5 w-1.5 rounded-full accent-dot" />}
                   </button>
                 );
               })}
@@ -1603,8 +1884,6 @@ function GlassSelect({
   panelOffsetX?: number;
   panelWidth?: number;
 }) {
-  const { theme } = useUi();
-  const accent = getSonarAccent(theme);
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
@@ -1675,8 +1954,8 @@ function GlassSelect({
             ? "relative flex w-full items-center gap-1.5 h-[14px] border-0 bg-transparent px-0 py-0 text-xs font-mono font-normal normal-case tracking-normal leading-none shadow-none transition-colors duration-150"
             : "relative flex w-full items-center gap-2.5 h-9 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-300",
           compact
-            ? clsx(accent.textSoft, "border-transparent bg-transparent shadow-none hover:text-zinc-200")
-            : clsx(accent.textSoft, "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]"),
+            ? clsx("accent-text-soft", "border-transparent bg-transparent shadow-none hover:text-zinc-200")
+            : clsx("accent-text-soft", "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]"),
           className
         )}
       >
@@ -1709,12 +1988,12 @@ function GlassSelect({
                         opt.disabled
                           ? "cursor-not-allowed text-zinc-600"
                           : opt.value === value
-                            ? accent.button
+                            ? "accent-soft"
                             : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200"
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                      {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", accent.dot)} />}
+                      {opt.value === value && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
                     </button>
                   </div>
                 ))}
@@ -1757,21 +2036,16 @@ const FB = {
   },
 } as const;
 
-const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick, color = "emerald" }) => {
-  const { theme } = useUi();
-  const resolvedColor = resolveAccentMsColor(theme, color);
-
-  return (
-    <button
-      onClick={onClick}
-      className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
-        active ? FB[resolvedColor].on : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
-      }`}
-    >
-      {label}
-    </button>
-  );
-};
+const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
+      active ? "accent-chip" : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+    }`}
+  >
+    {label}
+  </button>
+);
 
 // ЗАМІНИТИ існуюче оголошення SignalCardProps + компонент SignalCard
 // на наступний блок:
@@ -1808,8 +2082,6 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   pinColor = null,
 }) => {
-  const { theme } = useUi();
-  const sonarAccent = getSonarAccent(theme);
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
 
@@ -1868,8 +2140,6 @@ const SignalCard: React.FC<SignalCardProps> = ({
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
   const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : mintTextClass;
-  const rateCell = getDisplayedRatingCell(s, side);
-  const rateTextClass = isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass;
 
   const tickerColor = isActive
     ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass
@@ -1913,17 +2183,11 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
       <div className={`flex items-center justify-between w-full font-mono ${compact ? "text-[9px]" : "text-[10px]"} opacity-80`}>
         <div className="flex items-center gap-1.5">
-          <span className="text-zinc-600">RATE</span>
-          <span className={`${rateTextClass} tabular-nums`}>
-            {rateCell.rate == null ? "-" : `${Math.round(rateCell.rate * 100)}%`}
-          </span>
+          <span className="text-zinc-600">SIG</span>
+          <span className="text-zinc-400 tabular-nums">{s.sig == null ? "-" : fmtNum(toNum(s.sig), 2)}</span>
         </div>
 
           <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <span className="text-zinc-600">N</span>
-            <span className="text-zinc-400 tabular-nums">{rateCell.total == null ? "-" : fmtMaybeInt(rateCell.total)}</span>
-          </div>
           <div className="flex items-center gap-1">
             <span className="text-zinc-600">%</span>
             <span className="text-zinc-400 tabular-nums">{z == null ? "-" : fmtNum(z, 2)}</span>
@@ -1934,6 +2198,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
           </div>
         </div>
       </div>
+
     </button>
   );
 };
@@ -1942,191 +2207,6 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
 const safeObj = (v: any) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
 const getBestParams = (d: any) => d?.best_params ?? d?.bestParams ?? d?.BestParams ?? null;
-
-const toOpenDoorRateCell = (value: any) => {
-  const obj = safeObj(value);
-  return {
-    rate: toNum(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating),
-    total: toNum(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count),
-  };
-};
-
-const normalizeOpenDoorRatings = (value: any) => {
-  const source = safeObj(value);
-  const out: Record<string, any> = {};
-  if (!source) return out;
-
-  for (const [windowKey, rawBucket] of Object.entries(source)) {
-    const bucket = safeObj(rawBucket);
-    if (!bucket) continue;
-    out[windowKey] = {
-      any: toOpenDoorRateCell(bucket.any ?? bucket.Any),
-      hard: toOpenDoorRateCell(bucket.up ?? bucket.Up),
-      soft: toOpenDoorRateCell(bucket.down ?? bucket.Down),
-    };
-  }
-
-  return out;
-};
-
-const normalizeOpenDoorBestRanges = (value: any) => {
-  const source = safeObj(value);
-  return source ?? {};
-};
-
-const buildOpenDoorRatingsFromClasses = (value: any) => {
-  const source = safeObj(value);
-  const out: Record<string, any> = {};
-  if (!source) return out;
-
-  for (const [windowKey, rawClass] of Object.entries(source)) {
-    const stats = safeObj((rawClass as any)?.stats ?? (rawClass as any)?.Stats);
-    if (!stats) continue;
-
-    const total = toNum(stats.total ?? stats.Total ?? stats.count ?? stats.Count);
-    const upRate = toNum(stats.up_rate ?? stats.UpRate ?? stats.upRate ?? stats.Up_Rate);
-    const downRate = toNum(stats.down_rate ?? stats.DownRate ?? stats.downRate ?? stats.Down_Rate);
-    const anyRate =
-      upRate == null && downRate == null
-        ? null
-        : Math.max(upRate ?? Number.NEGATIVE_INFINITY, downRate ?? Number.NEGATIVE_INFINITY);
-
-    out[windowKey] = {
-      any: { rate: anyRate, total },
-      hard: { rate: upRate, total },
-      soft: { rate: downRate, total },
-    };
-  }
-
-  return out;
-};
-
-const toSyntheticOpenDoorSignal = (raw: any, direction: "up" | "down", cls: ArbClass): ArbitrageSignal | null => {
-  const ticker = normalizeTicker(String(raw?.ticker ?? raw?.Ticker ?? ""));
-  if (!ticker) return null;
-
-  const ratings = normalizeOpenDoorRatings(raw?.ratings ?? raw?.Ratings);
-  const classKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
-  const classBucket = safeObj(ratings[classKey]);
-  const anyCell = toOpenDoorRateCell(classBucket?.any);
-  const dirCell = direction === "up" ? toOpenDoorRateCell(classBucket?.hard) : toOpenDoorRateCell(classBucket?.soft);
-
-  const metricAbs = Math.abs(dirCell.rate ?? anyCell.rate ?? 0);
-  const signedMetric = direction === "down" ? metricAbs : -metricAbs;
-  const bestRanges = raw?.best_ranges ?? raw?.bestRanges ?? raw?.BestRanges ?? null;
-
-  return {
-    ...raw,
-    strategy: "opendoor",
-    ticker,
-    benchmark: "OPEN",
-    betaBucket: "unknown",
-    direction,
-    sig: signedMetric,
-    zapS: direction === "down" ? metricAbs : null,
-    zapSsigma: direction === "down" ? metricAbs : null,
-    zapL: direction === "up" ? signedMetric : null,
-    zapLsigma: direction === "up" ? signedMetric : null,
-    shortCandidate: direction === "down",
-    longCandidate: direction === "up",
-    kind: direction === "up" ? "hard" : "soft",
-    company: ticker,
-    active: true,
-    isActive: true,
-    PositionBp: direction === "down" ? -1 : 1,
-    best: {
-      classKey,
-      rating: dirCell.rate ?? anyCell.rate ?? null,
-      total: dirCell.total ?? anyCell.total ?? null,
-      hard: toNum(classBucket?.hard?.total),
-      soft: toNum(classBucket?.soft?.total),
-      ratings,
-    },
-    ratings,
-    best_ranges: bestRanges,
-    best_params: {
-      ratings,
-      best_ranges: bestRanges,
-    },
-    _bestRating: dirCell.rate ?? anyCell.rate ?? null,
-    _bestTotal: dirCell.total ?? anyCell.total ?? null,
-    _bestHard: toNum(classBucket?.hard?.total),
-    _bestSoft: toNum(classBucket?.soft?.total),
-    _isActive: true,
-  };
-};
-
-const mergeOpenDoorActivePayload = (signalRow: any, tickerItem: any, bestParamsItem: any) => {
-  const mergedTicker = normalizeTicker(
-    String(
-      signalRow?.ticker ??
-        signalRow?.Ticker ??
-        tickerItem?.ticker ??
-        tickerItem?.Ticker ??
-        bestParamsItem?.ticker ??
-        bestParamsItem?.Ticker ??
-        ""
-    )
-  );
-
-  const bestParamRatings = normalizeOpenDoorRatings(bestParamsItem?.ratings ?? bestParamsItem?.Ratings);
-  const tickerRatings = buildOpenDoorRatingsFromClasses(tickerItem?.classes ?? tickerItem?.Classes);
-  const signalRatings = normalizeOpenDoorRatings(signalRow?.ratings ?? signalRow?.Ratings);
-  const ratings =
-    Object.keys(bestParamRatings).length > 0
-      ? bestParamRatings
-      : Object.keys(signalRatings).length > 0
-        ? signalRatings
-        : tickerRatings;
-
-  const bestRanges = normalizeOpenDoorBestRanges(
-    bestParamsItem?.best_ranges ??
-      bestParamsItem?.bestRanges ??
-      bestParamsItem?.BestRanges ??
-      signalRow?.best_ranges ??
-      signalRow?.bestRanges ??
-      signalRow?.BestRanges
-  );
-
-  const merged = {
-    ...(safeObj(tickerItem) ?? {}),
-    ...(safeObj(signalRow) ?? {}),
-    ticker: mergedTicker ?? signalRow?.ticker ?? tickerItem?.ticker ?? bestParamsItem?.ticker,
-    strategy: "opendoor",
-    benchmark: "OPEN",
-    betaBucket: "unknown",
-    ratings,
-    best_ranges: bestRanges,
-  };
-
-  const classKey =
-    Object.entries(OPEN_DOOR_CLASS_META).find(([, meta]) => meta.api === String((signalRow as any)?.best?.classKey ?? ""))?.[0] ??
-    null;
-
-  const currentWindowKey = classKey ? OPEN_DOOR_CLASS_META[classKey as ArbClass]?.api : null;
-  const currentBucket = currentWindowKey ? safeObj(ratings[currentWindowKey]) : null;
-
-  return {
-    ...merged,
-    classes: safeObj(tickerItem?.classes ?? tickerItem?.Classes) ?? merged.classes,
-    best: {
-      ...(safeObj(signalRow?.best) ?? {}),
-      ratings,
-      classKey: currentWindowKey ?? signalRow?.best?.classKey ?? null,
-      rating: toNum(signalRow?.best?.rating ?? signalRow?.best?.Rating) ?? toNum(currentBucket?.any?.rate),
-      total: toNum(signalRow?.best?.total ?? signalRow?.best?.Total) ?? toNum(currentBucket?.any?.total),
-      hard: toNum(signalRow?.best?.hard ?? signalRow?.best?.Hard) ?? toNum(currentBucket?.hard?.total),
-      soft: toNum(signalRow?.best?.soft ?? signalRow?.best?.Soft) ?? toNum(currentBucket?.soft?.total),
-    },
-    best_params: {
-      ...(safeObj(signalRow?.best_params) ?? {}),
-      ...(safeObj(bestParamsItem) ?? {}),
-      ratings,
-      best_ranges: bestRanges,
-      classes: safeObj(tickerItem?.classes ?? tickerItem?.Classes) ?? undefined,
-    },
-  };
-};
 
 type WindowRateCell = {
   rate: number | null;
@@ -2139,23 +2219,6 @@ type WindowRatingRow = {
   hard: WindowRateCell;
   soft: WindowRateCell;
 };
-
-const chunkRowPairs = (rows: RowPair[], size: number): RowPair[][] => {
-  if (!Array.isArray(rows) || rows.length === 0) return [];
-  const safeSize = Math.max(1, Math.trunc(size || 1));
-  const chunks: RowPair[][] = [];
-  for (let i = 0; i < rows.length; i += safeSize) chunks.push(rows.slice(i, i + safeSize));
-  return chunks;
-};
-
-type OpenDoorLiveQuote = {
-  bid: number | null;
-  ask: number | null;
-  bidLstClsDeltaPct: number | null;
-  askLstClsDeltaPct: number | null;
-};
-
-const OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE = 120;
 
 const WINDOW_RATING_LABELS: Record<string, string> = {
   glob: "GLOBAL",
@@ -2176,6 +2239,7 @@ const WINDOW_RATING_LABELS: Record<string, string> = {
   post: "POST",
   print: "PRINT",
   ark: "ARK",
+  pre: "PRE",
   blue: "BLUE",
 };
 
@@ -2189,7 +2253,7 @@ const toWindowRateCell = (value: any): WindowRateCell => {
 };
 
 const pickWindowRatingsSource = (d: any) => {
-  const direct =
+  return (
     safeObj(d?.ratings) ??
     safeObj(d?.Ratings) ??
     safeObj(d?.best?.ratings) ??
@@ -2200,14 +2264,8 @@ const pickWindowRatingsSource = (d: any) => {
     safeObj(getBestParams(d)?.Ratings) ??
     safeObj(getBestParams(d)?.windows) ??
     safeObj(getBestParams(d)?.Windows) ??
-    null;
-
-  if (direct) return direct;
-
-  const fromClasses = buildOpenDoorRatingsFromClasses(d?.classes ?? d?.Classes);
-  if (Object.keys(fromClasses).length > 0) return fromClasses;
-
-  return null;
+    null
+  );
 };
 
 const getWindowRatings = (d: any): WindowRatingRow[] => {
@@ -2250,127 +2308,59 @@ const getWindowRatings = (d: any): WindowRatingRow[] => {
   });
 };
 
-const getDisplayedRatingCell = (s: any, side: "short" | "long"): WindowRateCell => {
-  const best = getBestObj(s);
-  const rate = toNum(best?.rating ?? best?.Rating ?? best?.rate ?? best?.Rate ?? (s as any)?._bestRating);
-  const directionalTotal = side === "long"
-    ? toNum(best?.hard ?? best?.Hard ?? (s as any)?._bestHard)
-    : toNum(best?.soft ?? best?.Soft ?? (s as any)?._bestSoft);
-
-  return {
-    rate,
-    total: directionalTotal ?? toNum(best?.total ?? best?.Total ?? (s as any)?._bestTotal),
-  };
-};
-
-const getOpenDoorLiveQuoteComparison = (row: WindowRatingRow | null) => {
-  if (!row) {
-    return {
-      askRate: null as number | null,
-      askTotal: null as number | null,
-      bidRate: null as number | null,
-      bidTotal: null as number | null,
-      edge: null as number | null,
-      bias: "NEUTRAL" as "ASK" | "BID" | "NEUTRAL",
-    };
-  }
-
-  const askRate = row.hard.rate;
-  const bidRate = row.soft.rate;
-  const edge = askRate == null || bidRate == null ? null : askRate - bidRate;
-
-  return {
-    askRate,
-    askTotal: row.hard.total,
-    bidRate,
-    bidTotal: row.soft.total,
-    edge,
-    bias: edge == null ? "NEUTRAL" : edge > 0 ? "ASK" : edge < 0 ? "BID" : "NEUTRAL",
-  };
-};
-
-const mergeLiveQuoteIntoSignal = (signal: ArbitrageSignal, quote: OpenDoorLiveQuote | null | undefined): ArbitrageSignal => {
-  if (!quote) return signal;
-
-  const bid = quote.bid;
-  const ask = quote.ask;
-  const bidLstClsDeltaPct = quote.bidLstClsDeltaPct;
-  const askLstClsDeltaPct = quote.askLstClsDeltaPct;
-  const spread = bid != null && ask != null ? Math.max(0, ask - bid) : toNum(signal.spread ?? signal.Spread);
-
-  return {
-    ...signal,
-    Bid: bid,
-    Ask: ask,
-    ["BidLstClsΔ%"]: bidLstClsDeltaPct ?? undefined,
-    ["AskLstClsΔ%"]: askLstClsDeltaPct ?? undefined,
-    BidLstClsDeltaPct: bidLstClsDeltaPct ?? undefined,
-    AskLstClsDeltaPct: askLstClsDeltaPct ?? undefined,
-    bidStock: bidLstClsDeltaPct ?? undefined,
-    askStock: askLstClsDeltaPct ?? undefined,
-    spread: spread ?? undefined,
-    Spread: spread ?? undefined,
-  };
-};
-
-const enrichOpenDoorSignalsWithLiveQuotes = (
-  signals: ArbitrageSignal[],
-  quotes: Record<string, OpenDoorLiveQuote>
-): ArbitrageSignal[] =>
-  signals.map((signal) => mergeLiveQuoteIntoSignal(signal, quotes[String(signal.ticker ?? "").toUpperCase()] ?? null));
-
-const getOpenDoorLiveQuotes = async (tickers: string[]): Promise<Record<string, OpenDoorLiveQuote>> => {
-  const normalized = Array.from(
-    new Set(
-      tickers
-        .map((ticker) => normalizeTicker(ticker))
-        .filter((ticker): ticker is string => !!ticker)
-    )
-  );
-
-  if (normalized.length === 0) return {};
-
-  const out: Record<string, OpenDoorLiveQuote> = {};
-  const chunks: string[][] = [];
-  for (let i = 0; i < normalized.length; i += OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE) {
-    chunks.push(normalized.slice(i, i + OPEN_DOOR_LIVE_QUOTE_BATCH_SIZE));
-  }
-
-  await Promise.all(
-    chunks.map(async (chunk) => {
-      const url = new URL(`${BRIDGE_BASE}/api/live/full-quotes`);
-      url.searchParams.set("tickers", chunk.join(","));
-      url.searchParams.set("fields", "Bid,Ask,BidLstClsΔ%,AskLstClsΔ%");
-
-      const res = await fetch(url.toString(), { cache: "no-store" });
-      if (!res.ok) throw new Error(`Live quotes HTTP ${res.status}`);
-
-      const json = await res.json();
-      const items = Array.isArray(json?.items) ? json.items : [];
-
-      for (const item of items) {
-        const ticker = normalizeTicker(String(item?.ticker ?? item?.Ticker ?? ""));
-        if (!ticker) continue;
-        const fields = safeObj(item?.fields ?? item?.Fields);
-        out[ticker] = {
-          bid: toNum(fields?.Bid ?? fields?.bid),
-          ask: toNum(fields?.Ask ?? fields?.ask),
-          bidLstClsDeltaPct: toNum(fields?.["BidLstClsΔ%"] ?? fields?.BidLstClsDeltaPct ?? fields?.bidLstClsDeltaPct),
-          askLstClsDeltaPct: toNum(fields?.["AskLstClsΔ%"] ?? fields?.AskLstClsDeltaPct ?? fields?.askLstClsDeltaPct),
-        };
-      }
-    })
-  );
-
-  return out;
-};
-
 type ListMode = "off" | "ignore" | "apply" | "pin";
 type ActiveMode = "off" | "onlyActive" | "onlyInactive";
 
 
 type PinColor = "orange" | "lavender" | "cyan";
 type PinMap = Record<string, PinColor>;
+
+export type SonarExactFilterSnapshot = {
+  cls: string;
+  type: string;
+  mode: string;
+  ratingMode: "SESSION" | "BIN" | "BINS";
+  minRate: number | string;
+  minTotal: number | string;
+  tickersFilterNorm: string;
+  listMode: ListMode;
+  topMode: boolean;
+  topSigmaOn: boolean;
+  topBenchOn: boolean;
+  topTimeOn: boolean;
+  ignoreSet: Set<string>;
+  applySet: Set<string>;
+  pinMap: Record<string, string>;
+  bounds: any;
+  excludeDividend: boolean;
+  excludeNews: boolean;
+  excludePTP: boolean;
+  excludeSSR: boolean;
+  excludeReport: boolean;
+  excludeETF: boolean;
+  excludeCrap: boolean;
+  activeMode: ActiveMode;
+  includeUSA: boolean;
+  includeChina: boolean;
+  selCountries: Set<string>;
+  countryEnabled: TriMode;
+  selExchanges: Set<string>;
+  exchangeEnabled: TriMode;
+  selSectors: Set<string>;
+  sectorEnabled: TriMode;
+  filterReport: "ALL" | "YES" | "NO";
+  equityType: string;
+  corrMin: string;
+  corrMax: string;
+  betaMin: string;
+  betaMax: string;
+  sigmaMin: string;
+  sigmaMax: string;
+  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapShowAbs: number;
+  zapSilverAbs: number;
+  zapGoldAbs: number;
+};
 
 type SortKey = "alpha" | "sigma" | "zapAbs" | "sigZapAbs" | "rate" | "posBpAbs" | "beta" | "pin";
 type SortDir = "asc" | "desc";
@@ -2380,6 +2370,175 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
   lavender: "bg-violet-300",
   cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
 };
+
+export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
+  const out: ArbitrageSignal[] = [];
+  const mr = toNum(f.minRate);
+  const mt = toNum(f.minTotal);
+  const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
+  const useSigBinFilter = f.ratingMode === "BINS" && f.zapMode === "sigma";
+
+  const base = Number(f.zapShowAbs ?? 0);
+  const zapThr = Math.max(0.3, base);
+  const sigThr = Math.max(0.05, base);
+  const eqNeedle = f.equityType.trim().toLowerCase();
+
+  const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
+    if ((min != null || max != null) && val == null) return false;
+    if (min != null && val != null && val < min) return false;
+    if (max != null && val != null && val > max) return false;
+    return true;
+  };
+
+  const boundKeys = Object.keys(RANGE_VALUE_GETTERS) as Array<keyof typeof RANGE_VALUE_GETTERS>;
+  const passesRangeBound = (key: keyof typeof RANGE_VALUE_GETTERS, signal: ArbitrageSignal) => {
+    const bounds = f.bounds[key];
+    return passMinMaxLocal(RANGE_VALUE_GETTERS[key](signal), bounds.min, bounds.max);
+  };
+
+  for (const s of arr ?? []) {
+    const tk = normalizeTicker(s?.ticker || "");
+    if (!tk) continue;
+    const posActive = isActiveByPositionBp(s);
+
+    if (f.activeMode === "onlyActive" && !posActive) continue;
+
+    if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
+    if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
+    if (f.listMode === "pin" && !f.pinMap[tk]) continue;
+
+    if (f.activeMode === "onlyInactive") {
+      if (posActive) continue;
+    }
+
+    if (!passMinMaxLocal(getCorrValue(s), toNum(f.corrMin), toNum(f.corrMax))) continue;
+    if (!passMinMaxLocal(getBetaValue(s), toNum(f.betaMin), toNum(f.betaMax))) continue;
+    if (!passMinMaxLocal(getSigmaValue(s), toNum(f.sigmaMin), toNum(f.sigmaMax))) continue;
+    let failedRangeBound = false;
+    for (const key of boundKeys) {
+      if (!passesRangeBound(key, s)) {
+        failedRangeBound = true;
+        break;
+      }
+    }
+    if (failedRangeBound) continue;
+
+    if (useBinRatingFilter) {
+      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
+    } else if (useSigBinFilter) {
+      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
+      const binStats = getSessionBinRating(s, f.cls as ArbClass);
+      if (binStats === null) continue;
+      if (mr != null && binStats.rate < mr) continue;
+      if (mt != null && binStats.total < mt) continue;
+    } else {
+      const effMr = Math.max(0, Number(mr) || 0);
+      const effMt = Math.max(0, Math.trunc(Number(mt) || 0));
+      if (effMr > 0 || effMt > 0) {
+        if (mr != null) {
+          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+          if (r == null || r < mr) continue;
+        }
+        if (mt != null) {
+          const t = getBestTotalByType(s, f.type as any);
+          if (t == null || t < mt) continue;
+        }
+      }
+    }
+
+    if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
+
+    if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
+    if (f.excludeNews) {
+      const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
+      if (nn > 0) continue;
+    }
+    if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
+    if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
+    if (f.excludeReport && hasTodayReport(s)) continue;
+    if (f.excludeETF) {
+      if (boolIsETF(s) === true) continue;
+      const eqt = strEquityType(s).toLowerCase();
+      if (eqt && eqt.includes("etf")) continue;
+    }
+    if (f.excludeCrap) {
+      const px = numLastClose(s);
+      if (px != null && px < 5) continue;
+    }
+
+    if (f.includeUSA || f.includeChina) {
+      const matchUSA = isUSA(s);
+      const c = getCountryStr(s);
+      const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
+      if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
+    }
+
+    if (f.selCountries.size > 0) {
+      if (f.countryEnabled === "include" && !f.selCountries.has(getCountry(s))) continue;
+      if (f.countryEnabled === "exclude" && f.selCountries.has(getCountry(s))) continue;
+    }
+    if (f.selExchanges.size > 0) {
+      if (f.exchangeEnabled === "include" && !f.selExchanges.has(getExchange(s))) continue;
+      if (f.exchangeEnabled === "exclude" && f.selExchanges.has(getExchange(s))) continue;
+    }
+    if (f.selSectors.size > 0) {
+      if (f.sectorEnabled === "include" && !f.selSectors.has(getSector(s))) continue;
+      if (f.sectorEnabled === "exclude" && f.selSectors.has(getSector(s))) continue;
+    }
+
+    if (f.filterReport !== "ALL") {
+      const rep = hasTodayReport(s);
+      if (f.filterReport === "YES" && rep !== true) continue;
+      if (f.filterReport === "NO" && rep !== false) continue;
+    }
+
+    if (eqNeedle) {
+      const et = strEquityType(s).toLowerCase();
+      if (!et.includes(eqNeedle)) continue;
+    }
+
+    if (f.zapMode !== "off" && !s.isStaticFallback) {
+      const dir = s.direction;
+      const isShort = dir === "down";
+      const isLong = dir === "up";
+      if (!isShort && !isLong) continue;
+
+      if (!posActive) {
+        if (f.zapMode === "zap") {
+          if (isShort) {
+            const v = toNum(s.zapS);
+            if (v == null || v < zapThr) continue;
+          } else {
+            const v = toNum(s.zapL);
+            if (v == null || v > -zapThr) continue;
+          }
+        } else if (f.zapMode === "delta") {
+          const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+          const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
+          if (isShort) {
+            const v = toNum(s.zapSsigma);
+            if (v == null || v < deltaThr) continue;
+          } else {
+            const v = toNum(s.zapLsigma);
+            if (v == null || v > -deltaThr) continue;
+          }
+        } else {
+          if (isShort) {
+            const v = toNum(s.zapSsigma);
+            if (v == null || v < sigThr) continue;
+          } else {
+            const v = toNum(s.zapLsigma);
+            if (v == null || v > -sigThr) continue;
+          }
+        }
+      }
+    }
+
+    out.push(s);
+  }
+
+  return out;
+}
 
 
 
@@ -2778,24 +2937,32 @@ export default function OpenDoorSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const isDark = true;
-  const sonarAccent = getSonarAccent(theme);
-  const accentSelectionClass = sonarAccent.selection;
-  const accentDotClass = sonarAccent.dot;
-  const accentBadgeClass = sonarAccent.badge;
-  const accentButtonClass = sonarAccent.button;
-  const accentOutlineButtonClass = sonarAccent.outlineButton;
-  const accentPanelClass = sonarAccent.panel;
-  const accentChipClass = sonarAccent.chip;
-  const accentLineClass = sonarAccent.line;
-  const accentTextClass = sonarAccent.text;
-  const accentTextSoftClass = sonarAccent.textSoft;
+  const accentSelectionClass = "accent-selection";
+  const accentDotClass = "accent-dot";
+  const accentBadgeClass = "accent-badge";
+  const accentButtonClass = "accent-soft";
+  const accentOutlineButtonClass = "accent-outline";
+  const accentPanelClass = "accent-panel-l";
+  const accentChipClass = "accent-chip";
+  const accentLineClass = "accent-line";
+  const accentTextClass = "accent-text";
+  const accentTextSoftClass = "accent-text-soft";
+  const sonarActiveFilterStripClass = "flex items-center gap-1.5 self-start";
+  const sonarActiveFilterButtonBaseClass =
+    "inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[11px] font-mono font-bold uppercase leading-none transition-all";
+  const sonarActiveFilterButtonActiveClass = accentButtonClass;
+  const sonarActiveFilterButtonInactiveClass = isLightTheme
+    ? "border border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
+    : "border border-transparent text-[#8b8d97] hover:text-[#cfd1d8] hover:bg-white/[0.03]";
+  const sonarActiveFilterIconClass = isLightTheme ? "text-slate-400" : "text-[#8f919b]";
+  const sonarActiveFilterActiveIconClass = "text-current";
   const secondaryGroupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
   const secondaryButtonBaseClass =
     "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
   const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
   const secondaryButtonSoftActiveClass = isLightTheme
     ? "bg-slate-900/10 text-slate-900 border-slate-900/10 shadow-none"
-    : "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]";
+    : accentButtonClass;
   const secondaryIconButtonClass =
     "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
@@ -2816,6 +2983,10 @@ export default function OpenDoorSonar() {
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
   const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
+  const [topMode, setTopMode] = useState(false);
+  const [topSigmaOn, setTopSigmaOn] = useState(true);
+  const [topBenchOn, setTopBenchOn] = useState(false);
+  const [topTimeOn, setTopTimeOn] = useState(false);
 
   type NumField = {
     label: string;
@@ -2831,6 +3002,69 @@ export default function OpenDoorSonar() {
     { label: "minRate", val: minRate, set: setMinRate, ph: "0.3", step: 0.1, min: 0.0 },
     { label: "minTotal", val: minTotal, set: setMinTotal, ph: "1", step: 1, min: 1, integer: true },
   ];
+
+  const renderSonarActiveFilterIcon = useCallback(
+    (kind: "active" | "inactive" | "all", active: boolean) => {
+      const iconClassName = clsx("shrink-0", active ? sonarActiveFilterActiveIconClass : sonarActiveFilterIconClass);
+      switch (kind) {
+        case "active":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" />
+            </svg>
+          );
+        case "inactive":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 4l16 16" />
+              <path d="M10.6 10.6A2 2 0 0 0 14 12V7a3 3 0 0 0-6 0v10a3 3 0 0 0 5.1 2.1" />
+            </svg>
+          );
+        case "all":
+          return (
+            <svg
+              aria-hidden="true"
+              className={iconClassName}
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M5 20V10" />
+              <path d="M12 20V4" />
+              <path d="M19 20v-7" />
+            </svg>
+          );
+      }
+    },
+    [sonarActiveFilterActiveIconClass, sonarActiveFilterIconClass]
+  );
 
   const bumpNumField = useCallback((field: NumField, delta: number) => {
     let next = Number.isFinite(field.val) ? field.val + delta : field.min;
@@ -2967,13 +3201,13 @@ export default function OpenDoorSonar() {
 
   /* ===== Multi-select ===== */
   const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
-  const [countryEnabled, setCountryEnabled] = useState(false);
+  const [countryEnabled, setCountryEnabled] = useState<TriMode>("off");
 
   const [selExchanges, setSelExchanges] = useState<Set<string>>(new Set());
-  const [exchangeEnabled, setExchangeEnabled] = useState(false);
+  const [exchangeEnabled, setExchangeEnabled] = useState<TriMode>("off");
 
   const [selSectors, setSelSectors] = useState<Set<string>>(new Set());
-  const [sectorEnabled, setSectorEnabled] = useState(false);
+  const [sectorEnabled, setSectorEnabled] = useState<TriMode>("off");
 
   const [filterReport, setFilterReport] = useState<"ALL" | "YES" | "NO">("ALL");
   const [accountNonEmptyFirst, setAccountNonEmptyFirst] = useState(false);
@@ -3021,13 +3255,14 @@ export default function OpenDoorSonar() {
   /* ===== Active ticker panel ===== */
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
   const [activePanelVisible, setActivePanelVisible] = useState<boolean>(true);
-  const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(false);
-  const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("expanded");
+  const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(true);
+  const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("mini");
   const [filtersCollapsed, setFiltersCollapsed] = useState(false);
 
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
   const [activeData, setActiveData] = useState<any>(null);
+  const [liveSnap, setLiveSnap] = useState<Record<string, any> | null>(null);
 
   const toggleRangeMode = useCallback((key: RangeBoundKey) => {
     setRangeModes((prev) => ({
@@ -3093,8 +3328,8 @@ export default function OpenDoorSonar() {
 
       const tk = typeof s?.activeTicker === "string" ? normalizeTicker(s.activeTicker) : null;
       const vis = typeof s?.visible === "boolean" ? s.visible : true;
-      const col = typeof s?.collapsed === "boolean" ? s.collapsed : false;
-      const mode = s?.mode === "mini" || s?.mode === "expanded" ? s.mode : "expanded";
+      const col = typeof s?.collapsed === "boolean" ? s.collapsed : true;
+      const mode = s?.mode === "mini" || s?.mode === "expanded" ? s.mode : "mini";
 
       setActiveTicker(tk);
       setActivePanelVisible(vis);
@@ -3309,10 +3544,14 @@ export default function OpenDoorSonar() {
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
-        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN") setRatingMode(s.ratingMode);
+        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
+        if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
+        if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
+        if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
+        if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.filtersCollapsed === "boolean") setFiltersCollapsed(s.filtersCollapsed);
 
@@ -3347,11 +3586,15 @@ export default function OpenDoorSonar() {
         if (typeof s?.sigmaMax === 'string') setSigmaMax(s.sigmaMax);
 
         // multi-select
-        if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled);
+        const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
+        if (validTriMode(s?.countryEnabled)) setCountryEnabled(s.countryEnabled);
+        else if (typeof s?.countryEnabled === 'boolean') setCountryEnabled(s.countryEnabled ? "include" : "off");
         if (Array.isArray(s?.selCountries)) setSelCountries(new Set(s.selCountries.filter(Boolean)));
-        if (typeof s?.exchangeEnabled === 'boolean') setExchangeEnabled(s.exchangeEnabled);
+        if (validTriMode(s?.exchangeEnabled)) setExchangeEnabled(s.exchangeEnabled);
+        else if (typeof s?.exchangeEnabled === 'boolean') setExchangeEnabled(s.exchangeEnabled ? "include" : "off");
         if (Array.isArray(s?.selExchanges)) setSelExchanges(new Set(s.selExchanges.filter(Boolean)));
-        if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled);
+        if (validTriMode(s?.sectorEnabled)) setSectorEnabled(s.sectorEnabled);
+        else if (typeof s?.sectorEnabled === 'boolean') setSectorEnabled(s.sectorEnabled ? "include" : "off");
         if (Array.isArray(s?.selSectors)) setSelSectors(new Set(s.selSectors.filter(Boolean)));
 
         if (s?.rangeModes && typeof s.rangeModes === "object") {
@@ -3482,6 +3725,7 @@ export default function OpenDoorSonar() {
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+          topMode, topSigmaOn, topBenchOn, topTimeOn,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -3876,7 +4120,7 @@ export default function OpenDoorSonar() {
       AvPreMhv: mm("AvPreMhv", avPreMhvMin, avPreMhvMax),
       RoundLot: mm("RoundLot", roundLotMin, roundLotMax),
       VWAP: mm("VWAP", vwapMin, vwapMax),
-      Spread: mm("Spread", spreadMin, spreadMax),
+      SpreadBidPct: mm("SpreadBidPct", spreadMin, spreadMax),
       LstPrcL: mm("LstPrcL", lstPrcLMin, lstPrcLMax),
       LstCls: mm("LstCls", lstClsMin, lstClsMax),
       YCls: mm("YCls", yClsMin, yClsMax),
@@ -4002,6 +4246,11 @@ export default function OpenDoorSonar() {
       zapSilverAbs,
       zapGoldAbs,
 
+      topMode,
+      topSigmaOn,
+      topBenchOn,
+      topTimeOn,
+
     };
   }, [
     cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
@@ -4014,6 +4263,7 @@ export default function OpenDoorSonar() {
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
+    topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
 
@@ -4033,347 +4283,166 @@ export default function OpenDoorSonar() {
   };
 
   const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
-    const out: ArbitrageSignal[] = [];
-    const mr = toNum(f.minRate);
-    const mt = toNum(f.minTotal);
-    const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
-
-    const base = Number(f.zapShowAbs ?? 0);
-    const zapThr = Math.max(0.3, base);   // for ZAP
-    const sigThr = Math.max(0.05, base);  // for SIGZAP
-    const eqNeedle = f.equityType.trim().toLowerCase();
-    const rangeValueGetters = {
-      ADV20: numADV20,
-      ADV20NF: numADV20NF,
-      ADV90: numADV90,
-      ADV90NF: numADV90NF,
-      AvPreMhv: numAvPreMh,
-      RoundLot: numRoundLot,
-      VWAP: numVWAP,
-      Spread: numSpread,
-      LstPrcL: numLstPrcL,
-      LstCls: numLastClose,
-      YCls: numYCls,
-      TCls: numTCls,
-      ClsToClsPct: numClsToClsPct,
-      Lo: numLo,
-      LstClsNewsCnt: numLstClsNewsCnt,
-      MarketCapM: numMarketCapM,
-      PreMhVolNF: numPreMktVolNF,
-      VolNFfromLstCls: numVolNFfromLstCls,
-      AvPostMhVol90NF: numAvPostMhVol90NF,
-      AvPreMhVol90NF: numAvPreMhVol90NF,
-      AvPreMhValue20NF: numAvPreMhValue20NF,
-      AvPreMhValue90NF: numAvPreMhValue90NF,
-      AvgDailyValue20: numAvgDailyValue20,
-      AvgDailyValue90: numAvgDailyValue90,
-      Volatility20: numVolatility20,
-      Volatility90: numVolatility90,
-      PreMhMDV20NF: numPreMhMDV20NF,
-      PreMhMDV90NF: numPreMhMDV90NF,
-      VolRel: numVolRel,
-      PreMhBidLstPrcPct: numPreMhBidLstPrcPct,
-      PreMhLoLstPrcPct: numPreMhLoLstPrcPct,
-      PreMhHiLstClsPct: numPreMhHiLstClsPct,
-      PreMhLoLstClsPct: numPreMhLoLstClsPct,
-      LstPrcLstClsPct: numLstPrcLstClsPctSafe,
-      ImbExch925: numImbExch925,
-      ImbExch1555: numImbExch1555,
-    } as const;
-    const boundKeys = Object.keys(rangeValueGetters) as Array<keyof typeof rangeValueGetters>;
-    const hasAnyRangeValue = Object.fromEntries(
-      boundKeys.map((key) => {
-        const bounds = f.bounds[key];
-        const isActive = bounds.min != null || bounds.max != null;
-        return [key, !isActive || (arr ?? []).some((s) => rangeValueGetters[key](s) != null)];
-      })
-    ) as Record<keyof typeof rangeValueGetters, boolean>;
-    const passesRangeBound = (key: keyof typeof rangeValueGetters, signal: ArbitrageSignal) => {
-      const bounds = f.bounds[key];
-      if (!hasAnyRangeValue[key]) return true;
-      return passMinMax(rangeValueGetters[key](signal), bounds.min, bounds.max);
-    };
-
-    for (const s of arr ?? []) {
-      const tk = normalizeTicker(s?.ticker || "");
-      if (!tk) continue;
-      const posActive = isActiveByPositionBp(s);
-
-      // ACTIVE tab should surface the same active position set used by hedge,
-      // so active rows bypass list mode and secondary client-side filters here.
-      if (f.activeMode === "onlyActive") {
-        if (!posActive) continue;
-        out.push(s);
-        continue;
-      }
-
-      // list mode first (cheap)
-      if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
-      if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
-      if (f.listMode === "pin" && !f.pinMap[tk]) continue;
-
-      if (f.activeMode === "onlyInactive") {
-        if (posActive) continue;
-      }
-
-
-      // thresholds
-      if (!passMinMax(getCorrValue(s), f.bounds.Corr.min, f.bounds.Corr.max)) continue;
-      if (!passMinMax(getBetaValue(s), f.bounds.Beta.min, f.bounds.Beta.max)) continue;
-      if (!passMinMax(getSigmaValue(s), f.bounds.Sigma.min, f.bounds.Sigma.max)) continue;
-      let failedRangeBound = false;
-      for (const key of boundKeys) {
-        if (!passesRangeBound(key, s)) {
-          failedRangeBound = true;
-          break;
-        }
-      }
-      if (failedRangeBound) continue;
-
-      // minRate/minTotal
-      if (useBinRatingFilter) {
-        if (!passesSonarBinRating({
-          signal: s,
-          cls: f.cls,
-          minRate: mr ?? 0,
-          minTotal: mt ?? 0,
-        })) continue;
-      } else {
-        if (mr != null) {
-          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-          if (r == null || r < mr) continue;
-        }
-        if (mt != null) {
-          const t = getBestTotalByType(s, f.type);
-          if (t == null || t < mt) continue;
-        }
-      }
-
-
-      // exclude group
-      if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
-      if (f.excludeNews) {
-        const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-        if (nn > 0) continue;
-      }
-      if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
-      if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
-      if (f.excludeReport && hasValue(pickAny(s, ["report", "Report"]))) continue;
-      if (f.excludeETF) {
-        if (boolIsETF(s) === true) continue;
-        const eqt = strEquityType(s).toLowerCase();
-        if (eqt && eqt.includes("etf")) continue;
-      }
-      if (f.excludeCrap) {
-        const px = numLastClose(s);
-        if (px != null && px < 5) continue;
-      }
-
-
-      // include group
-      if (f.includeUSA || f.includeChina) {
-        const matchUSA = isUSA(s);
-        const c = getCountryStr(s);
-        const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
-        if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
-      }
-
-      // multi
-      if (f.countryEnabled && f.selCountries.size > 0 && !f.selCountries.has(getCountry(s))) continue;
-      if (f.exchangeEnabled && f.selExchanges.size > 0 && !f.selExchanges.has(getExchange(s))) continue;
-      if (f.sectorEnabled && f.selSectors.size > 0 && !f.selSectors.has(getSector(s))) continue;
-
-      // report tri-state
-      if (f.filterReport !== "ALL") {
-        const rep = (s as any)._reportBool ?? toBool((s as any).report ?? (s as any).Report);
-        if (f.filterReport === "YES" && rep !== true) continue;
-        if (f.filterReport === "NO" && rep !== false) continue;
-      }
-
-      // equity type
-      if (eqNeedle) {
-        const et = strEquityType(s).toLowerCase();
-        if (!et.includes(eqNeedle)) continue;
-      }
-
-      // ZAP/SigmaZAP (mutually exclusive)
-      if (f.zapMode !== "off") {
-        const dir = s.direction;
-        const isShort = dir === "down";
-        const isLong = dir === "up";
-        if (!isShort && !isLong) continue;
-
-        // Start-deviation filter applies only to inactive candidates.
-        if (!posActive) {
-          if (f.zapMode === "zap") {
-            if (isShort) {
-              const v = toNum(s.zapS);
-              if (v == null || v < zapThr) continue;
-            } else {
-              const v = toNum(s.zapL);
-              if (v == null || v > -zapThr) continue;
-            }
-          } else if (f.zapMode === "delta") {
-            const base = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
-            const deltaThr = base + Math.max(0.05, Number(f.zapShowAbs ?? 0));
-            if (isShort) {
-              const v = toNum(s.zapSsigma);
-              if (v == null || v < deltaThr) continue;
-            } else {
-              const v = toNum(s.zapLsigma);
-              if (v == null || v > -deltaThr) continue;
-            }
-          } else {
-            if (isShort) {
-              const v = toNum(s.zapSsigma);
-              if (v == null || v < sigThr) continue;
-            } else {
-              const v = toNum(s.zapLsigma);
-              if (v == null || v > -sigThr) continue;
-            }
-          }
-        }
-      }
-
-      out.push(s);
-    }
-
-    return out;
+    return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
   }, []);
+  const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
-  /* =========================
-    Fetch signals (stable, race-safe)
-  ========================= */
+  const applySignalsPayload = useCallback((payload: any, f: typeof snapshot) => {
+    const rawItems: any[] = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
 
-  const reqIdRef = useRef(0);
-  const inFlightUrlRef = useRef<string | null>(null);
-  const fetchSignals = useCallback(async () => {
-    const f = filtersRef.current;
-    const classKey = OPEN_DOOR_CLASS_META[f.cls]?.api ?? "glob";
-    const signature = JSON.stringify({
-      cls: classKey,
-      type: f.type,
-      mode: f.mode,
-      minRate: f.minRate,
-      minTotal: f.minTotal,
-      tickers: f.tickersFilterNorm || "",
-    });
-    if (inFlightUrlRef.current === signature) return;
-    inFlightUrlRef.current = signature;
-    const myId = ++reqIdRef.current;
+    const normalized = rawItems
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
 
-    try {
-      setLoading(true);
-      setError(null);
-
-      const tickersArg = f.tickersFilterNorm || undefined;
-      const baseArgs = {
-        cls: classKey,
-        mode: f.mode,
-        minRate: f.minRate,
-        minTotal: f.minTotal,
-        limit: 5000,
-        offset: 0,
-        tickers: tickersArg,
-      } as const;
-
-      const loadDirection = async (apiType: "up" | "down", direction: "up" | "down") => {
-        const json = await getOpendoorSignals({ ...baseArgs, type: apiType });
-        const rawItems = Array.isArray(json?.items) ? json.items : [];
-        return rawItems
-          .map((item) => toSyntheticOpenDoorSignal(item, direction, f.cls))
-          .filter(Boolean) as ArbitrageSignal[];
-      };
-
-      let normalized: ArbitrageSignal[] = [];
-      if (f.type === "any") {
-        const [upItems, downItems] = await Promise.all([
-          loadDirection("up", "up"),
-          loadDirection("down", "down"),
-        ]);
-        const byKey = new Map<string, ArbitrageSignal>();
-        for (const item of [...upItems, ...downItems]) {
-          byKey.set(`${item.ticker}|${item.direction}`, item);
-        }
-        normalized = Array.from(byKey.values());
-      } else if (f.type === "hard") {
-        normalized = await loadDirection("up", "up");
-      } else {
-        normalized = await loadDirection("down", "down");
-      }
-
-      if (myId !== reqIdRef.current) return;
-
-      try {
-        const liveQuotes = await getOpenDoorLiveQuotes(normalized.map((item) => item.ticker));
-        if (myId !== reqIdRef.current) return;
-        normalized = enrichOpenDoorSignalsWithLiveQuotes(normalized, liveQuotes);
-      } catch {}
-
-      const filtered = applyAllClientFilters(normalized, f);
+    startTransition(() => {
       setAllItems(normalized);
-      setItems(filtered);
-      setUpdatedAt(Date.now());
-    } catch (e: any) {
-      if (myId !== reqIdRef.current) return;
-      setAllItems([]);
-      setItems([]);
-      setError(e?.message ?? "Unknown error");
-    } finally {
-      if (inFlightUrlRef.current === signature) inFlightUrlRef.current = null;
-      if (myId === reqIdRef.current) setLoading(false);
-    }
+      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
+    });
   }, [applyAllClientFilters]);
 
-  // auto refresh (no stale closure)
+  const applySignalsDiff = useCallback((payload: any, f: typeof snapshot) => {
+    const added = Array.isArray(payload?.added) ? payload.added : [];
+    const updated = Array.isArray(payload?.updated) ? payload.updated : [];
+    const removed = Array.isArray(payload?.removed) ? payload.removed : [];
+
+    const normalizedAdded = added
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
+
+    const normalizedUpdated = updated
+      .map(normalizeSignal)
+      .filter(Boolean) as ArbitrageSignal[];
+
+    const removedTickers = new Set<string>(
+      removed
+        .map((ticker: any) => normalizeTicker(String(ticker ?? "")))
+        .filter((ticker): ticker is string => Boolean(ticker))
+    );
+
+    startTransition(() => {
+      setAllItems((prev) => {
+        const nextMap = new Map(prev.map((item) => [item.ticker, item] as const));
+
+        for (const ticker of removedTickers) {
+          nextMap.delete(ticker);
+        }
+
+        for (const item of normalizedAdded) {
+          nextMap.set(item.ticker, item);
+        }
+
+        for (const item of normalizedUpdated) {
+          nextMap.set(item.ticker, item);
+        }
+
+        return Array.from(nextMap.values());
+      });
+
+      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
+    });
+  }, [applyAllClientFilters]);
+
+  const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
+    cls: snapshot.cls,
+    type: snapshot.type,
+    mode: snapshot.mode,
+    ratingMode: snapshot.ratingMode,
+    zapMode: snapshot.zapMode,
+    minRate: snapshot.minRate,
+    minTotal: snapshot.minTotal,
+    tickers: snapshot.tickersFilterNorm || undefined,
+    minCorr: toNum(snapshot.corrMin),
+    maxCorr: toNum(snapshot.corrMax),
+    minBeta: toNum(snapshot.betaMin),
+    maxBeta: toNum(snapshot.betaMax),
+    minSigma: toNum(snapshot.sigmaMin),
+    maxSigma: toNum(snapshot.sigmaMax),
+  }), [
+    snapshot.betaMax,
+    snapshot.betaMin,
+    snapshot.cls,
+    snapshot.corrMax,
+    snapshot.corrMin,
+    snapshot.minRate,
+    snapshot.minTotal,
+    snapshot.mode,
+    snapshot.ratingMode,
+    snapshot.sigmaMax,
+    snapshot.sigmaMin,
+    snapshot.tickersFilterNorm,
+    snapshot.type,
+    snapshot.zapMode,
+  ]);
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (isEditingRef.current) return;
-      fetchSignals();
-    }, 2500);
+    if (typeof window === "undefined") return;
+    let cancelled = false;
 
-    return () => clearInterval(timer);
-  }, [fetchSignals]);
+    setLoading(true);
+    setError(null);
 
-  // refetch on snapshot changes (stable dep)
-  const snapshotKey = useMemo(() => {
-    // Prefer a single stable field if present.
-    if (!snapshot) return "";
-    const s: any = snapshot as any;
+    const source = new EventSource(streamSignalsUrl);
 
-    const v = s.updatedAt ?? s.ts ?? s.seq ?? s.version;
-    if (typeof v === "number" || typeof v === "string") return String(v);
-
-    // Fallback: cheap shallow signature (avoids JSON.stringify on large snapshots)
-    try {
-      const keys = Object.keys(s).sort();
-      const parts: string[] = [];
-      const cap = 40;
-
-      for (let i = 0; i < keys.length && i < cap; i++) {
-        const k = keys[i];
-        const val = s[k];
-        if (val == null) parts.push(k);
-        else if (typeof val === "number" || typeof val === "string" || typeof val === "boolean") parts.push(`${k}:${val}`);
-        else if (Array.isArray(val)) parts.push(`${k}[${val.length}]`);
-        else parts.push(`${k}{}`);
+    const handlePayload = (event: MessageEvent<string>) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(String(event.data));
+        applySignalsPayload(payload, filtersRef.current);
+        setError(null);
+      } catch (error: any) {
+        if (!cancelled) {
+          setError(error?.message ?? "Failed to parse stream payload");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
+    };
 
-      parts.push(`k:${keys.length}`);
-      return parts.join("|");
-    } catch {
-      return "snapshot";
-    }
-  }, [snapshot]);
-  useEffect(() => {
-    if (isEditingRef.current) return;
-    fetchSignals();
-  }, [snapshotKey, fetchSignals]);
+    const handleDiff = (event: MessageEvent<string>) => {
+      if (cancelled) return;
+      try {
+        const payload = JSON.parse(String(event.data));
+        applySignalsDiff(payload, filtersRef.current);
+        setError(null);
+      } catch (error: any) {
+        if (!cancelled) {
+          setError(error?.message ?? "Failed to parse stream diff payload");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    source.onmessage = handlePayload;
+    source.addEventListener("snapshot", handlePayload as EventListener);
+    source.addEventListener("diff", handleDiff as EventListener);
+    source.onerror = () => {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    };
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [applySignalsPayload, streamReconnectVersion, streamSignalsUrl]);
 
   // Re-apply client filters immediately on any local filter change.
   useEffect(() => {
     if (isEditingRef.current) return;
-    setItems(applyAllClientFilters(allItems, snapshot));
+    const filtered = applyAllClientFilters(allItems, snapshot);
+    startTransition(() => {
+      setItems(filtered);
+    });
   }, [allItems, snapshot, applyAllClientFilters, isEditing]);
 
   /* =========================
@@ -4454,65 +4523,37 @@ export default function OpenDoorSonar() {
   }, [activeTicker, items]);
 
   useEffect(() => {
-    const tk = normalizeTicker(activeTicker || "");
-    if (!tk) {
-      setActiveErr(null);
-      setActiveData(null);
-      return;
-    }
-
-    setActiveData((prev: any) => {
-      if (!prev) return activeItem;
-      return mergeOpenDoorActivePayload(activeItem, prev, getBestParams(prev));
-    });
-  }, [activeItem, activeTicker]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tk = normalizeTicker(activeTicker || "");
-
-    if (!tk) {
-      setActiveLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
+    setActiveLoading(false);
     setActiveErr(null);
     setActiveData(activeItem);
-    setActiveLoading(true);
+  }, [activeItem]);
 
-    Promise.allSettled([getOpendoorTicker(tk), getOpendoorBestParamsByTicker(tk)])
-      .then((results) => {
+  // Fetch live snapshot fields for the active ticker so static fields
+  // (AvPreMhVol90NF, Volatility20, ImbExch9:25 etc.) always show current values
+  // even when tape rows are stale or missing those fields.
+  useEffect(() => {
+    const tk = normalizeTicker(activeTicker || "");
+    if (!tk) { setLiveSnap(null); return; }
+    let cancelled = false;
+    const LIVE_FIELDS = [
+      "AvPreMhVol90NF","AvPreMhValue20NF","AvPreMhValue90NF",
+      "PreMhMDV90NF","PreMhMDV20NF","AvPostMhVol90NF",
+      "Volatility20","Volatility90","VolRel",
+      "LstPrcLstClsΔ%",
+      "PreMhBidLstPrcΔ%","PreMhLoLstPrcΔ%","PreMhHiLstClsΔ%","PreMhLoLstClsΔ%",
+      "ImbExch9:25","ImbExch15:55",
+      "PreMhVol","PreMhVolNF",
+      "SpreadBid%",
+    ].join(",");
+    fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
+      .then((r) => r.json())
+      .then((data) => {
         if (cancelled) return;
-
-        const tickerRes = results[0].status === "fulfilled" ? results[0].value : null;
-        const bestParamsRes = results[1].status === "fulfilled" ? results[1].value : null;
-
-        const tickerItem = tickerRes?.item ?? null;
-        const bestParamsItem = bestParamsRes?.item ?? null;
-
-        setActiveData(mergeOpenDoorActivePayload(activeItem, tickerItem, bestParamsItem));
-
-        const errors = results
-          .filter((entry) => entry.status === "rejected")
-          .map((entry) => ((entry as PromiseRejectedResult).reason as any)?.message ?? "Unknown error")
-          .filter(Boolean);
-
-        setActiveErr(errors.length > 0 ? errors.join(" | ") : null);
+        const item = Array.isArray(data?.items) ? data.items[0] : null;
+        setLiveSnap(item?.Fields ?? item?.fields ?? null);
       })
-      .catch((e: any) => {
-        if (cancelled) return;
-        setActiveErr(e?.message ?? "Unknown error");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setActiveLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      .catch(() => { if (!cancelled) setLiveSnap(null); });
+    return () => { cancelled = true; };
   }, [activeTicker]);
 
   const onTickerClick = (tk: string) => {
@@ -4717,7 +4758,6 @@ export default function OpenDoorSonar() {
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
-
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
   const rawSignalCount = allItems.length;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
@@ -4725,6 +4765,12 @@ export default function OpenDoorSonar() {
   const bridgeReturnedNoSignals = !loading && !error && !hasAny && rawSignalCount === 0;
   const activeEmptyStateHints = useMemo(() => {
     const hints: string[] = [];
+    const pushRangeHint = (label: string, mode: RangeFilterMode, min: string, max: string) => {
+      if (mode === "off" || (!min && !max)) return;
+      hints.push(`${label} ${min || "min"}..${max || "max"}`);
+    };
+    pushRangeHint(`PreMhVolNF`, rangeModes.PreMhVolNF, preMhVolNFMin, preMhVolNFMax);
+    pushRangeHint(`VolNFfromLstCls`, rangeModes.VolNFfromLstCls, volNFfromLstClsMin, volNFfromLstClsMax);
     if (tickersFilterNorm) hints.push(`tickers ${tickersFilterNorm}`);
     if (corrMin || corrMax) hints.push(`ρ ${corrMin || "min"}..${corrMax || "max"}`);
     if (betaMin || betaMax) hints.push(`β ${betaMin || "min"}..${betaMax || "max"}`);
@@ -4743,9 +4789,9 @@ export default function OpenDoorSonar() {
     if (excludeCrap) hints.push("ex < $5");
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
-    if (countryEnabled && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
-    if (exchangeEnabled && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
-    if (sectorEnabled && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
+    if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
+    if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
+    if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
     if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
     return hints.slice(0, 8);
@@ -4771,6 +4817,9 @@ export default function OpenDoorSonar() {
     includeUSA,
     listMode,
     pinMap,
+    preMhVolNFMax,
+    preMhVolNFMin,
+    rangeModes,
     sectorEnabled,
     selCountries,
     selExchanges,
@@ -4778,6 +4827,8 @@ export default function OpenDoorSonar() {
     sigmaMax,
     sigmaMin,
     tickersFilterNorm,
+    volNFfromLstClsMax,
+    volNFfromLstClsMin,
     zapMode,
     zapShowAbs,
   ]);
@@ -4798,8 +4849,8 @@ export default function OpenDoorSonar() {
   const ignoreList = useMemo(() => sortedTickers(ignoreSet), [ignoreSet]);
   const applyList = useMemo(() => sortedTickers(applySet), [applySet]);
 
-  const classLabel = OPEN_DOOR_CLASS_META[cls]?.label ?? (cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase());
-  const typeLabel = OPEN_DOOR_TYPE_META[type]?.label ?? type.toUpperCase();
+  const classLabel = cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase();
+  const typeLabel = type.toUpperCase();
   const modeLabel = mode.toUpperCase();
 
   const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
@@ -4866,15 +4917,14 @@ export default function OpenDoorSonar() {
   }, [allItems, zapMode, zapGoldAbs]);
 
   const bestRating = toNum(bestObj?.rating);
-  const bestTotalAny = toNum(bestObj?.total);
   const bestTotalHard = toNum(bestObj?.hard);
   const bestTotalSoft = toNum(bestObj?.soft);
+  const bestTotalAny =
+    bestTotalHard != null || bestTotalSoft != null
+      ? (bestTotalHard ?? 0) + (bestTotalSoft ?? 0)
+      : toNum(bestObj?.total);
   const bestTotalEff = type === "hard" ? bestTotalHard : type === "soft" ? bestTotalSoft : bestTotalAny;
   const activeWindowRatings = useMemo(() => getWindowRatings(activeData), [activeData]);
-  const activeCurrentWindowKey = OPEN_DOOR_CLASS_META[cls]?.api ?? "glob";
-  const activeCurrentWindowRow =
-    activeWindowRatings.find((row) => row.windowKey.toLowerCase() === activeCurrentWindowKey.toLowerCase()) ?? null;
-  const activeBidAskComparison = getOpenDoorLiveQuoteComparison(activeCurrentWindowRow);
 
 
   return (
@@ -4883,30 +4933,8 @@ export default function OpenDoorSonar() {
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* ========================= HEADER ========================= */}
         <header className="bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3">
-              <span className={`w-2.5 h-2.5 rounded-full border border-white/10 ${accentDotClass} ${loading ? "animate-pulse" : ""}`} />
-              <h1 className="text-lg font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-white/60">
-                OPEN DOOR SONAR
-              </h1>
-
-              <div className="flex gap-2 ml-4">
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{classLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{modeLabel}</span>
-                <span className="px-2 py-1 rounded-full border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase">{typeLabel}</span>
-                {listMode !== "off" && (
-                  <span className={`px-2 py-1 rounded-full border text-[10px] font-mono uppercase ${accentBadgeClass}`}>
-                    LIST: {listMode}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">
-              <span>{updatedLabel ? `UPDATED ${updatedLabel}` : "CONNECTING..."}</span>
-              <span className="text-zinc-700 mx-1">|</span>
-              <span className="opacity-70">minRate {minRate ?? "-"} | minTotal {minTotal ?? "-"}</span>
-            </div>
+          <div className="flex items-center gap-3">
+            <GlitchTitle text="OPEN DOOR SONAR" />
           </div>
           
 
@@ -4917,20 +4945,19 @@ export default function OpenDoorSonar() {
             {/* Group 1: STREAM / SCANNER / SONAR */}
             <div className={secondaryGroupClass}>
               <Link
-                href="/stats/opendoor"
+                href="/opendoor/stream"
                 className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /stats/opendoor"
+                title="Open /opendoor/stream"
               >
-                MATRIX
+                STREAM
               </Link>
 
-              {/* SCANNER */}
               <Link
-                href="/stats/opendoor"
+                href="/opendoor/scanner"
                 className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /stats/opendoor"
+                title="Open /opendoor/scanner"
               >
-                STATS
+                SCANNER
               </Link>
 
               {/* SONAR (current) */}
@@ -4943,50 +4970,6 @@ export default function OpenDoorSonar() {
               </button>
             </div>
 
-            {/* Group 2: ACTIVE / INACTIVE / ALL */}
-            <div className={secondaryGroupClass}>
-              <button
-                type="button"
-                onClick={() => setActiveMode("onlyActive")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "onlyActive"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show only ACTIVE positions (PositionBp != 0)"
-              >
-                ACTIVE
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveMode("onlyInactive")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "onlyInactive"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show only INACTIVE positions (PositionBp == 0)"
-              >
-                INACTIVE
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveMode("off")}
-                className={[
-                  secondaryButtonBaseClass,
-                  activeMode === "off"
-                    ? accentButtonClass
-                    : secondaryButtonInactiveClass,
-                ].join(" ")}
-                title="Show ALL positions"
-              >
-                ALL
-              </button>
-            </div>
           </div>
 
 
@@ -5139,9 +5122,9 @@ export default function OpenDoorSonar() {
               {/* REFRESH */}
               <button
                 type="button"
-                onClick={fetchSignals}
+                onClick={() => setStreamReconnectVersion((v) => v + 1)}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95 ${accentOutlineButtonClass}`}
-                title="Refresh"
+                title="Reconnect stream"
               >
                 <svg
                   width="15"
@@ -5182,9 +5165,104 @@ export default function OpenDoorSonar() {
           </div>
         )}
 
-        <div className="mb-3 flex flex-wrap justify-end gap-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className={sonarActiveFilterStripClass}>
+            <button
+              type="button"
+              onClick={() => setActiveMode("onlyActive")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "onlyActive"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show only ACTIVE positions (PositionBp != 0)"
+            >
+              {renderSonarActiveFilterIcon("active", activeMode === "onlyActive")}
+              ACTIVE
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveMode("onlyInactive")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "onlyInactive"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show only INACTIVE positions (PositionBp == 0)"
+            >
+              {renderSonarActiveFilterIcon("inactive", activeMode === "onlyInactive")}
+              INACTIVE
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveMode("off")}
+              className={[
+                sonarActiveFilterButtonBaseClass,
+                activeMode === "off"
+                  ? sonarActiveFilterButtonActiveClass
+                  : sonarActiveFilterButtonInactiveClass,
+              ].join(" ")}
+              title="Show ALL positions"
+            >
+              {renderSonarActiveFilterIcon("all", activeMode === "off")}
+              ALL
+            </button>
+          </div>
+
+          <div className="ml-auto flex flex-wrap justify-end gap-3">
+
+          {/* TOP mode toggle */}
+          <div className="flex h-7 items-center gap-1.5">
+            <div className="flex h-7 items-center rounded-lg bg-black/20">
+              {([false, true] as const).map((isTop) => (
+                <button
+                  key={String(isTop)}
+                  type="button"
+                  onClick={() => setTopMode(isTop)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    topMode === isTop
+                      ? isTop
+                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                        : secondaryButtonSoftActiveClass
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {isTop ? "TOP" : "ALL"}
+                </button>
+              ))}
+            </div>
+            {topMode && (
+              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+                {([
+                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
+                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
+                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
+                ] as const).map(({ key, label, on, set }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => set((v) => !v)}
+                    className={clsx(
+                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
+                      on
+                        ? "accent-fill"
+                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
@@ -5252,16 +5330,17 @@ export default function OpenDoorSonar() {
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {OPEN_DOOR_VISIBLE_CLASS_ORDER.map((c) => (
+            {(["global", "blue", "pre", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
               <FilterButton
                 key={c}
                 active={cls === c}
-                label={OPEN_DOOR_CLASS_META[c].label}
+                label={c === "global" ? "GLOB" : c.toUpperCase()}
                 onClick={() => setCls(c)}
               />
             ))}
@@ -5270,15 +5349,16 @@ export default function OpenDoorSonar() {
           <div className="h-7 w-px self-center bg-white/5" />
 
           <div className="flex h-7 items-center gap-2">
-            <FilterButton active={mode === "all"} label="ALL" onClick={() => setMode("all")} />
-            <FilterButton active={mode === "top"} label="TOP" onClick={() => setMode("top")} />
+            {(["all", "top"] as const).map((m) => (
+              <FilterButton key={m} active={mode === m} label={m.toUpperCase()} onClick={() => setMode(m)} />
+            ))}
           </div>
 
           <div className="h-7 w-px self-center bg-white/5" />
 
-            <div className="flex h-7 items-center gap-2">
-              {(["any", "hard", "soft"] as ArbType[]).map((t) => (
-              <FilterButton key={t} active={type === t} label={OPEN_DOOR_TYPE_META[t].label} onClick={() => setType(t)} />
+          <div className="flex h-7 items-center gap-2">
+            {(["any", "hard", "soft"] as ArbType[]).map((t) => (
+              <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
             ))}
           </div>
 
@@ -5502,7 +5582,6 @@ export default function OpenDoorSonar() {
                 )}
               </button>
 
-          </div>
         </div>
 
         {/* ========================= THRESHOLDS GRID ========================= */}
@@ -5515,7 +5594,7 @@ export default function OpenDoorSonar() {
             <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Spread" filterKey="Spread" mode={rangeModes.Spread} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMax label="SpreadBid%" filterKey="SpreadBidPct" mode={rangeModes.SpreadBidPct} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
             <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
 
             <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
@@ -5550,7 +5629,7 @@ export default function OpenDoorSonar() {
 
         <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN"] as RatingMode[]).map((modeKey) => (
+            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
               <button
                 key={modeKey}
                 type="button"
@@ -5679,15 +5758,10 @@ export default function OpenDoorSonar() {
             </div>
           ))}
         </div>
+        </div>
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          <span className="flex h-[40px] items-center text-zinc-500 text-sm">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-            </svg>
-          </span>
-
+        <div className="flex flex-wrap items-center gap-3">
           {/* RED GROUP */}
           <div className={`${SONAR_FILTER_GROUP_BASE} border-rose-500/20 bg-rose-500/[0.06]`}>
             {[
@@ -5738,7 +5812,7 @@ export default function OpenDoorSonar() {
               selected={selCountries}
               setSelected={setSelCountries}
               enabled={countryEnabled}
-              toggleEnabled={() => setCountryEnabled(!countryEnabled)}
+              toggleEnabled={() => setCountryEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
             <MultiSelectFilter
@@ -5747,7 +5821,7 @@ export default function OpenDoorSonar() {
               selected={selExchanges}
               setSelected={setSelExchanges}
               enabled={exchangeEnabled}
-              toggleEnabled={() => setExchangeEnabled(!exchangeEnabled)}
+              toggleEnabled={() => setExchangeEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
             <MultiSelectFilter
@@ -5756,7 +5830,7 @@ export default function OpenDoorSonar() {
               selected={selSectors}
               setSelected={setSelSectors}
               enabled={sectorEnabled}
-              toggleEnabled={() => setSectorEnabled(!sectorEnabled)}
+              toggleEnabled={() => setSectorEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
               color="amber"
             />
           </div>
@@ -6383,7 +6457,19 @@ export default function OpenDoorSonar() {
             {!activePanelCollapsed && (
               <div className="relative p-4 space-y-4">
                 {(() => {
-                  const s = activeData;
+                  const isUsableLive = (v: any) => {
+                    if (v == null) return false;
+                    if (typeof v === "string") { const t = v.trim(); return t.length > 0 && t !== "-" && t !== "—"; }
+                    return true;
+                  };
+                  const liveSnapFiltered = liveSnap
+                    ? Object.fromEntries(Object.entries(liveSnap).filter(([, v]) => isUsableLive(v)))
+                    : null;
+                  const s = activeData
+                    ? (liveSnapFiltered && Object.keys(liveSnapFiltered).length > 0
+                        ? { ...activeData, ...liveSnapFiltered }
+                        : activeData)
+                    : null;
                   const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
                   const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
 
@@ -6419,7 +6505,7 @@ export default function OpenDoorSonar() {
                       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
                         {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : activeSector2) : "-")}
                         {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
-                        {renderCell("Spread", s ? (numSpread(s) == null ? "-" : fmtNum(numSpread(s)!, 4)) : "-")}
+                        {renderCell("SpreadBid%", s ? (numSpreadBidPct(s) == null ? "-" : fmtNum(numSpreadBidPct(s)!, 4)) : "-")}
                         {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
                         {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
                         {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
@@ -6477,51 +6563,6 @@ export default function OpenDoorSonar() {
                           { k: "MD Print Neg", v: activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2) },
                         ].map((item) => (
                                   <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
-                            <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
-                            <span className={`text-[12px] font-mono tabular-nums ${item.c ?? "text-zinc-200"}`}>{item.v}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
-                      <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
-                        <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Bid / Ask vs Window Rating</span>
-                        <span className="text-[10px] font-mono text-zinc-600">
-                          {WINDOW_RATING_LABELS[activeCurrentWindowKey.toLowerCase()] ?? activeCurrentWindowKey.toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-px bg-white/10">
-                        {[
-                          { k: "Bid", v: activeData?.Bid == null ? "-" : fmtNum(toNum(activeData?.Bid), 2), c: "text-emerald-400" },
-                          {
-                            k: "Bid Down Rate",
-                            v: activeBidAskComparison.bidRate == null ? "-" : `${Math.round(activeBidAskComparison.bidRate * 100)}%`,
-                            c: activeBidAskComparison.bias === "BID" ? "text-rose-300" : "text-zinc-200",
-                          },
-                          { k: "Bid N", v: fmtMaybeInt(activeBidAskComparison.bidTotal) },
-                          { k: "Ask", v: activeData?.Ask == null ? "-" : fmtNum(toNum(activeData?.Ask), 2), c: "text-rose-300" },
-                          {
-                            k: "Ask Up Rate",
-                            v: activeBidAskComparison.askRate == null ? "-" : `${Math.round(activeBidAskComparison.askRate * 100)}%`,
-                            c: activeBidAskComparison.bias === "ASK" ? accentTextClass : "text-zinc-200",
-                          },
-                          {
-                            k: "Edge",
-                            v: activeBidAskComparison.edge == null
-                              ? "-"
-                              : `${activeBidAskComparison.edge >= 0 ? "+" : ""}${fmtPct(activeBidAskComparison.edge * 100, 1)}`,
-                            c:
-                              activeBidAskComparison.edge == null
-                                ? "text-zinc-500"
-                                : activeBidAskComparison.edge > 0
-                                  ? accentTextClass
-                                  : activeBidAskComparison.edge < 0
-                                    ? "text-rose-300"
-                                    : "text-zinc-200",
-                          },
-                        ].map((item) => (
-                          <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
                             <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
                             <span className={`text-[12px] font-mono tabular-nums ${item.c ?? "text-zinc-200"}`}>{item.v}</span>
                           </div>
@@ -6630,7 +6671,7 @@ export default function OpenDoorSonar() {
               "rounded-2xl bg-black/40 px-4 py-3",
               activeGoldTickers.length > 0
                 ? "border border-amber-500/20 bg-amber-500/[0.03]"
-                : sonarAccent.panelSoft,
+                : "accent-panel-soft",
             ].join(" ")}
           >
             {activeGoldTickers.length > 0 ? (
@@ -6743,7 +6784,7 @@ export default function OpenDoorSonar() {
               if (!activePairs.length) return null;
 
               return (
-                <div className={`px-3 py-2 rounded-lg border ${sonarAccent.panelSoft}`}>
+                <div className={`px-3 py-2 rounded-lg border ${"accent-panel-soft"}`}>
                   <div className="flex items-center gap-3">
                     <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
                     <span className={`text-[10px] font-mono uppercase tracking-widest ${accentTextClass}`}>
@@ -6779,10 +6820,7 @@ export default function OpenDoorSonar() {
               return (
                 <div
                   key={bench.benchmark}
-                  className={clsx(
-                    "flex min-w-0 flex-col self-start",
-                    benchBlocks.length === 1 && "sm:col-span-2 md:col-span-3 lg:col-span-4 xl:col-span-5"
-                  )}
+                  className="flex min-w-0 flex-col self-start"
                 >
                   <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
 
@@ -6794,89 +6832,84 @@ export default function OpenDoorSonar() {
                     {bench.buckets.map((g) => {
                       const isExpanded = !!expandedMap[g.id];
                       const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
-                      const visibleRows = g.rows.slice(0, rowsToShow);
-                      const rowChunks = chunkRowPairs(visibleRows, 6);
 
                       return (
-                        <div key={g.id} className="space-y-3">
-                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-                            {rowChunks.map((chunk, chunkIndex) => {
-                              const shortSignals = (chunk.map((r) => r.short).filter(Boolean) as ArbitrageSignal[]);
-                              const longSignals = (chunk.map((r) => r.long).filter(Boolean) as ArbitrageSignal[]);
+                        <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
+                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
+                            <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
+                              <svg
+                                aria-hidden="true"
+                                viewBox="0 0 12 12"
+                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
+                                fill="currentColor"
+                              >
+                                <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
+                              </svg>
+                            </div>
+                            <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
+                              {betaLabels[g.betaKey]}
+                            </div>
+                            <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
+                              <svg
+                                aria-hidden="true"
+                                viewBox="0 0 12 12"
+                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
+                                fill="currentColor"
+                              >
+                                <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
+                              </svg>
+                            </div>
+                          </div>
 
-                              return (
-                                <div key={`${g.id}__chunk_${chunkIndex}`} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
-                                  <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
-                                    <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
-                                      <svg
-                                        aria-hidden="true"
-                                        viewBox="0 0 12 12"
-                                        className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
-                                        fill="currentColor"
-                                      >
-                                        <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
-                                      </svg>
-                                    </div>
-                                    <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
-                                      {betaLabels[g.betaKey]}
-                                    </div>
-                                    <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
-                                      <svg
-                                        aria-hidden="true"
-                                        viewBox="0 0 12 12"
-                                        className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
-                                        fill="currentColor"
-                                      >
-                                        <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
-                                      </svg>
-                                    </div>
-                                  </div>
+                          <div className="p-2 grid grid-cols-2 gap-2">
+                            <div className="flex flex-col gap-2">
+                              {(g.rows
+                                .slice(0, rowsToShow)
+                                .map((r) => r.short)
+                                .filter(Boolean) as ArbitrageSignal[]
+                              ).map((s) => (
+                                <SignalCard
+                                  key={`S-${s.ticker}`}
+                                  s={s}
+                                  side="short"
+                                  onClick={onTickerClick}
+                                  activeTicker={activeTicker}
+                                  flashClass={flashClass}
+                                  zapMode={zapMode}
+                                  zapShowAbs={zapShowAbs}
+                                  zapSilverAbs={zapSilverAbs}
+                                  zapGoldAbs={zapGoldAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
+                                />
+                              ))}
+                            </div>
 
-                                  <div className="p-2 grid grid-cols-2 gap-2">
-                                    <div className="flex flex-col gap-2 content-start">
-                                      {shortSignals.map((s) => (
-                                        <SignalCard
-                                          key={`S-${chunkIndex}-${s.ticker}`}
-                                          s={s}
-                                          side="short"
-                                          onClick={onTickerClick}
-                                          activeTicker={activeTicker}
-                                          flashClass={flashClass}
-                                          zapMode={zapMode}
-                                          zapShowAbs={zapShowAbs}
-                                          zapSilverAbs={zapSilverAbs}
-                                          zapGoldAbs={zapGoldAbs}
-                                          pinColor={pinMap[s.ticker] ?? null}
-                                        />
-                                      ))}
-                                    </div>
-
-                                    <div className="flex flex-col gap-2 content-start">
-                                      {longSignals.map((s) => (
-                                        <SignalCard
-                                          key={`L-${chunkIndex}-${s.ticker}`}
-                                          s={s}
-                                          side="long"
-                                          onClick={onTickerClick}
-                                          activeTicker={activeTicker}
-                                          flashClass={flashClass}
-                                          zapMode={zapMode}
-                                          zapShowAbs={zapShowAbs}
-                                          zapSilverAbs={zapSilverAbs}
-                                          zapGoldAbs={zapGoldAbs}
-                                          pinColor={pinMap[s.ticker] ?? null}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                            <div className="flex flex-col gap-2">
+                              {(g.rows
+                                .slice(0, rowsToShow)
+                                .map((r) => r.long)
+                                .filter(Boolean) as ArbitrageSignal[]
+                              ).map((s) => (
+                                <SignalCard
+                                  key={`L-${s.ticker}`}
+                                  s={s}
+                                  side="long"
+                                  onClick={onTickerClick}
+                                  activeTicker={activeTicker}
+                                  flashClass={flashClass}
+                                  zapMode={zapMode}
+                                  zapShowAbs={zapShowAbs}
+                                  zapSilverAbs={zapSilverAbs}
+                                  zapGoldAbs={zapGoldAbs}
+                                  pinColor={pinMap[s.ticker] ?? null}
+                                />
+                              ))}
+                            </div>
                           </div>
                           {g.rows.length > 10 && (
                             <button
                               onClick={() => toggleBucket(g.id)}
-                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border border-white/5 rounded-xl bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
+                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border-t border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
                             >
                               {isExpanded ? "SHOW LESS" : `SHOW ALL (${g.rows.length})`}
                             </button>
@@ -7005,6 +7038,7 @@ export default function OpenDoorSonar() {
             --tw-gradient-from: #111827 var(--tw-gradient-from-position) !important;
             --tw-gradient-to: rgb(17 24 39 / 0.62) var(--tw-gradient-to-position) !important;
           }
+
         `}</style>
       </div>
     </div>

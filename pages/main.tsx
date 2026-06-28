@@ -7,6 +7,15 @@ import { useUi } from "@/components/UiProvider";
 import Link from "next/link";
 import { STRATEGY_CATALOG } from "@/lib/strategyCatalog";
 import { Activity, BarChart2, Zap } from "lucide-react";
+import {
+  DndContext, closestCenter, PointerSensor, KeyboardSensor,
+  useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay,
+} from "@dnd-kit/core";
+import {
+  arrayMove, SortableContext, sortableKeyboardCoordinates,
+  rectSortingStrategy, useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { IconSonar, IconScanner, IconScope, IconSwagger, IconSpectr, IconSwift } from "@/components/nav/AppIcons";
 
 const QuarterCalendar = dynamic(() => import("@/components/mainPage/QuarterCalendar"), { ssr: false });
@@ -1005,6 +1014,7 @@ const STRATEGY_COLORS: Record<string, { hex: string; bg: string; border: string 
   reversal:    { hex: "#60a5fa", bg: "rgba(96,165,250,0.08)",  border: "rgba(96,165,250,0.2)"  },
   earnings:    { hex: "#fbbf24", bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.2)"  },
   gap:         { hex: "#a78bfa", bg: "rgba(167,139,250,0.08)", border: "rgba(167,139,250,0.2)" },
+  dayTwo:      { hex: "#2dd4bf", bg: "rgba(45,212,191,0.08)",  border: "rgba(45,212,191,0.2)"  },
   chrono:      { hex: "#22d3ee", bg: "rgba(34,211,238,0.08)",  border: "rgba(34,211,238,0.2)"  },
   powerHour:   { hex: "#f97316", bg: "rgba(249,115,22,0.08)",  border: "rgba(249,115,22,0.2)"  },
 };
@@ -1017,7 +1027,10 @@ type StrategyTile = {
 };
 
 function buildTiles(): StrategyTile[] {
-  return STRATEGY_CATALOG.slice(0, 6).map(s => ({
+  const SHOW_KEYS = ["arbitrage","pumpAndDump","breakout","reversal","earnings","gap","opendoor","dayTwo"];
+  return STRATEGY_CATALOG.filter(s => SHOW_KEYS.includes(s.key))
+    .sort((a, b) => SHOW_KEYS.indexOf(a.key) - SHOW_KEYS.indexOf(b.key))
+    .map(s => ({
     key:      s.key,
     name:     s.name,
     icon:     s.icon || "✨",
@@ -1027,149 +1040,239 @@ function buildTiles(): StrategyTile[] {
   }));
 }
 
+const TICKERS_MAIN = [
+  { t: "MOA", s: 92 }, { t: "ETH", s: 88 }, { t: "BTC", s: 76 },
+];
+
+function TileCardContent({ tile, inView, isDragOverlay = false }: {
+  tile: StrategyTile; inView: boolean; isDragOverlay?: boolean;
+}) {
+  const col = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
+  const pct = Math.round((tile.score / tile.maxScore) * 100);
+  return (
+    <>
+      <div className="flex-1 flex flex-col p-5 relative min-w-0">
+        {!isDragOverlay && <Link href={tile.key === "opendoor" ? "/opendoor/sonar" : `/signals/${tile.key}`} className="absolute inset-0 z-0" />}
+        <div className="flex items-start justify-between mb-3 relative z-10">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl text-xl shrink-0"
+              style={{ background: col.bg, border: `1px solid ${col.border}` }}>
+              {tile.icon}
+            </div>
+            <div>
+              <div style={{ fontFamily: "'Space Grotesk','Inter',sans-serif", fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,0.92)", lineHeight: 1.2 }}>
+                {tile.name}
+              </div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="px-1.5 py-0.5 rounded font-mono text-[8px] font-bold uppercase"
+                  style={{ background: col.bg, border: `1px solid ${col.border}`, color: col.hex }}>
+                  LIVE V4
+                </span>
+              </div>
+            </div>
+          </div>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 99, padding: "2px 8px" }}>
+            {pct}%
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 mb-auto relative z-10">
+          {TICKERS_MAIN.map(t => (
+            <div key={t.t} className="flex items-center gap-1.5 px-2 py-1 rounded-lg"
+              style={{ background: "rgba(10,10,10,0.6)", border: "1px solid rgba(255,255,255,0.05)" }}>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.75)", letterSpacing: "0.05em" }}>{t.t}</span>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.35)" }}>{t.s}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-end justify-between mt-4 mb-5 relative z-10">
+          <div>
+            <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8, letterSpacing: "0.28em", textTransform: "uppercase", color: "rgba(255,255,255,0.22)", marginBottom: 2 }}>
+              SIGNAL DENSITY
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 36, fontWeight: 900, color: "rgba(255,255,255,0.9)", lineHeight: 1, letterSpacing: "-0.03em" }}>
+                {tile.score}
+              </span>
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "rgba(255,255,255,0.25)", fontWeight: 700 }}>
+                / {tile.maxScore}
+              </span>
+            </div>
+          </div>
+          <div style={{ width: 100, height: 36, opacity: 0.18 }}>
+            <svg viewBox="0 0 100 36" className="w-full h-full overflow-visible">
+              <polyline
+                points={tile.spark.map((v, i) => `${(i / 9) * 100},${36 - (v / 100) * 28 - 2}`).join(" ")}
+                fill="none" stroke={col.hex} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+        </div>
+        <div className="absolute bottom-0 left-5 right-[65px] h-[3px] rounded-full overflow-hidden"
+          style={{ background: "rgba(255,255,255,0.04)" }}>
+          <motion.div
+            className="h-full rounded-full relative"
+            initial={{ width: 0 }}
+            animate={inView ? { width: `${pct}%` } : { width: 0 }}
+            transition={{ delay: 0.5, duration: 1, ease: "easeOut" }}
+            style={{ background: col.hex, boxShadow: `0 0 10px ${col.hex}66` }}
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full"
+              style={{ background: col.hex, filter: "blur(1px)", boxShadow: `0 0 8px ${col.hex}` }} />
+          </motion.div>
+        </div>
+      </div>
+      <div className="w-[52px] shrink-0 flex flex-col border-l rounded-r-[20px] overflow-hidden"
+        style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(13,13,15,0.9)" }}>
+        <Link href={tile.key === "opendoor" ? "/opendoor/sonar" : `/signals/${tile.key}`}
+          className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
+          style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+          <Zap size={14} className="text-zinc-600 group-hover/btn:text-orange-400 transition-colors" />
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>SGN</span>
+        </Link>
+        <Link href={tile.key === "opendoor" ? "/opendoor/scanner" : `/stats/${tile.key}`}
+          className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
+          style={{ borderColor: "rgba(255,255,255,0.05)" }}>
+          <BarChart2 size={14} className="text-zinc-600 group-hover/btn:text-violet-400 transition-colors" />
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>STS</span>
+        </Link>
+        <Link href={tile.key === "opendoor" ? "/opendoor/stream" : `/perform/${tile.key}`}
+          className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.06] transition-all group/btn">
+          <Activity size={14} className="text-zinc-600 group-hover/btn:text-emerald-400 transition-colors" />
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>PRF</span>
+        </Link>
+      </div>
+    </>
+  );
+}
+
+function SortableTile({ tile, inView }: { tile: StrategyTile; inView: boolean }) {
+  const col = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tile.key });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0 : 1,
+    zIndex: isDragging ? 50 : "auto" as const,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="relative rounded-[20px] overflow-hidden group flex flex-row"
+    >
+      {/* drag handle — icon area */}
+      <div
+        {...attributes}
+        {...listeners}
+        className="absolute top-4 left-4 w-10 h-10 rounded-xl z-20 cursor-grab active:cursor-grabbing"
+        style={{ touchAction: "none" }}
+      />
+      <div
+        className="relative rounded-[20px] overflow-hidden flex flex-row w-full"
+        style={{
+          background: "rgba(10,10,10,0.55)",
+          border: `1px solid rgba(255,255,255,0.07)`,
+          backdropFilter: "blur(12px)",
+          minHeight: 180,
+          transition: "border 0.2s, box-shadow 0.2s",
+        }}
+      >
+        <TileCardContent tile={tile} inView={inView} />
+      </div>
+    </div>
+  );
+}
+
 function StrategyCards({ accent }: { accent: ThemeAccent }) {
   const ref    = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
-  const [tiles] = useState<StrategyTile[]>(buildTiles);
+  const [tiles, setTiles]       = useState<StrategyTile[]>(() => {
+    try {
+      const saved = typeof window !== "undefined" && localStorage.getItem("main_strategy_order");
+      if (saved) {
+        const keys = JSON.parse(saved) as string[];
+        const base = buildTiles();
+        const map  = Object.fromEntries(base.map(t => [t.key, t]));
+        const ordered = keys.map(k => map[k]).filter(Boolean) as StrategyTile[];
+        const rest    = base.filter(t => !keys.includes(t.key));
+        return [...ordered, ...rest];
+      }
+    } catch {}
+    return buildTiles();
+  });
+  const [activeId, setActiveId] = useState<string | null>(null);
 
-  const TICKERS = [
-    { t: "MOA", s: 92 }, { t: "ETH", s: 88 }, { t: "BTC", s: 76 },
-  ];
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const activeTile = activeId ? tiles.find(t => t.key === activeId) ?? null : null;
+  const activeCol  = activeTile ? (STRATEGY_COLORS[activeTile.key] ?? DEFAULT_COL) : DEFAULT_COL;
+
+  const handleDragStart = (e: DragStartEvent) => setActiveId(e.active.id as string);
+  const handleDragEnd   = (e: DragEndEvent) => {
+    const { active, over } = e;
+    setActiveId(null);
+    if (!over || active.id === over.id) return;
+    setTiles(prev => {
+      const ai = prev.findIndex(t => t.key === active.id);
+      const bi = prev.findIndex(t => t.key === over.id);
+      const next = arrayMove(prev, ai, bi);
+      try { localStorage.setItem("main_strategy_order", JSON.stringify(next.map(t => t.key))); } catch {}
+      return next;
+    });
+  };
 
   return (
-    <motion.div
-        ref={ref}
-        className="w-full h-full grid grid-cols-3 gap-3"
-        initial="hidden"
-        animate={inView ? "show" : "hidden"}
-        variants={{ hidden: {}, show: { transition: { staggerChildren: 0.08 } } }}
-      >
-        {tiles.map((tile) => {
-          const col   = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
-          const pct   = Math.round((tile.score / tile.maxScore) * 100);
-
-          return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={tiles.map(t => t.key)} strategy={rectSortingStrategy}>
+        <motion.div
+          ref={ref}
+          className="w-full h-full grid grid-cols-4 gap-3"
+          initial="hidden"
+          animate={inView ? "show" : "hidden"}
+          variants={{ hidden: {}, show: { transition: { staggerChildren: 0.08 } } }}
+        >
+          {tiles.map((tile) => (
             <motion.div
               key={tile.key}
               variants={{
                 hidden: { opacity: 0, y: 18 },
                 show:   { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } },
               }}
-              className="relative rounded-[20px] overflow-hidden group flex flex-row"
-              style={{
-                background: "rgba(10,10,10,0.55)",
-                border: "1px solid rgba(255,255,255,0.07)",
-                backdropFilter: "blur(12px)",
-                minHeight: 180,
-              }}
             >
-              {/* Content */}
-              <div className="flex-1 flex flex-col p-5 relative min-w-0">
-                <Link href={`/signals/${tile.key}`} className="absolute inset-0 z-0" />
-
-                {/* Header */}
-                <div className="flex items-start justify-between mb-3 relative z-10">
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center justify-center w-10 h-10 rounded-xl text-xl shrink-0"
-                      style={{ background: col.bg, border: `1px solid ${col.border}` }}>
-                      {tile.icon}
-                    </div>
-                    <div>
-                      <div style={{ fontFamily: "'Space Grotesk','Inter',sans-serif", fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,0.92)", lineHeight: 1.2 }}>
-                        {tile.name}
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className="px-1.5 py-0.5 rounded font-mono text-[8px] font-bold uppercase"
-                          style={{ background: col.bg, border: `1px solid ${col.border}`, color: col.hex }}>
-                          LIVE V4
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 99, padding: "2px 8px" }}>
-                    {pct}%
-                  </span>
-                </div>
-
-                {/* Ticker chips */}
-                <div className="flex items-center gap-1.5 mb-auto relative z-10">
-                  {TICKERS.map(t => (
-                    <div key={t.t} className="flex items-center gap-1.5 px-2 py-1 rounded-lg"
-                      style={{ background: "rgba(10,10,10,0.6)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.75)", letterSpacing: "0.05em" }}>{t.t}</span>
-                      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.35)" }}>{t.s}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Score + sparkline */}
-                <div className="flex items-end justify-between mt-4 mb-5 relative z-10">
-                  <div>
-                    <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8, letterSpacing: "0.28em", textTransform: "uppercase", color: "rgba(255,255,255,0.22)", marginBottom: 2 }}>
-                      SIGNAL DENSITY
-                    </div>
-                    <div className="flex items-baseline gap-1.5">
-                      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 36, fontWeight: 900, color: "rgba(255,255,255,0.9)", lineHeight: 1, letterSpacing: "-0.03em" }}>
-                        {tile.score}
-                      </span>
-                      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "rgba(255,255,255,0.25)", fontWeight: 700 }}>
-                        / {tile.maxScore}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Mini sparkline */}
-                  <div style={{ width: 100, height: 36, opacity: 0.18 }} className="group-hover:opacity-40 transition-opacity duration-500">
-                    <svg viewBox="0 0 100 36" className="w-full h-full overflow-visible">
-                      <polyline
-                        points={tile.spark.map((v, i) => `${(i / 9) * 100},${36 - (v / 100) * 28 - 2}`).join(" ")}
-                        fill="none" stroke={col.hex} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                <div className="absolute bottom-0 left-5 right-[65px] h-[3px] rounded-full overflow-hidden"
-                  style={{ background: "rgba(255,255,255,0.04)" }}>
-                  <motion.div
-                    className="h-full rounded-full relative"
-                    initial={{ width: 0 }}
-                    animate={inView ? { width: `${pct}%` } : { width: 0 }}
-                    transition={{ delay: 0.5, duration: 1, ease: "easeOut" }}
-                    style={{ background: col.hex, boxShadow: `0 0 10px ${col.hex}66` }}
-                  >
-                    <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full"
-                      style={{ background: col.hex, filter: "blur(1px)", boxShadow: `0 0 8px ${col.hex}` }} />
-                  </motion.div>
-                </div>
-              </div>
-
-              {/* Sidebar buttons */}
-              <div className="w-[52px] shrink-0 flex flex-col border-l rounded-r-[20px] overflow-hidden"
-                style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(13,13,15,0.9)" }}>
-                <Link href={`/signals/${tile.key}`}
-                  className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
-                  style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-                  <Zap size={14} className="text-zinc-600 group-hover/btn:text-orange-400 transition-colors" />
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>SGN</span>
-                </Link>
-                <Link href={`/stats/${tile.key}`}
-                  className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
-                  style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-                  <BarChart2 size={14} className="text-zinc-600 group-hover/btn:text-violet-400 transition-colors" />
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>STS</span>
-                </Link>
-                <Link href={`/perform/${tile.key}`}
-                  className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.06] transition-all group/btn">
-                  <Activity size={14} className="text-zinc-600 group-hover/btn:text-emerald-400 transition-colors" />
-                  <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>PRF</span>
-                </Link>
-              </div>
+              <SortableTile tile={tile} inView={inView} />
             </motion.div>
-          );
-        })}
-    </motion.div>
+          ))}
+        </motion.div>
+      </SortableContext>
+
+      <DragOverlay dropAnimation={{
+        duration: 200,
+        easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+      }}>
+        {activeTile && (
+          <div
+            className="relative rounded-[20px] overflow-hidden flex flex-row"
+            style={{
+              background: "rgba(10,10,10,0.85)",
+              border: `1px solid ${activeCol.hex}`,
+              backdropFilter: "blur(24px)",
+              minHeight: 180,
+              boxShadow: `0 24px 60px rgba(0,0,0,0.6), 0 0 30px ${activeCol.hex}33`,
+            }}
+          >
+            <TileCardContent tile={activeTile} inView={true} isDragOverlay />
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
   );
 }
 
@@ -1470,11 +1573,11 @@ export default function MainPage() {
             Active Strategies
           </SectionLabel>
         </div>
-        <div className="grid grid-cols-4 gap-3 items-stretch">
+        <div className="grid grid-cols-5 gap-3 items-stretch">
           <div>
             <GlitchArtPanel accent={accent} />
           </div>
-          <div className="col-span-3">
+          <div className="col-span-4">
             <StrategyCards accent={accent} />
           </div>
         </div>

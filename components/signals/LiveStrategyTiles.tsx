@@ -284,78 +284,78 @@ function StrategyCard({ id, data, isFeatured }: { id: string, data: Tile, isFeat
   };
 
   return (
-    <div ref={setNodeRef} style={style} className={`group relative isolate flex flex-row rounded-[2.5rem] border border-white/[0.08] bg-[#0a0a0a]/60 backdrop-blur-xl overflow-hidden transition-all duration-500 hover:border-white/20 shadow-2xl ${isFeatured ? 'h-[280px]' : 'h-[240px]'}`}>
+    <div ref={setNodeRef} style={style} className={`group relative isolate flex flex-row rounded-[1.75rem] border border-white/[0.08] bg-[#0a0a0a]/60 backdrop-blur-xl overflow-hidden transition-all duration-500 hover:border-white/20 shadow-2xl ${isFeatured ? 'h-[210px]' : 'h-[190px]'}`}>
       <div className="flex-1 flex flex-col relative min-w-0">
         <Link href={`/signals/${data.key}`} className="absolute inset-0 z-0" />
-        <div className="p-8 flex flex-col h-full relative z-10 text-zinc-100">
-          <div className="flex items-start justify-between mb-2">
-            <div className="flex items-center gap-5">
-              <div {...attributes} {...listeners} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-2xl shadow-2xl border border-white/5 cursor-grab active:cursor-grabbing pointer-events-auto transition-transform active:scale-95 z-20 ${theme.bg} backdrop-blur-xl`}>
+        <div className="p-5 flex flex-col h-full relative z-10 text-zinc-100">
+          <div className="flex items-start justify-between mb-1.5">
+            <div className="flex items-center gap-3">
+              <div {...attributes} {...listeners} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg shadow-2xl border border-white/5 cursor-grab active:cursor-grabbing pointer-events-auto transition-transform active:scale-95 z-20 ${theme.bg} backdrop-blur-xl`}>
                 {data.icon}
               </div>
               <div className="min-w-0 pointer-events-none">
-                <h3 className="font-bold font-sans truncate tracking-tight leading-tight text-[21px]">{data.title}</h3>
-                <div className="flex items-center gap-2 mt-1">
-                   <div className={`px-2 py-0.5 rounded font-mono text-[9px] font-bold uppercase border ${theme.badge}`}>Live v4</div>
+                <h3 className="font-bold font-sans truncate tracking-tight leading-tight text-[15px]">{data.title}</h3>
+                <div className="flex items-center gap-2 mt-0.5">
+                   <div className={`px-1.5 py-0.5 rounded font-mono text-[8px] font-bold uppercase border ${theme.badge}`}>Live v4</div>
                 </div>
               </div>
             </div>
-            <div className="font-mono text-[10px] text-zinc-500 tabular-nums bg-white/[0.03] px-2.5 py-1 rounded-full border border-white/5">{percent}%</div>
+            <div className="font-mono text-[9px] text-zinc-500 tabular-nums bg-white/[0.03] px-2 py-0.5 rounded-full border border-white/5">{percent}%</div>
           </div>
 
-          <div className="mt-6 flex flex-wrap flex-row gap-2 pointer-events-none relative z-10">
-            {data.tickers.slice(0, isFeatured ? 5 : 3).map((t, idx) => (
-              <div key={idx} className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-white/[0.05] bg-[#0a0a0a]/60 backdrop-blur-md">
-                <span className="font-mono text-[10px] font-bold text-zinc-200 uppercase tracking-tighter">{t.t}</span>
-                <span className="font-mono text-[10px] text-zinc-500 tabular-nums font-bold">{t.s}</span>
+          <div className="mt-3 flex flex-wrap flex-row gap-1.5 pointer-events-none relative z-10">
+            {data.tickers.slice(0, 3).map((t, idx) => (
+              <div key={idx} className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-white/[0.05] bg-[#0a0a0a]/60 backdrop-blur-md">
+                <span className="font-mono text-[9px] font-bold text-zinc-200 uppercase tracking-tighter">{t.t}</span>
+                <span className="font-mono text-[9px] text-zinc-500 tabular-nums font-bold">{t.s}</span>
               </div>
             ))}
           </div>
 
-          <div className="mt-auto flex items-end justify-between pointer-events-none relative mb-4">
-            <div className="space-y-1">
-              <p className="font-mono text-[9px] text-zinc-600 uppercase tracking-[0.3em] opacity-60 italic leading-none">Signal Density</p>
-              <div className="flex items-baseline gap-2 leading-none">
-                <span className={`font-mono font-bold text-zinc-100 tracking-tighter tabular-nums drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] ${isFeatured ? 'text-[48px]' : 'text-[32px]'}`}>
+          <div className="mt-auto flex items-end justify-between pointer-events-none relative mb-3">
+            <div className="space-y-0.5">
+              <p className="font-mono text-[8px] text-zinc-600 uppercase tracking-[0.3em] opacity-60 italic leading-none">Signal Density</p>
+              <div className="flex items-baseline gap-1.5 leading-none">
+                <span className={`font-mono font-bold text-zinc-100 tracking-tighter tabular-nums drop-shadow-[0_0_10px_rgba(255,255,255,0.2)] ${isFeatured ? 'text-[36px]' : 'text-[28px]'}`}>
                   {data.score}
                 </span>
-                <span className="font-mono text-[14px] text-zinc-700 tabular-nums font-bold opacity-50">/ {data.maxScore}</span>
+                <span className="font-mono text-[12px] text-zinc-700 tabular-nums font-bold opacity-50">/ {data.maxScore}</span>
               </div>
             </div>
-            <div className="absolute right-0 bottom-0 w-[140px] h-[50px] opacity-10 group-hover:opacity-40 transition-all duration-1000 text-zinc-500">
+            <div className="absolute right-0 bottom-0 w-[110px] h-[40px] opacity-10 group-hover:opacity-40 transition-all duration-1000 text-zinc-500">
               <svg viewBox="0 0 140 50" className="w-full h-full overflow-visible">
                 <polyline points={data.spark?.map((v, i) => `${(i/9)*140},${50 - (v/100)*40 - 5}`).join(" ")} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
           </div>
         </div>
-        
-        <div className="absolute bottom-8 left-10 right-10 h-[3px] bg-white/[0.03] z-10 rounded-full overflow-hidden">
-          <div 
-            className="h-full relative transition-all duration-[1200ms] cubic-bezier(0.4, 0, 0.2, 1) rounded-full" 
-            style={{ width: `${percent}%`, backgroundColor: theme.hex, boxShadow: `0 0 15px ${theme.hex}60` }}
+
+        <div className="absolute bottom-6 left-7 right-7 h-[2px] bg-white/[0.03] z-10 rounded-full overflow-hidden">
+          <div
+            className="h-full relative transition-all duration-[1200ms] cubic-bezier(0.4, 0, 0.2, 1) rounded-full"
+            style={{ width: `${percent}%`, backgroundColor: theme.hex, boxShadow: `0 0 12px ${theme.hex}60` }}
           >
-             <div 
-               className="absolute top-[-4px] right-0 h-4 w-4 rounded-full blur-[1px] shadow-[0_0_12px_currentColor]" 
-               style={{ color: theme.hex, backgroundColor: theme.hex }} 
+             <div
+               className="absolute top-[-3px] right-0 h-3 w-3 rounded-full blur-[1px] shadow-[0_0_10px_currentColor]"
+               style={{ color: theme.hex, backgroundColor: theme.hex }}
              />
           </div>
         </div>
       </div>
 
       {/* Sidebar Buttons */}
-      <div className="w-[65px] shrink-0 flex flex-col border-l border-white/5 bg-[#0d0d0f]/95 backdrop-blur-xl relative z-20 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] rounded-r-[2.5rem]">
-        <Link href={`/signals/${data.key}`} className="flex-1 flex flex-col items-center justify-center border-b border-white/5 hover:bg-white/[0.08] transition-all group/btn rounded-tr-[2.5rem]">
-          <Zap size={20} className="text-zinc-500 group-hover/btn:text-orange-400 transition-colors" />
-          <span className="font-mono text-[8px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">SGN</span>
+      <div className="w-[52px] shrink-0 flex flex-col border-l border-white/5 bg-[#0d0d0f]/95 backdrop-blur-xl relative z-20 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] rounded-r-[1.75rem]">
+        <Link href={`/signals/${data.key}`} className="flex-1 flex flex-col items-center justify-center border-b border-white/5 hover:bg-white/[0.08] transition-all group/btn rounded-tr-[1.75rem]">
+          <Zap size={16} className="text-zinc-500 group-hover/btn:text-orange-400 transition-colors" />
+          <span className="font-mono text-[7px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">SGN</span>
         </Link>
         <Link href={`/stats/${data.key}`} className="flex-1 flex flex-col items-center justify-center border-b border-white/5 hover:bg-white/[0.08] transition-all group/btn">
-          <BarChart2 size={20} className="text-zinc-500 group-hover/btn:text-violet-400 transition-colors" />
-          <span className="font-mono text-[8px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">STS</span>
+          <BarChart2 size={16} className="text-zinc-500 group-hover/btn:text-violet-400 transition-colors" />
+          <span className="font-mono text-[7px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">STS</span>
         </Link>
-        <Link href={`/perform/${data.key}`} className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.08] transition-all group/btn rounded-br-[2.5rem]">
-          <Activity size={20} className="text-zinc-500 group-hover/btn:text-emerald-400 transition-colors" />
-          <span className="font-mono text-[8px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">PRF</span>
+        <Link href={`/perform/${data.key}`} className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.08] transition-all group/btn rounded-br-[1.75rem]">
+          <Activity size={16} className="text-zinc-500 group-hover/btn:text-emerald-400 transition-colors" />
+          <span className="font-mono text-[7px] font-black text-zinc-700 group-hover/btn:text-white tracking-widest mt-1 uppercase">PRF</span>
         </Link>
       </div>
     </div>
@@ -469,7 +469,7 @@ export default function LiveStrategyTiles() {
               <div className="h-px flex-1 bg-white/[0.03]" />
             </div>
             <SortableContext id="priority" items={items.priority.filter(Boolean).map(i => i.key)} strategy={rectSortingStrategy}>
-              <div className="grid gap-10 sm:grid-cols-2 min-h-[150px] p-8 bg-white/[0.01] rounded-[4rem] border border-dashed border-white/[0.04] transition-all duration-500">
+              <div className="grid gap-5 grid-cols-2 lg:grid-cols-4 min-h-[150px] p-6 bg-white/[0.01] rounded-[3rem] border border-dashed border-white/[0.04] transition-all duration-500">
                 {items.priority.map((s) => s && <StrategyCard key={s.key} id={s.key} data={s} isFeatured={true} />)}
               </div>
             </SortableContext>
@@ -480,7 +480,7 @@ export default function LiveStrategyTiles() {
               <div className="h-px flex-1 bg-white/[0.03]" />
             </div>
             <SortableContext id="catalog" items={items.catalog.filter(Boolean).map(i => i.key)} strategy={rectSortingStrategy}>
-              <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-h-[250px]">
+              <div className="grid gap-5 grid-cols-2 lg:grid-cols-4 min-h-[250px]">
                 {items.catalog.map((s) => s && <StrategyCard key={s.key} id={s.key} data={s} isFeatured={false} />)}
               </div>
             </SortableContext>

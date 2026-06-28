@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -13,14 +13,14 @@ import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFil
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import ArbitrageStreamView from "../stream/ArbitrageStreamView";
+import OpenDoorStreamView from "../stream/OpenDoorStream";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamFilterPassLogStore, downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
-import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
@@ -7287,7 +7287,7 @@ function ScannerAnalyticsLog({
   );
 }
 
-export default function ArbitrageScanner({
+export default function OpenDoorScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
   controlledTab,
@@ -7312,10 +7312,10 @@ export default function ArbitrageScanner({
   analyticsTabLabelOverride,
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
-  lsKeyPrefix = "paper.arb",
-  navStreamHref = "/stream/arbitrage",
-  navScannerHref = "/paper/arbitrage",
-  navSonarHref = "/signals/arbitrage",
+  lsKeyPrefix = "paper.opendoor",
+  navStreamHref = "/opendoor/stream",
+  navScannerHref = "/opendoor/scanner",
+  navSonarHref = "/opendoor/sonar",
 }: ArbitrageScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
@@ -11495,12 +11495,12 @@ export default function ArbitrageScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "ARBITRAGE STREAM")
+    ? (headerTitleOverride ?? "OPEN DOOR STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "ARBITRAGE STREAM"
-        : "ARBITRAGE SCANNER";
+        ? "OPEN DOOR STREAM"
+        : "OPEN DOOR SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -13820,7 +13820,7 @@ export default function ArbitrageScanner({
 
         {/* CONTENT */}
         {primaryPanel === "stream" && (
-          <ArbitrageStreamView
+          <OpenDoorStreamView
             tab={tab}
             streamSignalsCount={streamSignalMeta.totalCount}
             streamAutoEnabled={effectiveStreamAutoEnabled}

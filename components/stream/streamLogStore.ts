@@ -212,18 +212,18 @@ export function useStreamLogEntries(): StreamLogEntry[] {
 // ---- CSV export -----------------------------------------------------------
 
 const CSV_HEADERS = [
-  "seq", "time", "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
-  "ticker", "benchmark", "side",
-  "sigmaZap", "zapSsigma", "zapLsigma", "zapPct",
+  "seq", "date", "time", "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
+  "ticker", "bench", "side",
+  "sigmaZap", "sigmaAbs", "zapSsigma", "zapLsigma", "zapPct",
   "bidPct", "askPct", "benchBidPct", "benchAskPct",
   "corr", "beta", "stockSigma", "rating", "ratingTotal",
   "filtersOk",
   "spread", "netEdge",
-  "holdSec", "qualifiedAt",
+  "holdSec", "holdCandles", "qualifiedAt",
   "sequence", "entrySignal", "addThreshold", "dilutionStep", "maxAdds",
-  "exitMode", "hedgeMode", "scaleMode", "minNetEdge", "minHoldMin", "notionalUsd",
+  "exitMode", "hedgeMode", "scaleMode", "minNetEdge", "minHoldCandles", "notionalUsd",
   "hedgeRequired",
-  "decisionContext", "gateContext", "scaleContext", "executionContext",
+  "decisionContext", "gateContext", "scaleContext", "execContext",
   "reason",
 ];
 
@@ -273,6 +273,7 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
     ].join(" | ");
     rows.push([
       e.seq,
+      localDayKey(e.ts),
       csvCell(e.timeStr),
       e.event,
       e.status,
@@ -286,6 +287,7 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
       csvCell(e.benchmark),
       e.side,
       fmt4(e.sigmaZap),
+      e.sigmaZap != null ? Math.abs(e.sigmaZap).toFixed(4) : "",
       fmt4(e.zapSsigma),
       fmt4(e.zapLsigma),
       fmt4(e.zapPct),
@@ -302,6 +304,7 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
       fmt4(e.spread),
       fmt4(e.netEdge),
       e.holdMs != null ? (e.holdMs / 1000).toFixed(1) : "",
+      e.holdMs != null ? String(Math.round(e.holdMs / 60000)) : "",
       csvCell(e.qualifiedAtStr ?? ""),
       e.sequence,
       fmt4(e.entrySignal),
