@@ -3111,39 +3111,42 @@ function computeScopeResearch(
   const parameterValues = points.map((point) => point.parameter);
   const edges = fixedEdges && fixedEdges.length >= 2 ? fixedEdges : scopeResearchEdges(parameterValues, selection.bucketCount);
   const minSamples = Math.max(1, Math.trunc(selection.minSamples) || 1);
-  const bins =
+  const rawBuckets =
     edges.length < 2
       ? []
-      : Array.from({ length: edges.length - 1 }, (_, index) => ({
-          from: edges[index] ?? 0,
-          to: edges[index + 1] ?? 0,
+      : Array.from({ length: edges.length - 1 }, (_, i) => ({
+          from: edges[i] ?? 0,
+          to: edges[i + 1] ?? 0,
           values: [] as number[],
-        }))
-          .map((bucket, _, source) => {
-            for (const point of points) {
-              const bucketIndex = source.findIndex((candidate, candidateIndex) =>
-                candidateIndex === source.length - 1
-                  ? point.parameter >= candidate.from && point.parameter <= candidate.to
-                  : point.parameter >= candidate.from && point.parameter < candidate.to
-              );
-              if (bucketIndex >= 0 && source[bucketIndex] === bucket) {
-                bucket.values.push(point.result);
-              }
-            }
-            return bucket;
-          })
-          .map((bucket) =>
-            bucket.values.length < minSamples
-              ? null
-              : ({
-                  label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
-                  from: bucket.from,
-                  to: bucket.to,
-                  values: [...bucket.values],
-                  ...scopeResearchSummarize(bucket.values),
-                } satisfies ScopeResearchBinRow)
-          )
-          .filter(Boolean) as ScopeResearchBinRow[];
+        }));
+
+  if (rawBuckets.length) {
+    const lastIdx = rawBuckets.length - 1;
+    for (const point of points) {
+      const p = point.parameter;
+      for (let i = 0; i <= lastIdx; i++) {
+        const b = rawBuckets[i]!;
+        if (i === lastIdx ? p >= b.from && p <= b.to : p >= b.from && p < b.to) {
+          b.values.push(point.result);
+          break;
+        }
+      }
+    }
+  }
+
+  const bins = rawBuckets
+    .map((bucket) =>
+      bucket.values.length < minSamples
+        ? null
+        : ({
+            label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
+            from: bucket.from,
+            to: bucket.to,
+            values: [...bucket.values],
+            ...scopeResearchSummarize(bucket.values),
+          } satisfies ScopeResearchBinRow)
+    )
+    .filter(Boolean) as ScopeResearchBinRow[];
 
   const thresholdSeeds = edges.slice(1, -1).length ? edges.slice(1, -1) : edges.slice(0, -1);
   const thresholds = thresholdSeeds
@@ -7656,11 +7659,20 @@ export default function OpenDoorScanner({
       ["imbexch1555", "imbExch1555"],
     ];
 
+    const active = fieldCoverageChecks.filter(([key]) => sharedRangeFilterModes[key] === "on");
+    if (!active.length) return new Set<SharedRangeFilterKey>();
+
+    const uncovered = new Set(active.map(([, field]) => field));
+    for (const row of episodesRows) {
+      for (const [, field] of active) {
+        if (uncovered.has(field) && row[field] != null) uncovered.delete(field);
+      }
+      if (!uncovered.size) break;
+    }
+
     const next = new Set<SharedRangeFilterKey>();
-    for (const [filterKey, field] of fieldCoverageChecks) {
-      if (sharedRangeFilterModes[filterKey] !== "on") continue;
-      const hasCoverage = episodesRows.some((row) => row[field] != null);
-      if (!hasCoverage) next.add(filterKey);
+    for (const [key, field] of active) {
+      if (uncovered.has(field)) next.add(key);
     }
     return next;
   }, [episodesRows, sharedRangeFilterModes]);
@@ -10397,24 +10409,34 @@ export default function OpenDoorScanner({
     return true;
   };
 
+  const _minCorrV = optNumOrNull(minCorr);
+  const _maxCorrV = optNumOrNull(maxCorr);
+  const _minBetaV = optNumOrNull(minBeta);
+  const _maxBetaV = optNumOrNull(maxBeta);
+  const _minSigmaV = optNumOrNull(minSigma);
+  const _maxSigmaV = optNumOrNull(maxSigma);
+
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
-    const filters = [
-      { key: "corr" as const, min: minCorr, max: maxCorr },
-      { key: "beta" as const, min: minBeta, max: maxBeta },
-      { key: "sigma" as const, min: minSigma, max: maxSigma },
-    ];
 
-    for (const filter of filters) {
-      const minValue = optNumOrNull(filter.min);
-      const maxValue = optNumOrNull(filter.max);
-      if (minValue == null && maxValue == null) continue;
-
-      const value = getOptimizerFallbackValue(row, filter.key, tickerMeta);
+    if (_minCorrV != null || _maxCorrV != null) {
+      const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
       if (value == null) return false;
-      if (minValue != null && value < minValue) return false;
-      if (maxValue != null && value > maxValue) return false;
+      if (_minCorrV != null && value < _minCorrV) return false;
+      if (_maxCorrV != null && value > _maxCorrV) return false;
+    }
+    if (_minBetaV != null || _maxBetaV != null) {
+      const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
+      if (value == null) return false;
+      if (_minBetaV != null && value < _minBetaV) return false;
+      if (_maxBetaV != null && value > _maxBetaV) return false;
+    }
+    if (_minSigmaV != null || _maxSigmaV != null) {
+      const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
+      if (value == null) return false;
+      if (_minSigmaV != null && value < _minSigmaV) return false;
+      if (_maxSigmaV != null && value > _maxSigmaV) return false;
     }
 
     return true;
@@ -10852,20 +10874,31 @@ export default function OpenDoorScanner({
 
   const episodesSummary = useMemo(() => {
     const rows = filteredEpisodes;
-    const total = rows.reduce((s, r) => s + (r.totalPnlUsd ?? 0), 0);
-    const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
-    const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
+    let total = 0, wins = 0, losses = 0;
+    for (const r of rows) {
+      const pnl = r.totalPnlUsd ?? 0;
+      total += pnl;
+      if (pnl > 0) wins++;
+      else if (pnl < 0) losses++;
+    }
     const avg = rows.length ? total / rows.length : 0;
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
   const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
     const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
-      const values = filteredEpisodes
-        .map((row) => scopeResearchParameterValue(row, parameterKey))
-        .filter((value): value is number => value != null && Number.isFinite(value));
-      if (!values.length) return { min: null as number | null, max: null as number | null, count: 0 };
-      return { min: Math.min(...values), max: Math.max(...values), count: values.length };
+      let min = Infinity, max = -Infinity, count = 0;
+      for (const row of filteredEpisodes) {
+        const value = scopeResearchParameterValue(row, parameterKey);
+        if (value != null && Number.isFinite(value)) {
+          if (value < min) min = value;
+          if (value > max) max = value;
+          count++;
+        }
+      }
+      return count === 0
+        ? { min: null as number | null, max: null as number | null, count: 0 }
+        : { min, max, count };
     };
     return {
       left: buildBounds(scopeResearchDrafts.left.parameterKey),

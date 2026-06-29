@@ -3111,39 +3111,42 @@ function computeScopeResearch(
   const parameterValues = points.map((point) => point.parameter);
   const edges = fixedEdges && fixedEdges.length >= 2 ? fixedEdges : scopeResearchEdges(parameterValues, selection.bucketCount);
   const minSamples = Math.max(1, Math.trunc(selection.minSamples) || 1);
-  const bins =
+  const rawBuckets =
     edges.length < 2
       ? []
-      : Array.from({ length: edges.length - 1 }, (_, index) => ({
-          from: edges[index] ?? 0,
-          to: edges[index + 1] ?? 0,
+      : Array.from({ length: edges.length - 1 }, (_, i) => ({
+          from: edges[i] ?? 0,
+          to: edges[i + 1] ?? 0,
           values: [] as number[],
-        }))
-          .map((bucket, _, source) => {
-            for (const point of points) {
-              const bucketIndex = source.findIndex((candidate, candidateIndex) =>
-                candidateIndex === source.length - 1
-                  ? point.parameter >= candidate.from && point.parameter <= candidate.to
-                  : point.parameter >= candidate.from && point.parameter < candidate.to
-              );
-              if (bucketIndex >= 0 && source[bucketIndex] === bucket) {
-                bucket.values.push(point.result);
-              }
-            }
-            return bucket;
-          })
-          .map((bucket) =>
-            bucket.values.length < minSamples
-              ? null
-              : ({
-                  label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
-                  from: bucket.from,
-                  to: bucket.to,
-                  values: [...bucket.values],
-                  ...scopeResearchSummarize(bucket.values),
-                } satisfies ScopeResearchBinRow)
-          )
-          .filter(Boolean) as ScopeResearchBinRow[];
+        }));
+
+  if (rawBuckets.length) {
+    const lastIdx = rawBuckets.length - 1;
+    for (const point of points) {
+      const p = point.parameter;
+      for (let i = 0; i <= lastIdx; i++) {
+        const b = rawBuckets[i]!;
+        if (i === lastIdx ? p >= b.from && p <= b.to : p >= b.from && p < b.to) {
+          b.values.push(point.result);
+          break;
+        }
+      }
+    }
+  }
+
+  const bins = rawBuckets
+    .map((bucket) =>
+      bucket.values.length < minSamples
+        ? null
+        : ({
+            label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
+            from: bucket.from,
+            to: bucket.to,
+            values: [...bucket.values],
+            ...scopeResearchSummarize(bucket.values),
+          } satisfies ScopeResearchBinRow)
+    )
+    .filter(Boolean) as ScopeResearchBinRow[];
 
   const thresholdSeeds = edges.slice(1, -1).length ? edges.slice(1, -1) : edges.slice(0, -1);
   const thresholds = thresholdSeeds
@@ -7656,11 +7659,22 @@ export default function ArbitrageScanner({
       ["imbexch1555", "imbExch1555"],
     ];
 
+    // Only check ON filters — skip the rest immediately
+    const active = fieldCoverageChecks.filter(([key]) => sharedRangeFilterModes[key] === "on");
+    if (!active.length) return new Set<SharedRangeFilterKey>();
+
+    // Single pass: track fields still needing coverage, early-exit once all found
+    const uncovered = new Set(active.map(([, field]) => field));
+    for (const row of episodesRows) {
+      for (const [, field] of active) {
+        if (uncovered.has(field) && row[field] != null) uncovered.delete(field);
+      }
+      if (!uncovered.size) break;
+    }
+
     const next = new Set<SharedRangeFilterKey>();
-    for (const [filterKey, field] of fieldCoverageChecks) {
-      if (sharedRangeFilterModes[filterKey] !== "on") continue;
-      const hasCoverage = episodesRows.some((row) => row[field] != null);
-      if (!hasCoverage) next.add(filterKey);
+    for (const [key, field] of active) {
+      if (uncovered.has(field)) next.add(key);
     }
     return next;
   }, [episodesRows, sharedRangeFilterModes]);
@@ -8793,9 +8807,9 @@ export default function ArbitrageScanner({
   ]);
 
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
-    const mm = (minRaw: string, maxRaw: string) => ({
-      min: optNumOrNull(minRaw),
-      max: optNumOrNull(maxRaw),
+    const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
+      min: rangeValueOrNull(key, minRaw),
+      max: rangeValueOrNull(key, maxRaw),
     });
     const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
 
@@ -8814,45 +8828,45 @@ export default function ArbitrageScanner({
         applySet: new Set(splitListUpper(tickersText)),
         pinMap,
         bounds: {
-        Corr: mm(minCorr, maxCorr),
-        Beta: mm(minBeta, maxBeta),
-        Sigma: mm(minSigma, maxSigma),
-        ADV20: mm(minAdv20, maxAdv20),
-        ADV20NF: mm(minAdv20NF, maxAdv20NF),
-        ADV90: mm(minAdv90, maxAdv90),
-        ADV90NF: mm(minAdv90NF, maxAdv90NF),
-        AvPreMhv: mm(minAvPreMhv, maxAvPreMhv),
-        RoundLot: mm(minRoundLot, maxRoundLot),
-        VWAP: mm(minVWAP, maxVWAP),
-        SpreadBidPct: mm(minSpread, maxSpread),
-        LstPrcL: mm(minLstPrcL, maxLstPrcL),
-        LstCls: mm(minLstCls, maxLstCls),
-        YCls: mm(minYCls, maxYCls),
-        TCls: mm(minTCls, maxTCls),
-        ClsToClsPct: mm(minClsToClsPct, maxClsToClsPct),
-        Lo: mm(minLo, maxLo),
-        LstClsNewsCnt: mm(minLstClsNewsCnt, maxLstClsNewsCnt),
-        MarketCapM: mm(minMarketCapM, maxMarketCapM),
-        PreMhVolNF: mm(minPreMktVolNF, maxPreMktVolNF),
-        VolNFfromLstCls: mm(minVolNFfromLstCls, maxVolNFfromLstCls),
-        AvPostMhVol90NF: mm(minAvPostMhVol90NF, maxAvPostMhVol90NF),
-        AvPreMhVol90NF: mm(minAvPreMhVol90NF, maxAvPreMhVol90NF),
-        AvPreMhValue20NF: mm(minAvPreMhValue20NF, maxAvPreMhValue20NF),
-        AvPreMhValue90NF: mm(minAvPreMhValue90NF, maxAvPreMhValue90NF),
-        AvgDailyValue20: mm(minAvgDailyValue20, maxAvgDailyValue20),
-        AvgDailyValue90: mm(minAvgDailyValue90, maxAvgDailyValue90),
-        Volatility20: mm(minVolatility20, maxVolatility20),
-        Volatility90: mm(minVolatility90, maxVolatility90),
-        PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
-        PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
-        VolRel: mm(minVolRel, maxVolRel),
-        PreMhBidLstPrcPct: mm(minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
-        PreMhLoLstPrcPct: mm(minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
-        PreMhHiLstClsPct: mm(minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
-        PreMhLoLstClsPct: mm(minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
-        LstPrcLstClsPct: mm(minLstPrcLstClsPct, maxLstPrcLstClsPct),
-        ImbExch925: mm(minImbExch925, maxImbExch925),
-        ImbExch1555: mm(minImbExch1555, maxImbExch1555),
+        Corr: mm("corr", minCorr, maxCorr),
+        Beta: mm("beta", minBeta, maxBeta),
+        Sigma: mm("sigma", minSigma, maxSigma),
+        ADV20: mm("adv20", minAdv20, maxAdv20),
+        ADV20NF: mm("adv20nf", minAdv20NF, maxAdv20NF),
+        ADV90: mm("adv90", minAdv90, maxAdv90),
+        ADV90NF: mm("adv90nf", minAdv90NF, maxAdv90NF),
+        AvPreMhv: mm("avpremhv", minAvPreMhv, maxAvPreMhv),
+        RoundLot: mm("roundlot", minRoundLot, maxRoundLot),
+        VWAP: mm("vwap", minVWAP, maxVWAP),
+        SpreadBidPct: mm("spread", minSpread, maxSpread),
+        LstPrcL: mm("lstprcl", minLstPrcL, maxLstPrcL),
+        LstCls: mm("lstcls", minLstCls, maxLstCls),
+        YCls: mm("ycls", minYCls, maxYCls),
+        TCls: mm("tcls", minTCls, maxTCls),
+        ClsToClsPct: mm("clstocls", minClsToClsPct, maxClsToClsPct),
+        Lo: mm("lo", minLo, maxLo),
+        LstClsNewsCnt: mm("lstclsnewscnt", minLstClsNewsCnt, maxLstClsNewsCnt),
+        MarketCapM: mm("marketcapm", minMarketCapM, maxMarketCapM),
+        PreMhVolNF: mm("premhvolnf", minPreMktVolNF, maxPreMktVolNF),
+        VolNFfromLstCls: mm("volnffromlstcls", minVolNFfromLstCls, maxVolNFfromLstCls),
+        AvPostMhVol90NF: mm("avpostmhvol90nf", minAvPostMhVol90NF, maxAvPostMhVol90NF),
+        AvPreMhVol90NF: mm("avpremhvol90nf", minAvPreMhVol90NF, maxAvPreMhVol90NF),
+        AvPreMhValue20NF: mm("avpremhvalue20nf", minAvPreMhValue20NF, maxAvPreMhValue20NF),
+        AvPreMhValue90NF: mm("avpremhvalue90nf", minAvPreMhValue90NF, maxAvPreMhValue90NF),
+        AvgDailyValue20: mm("avgdailyvalue20", minAvgDailyValue20, maxAvgDailyValue20),
+        AvgDailyValue90: mm("avgdailyvalue90", minAvgDailyValue90, maxAvgDailyValue90),
+        Volatility20: mm("volatility20", minVolatility20, maxVolatility20),
+        Volatility90: mm("volatility90", minVolatility90, maxVolatility90),
+        PreMhMDV20NF: mm("premhmdv20nf", minPreMhMDV20NF, maxPreMhMDV20NF),
+        PreMhMDV90NF: mm("premhmdv90nf", minPreMhMDV90NF, maxPreMhMDV90NF),
+        VolRel: mm("volrel", minVolRel, maxVolRel),
+        PreMhBidLstPrcPct: mm("premhbidlstprc", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
+        PreMhLoLstPrcPct: mm("premhlolstprc", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
+        PreMhHiLstClsPct: mm("premhhilstcls", minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
+        PreMhLoLstClsPct: mm("premhlolstcls", minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
+        LstPrcLstClsPct: mm("lstprclstcls", minLstPrcLstClsPct, maxLstPrcLstClsPct),
+        ImbExch925: mm("imbexch925", minImbExch925, maxImbExch925),
+        ImbExch1555: mm("imbexch1555", minImbExch1555, maxImbExch1555),
       },
       excludeDividend: excludeDividend,
       excludeNews: excludeHasNews,
@@ -8990,6 +9004,7 @@ export default function ArbitrageScanner({
       startAbs,
       tickersText,
       zapMode,
+      sharedRangeFilterModes,
     ]);
 
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
@@ -10397,24 +10412,34 @@ export default function ArbitrageScanner({
     return true;
   };
 
+  const _minCorrV = optNumOrNull(minCorr);
+  const _maxCorrV = optNumOrNull(maxCorr);
+  const _minBetaV = optNumOrNull(minBeta);
+  const _maxBetaV = optNumOrNull(maxBeta);
+  const _minSigmaV = optNumOrNull(minSigma);
+  const _maxSigmaV = optNumOrNull(maxSigma);
+
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
-    const filters = [
-      { key: "corr" as const, min: minCorr, max: maxCorr },
-      { key: "beta" as const, min: minBeta, max: maxBeta },
-      { key: "sigma" as const, min: minSigma, max: maxSigma },
-    ];
 
-    for (const filter of filters) {
-      const minValue = optNumOrNull(filter.min);
-      const maxValue = optNumOrNull(filter.max);
-      if (minValue == null && maxValue == null) continue;
-
-      const value = getOptimizerFallbackValue(row, filter.key, tickerMeta);
+    if (_minCorrV != null || _maxCorrV != null) {
+      const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
       if (value == null) return false;
-      if (minValue != null && value < minValue) return false;
-      if (maxValue != null && value > maxValue) return false;
+      if (_minCorrV != null && value < _minCorrV) return false;
+      if (_maxCorrV != null && value > _maxCorrV) return false;
+    }
+    if (_minBetaV != null || _maxBetaV != null) {
+      const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
+      if (value == null) return false;
+      if (_minBetaV != null && value < _minBetaV) return false;
+      if (_maxBetaV != null && value > _maxBetaV) return false;
+    }
+    if (_minSigmaV != null || _maxSigmaV != null) {
+      const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
+      if (value == null) return false;
+      if (_minSigmaV != null && value < _minSigmaV) return false;
+      if (_maxSigmaV != null && value > _maxSigmaV) return false;
     }
 
     return true;
@@ -10852,20 +10877,31 @@ export default function ArbitrageScanner({
 
   const episodesSummary = useMemo(() => {
     const rows = filteredEpisodes;
-    const total = rows.reduce((s, r) => s + (r.totalPnlUsd ?? 0), 0);
-    const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
-    const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
+    let total = 0, wins = 0, losses = 0;
+    for (const r of rows) {
+      const pnl = r.totalPnlUsd ?? 0;
+      total += pnl;
+      if (pnl > 0) wins++;
+      else if (pnl < 0) losses++;
+    }
     const avg = rows.length ? total / rows.length : 0;
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
   const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
     const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
-      const values = filteredEpisodes
-        .map((row) => scopeResearchParameterValue(row, parameterKey))
-        .filter((value): value is number => value != null && Number.isFinite(value));
-      if (!values.length) return { min: null as number | null, max: null as number | null, count: 0 };
-      return { min: Math.min(...values), max: Math.max(...values), count: values.length };
+      let min = Infinity, max = -Infinity, count = 0;
+      for (const row of filteredEpisodes) {
+        const value = scopeResearchParameterValue(row, parameterKey);
+        if (value != null && Number.isFinite(value)) {
+          if (value < min) min = value;
+          if (value > max) max = value;
+          count++;
+        }
+      }
+      return count === 0
+        ? { min: null as number | null, max: null as number | null, count: 0 }
+        : { min, max, count };
     };
     return {
       left: buildBounds(scopeResearchDrafts.left.parameterKey),
