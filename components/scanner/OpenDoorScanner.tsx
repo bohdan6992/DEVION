@@ -10416,27 +10416,38 @@ export default function OpenDoorScanner({
   const _minSigmaV = optNumOrNull(minSigma);
   const _maxSigmaV = optNumOrNull(maxSigma);
 
+  const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
+
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 
     if (_minCorrV != null || _maxCorrV != null) {
       const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
-      if (value == null) return false;
-      if (_minCorrV != null && value < _minCorrV) return false;
-      if (_maxCorrV != null && value > _maxCorrV) return false;
+      if (value == null) {
+        if (!_metaLoaded) { /* pass through */ } else return false;
+      } else {
+        if (_minCorrV != null && value < _minCorrV) return false;
+        if (_maxCorrV != null && value > _maxCorrV) return false;
+      }
     }
     if (_minBetaV != null || _maxBetaV != null) {
       const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
-      if (value == null) return false;
-      if (_minBetaV != null && value < _minBetaV) return false;
-      if (_maxBetaV != null && value > _maxBetaV) return false;
+      if (value == null) {
+        if (!_metaLoaded) { /* pass through */ } else return false;
+      } else {
+        if (_minBetaV != null && value < _minBetaV) return false;
+        if (_maxBetaV != null && value > _maxBetaV) return false;
+      }
     }
     if (_minSigmaV != null || _maxSigmaV != null) {
       const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
-      if (value == null) return false;
-      if (_minSigmaV != null && value < _minSigmaV) return false;
-      if (_maxSigmaV != null && value > _maxSigmaV) return false;
+      if (value == null) {
+        if (!_metaLoaded) { /* pass through */ } else return false;
+      } else {
+        if (_minSigmaV != null && value < _minSigmaV) return false;
+        if (_maxSigmaV != null && value > _maxSigmaV) return false;
+      }
     }
 
     return true;
@@ -10614,17 +10625,15 @@ export default function OpenDoorScanner({
     if (!needsStaticMetricMeta) return;
 
     const sourceRows = [...episodesRows, ...(activeRows as any[])];
-    const needRatingMeta =
-      !optimizerRanges?.parameters?.some((parameter) => ["corr", "beta", "sigma"].includes(String(parameter.key).toLowerCase())) &&
-      sourceRows.some((row) => {
-        const ticker = String((row as any)?.ticker ?? "").trim();
-        if (!ticker) return false;
-        return (
-          getOptimizerFallbackValue(row as PaperArbClosedDto, "corr") == null ||
-          getOptimizerFallbackValue(row as PaperArbClosedDto, "beta") == null ||
-          getOptimizerFallbackValue(row as PaperArbClosedDto, "sigma") == null
-        );
-      });
+    const needRatingMeta = sourceRows.some((row) => {
+      const ticker = String((row as any)?.ticker ?? "").trim();
+      if (!ticker) return false;
+      return (
+        getOptimizerFallbackValue(row as PaperArbClosedDto, "corr") == null ||
+        getOptimizerFallbackValue(row as PaperArbClosedDto, "beta") == null ||
+        getOptimizerFallbackValue(row as PaperArbClosedDto, "sigma") == null
+      );
+    });
 
     if (!needRatingMeta) return;
 
