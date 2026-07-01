@@ -1767,27 +1767,18 @@ export default function ArbitrageStreamView({
             />
           </label>
 
-          <label className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 cursor-pointer transition-colors",
-            automationConfig.betaMode
-              ? "border-amber-500/40 bg-amber-500/10"
-              : "border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04]"
-          )}>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400">β BETA MODE</span>
-                {automationConfig.betaMode && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">ACTIVE</span>
-                )}
+          {tab === "episodes" && (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400">β BETA MODE</span>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">LOCKED ON</span>
+                </div>
+                <div className="mt-1 text-xs font-mono text-zinc-400">SIMULATOR always simulates — no real orders sent.</div>
               </div>
-              <div className="mt-1 text-xs font-mono text-zinc-400">Simulate all trades — no real orders sent. All logic, queues and signals run normally.</div>
+              <input type="checkbox" checked disabled className="h-4 w-4 rounded border-amber-500/40 bg-black/30 accent-amber-500 cursor-not-allowed opacity-60" />
             </div>
-            <input
-              type="checkbox"
-              checked={automationConfig.betaMode ?? false}
-              onChange={(e) => onAutomationConfigChange({ betaMode: e.target.checked })}
-              className="h-4 w-4 rounded border-amber-500/40 bg-black/30 accent-amber-500"
-            />
-          </label>
+          )}
         </div>
       </div>
 

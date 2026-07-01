@@ -390,9 +390,12 @@ export default function StreamPageContainer({
     setSharedRatingRules((prev) => sameSharedRatingRules(prev, rules) ? prev : rules);
   }, []);
 
-  // SIMULATOR tab always runs in betaMode (no real orders sent).
+  // SIMULATOR = episodes tab: always betaMode (no real orders).
+  // EXECUTOR  = analytics tab: always real orders (betaMode forced off).
   const automationConfigForTab = useMemo<StreamAutomationConfig>(
-    () => tab === "episodes" ? { ...automationConfig, betaMode: true } : automationConfig,
+    () => tab === "episodes"
+      ? { ...automationConfig, betaMode: true }
+      : { ...automationConfig, betaMode: false },
     [automationConfig, tab]
   );
 

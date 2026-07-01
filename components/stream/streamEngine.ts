@@ -728,6 +728,10 @@ function mergeStreamPositionsWithActionLog(
     const existing = prevByTicker.get(ticker) ?? null;
     merged.set(ticker, existing ? {
       ...row,
+      // Never regress entryCount below what the engine already pre-incremented.
+      // The log lags behind: engine pre-increments on trigger, log only confirms on execution.
+      // If we let the log overwrite with a lower count, the maxAdds guard can be bypassed.
+      entryCount: Math.max(existing.entryCount, row.entryCount),
       spread: existing.spread ?? row.spread,
       spreadBidPct: existing.spreadBidPct ?? row.spreadBidPct,
       status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
@@ -975,7 +979,8 @@ export function syncStreamPositions(
   maxSpreadValue: unknown,
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
-  loggedOpenTickers: ReadonlySet<string> = new Set()
+  loggedOpenTickers: ReadonlySet<string> = new Set(),
+  dispatchingEntryTickers: ReadonlySet<string> = new Set()
 ): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
@@ -1112,6 +1117,20 @@ export function syncStreamPositions(
         const entryIsHold = decision?.status === "HOLD";
         const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
         if (inPrintWindow || entryIsHold || (!entryStillReady && !withinGrace)) {
+          // If a real-mode dispatch is in-flight for this ticker (between
+          // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
+          // the position alive so the latch cannot recreate it with a new qualifiedSince.
+          // A new qualifiedSince would produce a different intentId and bypass
+          // dispatchedIntentIdsRef, causing a duplicate ENTRY order to be sent.
+          if (dispatchingEntryTickers.has(existing.ticker)) {
+            next.push({
+              ...existing,
+              pendingIntent: null,
+              reason: "dispatch in-flight — entry hold cancelled, keeping to block latch",
+              updatedAt: now,
+            });
+            seen.add(existing.ticker);
+          }
           continue;
         }
 
@@ -1807,6 +1826,9 @@ export function useStreamEngine({
 }: UseStreamEngineArgs) {
   const STATUS_REFRESH_INTERVAL_MS = 2500;
   const AUTO_DISPATCH_COOLDOWN_MS = 15000;
+  // After dismissStreamActivePositions, block auto-entry for this ticker for 5 minutes.
+  // Prevents re-dispatch when signal is still ENTRY_READY after manual dismiss.
+  const DISMISS_ENTRY_BLOCK_MS = 5 * 60_000;
   const SIGNAL_SURGE_GUARD_MIN_COUNT = 24;
   const SIGNAL_SURGE_GUARD_MULTIPLIER = 3;
   const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
@@ -1836,6 +1858,16 @@ export function useStreamEngine({
   const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
   const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
   const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
+  // Tracks tickers whose initial ENTRY dispatch is currently in-flight (between
+  // dispatchedIntentIdsRef.add and the post-dispatch setStreamPositions that sets
+  // entryDispatchedAt). Checked synchronously in syncStreamPositions to prevent the
+  // engine from dropping the position (via HOLD/grace-timeout path) and allowing the
+  // latch to recreate it with a new qualifiedSince → different intentId → double entry.
+  const dispatchingEntryTickersRef = useRef<Set<string>>(new Set());
+  // Tickers manually dismissed via dismissStreamActivePositions: ticker → dismissedAt ms.
+  // Prevents automatic re-entry dispatch for DISMISS_ENTRY_BLOCK_MS (5 min) after dismiss,
+  // regardless of intentId or mode. Cleared on resetStreamAutomationState / startStreamAutomation.
+  const dismissedEntryTickersRef = useRef<Map<string, number>>(new Map());
   const pendingActionLogEntriesRef = useRef<Map<string, StreamActionLogEntry[]>>(new Map());
   const streamAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
   const primaryStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
@@ -1868,6 +1900,10 @@ export function useStreamEngine({
   const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
   const dispatchLoopActiveRef = useRef(false);
   const dispatchLoopReplayRef = useRef(false);
+  // Set by resetStreamAutomationState when called while a dispatch loop is active.
+  // The loop's finally block detects this and clears dedup refs AFTER the in-flight
+  // request completes, preventing the window where refs are clear but an order is in-flight.
+  const pendingResetDispatchRefsRef = useRef(false);
   const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
   const onFetchActiveTickersRef = useRef<typeof onFetchActiveTickers>(onFetchActiveTickers);
@@ -2065,6 +2101,8 @@ export function useStreamEngine({
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
+    dispatchingEntryTickersRef.current.clear();
+    dismissedEntryTickersRef.current.clear();
   }, [actionLogStorageKey]);
 
   useEffect(() => {
@@ -2374,13 +2412,25 @@ export function useStreamEngine({
   }, [refreshExecutionStatus]);
 
   const resetStreamAutomationState = useCallback(() => {
+    // Always safe: reset UI state. The dispatch loop uses a snapshot taken at loop start,
+    // so changing streamPositions/latches/intents mid-loop is harmless for the current batch.
     setStreamSignalLatches([]);
     setStreamPositions(buildStreamPositionsFromActionLog(streamActionLog, localDayKey()));
     setStreamOrderIntents([]);
     setStreamSentOrdersCount(0);
+    if (dispatchLoopActiveRef.current) {
+      // A dispatch is in-flight. Clearing dedup refs NOW would create a window where
+      // an in-flight order has no intentId or in-flight guard, letting the latch recreate
+      // with a new qualifiedSince → different intentId → second ENTRY order.
+      // Defer the ref-clear to the dispatch loop's finally block.
+      pendingResetDispatchRefsRef.current = true;
+      return;
+    }
     dispatchedIntentIdsRef.current.clear();
     dispatchedHedgeIntentIdsRef.current.clear();
     recentDispatchAttemptsRef.current.clear();
+    dispatchingEntryTickersRef.current.clear();
+    dismissedEntryTickersRef.current.clear();
   }, [streamActionLog]);
 
   const dismissStreamActivePositions = useCallback((tickers: string[]) => {
@@ -2401,6 +2451,11 @@ export function useStreamEngine({
         pendingActionLogEntriesRef.current.delete(intentId);
       }
     });
+    // Block auto-entry re-dispatch for DISMISS_ENTRY_BLOCK_MS after dismiss.
+    // Without this: after cooldown expiry (15s) the dispatch loop sees no action-log entry
+    // and no dispatchedIntentId for the ticker → fires a second ENTRY order.
+    const now = Date.now();
+    tickerSet.forEach((ticker) => dismissedEntryTickersRef.current.set(ticker, now));
     queueMicrotask(() => {
       void refreshRef.current?.({ refreshBridge: false }).catch(() => {});
     });
@@ -2707,7 +2762,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers, dispatchingEntryTickersRef.current);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3116,6 +3171,14 @@ export function useStreamEngine({
         const lastAttemptAt = recentDispatchAttemptsRef.current.get(dispatchKey) ?? 0;
         if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
 
+        // Block auto-entry re-dispatch for tickers recently dismissed by the user.
+        // Covers the race where: dismiss clears action log → cooldown expires → signal still
+        // ENTRY_READY → engine re-dispatches (same or new intentId depending on latch history).
+        if (!primaryAlreadyDispatched && isEntryIntent && !intent.id.startsWith("manual|")) {
+          const dismissedAt = dismissedEntryTickersRef.current.get(intent.ticker) ?? 0;
+          if (Date.now() - dismissedAt < DISMISS_ENTRY_BLOCK_MS) continue;
+        }
+
         const correspondingDecision = getStreamDecisionRow(intent.ticker);
         const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
         const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
@@ -3342,6 +3405,23 @@ export function useStreamEngine({
             streamLogStore.push({ ..._logBase, status: "SIMULATED" });
             console.log(`[BETA SIM] ${intent.ticker} ${intent.intent} — no order sent`);
           } else {
+          // Mark ticker as having an in-flight ENTRY dispatch. This is checked
+          // synchronously in syncStreamPositions to prevent the engine from dropping
+          // the position (HOLD/grace path) while the HTTP request is outstanding.
+          // The ref update is synchronous, guaranteeing visibility on the next engine
+          // tick regardless of React's async state update scheduling.
+          if (!isAdd && isEntryIntent) {
+            dispatchingEntryTickersRef.current.add(intent.ticker);
+          }
+          // Pre-mark entryDispatchedAt before the HTTP round-trip so the engine
+          // never sees entryDispatchedAt==null on the next tick and drops the position.
+          // (Belt-and-suspenders alongside dispatchingEntryTickersRef.)
+          if (!isAdd && isEntryIntent) {
+            setStreamPositions((prev) => prev.map((row) => {
+              if (row.ticker !== intent.ticker || row.entryDispatchedAt != null) return row;
+              return { ...row, entryDispatchedAt: dispatchAt };
+            }));
+          }
           try {
             await queueLegWithRetry({
               intentId: intent.id,
@@ -3355,6 +3435,15 @@ export function useStreamEngine({
             dispatchedIntentIdsRef.current.delete(intent.id);
             recentDispatchAttemptsRef.current.delete(dispatchKey);
             sentDispatchKeys.delete(dispatchKey);
+            if (!isAdd && isEntryIntent) {
+              // Remove from in-flight tracking so next cycle can retry.
+              dispatchingEntryTickersRef.current.delete(intent.ticker);
+              // Roll back the pre-marked entryDispatchedAt so the engine re-generates the intent.
+              setStreamPositions((prev) => prev.map((row) => {
+                if (row.ticker !== intent.ticker) return row;
+                return { ...row, entryDispatchedAt: null };
+              }));
+            }
             console.error(`[SEND FAIL] ${intent.ticker} ${intent.intent}`, err);
             streamLogStore.push({ ..._logBase, status: "FAILED" });
             throw err;
@@ -3384,6 +3473,10 @@ export function useStreamEngine({
               updatedAt: dispatchAt,
             };
           }));
+          // entryDispatchedAt is now permanently set in state — the in-flight guard is no longer needed.
+          if (!isAdd && isEntryIntent) {
+            dispatchingEntryTickersRef.current.delete(intent.ticker);
+          }
           // In beta mode: immediately confirm action log entries (no backend to confirm them).
           // In real mode: queue pending entries and wait for execution snapshot confirmation.
           const _dispatchActionLog = (entries: StreamActionLogEntry[]) => {
@@ -3550,6 +3643,16 @@ export function useStreamEngine({
       onError?.(error?.message ?? String(error));
     }).finally(() => {
       dispatchLoopActiveRef.current = false;
+      // If resetStreamAutomationState was called while we were in-flight, it deferred
+      // the ref-clear to here so no in-flight order loses its dedup coverage mid-flight.
+      if (pendingResetDispatchRefsRef.current) {
+        pendingResetDispatchRefsRef.current = false;
+        dispatchedIntentIdsRef.current.clear();
+        dispatchedHedgeIntentIdsRef.current.clear();
+        recentDispatchAttemptsRef.current.clear();
+        dispatchingEntryTickersRef.current.clear();
+        dismissedEntryTickersRef.current.clear();
+      }
       if (dispatchLoopReplayRef.current) {
         dispatchLoopReplayRef.current = false;
         queueMicrotask(() => setExecutionRevision((prev) => prev + 1));
