@@ -242,6 +242,8 @@ export type StreamAutomationConfig = {
   printCloseTime: string;
   noSpreadExit: boolean;
   betaMode: boolean;
+  /** Time-of-day (HH:MM, local) after which auto-dispatch of new ENTRY orders stops. */
+  startCutoffTime: string;
 };
 
 type StreamSignalLatch = {
@@ -990,6 +992,8 @@ export function syncStreamPositions(
   const nowMinutes = currentMinutesLocal();
   const nowMinuteIdx = Math.floor(now / 60_000);
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+  // After this time, no new ENTRY orders are auto-dispatched (existing positions are unaffected).
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
   const endThreshold = Math.max(0, automationConfig?.endSignalThreshold ?? 0);
   const minHoldMinutes = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
   const minHoldMs = minHoldMinutes * 60_000;
@@ -1310,6 +1314,7 @@ export function syncStreamPositions(
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
+      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
       if (openCount >= maxOpenAllowed) continue;
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
       // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.

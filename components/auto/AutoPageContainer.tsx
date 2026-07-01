@@ -36,6 +36,7 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     noSpreadExit: true,
     exitConfirmTicks: 3,
     betaMode: false,
+    startCutoffTime: "09:20",
   };
 }
 
@@ -95,6 +96,7 @@ function readInitialAutomationConfig(): StreamAutomationConfig {
       noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig().noSpreadExit,
       exitConfirmTicks: typeof parsed.exitConfirmTicks === "number" ? parsed.exitConfirmTicks : defaultAutomationConfig().exitConfirmTicks,
       betaMode: false,
+      startCutoffTime: typeof parsed.startCutoffTime === "string" && parsed.startCutoffTime ? parsed.startCutoffTime : defaultAutomationConfig().startCutoffTime,
     };
   } catch {
     return defaultAutomationConfig();

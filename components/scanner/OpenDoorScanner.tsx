@@ -9026,6 +9026,7 @@ export default function OpenDoorScanner({
     printCloseTime: streamAutomationConfigOverride?.printCloseTime ?? "09:30",
     noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
+    startCutoffTime,
   }), [
     addDelayMinutes,
     closeMode,
@@ -9039,6 +9040,7 @@ export default function OpenDoorScanner({
     pnlMode,
     sizeValue,
     sizingMode,
+    startCutoffTime,
   ]);
 
   const streamTrackedSignalsEnabled =

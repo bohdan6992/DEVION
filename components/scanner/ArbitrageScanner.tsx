@@ -9029,6 +9029,7 @@ export default function ArbitrageScanner({
     printCloseTime: streamAutomationConfigOverride?.printCloseTime ?? "09:30",
     noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
+    startCutoffTime,
   }), [
     addDelayMinutes,
     closeMode,
@@ -9042,6 +9043,7 @@ export default function ArbitrageScanner({
     pnlMode,
     sizeValue,
     sizingMode,
+    startCutoffTime,
   ]);
 
   const streamTrackedSignalsEnabled =

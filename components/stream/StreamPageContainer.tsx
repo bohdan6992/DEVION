@@ -89,6 +89,7 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     noSpreadExit: true,
     exitConfirmTicks: 3,
     betaMode: false,
+    startCutoffTime: "09:20",
   };
 }
 
@@ -115,7 +116,8 @@ function sameStreamAutomationConfig(
     left.printStartTime === right.printStartTime &&
     left.printCloseTime === right.printCloseTime &&
     left.noSpreadExit === right.noSpreadExit &&
-    left.betaMode === right.betaMode
+    left.betaMode === right.betaMode &&
+    left.startCutoffTime === right.startCutoffTime
   );
 }
 
@@ -214,6 +216,7 @@ function readInitialAutomationConfig(automationKey: string): StreamAutomationCon
       printCloseTime: typeof parsed.printCloseTime === "string" && parsed.printCloseTime ? parsed.printCloseTime : defaultAutomationConfig().printCloseTime,
       noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig().noSpreadExit,
       betaMode: typeof parsed.betaMode === "boolean" ? parsed.betaMode : false,
+      startCutoffTime: typeof parsed.startCutoffTime === "string" && parsed.startCutoffTime ? parsed.startCutoffTime : defaultAutomationConfig().startCutoffTime,
     };
   } catch {
     return defaultAutomationConfig();

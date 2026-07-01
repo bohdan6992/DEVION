@@ -1,0 +1,19 @@
+
+> dev
+> node scripts/dev-stable.mjs
+
+[dev:stable] cleared .turbo
+[dev:stable] cleared .next
+  ▲ Next.js 14.2.32
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.4s
+ ○ Compiling /stream/arbitrage ...
+ ✓ Compiled /stream/arbitrage in 3.4s (525 modules)
+ GET /stream/arbitrage 200 in 3728ms
+ GET /stream/arbitrage 200 in 8ms
+ GET /stream/arbitrage 200 in 118ms
+ GET /stream/arbitrage 200 in 14ms
+ GET /stream/arbitrage 200 in 62ms
