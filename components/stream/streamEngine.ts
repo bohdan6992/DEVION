@@ -1892,6 +1892,11 @@ export function useStreamEngine({
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const activeScannerTickersRef = useRef<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>(activeScannerTickers ?? []);
   const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
+  // Accumulates above-threshold tickers across ALL polls within the current (in-progress) minute.
+  const minuteAccumRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
+  // Frozen union set for the last FULLY completed minute — used to gate latch creation and
+  // hold-streak eviction, so a ticker that only crossed threshold between polls (not caught by
+  // a single point-in-time sample) still counts as qualified for that minute.
   const minuteSnapshotRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
   // Tracks when each ticker first qualified above startAbs — always active, independent of automation.
@@ -1905,6 +1910,9 @@ export function useStreamEngine({
   const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
   const dispatchLoopActiveRef = useRef(false);
   const dispatchLoopReplayRef = useRef(false);
+  // Tracks the last "dayKey|startCutoffTime" for which the Ctrl+Q cutoff hotkey was
+  // sent, so it fires exactly once per cutoff crossing (not once per dispatch tick).
+  const cutoffHotkeySentKeyRef = useRef<string | null>(null);
   // Set by resetStreamAutomationState when called while a dispatch loop is active.
   // The loop's finally block detects this and clears dedup refs AFTER the in-flight
   // request completes, preventing the window where refs are clear but an order is in-flight.
@@ -2645,10 +2653,18 @@ export function useStreamEngine({
     const effectiveEndAbs = (closeMode !== "Passive" && endAbs != null && endAbs > 0) ? endAbs : 0;
 
     const currentMinuteIdx = Math.floor(nowForDisplay / 60_000);
+    // Roll the accumulator over into the frozen "completed minute" snapshot once the minute
+    // index advances. minuteAccumRef unions every poll's above-threshold tickers during the
+    // minute it covers, so a ticker that crosses threshold between two polls (not caught by
+    // whichever single poll used to define the old point-in-time snapshot) is still counted —
+    // avoiding poll-timing luck deciding whether a real signal ever gets a latch at all.
+    if (minuteAccumRef.current != null && minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
+      minuteSnapshotRef.current = minuteAccumRef.current;
+      minuteAccumRef.current = null;
+    }
     // Mirror Scanner (TapeArbitrageEngine) exactly: at each minute boundary, any ticker whose
-    // sigma was below startAbs at that boundary has its hold streak broken (pending-start reset).
-    // Scanner checks the tape snapshot at HH:MM:00; we use minuteSnapshotRef which captures the
-    // same boundary moment. Evict before the main loop so evicted tickers can be re-added with
+    // sigma was below startAbs for the ENTIRE boundary minute has its hold streak broken
+    // (pending-start reset). Evict before the main loop so evicted tickers can be re-added with
     // a fresh qualifiedSince (counter=0), matching Scanner's "new pending start" semantics.
     const prevMinSnap = minuteSnapshotRef.current;
     if (prevMinSnap != null && prevMinSnap.minuteIdx === currentMinuteIdx - 1) {
@@ -2708,16 +2724,18 @@ export function useStreamEngine({
       })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
-    // Update minute snapshot at each new minute boundary.
-    // New latches are only created when a ticker appears in this snapshot, ensuring
-    // STREAM's candidate qualification starts at a minute boundary — the same granularity
-    // as tape candles in SCANNER.
-    if (minuteSnapshotRef.current?.minuteIdx !== currentMinuteIdx && filtered.length > 0) {
-      const aboveSet = new Set<string>();
-      for (const row of decisionsWithWindowGuard) {
-        if (row.status !== "HOLD") aboveSet.add(`${row.ticker}|${row.side}`);
+    // Union this poll's above-threshold tickers into the current (in-progress) minute's
+    // accumulator. New latches are gated on minuteSnapshotRef — the frozen, fully-completed
+    // previous minute — not this in-progress accumulator, so a ticker only needs to have
+    // crossed threshold at SOME point during a minute, not at the specific instant we happened
+    // to poll, to count as qualified for that minute.
+    if (filtered.length > 0) {
+      if (minuteAccumRef.current == null || minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
+        minuteAccumRef.current = { minuteIdx: currentMinuteIdx, aboveSet: new Set<string>() };
       }
-      minuteSnapshotRef.current = { minuteIdx: currentMinuteIdx, aboveSet };
+      for (const row of decisionsWithWindowGuard) {
+        if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(`${row.ticker}|${row.side}`);
+      }
     }
 
     const decisionsForAutomation = decisionsWithWindowGuard;
@@ -3140,6 +3158,41 @@ export function useStreamEngine({
     const sendQueuedIntents = async () => {
       dispatchLoopActiveRef.current = true;
       const sentDispatchKeys = new Set<string>();
+
+      // Entry cutoff hotkey: fire Ctrl+Q exactly once at the moment startCutoffTime is
+      // reached. This must be awaited before any CLOSE_ALL_PRINT (Ctrl+O) dispatch below
+      // so that when both times coincide (e.g. both default to 09:20), Ctrl+Q always
+      // reaches TradingApp first.
+      const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutesNow) {
+        const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
+        if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
+          cutoffHotkeySentKeyRef.current = cutoffKey;
+          try {
+            const response = await fetch(tradingAppBridgeUrl("/queue"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                intentId: `cutoff-hotkey|${cutoffKey}`,
+                ticker: "ALL",
+                type: "ExitActive",
+                note: `entry cutoff reached at ${automationConfig?.startCutoffTime ?? "09:20"}`,
+                source: "stream-auto",
+                hotkeyOverride: "Ctrl+Q",
+              }),
+            });
+            const json = await response.json().catch(() => ({}));
+            if (!response.ok || json?.ok === false) {
+              throw new Error(json?.error || `Failed to queue cutoff hotkey (${response.status})`);
+            }
+            console.log(`[CUTOFF] Ctrl+Q sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
+          } catch (err) {
+            // Allow retry on the next tick instead of silently giving up for the day.
+            cutoffHotkeySentKeyRef.current = null;
+            console.error("[CUTOFF] Failed to send Ctrl+Q", err);
+          }
+        }
+      }
 
       for (const intent of queued) {
         const type =

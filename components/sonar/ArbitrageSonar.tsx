@@ -4016,7 +4016,26 @@ export default function ArbitrageSonar() {
           ...createDefaultRangeModes(),
           ...(base?.rangeModes && typeof base.rangeModes === "object" ? base.rangeModes : {}),
         },
+        // Reset all toggle/country/sector filters to defaults so the same preset
+        // produces identical results regardless of prior per-device localStorage state.
+        excludeDividend: false, excludeNews: false, excludePTP: false, excludeSSR: false,
+        excludeReport: false, excludeETF: false, excludeCrap: false,
+        includeUSA: false, includeChina: false,
+        filterReport: "ALL", equityType: "",
+        countryEnabled: "off", selCountries: [],
+        exchangeEnabled: "off", selExchanges: [],
+        sectorEnabled: "off", selSectors: [],
       } as Record<string, any>;
+
+      // Apply the resets to React state as well
+      setExcludeDividend(false); setExcludeNews(false); setExcludePTP(false); setExcludeSSR(false);
+      setExcludeReport(false); setExcludeETF(false); setExcludeCrap(false);
+      setIncludeUSA(false); setIncludeChina(false);
+      setFilterReport("ALL"); setEquityType("");
+      setCountryEnabled("off"); setSelCountries(new Set());
+      setExchangeEnabled("off"); setSelExchanges(new Set());
+      setSectorEnabled("off"); setSelSectors(new Set());
+
       let applied = 0;
 
       for (const { key, sonarMode, sonarMin, sonarMax } of SHARED_FILTER_PRESET_FIELDS) {
