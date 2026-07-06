@@ -9009,7 +9009,9 @@ export default function OpenDoorScanner({
     minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
     endSignalThreshold: streamAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
     maxOpenPositions: streamAutomationConfigOverride?.maxOpenPositions ?? 10,
-    maxAdds: streamAutomationConfigOverride?.maxAdds ?? maxAdds,
+    // Unconditional — see ArbitrageScanner.tsx for why: maxAdds must always reflect the visible
+    // shared toolbar field, never streamAutomationConfigOverride's own isolated default.
+    maxAdds,
     queueDelayMinSeconds: streamAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
     queueDelayMaxSeconds: streamAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
     exitExecutionMode: closeMode === "Passive" ? "passive" : "active",

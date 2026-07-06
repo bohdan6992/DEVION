@@ -56,6 +56,12 @@ export type StreamPosition = {
   lastAboveAddCapAt: number | null;  // last time add signal exceeded ADD_MAX_SIGMA (resets add delay)
   openedAt: number;
   updatedAt: number;
+  // Running peak |deviation| seen so far during the CURRENT (in-progress) minute, used for the
+  // ADD trigger check so a threshold crossing between two polls isn't missed just because the
+  // latest poll happens to read a lower value. Reset whenever the minute rolls over.
+  addPeakMinuteIdx?: number | null;
+  addPeakAbs?: number | null;
+  addPeakSigned?: number | null;
 };
 
 export type StreamActionLogKind = "ENTRY" | "ADD" | "CLOSE";
@@ -441,8 +447,21 @@ function signalSpreadBidPct(row: ArbitrageSignal | null | undefined): number | n
 }
 
 function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
-  return (signalClass ?? "").trim().toLowerCase() === "ark";
+  const normalized = (signalClass ?? "").trim().toLowerCase();
+  return normalized === "ark" || normalized === "pre";
 }
+
+function getStrategySessionStartMinutes(signalClass: string | undefined): number | null {
+  const normalized = (signalClass ?? "").trim().toLowerCase();
+  if (normalized === "ark") return ARK_SESSION_START_MINUTES;
+  if (normalized === "pre") return 1;
+  return null;
+}
+
+// ARK session start (mirrors Scanner's TapeArbClasses.ArkFrom window). The automation toggle
+// can be switched on any time, but no new ENTRY latch/position is created before this minute —
+// it just waits, same as BLUE effectively "waits" from 00:00 (i.e. never blocks).
+const ARK_SESSION_START_MINUTES = 4 * 60; // 04:00
 
 function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
   return rawItems
@@ -802,6 +821,7 @@ function syncStreamSignalLatches(
   autoEnabled: boolean,
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
+  sessionStartMinutes: number | null = null,
   primeImmediately = false,
   latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
   primedTickers?: ReadonlySet<string>,
@@ -816,6 +836,9 @@ function syncStreamSignalLatches(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return [];
+  // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
+  // it just waits here instead of creating any latches.
+  if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return [];
 
   const prevMap = new Map(prev.map((row) => [row.ticker, row]));
   const next: StreamSignalLatch[] = [];
@@ -981,6 +1004,7 @@ export function syncStreamPositions(
   maxSpreadValue: unknown,
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
+  sessionStartMinutes: number | null = null,
   loggedOpenTickers: ReadonlySet<string> = new Set(),
   dispatchingEntryTickers: ReadonlySet<string> = new Set()
 ): StreamPosition[] {
@@ -1011,7 +1035,10 @@ export function syncStreamPositions(
           ? toNum(raw?.zapLsigma)
           : toNum(raw?.zapSsigma);
         const currentSignal = zapSigma ?? signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
-        const inPrintWindow = entryCutoffEnabled && nowMinutes >= printStartMinutes;
+        // Ctrl+O only ever fires as part of the Ctrl+Q -> 1s -> Ctrl+O cutoff pair (dispatch
+        // loop, driven by startCutoffTime) — this printStartTime-driven auto print-exit is
+        // disabled so no other path can arm/dispatch it.
+        const inPrintWindow = false;
         return {
           ...existing,
           lastSignal: currentSignal,
@@ -1060,7 +1087,10 @@ export function syncStreamPositions(
       const resolvedEntrySignal = existing.entrySignal ?? currentSigned ?? null;
       const spreadBlocked = spreadLimit != null && currentSpread != null && currentSpread > spreadLimit;
       const holdBlocked = minHoldMs > 0 && now - existing.openedAt < minHoldMs;
-      const inPrintWindow = entryCutoffEnabled && nowMinutes >= printStartMinutes;
+      // Ctrl+O only ever fires as part of the Ctrl+Q -> 1s -> Ctrl+O cutoff pair (dispatch
+      // loop, driven by startCutoffTime) — this printStartTime-driven auto print-exit is
+      // disabled so no other path can arm/dispatch it.
+      const inPrintWindow = false;
       const activeExitMode = (automationConfig.exitExecutionMode ?? "active") === "active";
       const belowEndThreshold = currentAbs != null && currentAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
@@ -1079,6 +1109,13 @@ export function syncStreamPositions(
       let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
+      // Running peak |deviation| for the CURRENT (in-progress) minute — reset on minute rollover.
+      // Used by the ADD trigger check below so a threshold crossing between two polls isn't
+      // missed just because the specific poll we're on right now reads a lower value.
+      let addPeakMinuteIdx = existing.addPeakMinuteIdx ?? null;
+      let addPeakAbs = addPeakMinuteIdx === nowMinuteIdx ? (existing.addPeakAbs ?? null) : null;
+      let addPeakSigned = addPeakMinuteIdx === nowMinuteIdx ? (existing.addPeakSigned ?? null) : null;
+      addPeakMinuteIdx = nowMinuteIdx;
       const decision = decisionMap.get(existing.ticker);
       const entryStillReady = decision?.status === "ENTRY_READY";
       const hasUndispatchedEntry =
@@ -1225,27 +1262,48 @@ export function syncStreamPositions(
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
+
+          // Trigger base is always the FIRST entry signal (never lastScaleSignal).
+          const entryBase = resolvedEntrySignal;
+
+          // Update this minute's running peak (same direction as entry only — an opposite-
+          // direction excursion must not count toward the add trigger or the cap).
+          if (
+            filteredAbs != null &&
+            filteredSigned != null &&
+            entryBase != null &&
+            entryBase !== 0 &&
+            Math.sign(filteredSigned) === Math.sign(entryBase) &&
+            (addPeakAbs == null || filteredAbs > addPeakAbs)
+          ) {
+            addPeakAbs = filteredAbs;
+            addPeakSigned = filteredSigned;
+          }
+          // Effective value = the stronger of "right now" and "peak seen so far this minute" —
+          // so a threshold crossing between two polls isn't lost just because the latest poll
+          // happens to read a lower value (mirrors SCANNER's mid-minute Hi-sigma sampling).
+          const effectiveAbs = addPeakAbs != null && (filteredAbs == null || addPeakAbs > filteredAbs) ? addPeakAbs : filteredAbs;
+          const effectiveSigned = effectiveAbs === addPeakAbs && addPeakSigned != null ? addPeakSigned : filteredSigned;
+
           // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
           // and restart the add delay timer (same hold protection as entry window).
           const ADD_MAX_SIGMA = 4.0;
-          if (filteredAbs != null && filteredAbs > ADD_MAX_SIGMA) {
+          if (effectiveAbs != null && effectiveAbs > ADD_MAX_SIGMA) {
             lastAboveAddCapAt = now;
             if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
+            addPeakAbs = null;
+            addPeakSigned = null;
           }
-          // Trigger base is always the FIRST entry signal (never lastScaleSignal).
-          // Each add threshold: |entrySignal| + addNumber × dilutionStep.
-          // Example: entry=1.2σ, step=0.3 → add#1 at 1.5σ, add#2 at 1.8σ, add#3 at 2.1σ.
-          const entryBase = resolvedEntrySignal;
           if (entryBase == null || entryBase === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           } else {
           const addNumber = entryCount; // entryCount=1 before first add, =2 before second, etc.
           const trigger = Math.abs(entryBase) + Math.max(0, automationConfig.dilutionStep ?? 0) * addNumber;
           const sameSign =
-            filteredSigned != null &&
-            Number.isFinite(filteredSigned) &&
-            filteredSigned !== 0 &&
-            Math.sign(filteredSigned) === Math.sign(entryBase);
+            effectiveSigned != null &&
+            Number.isFinite(effectiveSigned) &&
+            effectiveSigned !== 0 &&
+            Math.sign(effectiveSigned) === Math.sign(entryBase);
           const addDelayMs = Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000;
           // Add delay restarts from the last cap breach — same protection as entry minHold.
           // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
@@ -1260,12 +1318,15 @@ export function syncStreamPositions(
           const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
             ? false
             : addDelayMs === 0 || now - lastDispatchOrBreach >= addDelayMs;
-          const belowAddCap = filteredAbs == null || filteredAbs <= ADD_MAX_SIGMA;
-          if (filteredAbs != null && filteredAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
+          const belowAddCap = effectiveAbs == null || effectiveAbs <= ADD_MAX_SIGMA;
+          if (effectiveAbs != null && effectiveAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
-            lastScaleSignal = filteredSigned;
+            lastScaleSignal = effectiveSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
+            // Consume the peak once acted on, so it doesn't immediately re-trigger next tick.
+            addPeakAbs = null;
+            addPeakSigned = null;
           } else {
             // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
             // next threshold yet). But if signal reversed sign, clear the intent — the
@@ -1301,6 +1362,9 @@ export function syncStreamPositions(
         entryDispatchedAt,
         lastConfirmedActiveAt,
         lastAboveAddCapAt,
+        addPeakMinuteIdx,
+        addPeakAbs,
+        addPeakSigned,
         updatedAt: now,
       });
       seen.add(existing.ticker);
@@ -1315,6 +1379,9 @@ export function syncStreamPositions(
       if (seen.has(latch.ticker)) continue;
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
       if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
+      // Session hasn't started yet (e.g. ARK before 04:00) — same wait-then-work behavior as
+      // the latch gate above.
+      if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) continue;
       if (openCount >= maxOpenAllowed) continue;
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
       // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
@@ -1455,37 +1522,15 @@ export function buildStreamOrderIntents(
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
-  const printWindowEnabled = entryCutoffEnabled && automationConfig?.exitMode === "print";
   const intents: StreamOrderIntent[] = [];
   const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
 
   if (automationConfig?.strategyModeEnabled) {
-    if (entryCutoffEnabled && nowMinutes >= printStartMinutes) {
-      const representativePosition = positions.find((position) =>
-        position.status !== "CLOSED" &&
-        position.status !== "PENDING_ENTRY"
-      ) ?? null;
-      if (!representativePosition) return [];
-      return [{
-        id: intentId(["close-all-print", "strategy", "armed"]),
-        ticker: representativePosition.ticker,
-        benchmark: "PRINT",
-        side: representativePosition.side,
-        intent: "CLOSE_ALL_PRINT",
-        sequence: 0,
-        priceRef: "PRINT",
-        status: "QUEUED",
-        reason: `print exit window active | global Ctrl+O at ${automationConfig.printStartTime}`,
-        createdAt: now,
-      }];
-    }
-
+    // Ctrl+O is only ever sent as part of the Ctrl+Q → 1s → Ctrl+O cutoff pair, driven by
+    // startCutoffTime (see the dispatch loop). No other automatic path fires it here — entries
+    // are already stopped at cutoff via syncStreamPositions/syncStreamSignalLatches.
     for (const position of positions) {
       if (!position.pendingIntent) continue;
-      const isEntryIntent =
-        position.pendingIntent === "ENTER_LONG_AGGRESSIVE" ||
-        position.pendingIntent === "ENTER_SHORT_AGGRESSIVE";
-      if (entryCutoffEnabled && nowMinutes >= printStartMinutes && isEntryIntent) continue;
       intents.push({
         id: intentId([position.ticker, "strategy", position.openedAt, position.pendingIntent, position.entryCount, nowMinutes >= printStartMinutes ? "print" : "live"]),
         ticker: position.ticker,
@@ -1566,22 +1611,6 @@ export function buildStreamOrderIntents(
       continue;
     }
 
-    if (printWindowEnabled && nowMinutes >= printStartMinutes) {
-      intents.push({
-        id: intentId([position.ticker, "print-exit", position.side]),
-        ticker: position.ticker,
-        benchmark: position.benchmark,
-        side: position.side,
-        intent: position.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT",
-        sequence: position.entryCount,
-        priceRef: "PRINT",
-        status: "QUEUED",
-        reason: "print exit window active",
-        createdAt: now,
-      });
-      continue;
-    }
-
     if (normalizeExitTriggered) {
       const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 60_000;
       intents.push({
@@ -1601,21 +1630,6 @@ export function buildStreamOrderIntents(
     }
   }
 
-  if (printWindowEnabled && positions.length > 0 && nowMinutes >= printStartMinutes) {
-    intents.push({
-      id: intentId(["close-all-print", nowMinutes >= printStartMinutes ? "armed" : "idle"]),
-      ticker: "ALL",
-      benchmark: "PRINT",
-      side: "Long",
-      intent: "CLOSE_ALL_PRINT",
-      sequence: 0,
-      priceRef: "PRINT",
-      status: "QUEUED",
-      reason: `close all remaining positions at ${automationConfig.printCloseTime}`,
-      createdAt: now,
-    });
-  }
-
   return intents.sort((a, b) => a.ticker.localeCompare(b.ticker) || a.intent.localeCompare(b.intent));
 }
 
@@ -1625,6 +1639,7 @@ function buildFallbackPendingEntryPositions(
   filteredSignals: ArbitrageSignal[],
   automationConfig: StreamAutomationConfig | undefined,
   entryCutoffEnabled: boolean,
+  sessionStartMinutes: number | null,
 ): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
 
@@ -1632,6 +1647,7 @@ function buildFallbackPendingEntryPositions(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return existingPositions;
+  if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return existingPositions;
 
   // Respect the same entryCutoffEnabled guard used everywhere else:
   // global band (entryCutoffEnabled=false) has no position cap.
@@ -1839,6 +1855,7 @@ export function useStreamEngine({
   const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
+  const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass);
   const actionLogStorageKey = streamActionLogStorageKey(signalClass);
   const [currentDayKey, setCurrentDayKey] = useState<string>(() => localDayKey());
   useEffect(() => {
@@ -2746,6 +2763,7 @@ export function useStreamEngine({
       autoEnabledNow,
       automationConfig,
       entryCutoffEnabled,
+      strategySessionStartMinutes,
       wantsPrime,
       latchQualifiedSinceHistoryRef.current,
       wantsPrime ? primedFromScannerRef.current : undefined,
@@ -2785,7 +2803,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, openLoggedTickers, dispatchingEntryTickersRef.current);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -2816,6 +2834,7 @@ export function useStreamEngine({
         filtered,
         automationConfig,
         entryCutoffEnabled,
+        strategySessionStartMinutes,
       );
       intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
     }
@@ -3159,22 +3178,33 @@ export function useStreamEngine({
       dispatchLoopActiveRef.current = true;
       const sentDispatchKeys = new Set<string>();
 
-      // Entry cutoff hotkey: fire Ctrl+Q exactly once at the moment startCutoffTime is
-      // reached. This must be awaited before any CLOSE_ALL_PRINT (Ctrl+O) dispatch below
-      // so that when both times coincide (e.g. both default to 09:20), Ctrl+Q always
-      // reaches TradingApp first.
+      // Entry cutoff pair: at the moment startCutoffTime is reached, fire Ctrl+Q (stop new
+      // entries) then, 1s later, Ctrl+O (print-close everything open) — exactly once per
+      // cutoff crossing. This runs before the separate printStartTime-driven CLOSE_ALL_PRINT
+      // dispatch below, so if both times coincide Ctrl+Q still always reaches TradingApp first.
       const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
       if (entryCutoffEnabled && nowMinutes >= startCutoffMinutesNow) {
         const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
+            // Mirror CLOSE_ALL_PRINT (Ctrl+O): the executor always injects intent.Ticker into
+            // TradingApp's ticker field before sending the hotkey (TradingAppHotkeyExecutor.cs),
+            // with no special case for a sentinel like "ALL". Ctrl+Q is a global hotkey — which
+            // ticker gets injected doesn't matter for its effect — but it must be a real, valid
+            // symbol or the injection step itself can fail/misbehave. Reuse an open position's
+            // ticker the same way CLOSE_ALL_PRINT does; fall back to a always-valid ETF symbol
+            // if nothing is open yet.
+            const cutoffTicker =
+              positionsSnapshot.find((p) => p.status !== "CLOSED" && p.status !== "PENDING_ENTRY")?.ticker ??
+              positionsSnapshot[0]?.ticker ??
+              "SPY";
             const response = await fetch(tradingAppBridgeUrl("/queue"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 intentId: `cutoff-hotkey|${cutoffKey}`,
-                ticker: "ALL",
+                ticker: cutoffTicker,
                 type: "ExitActive",
                 note: `entry cutoff reached at ${automationConfig?.startCutoffTime ?? "09:20"}`,
                 source: "stream-auto",
@@ -3186,10 +3216,57 @@ export function useStreamEngine({
               throw new Error(json?.error || `Failed to queue cutoff hotkey (${response.status})`);
             }
             console.log(`[CUTOFF] Ctrl+Q sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
+
+            // Ctrl+O follows Ctrl+Q by exactly 1s, same cutoff moment: stop new entries (Ctrl+Q)
+            // then immediately print-close everything open (Ctrl+O), as one sequential pair.
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const responseO = await fetch(tradingAppBridgeUrl("/queue"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                intentId: `cutoff-hotkey-o|${cutoffKey}`,
+                ticker: cutoffTicker,
+                type: "ExitPrint",
+                note: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"}`,
+                source: "stream-auto",
+                hotkeyOverride: "Ctrl+O",
+              }),
+            });
+            const jsonO = await responseO.json().catch(() => ({}));
+            if (!responseO.ok || jsonO?.ok === false) {
+              throw new Error(jsonO?.error || `Failed to queue cutoff Ctrl+O (${responseO.status})`);
+            }
+            console.log(`[CUTOFF] Ctrl+O sent 1s after Ctrl+Q at ${automationConfig?.startCutoffTime ?? "09:20"}`);
+
+            // Ctrl+O is one global hotkey — TradingApp closes every open position at once, not
+            // just cutoffTicker. Mirror that in STREAM's own action log/state (same bookkeeping
+            // the removed CLOSE_ALL_PRINT intent path used to do), so positions that never
+            // self-normalized (ACTIVE mode) or never had another exit path (PASSIVE mode) show
+            // as closed here too, not just in TradingApp.
+            if (openLoggedPositions.length > 0) {
+              const dispatchAt = Date.now();
+              const closeEntries: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
+                id: `${row.ticker}|CLOSE|${dispatchAt}`,
+                dayKey: localDayKey(),
+                ticker: row.ticker,
+                benchmark: row.benchmark,
+                side: row.side,
+                kind: "CLOSE" as const,
+                deviation: row.lastSignal ?? row.entrySignal,
+                at: dispatchAt,
+                intent: "CLOSE_ALL_PRINT" as const,
+                reason: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"}`,
+              }));
+              if (automationConfig?.betaMode === true) {
+                appendStreamActionLogEntries(closeEntries);
+              } else {
+                queuePendingActionLogEntries(`cutoff-hotkey-o|${cutoffKey}`, closeEntries);
+              }
+            }
           } catch (err) {
             // Allow retry on the next tick instead of silently giving up for the day.
             cutoffHotkeySentKeyRef.current = null;
-            console.error("[CUTOFF] Failed to send Ctrl+Q", err);
+            console.error("[CUTOFF] Failed to send Ctrl+Q/Ctrl+O pair", err);
           }
         }
       }

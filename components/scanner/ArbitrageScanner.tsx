@@ -1031,9 +1031,11 @@ function scannerRealtimePnlUsd(args: {
   closeMode?: PaperArbCloseMode;
   gapPct?: number | null;
   benchGapPct?: number | null;
+  startClass?: string | null;
 }): { rawPnlUsd: number | null; benchPnlUsd: number | null; hedgedPnlUsd: number | null; totalPnlUsd: number | null } {
-  const { side, beta, trancheAmountUsd, entrySnaps, start, last, pnlMode, priceMode, closeMode, gapPct, benchGapPct } = args;
+  const { side, beta, trancheAmountUsd, entrySnaps, start, last, pnlMode, priceMode, closeMode, gapPct, benchGapPct, startClass } = args;
   const isPassive = closeMode === "Passive";
+  const useGapExit = isPassive && (startClass === "PRE" || startClass === "ARK");
   const null4 = { rawPnlUsd: null, benchPnlUsd: null, hedgedPnlUsd: null, totalPnlUsd: null };
   if (!Number.isFinite(trancheAmountUsd ?? NaN) || Number(trancheAmountUsd) <= 0) return null4;
   if (!last) return null4;
@@ -1050,13 +1052,14 @@ function scannerRealtimePnlUsd(args: {
   let rawSum = 0, rawAny = false;
   let benchSum = 0, benchAny = false;
 
-  // Exit: Passive → GapPct/benchGapPct. BidAsk+Active → bid/ask. Print+Active → lstPrcLstClsPct.
-  const exitStockPct = isPassive
+  // Exit: PRE/ARK Passive → GapPct/benchGapPct. Other sessions stay on live mark-to-market
+  // until the passive window actually ends. BidAsk+Active → bid/ask. Print+Active → lstPrcLstClsPct.
+  const exitStockPct = useGapExit
     ? (gapPct ?? null)
     : (priceMode === "BidAsk"
       ? (normalizedSide === "Long" ? (last.bidPct ?? last.lstPrcLstClsPct) : (last.askPct ?? last.lstPrcLstClsPct))
       : last.lstPrcLstClsPct);
-  const exitBenchPct = isPassive
+  const exitBenchPct = useGapExit
     ? (benchGapPct ?? null)
     : (priceMode === "BidAsk"
       ? (hedgeSide === "Long" ? (last.benchBidPct ?? last.benchLstPrcLstClsPct) : (last.benchAskPct ?? last.benchLstPrcLstClsPct))
@@ -9012,7 +9015,11 @@ export default function ArbitrageScanner({
     minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
     endSignalThreshold: streamAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
     maxOpenPositions: streamAutomationConfigOverride?.maxOpenPositions ?? 10,
-    maxAdds: streamAutomationConfigOverride?.maxAdds ?? maxAdds,
+    // Unconditional, like sizeValue/dilutionStep/minHoldMinutes below: maxAdds must always come
+    // from the shared toolbar state (the visible MAXADD field), never from
+    // streamAutomationConfigOverride's own isolated default — otherwise Stream silently enforces
+    // a different limit than what the user sees and sets.
+    maxAdds,
     queueDelayMinSeconds: streamAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
     queueDelayMaxSeconds: streamAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
     exitExecutionMode: closeMode === "Passive" ? "passive" : "active",
@@ -10743,6 +10750,7 @@ export default function ArbitrageScanner({
         closeMode: rowCloseMode,
         gapPct: rowGapPct,
         benchGapPct: row.benchGapPct ?? (row as any).BenchGapPct ?? null,
+        startClass: row.startClass ?? null,
       });
       const serverRawPnl = row.rawPnlUsd ?? (row as any).RawPnlUsd ?? null;
       const serverBenchPnl = row.benchPnlUsd ?? (row as any).BenchPnlUsd ?? null;

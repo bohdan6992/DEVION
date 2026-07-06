@@ -994,7 +994,7 @@ export function buildSignalsUrl(args: {
     : Number.isFinite(minRate) ? Math.max(0, minRate) : BIN_SERVER_MIN_RATE;
   const safeMinTotal = useBinRatingFilter
     ? BIN_SERVER_MIN_TOTAL
-    : Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : BIN_SERVER_MIN_TOTAL;
+    : Number.isFinite(minTotal) ? Math.max(0, Math.trunc(minTotal)) : BIN_SERVER_MIN_TOTAL;
 
   u.searchParams.set("minRate", String(safeMinRate));
   u.searchParams.set("minTotal", String(safeMinTotal));
