@@ -1731,7 +1731,6 @@ export default function ArbitrageStreamView({
               className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
             >
               <option value="normalize">Normalize</option>
-              <option value="print">Print</option>
             </select>
           </div>
         </div>

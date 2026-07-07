@@ -835,7 +835,9 @@ function syncStreamSignalLatches(
   const nowMinuteIdx = Math.floor(now / 60_000);
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return [];
+  if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) return [];
   // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
   // it just waits here instead of creating any latches.
   if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return [];
@@ -1157,7 +1159,8 @@ export function syncStreamPositions(
         // entries don't fire at deviations far outside the configured startAbsMax cap.
         const entryIsHold = decision?.status === "HOLD";
         const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
-        if (inPrintWindow || entryIsHold || (!entryStillReady && !withinGrace)) {
+        const cutoffReached = entryCutoffEnabled && nowMinutes >= startCutoffMinutes;
+        if (inPrintWindow || entryIsHold || cutoffReached || (!entryStillReady && !withinGrace)) {
           // If a real-mode dispatch is in-flight for this ticker (between
           // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
           // the position alive so the latch cannot recreate it with a new qualifiedSince.
@@ -1253,6 +1256,7 @@ export function syncStreamPositions(
           entryDispatchedAt != null &&
           atOrAboveEndThreshold &&
           !inPrintWindow &&
+          !(entryCutoffEnabled && nowMinutes >= startCutoffMinutes) &&
           automationConfig.scaleMode === "scale_in" &&
           entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0)
         ) {
@@ -1431,7 +1435,8 @@ export function syncStreamPositions(
   }
 
   const printCloseMinutes = parseTimeToMinutes(automationConfig?.printCloseTime, 9 * 60 + 30);
-  const printWindowEnabled = entryCutoffEnabled && automationConfig?.exitMode === "print";
+  // Exit Mode "print" is retired — CUTOFF (Ctrl+Q -> 1s -> Ctrl+O) is the only session-end path.
+  const printWindowEnabled = false;
   const next: StreamPosition[] = [];
   const seen = new Set<string>();
 
@@ -1522,6 +1527,7 @@ export function buildStreamOrderIntents(
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
   const intents: StreamOrderIntent[] = [];
   const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
 
@@ -1560,6 +1566,7 @@ export function buildStreamOrderIntents(
   for (const row of decisions) {
     if (row.status === "ENTRY_READY") {
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
+      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
       intents.push({
         id: intentId([row.ticker, "enter", row.side]),
         ticker: row.ticker,
@@ -1646,7 +1653,9 @@ function buildFallbackPendingEntryPositions(
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
   if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return existingPositions;
+  if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) return existingPositions;
   if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return existingPositions;
 
   // Respect the same entryCutoffEnabled guard used everywhere else:
@@ -3146,17 +3155,10 @@ export function useStreamEngine({
     if (streamExecutionSnapshotRef.current?.panicOff) return;
 
     const nowMinutes = currentMinutesLocal();
-    const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
-    const arkPrintLockActive =
-      Boolean(automationConfig?.strategyModeEnabled) &&
-      entryCutoffEnabled &&
-      nowMinutes >= printStartMinutes;
 
-    const queued = streamOrderIntents.filter((intent) => {
-      if (intent.status !== "QUEUED") return false;
-      if (!arkPrintLockActive) return true;
-      return intent.intent === "CLOSE_ALL_PRINT";
-    });
+    // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
+    // intents are no longer gated by printStartTime here — only by CUTOFF, handled below.
+    const queued = streamOrderIntents.filter((intent) => intent.status === "QUEUED");
     if (!queued.length) return;
 
     // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and

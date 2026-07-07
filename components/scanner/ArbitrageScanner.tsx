@@ -1274,7 +1274,7 @@ function downloadEpisodesCsv(
       addsCount,
       context != null ? context.dilutionStep.toFixed(3) : "",
       context != null ? String(context.maxAdds) : "",
-      r.minHoldCandles ?? "",
+      context != null ? String(context.minHoldCandles) : (r.minHoldCandles != null ? String(r.minHoldCandles) : ""),
       cell(filtersOk),
       cell(r.closeMode ?? ""),   // reason
       cell(r.closeMode ?? ""),   // closeMode (fixes column alignment — was missing)
@@ -7262,7 +7262,7 @@ function ScannerAnalyticsLog({
                   <td className="text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
                   <td className="text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
                   <td className="text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
-                  <td className="text-right tabular-nums text-zinc-500">{r.minHoldCandles ?? "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-500">{context?.minHoldCandles ?? r.minHoldCandles ?? "—"}</td>
                   <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
                   <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
                   <td className="text-emerald-200 max-w-[220px] truncate" title={execCtx}>{execCtx}</td>
@@ -7398,6 +7398,14 @@ export default function ArbitrageScanner({
   const [maxAdds, setMaxAdds] = useState<number>(3);
   const [addDelayMinutes, setAddDelayMinutes] = useState<number>(0);
   const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
+  const normalizedMinHoldCandles = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
+  // STREAM only promotes fresh candidates after a completed-minute snapshot, while
+  // SCANNER tape can activate on the start candle itself. Shift scanner requests by
+  // one minute once hold is enabled so the shared MINHOLD control stays closer
+  // between the two data sources without changing live stream behavior.
+  const effectiveScannerMinHoldCandles = normalizedMinHoldCandles > 0
+    ? normalizedMinHoldCandles - 1
+    : 0;
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -9029,7 +9037,7 @@ export default function ArbitrageScanner({
     sizeValue,
     dilutionStep,
     addDelayMinutes,
-    minHoldMinutes: minHoldCandles,
+    minHoldMinutes: normalizedMinHoldCandles,
     exitConfirmTicks: streamAutomationConfigOverride?.exitConfirmTicks ?? exitConfirmTicks,
     exitMode: streamAutomationConfigOverride?.exitMode ?? "normalize",
     printStartTime: streamAutomationConfigOverride?.printStartTime ?? "09:20",
@@ -9261,7 +9269,6 @@ export default function ArbitrageScanner({
 
   // ========= Build query params for GET /active & /episodes
   function buildGetParams(d: string) {
-    const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const reqTickers = requestScopedTickers;
 
     return {
@@ -9273,7 +9280,7 @@ export default function ArbitrageScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: mh,
+      minHoldCandles: effectiveScannerMinHoldCandles,
       priceMode,
       pnlMode,
       sizingMode,
@@ -9416,7 +9423,6 @@ export default function ArbitrageScanner({
   }
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
-    const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const startAbsMaxNum = optNumOrNull(startAbsMax);
     const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
     const reqTickers = requestScopedTickers;
@@ -9439,7 +9445,7 @@ export default function ArbitrageScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: mh,
+      minHoldCandles: effectiveScannerMinHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       priceMode,
       pnlMode,
@@ -10715,7 +10721,7 @@ export default function ArbitrageScanner({
       case "closeMode":
         return String(r.closeMode ?? closeMode);
       case "minHold":
-        return r.minHoldCandles ?? minHoldCandles;
+        return normalizedMinHoldCandles;
     }
   };
 
@@ -10778,7 +10784,7 @@ export default function ArbitrageScanner({
         endMetric: row.last?.metric ?? null,
         endMetricAbs: lastAbs,
         closeMode: row.closeMode ?? closeMode,
-        minHoldCandles: row.minHoldCandles ?? minHoldCandles,
+        minHoldCandles: normalizedMinHoldCandles,
         tierBp: row.tierBp ?? (row as any).TierBp ?? null,
         beta: row.beta ?? (row as any).Beta ?? null,
         positionNotionalUsd: row.positionNotionalUsd ?? (row as any).PositionNotionalUsd ?? null,
@@ -10792,7 +10798,7 @@ export default function ArbitrageScanner({
         yCls: row.yCls ?? (row as any).YCls ?? null,
       };
     });
-  }, [filteredActive, dateNy, closeMode, minHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
+  }, [filteredActive, dateNy, closeMode, normalizedMinHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
 
   const activeRealtimeSorted = useMemo(() => {
     const mul = dirMul(analyticsSort.dir);
@@ -13085,7 +13091,10 @@ export default function ArbitrageScanner({
             </div>
 
 
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+            <div
+              className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20"
+              title={`STREAM hold=${normalizedMinHoldCandles}m | SCANNER hold=${effectiveScannerMinHoldCandles}m (parity compensation)`}
+            >
               <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
               <div className="group relative h-8 w-14 overflow-hidden rounded-md">
                 <input
