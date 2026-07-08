@@ -7399,13 +7399,6 @@ export default function ArbitrageScanner({
   const [addDelayMinutes, setAddDelayMinutes] = useState<number>(0);
   const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
   const normalizedMinHoldCandles = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
-  // STREAM only promotes fresh candidates after a completed-minute snapshot, while
-  // SCANNER tape can activate on the start candle itself. Shift scanner requests by
-  // one minute once hold is enabled so the shared MINHOLD control stays closer
-  // between the two data sources without changing live stream behavior.
-  const effectiveScannerMinHoldCandles = normalizedMinHoldCandles > 0
-    ? normalizedMinHoldCandles - 1
-    : 0;
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -9280,7 +9273,7 @@ export default function ArbitrageScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: effectiveScannerMinHoldCandles,
+      minHoldCandles: normalizedMinHoldCandles,
       priceMode,
       pnlMode,
       sizingMode,
@@ -9445,7 +9438,7 @@ export default function ArbitrageScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: effectiveScannerMinHoldCandles,
+      minHoldCandles: normalizedMinHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       priceMode,
       pnlMode,
@@ -13091,10 +13084,7 @@ export default function ArbitrageScanner({
             </div>
 
 
-            <div
-              className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20"
-              title={`STREAM hold=${normalizedMinHoldCandles}m | SCANNER hold=${effectiveScannerMinHoldCandles}m (parity compensation)`}
-            >
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
               <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
               <div className="group relative h-8 w-14 overflow-hidden rounded-md">
                 <input

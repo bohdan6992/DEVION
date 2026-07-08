@@ -867,12 +867,25 @@ function syncStreamSignalLatches(
     }
     // qualifiedSince is aligned to minute boundaries so hold check (minute index
     // arithmetic) gives integer-exact results matching tape candle counting.
+    //
+    // Scanner semantics:
+    // - minHold=0 => the first signal minute is the episode start minute.
+    // Stream semantics we want here:
+    // - if a signal first appears during minute T, it may dispatch only at the END of T.
+    // So a brand-new live latch should be anchored to the completed boundary of T,
+    // i.e. the previous minute boundary from "now". Primed tickers, however, already
+    // passed Scanner hold before Stream attached, so backdate them enough to qualify
+    // immediately under the completed-minute rule.
     const minuteAlignedNow = nowMinuteIdx * 60_000;
+    const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
+    const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
-      qualifiedSince: existing?.qualifiedSince ?? historic?.qualifiedSince ?? (isPrimed ? minuteAlignedNow - minHoldMs : minuteAlignedNow),
+      qualifiedSince: existing?.qualifiedSince
+        ?? historic?.qualifiedSince
+        ?? (isPrimed ? primedQualifiedSince : completedSignalMinuteBoundary),
       lastSeenAt: now,
     });
   }
@@ -882,6 +895,18 @@ function syncStreamSignalLatches(
 
 export function parseStreamSpreadLimit(value: unknown): number | null {
   return toNum(value);
+}
+
+function hasCompletedStreamHoldWindow(
+  qualifiedSinceMs: number,
+  nowMinuteIdx: number,
+  minHoldMinutes: number
+): boolean {
+  const qualifiedMinuteIdx = Math.floor(qualifiedSinceMs / 60_000);
+  // STREAM should only dispatch after the qualifying minute fully closes:
+  // minHold=0 => wait until the next minute boundary,
+  // minHold=1 => wait one additional full minute after that boundary, etc.
+  return nowMinuteIdx - qualifiedMinuteIdx > minHoldMinutes;
 }
 
 export function deriveStreamSignalClass(ruleBand: "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
@@ -1389,7 +1414,7 @@ export function syncStreamPositions(
       if (openCount >= maxOpenAllowed) continue;
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
       // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
-      if (nowMinuteIdx - Math.floor(latch.qualifiedSince / 60_000) < minHoldMinutes) continue;
+      if (!hasCompletedStreamHoldWindow(latch.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
       // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
       // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
       const latchDecision = decisionMap.get(latch.ticker);
@@ -2827,7 +2852,9 @@ export function useStreamEngine({
     const now2MinuteIdx = Math.floor(now2 / 60_000);
     const entryReady = decisionsForAutomation.filter(d => d.status === "ENTRY_READY").length;
     const latched = nextLatches.length;
-    const qualifiedLatches = nextLatches.filter((l) => now2MinuteIdx - Math.floor(l.qualifiedSince / 60_000) >= minHoldMinutesForDisplay);
+    const qualifiedLatches = nextLatches.filter((l) =>
+      hasCompletedStreamHoldWindow(l.qualifiedSince, now2MinuteIdx, minHoldMinutesForDisplay)
+    );
     let nextPositions = nextPositionsBase;
     let intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
 
