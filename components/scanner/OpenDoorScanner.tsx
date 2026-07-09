@@ -7385,7 +7385,9 @@ export default function OpenDoorScanner({
   const [startAbsMax, setStartAbsMax] = useState<string>("");
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
-  const [startCutoffTime, setStartCutoffTime] = useState<string>("09:20");
+  const [startCutoffTime, setStartCutoffTime] = useState<string>(
+    () => streamAutomationConfigOverride?.startCutoffTime ?? "09:20"
+  );
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
   const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
@@ -8052,7 +8054,9 @@ export default function OpenDoorScanner({
         if (typeof s.startCutoffMinuteIdx === "number" && s.startCutoffMinuteIdx >= 0) {
           const h = Math.floor(s.startCutoffMinuteIdx / 60);
           const m = s.startCutoffMinuteIdx % 60;
-          setStartCutoffTime(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+          const restoredCutoffTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          setStartCutoffTime(restoredCutoffTime);
+          onStreamAutomationConfigChange?.({ startCutoffTime: restoredCutoffTime });
         }
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
@@ -8253,6 +8257,7 @@ export default function OpenDoorScanner({
       startAbsMax,
       endAbs,
       minHoldCandles,
+      startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       pnlMode,
       priceMode,
       sizingMode,
@@ -8411,7 +8416,7 @@ export default function OpenDoorScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, priceMode, pnlMode,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
@@ -13234,7 +13239,9 @@ export default function OpenDoorScanner({
                   onChange={(e) => {
                     const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
                     const m = startCutoffTime.split(":")[1] ?? "00";
-                    setStartCutoffTime(`${String(h).padStart(2, "0")}:${m}`);
+                    const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
+                    setStartCutoffTime(nextCutoffTime);
+                    onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                   }}
                   className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
                 />
@@ -13245,7 +13252,9 @@ export default function OpenDoorScanner({
                     onClick={() => {
                       const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") + 1));
                       const m = startCutoffTime.split(":")[1] ?? "00";
-                      setStartCutoffTime(`${String(h).padStart(2, "0")}:${m}`);
+                      const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
+                      setStartCutoffTime(nextCutoffTime);
+                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                     }}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Increase cutoff hour"
@@ -13256,7 +13265,9 @@ export default function OpenDoorScanner({
                     onClick={() => {
                       const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") - 1));
                       const m = startCutoffTime.split(":")[1] ?? "00";
-                      setStartCutoffTime(`${String(h).padStart(2, "0")}:${m}`);
+                      const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
+                      setStartCutoffTime(nextCutoffTime);
+                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                     }}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Decrease cutoff hour"
@@ -13276,7 +13287,9 @@ export default function OpenDoorScanner({
                   onChange={(e) => {
                     const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
                     const h = startCutoffTime.split(":")[0] ?? "09";
-                    setStartCutoffTime(`${h}:${String(m).padStart(2, "0")}`);
+                    const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
+                    setStartCutoffTime(nextCutoffTime);
+                    onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                   }}
                   className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
                 />
@@ -13287,7 +13300,9 @@ export default function OpenDoorScanner({
                     onClick={() => {
                       const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") + 5));
                       const h = startCutoffTime.split(":")[0] ?? "09";
-                      setStartCutoffTime(`${h}:${String(m).padStart(2, "0")}`);
+                      const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
+                      setStartCutoffTime(nextCutoffTime);
+                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                     }}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Increase cutoff minute"
@@ -13298,7 +13313,9 @@ export default function OpenDoorScanner({
                     onClick={() => {
                       const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") - 5));
                       const h = startCutoffTime.split(":")[0] ?? "09";
-                      setStartCutoffTime(`${h}:${String(m).padStart(2, "0")}`);
+                      const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
+                      setStartCutoffTime(nextCutoffTime);
+                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
                     }}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Decrease cutoff minute"

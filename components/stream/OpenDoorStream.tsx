@@ -1208,8 +1208,8 @@ export default function OpenDoorStreamView({
   const strategyModeEnabled = automationConfig.strategyModeEnabled;
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const printStartMinutes = timeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
-  const entryWindowClosed = entryCutoffActive && nowMinutes >= printStartMinutes;
+  const startCutoffMinutes = timeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  const entryWindowClosed = entryCutoffActive && nowMinutes >= startCutoffMinutes;
   const isAutoView = viewMode === "auto";
   const isStreamAutoTab = viewMode === "stream-auto-tab";
   const showAutomationWorkspace = isAutoView || (isStreamAutoTab && (tab === "analytics" || tab === "episodes"));
@@ -1501,7 +1501,7 @@ export default function OpenDoorStreamView({
         </div>
         <div className="mt-2 text-[11px] font-mono text-zinc-500">
           {strategyModeEnabled
-            ? `SONAR mode watches live SONAR situations, enters after MINHOLD minutes, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and prints everything at ${automationConfig.printStartTime}.`
+            ? `SONAR mode watches live SONAR situations, enters after MINHOLD minutes, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and cuts off (Ctrl+Q then Ctrl+O) at ${automationConfig.startCutoffTime}.`
             : "SONAR mode is off. AUTO keeps using the legacy STREAM intent builder."}
         </div>
         {isAutoView && (
@@ -1737,22 +1737,14 @@ export default function OpenDoorStreamView({
         </div>
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Print Start</div>
-            <input
-              type="time"
-              value={automationConfig.printStartTime}
-              onChange={(e) => onAutomationConfigChange({ printStartTime: e.target.value })}
-              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
-            />
-          </div>
-          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Print Close</div>
-            <input
-              type="time"
-              value={automationConfig.printCloseTime}
-              onChange={(e) => onAutomationConfigChange({ printCloseTime: e.target.value })}
-              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
-            />
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Cutoff</div>
+            {/* Read-only mirror of the CUTOFF stepper (toolbar DELAY/CUTOFF control) — that
+                stepper is the single source of truth (drives local startCutoffTime state, which
+                effectiveStreamAutomationConfig always uses regardless of any override). An
+                editable field here would write to the override only, which the engine ignores. */}
+            <div className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 flex items-center text-sm font-mono text-zinc-200">
+              {automationConfig.startCutoffTime}
+            </div>
           </div>
           <label className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
             <div>

@@ -152,6 +152,7 @@ export type TradingAppQueueItem = {
   ticker: string;
   type: string;
   source: string;
+  note?: string | null;
   status: string;
   message: string;
   hotkey?: string | null;
@@ -3182,11 +3183,17 @@ export function useStreamEngine({
     if (streamExecutionSnapshotRef.current?.panicOff) return;
 
     const nowMinutes = currentMinutesLocal();
+    const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+    const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
+    const cutoffDue =
+      entryCutoffEnabled &&
+      nowMinutes >= startCutoffMinutesNow &&
+      cutoffHotkeySentKeyRef.current !== cutoffKey;
 
     // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
     // intents are no longer gated by printStartTime here — only by CUTOFF, handled below.
     const queued = streamOrderIntents.filter((intent) => intent.status === "QUEUED");
-    if (!queued.length) return;
+    if (!queued.length && !cutoffDue) return;
 
     // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and
     // restart the effect (streamPositions is excluded from deps for the same reason).
@@ -3211,9 +3218,7 @@ export function useStreamEngine({
       // entries) then, 1s later, Ctrl+O (print-close everything open) — exactly once per
       // cutoff crossing. This runs before the separate printStartTime-driven CLOSE_ALL_PRINT
       // dispatch below, so if both times coincide Ctrl+Q still always reaches TradingApp first.
-      const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
       if (entryCutoffEnabled && nowMinutes >= startCutoffMinutesNow) {
-        const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
