@@ -62,6 +62,10 @@ export type StreamPosition = {
   addPeakMinuteIdx?: number | null;
   addPeakAbs?: number | null;
   addPeakSigned?: number | null;
+  // σ trigger threshold that armed the currently-pending add (captured at decision time in
+  // syncStreamPositions, where `trigger` is exact) — read at dispatch time for logging instead
+  // of recomputing, since lastScaleSignal is already overwritten to the new value by then.
+  pendingAddTrigger?: number | null;
 };
 
 export type StreamActionLogKind = "ENTRY" | "ADD" | "CLOSE";
@@ -758,7 +762,15 @@ function mergeStreamPositionsWithActionLog(
       spreadBidPct: existing.spreadBidPct ?? row.spreadBidPct,
       status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
       reason: existing.reason || row.reason,
-      pendingIntent: isExitOrderIntent(existing.pendingIntent) ? existing.pendingIntent : null,
+      // Same lag as entryCount above: a pending ADD (ENTER_*_AGGRESSIVE on an already-open
+      // position) is only confirmed in the action log after dispatch completes. Clearing it
+      // here on every intervening tick — before dispatch even finishes — would drop the
+      // isEntryOrderIntent(pendingIntent) guard in the add-trigger check one tick later,
+      // letting addDelayPassed fall back to stale entryDispatchedAt (the ORIGINAL entry time,
+      // not the just-decided add) and pass immediately. Preserve entry intents same as exits.
+      pendingIntent: isExitOrderIntent(existing.pendingIntent) || isEntryOrderIntent(existing.pendingIntent)
+        ? existing.pendingIntent
+        : null,
       lockedForPrint: existing.lockedForPrint,
       lastSignal: existing.lastSignal ?? row.lastSignal,
       updatedAt: Math.max(existing.updatedAt, row.updatedAt),
@@ -872,13 +884,16 @@ function syncStreamSignalLatches(
     // Scanner semantics:
     // - minHold=0 => the first signal minute is the episode start minute.
     // Stream semantics we want here:
-    // - if a signal first appears during minute T, it may dispatch only at the END of T.
-    // So a brand-new live latch should be anchored to the completed boundary of T,
-    // i.e. the previous minute boundary from "now". Primed tickers, however, already
-    // passed Scanner hold before Stream attached, so backdate them enough to qualify
-    // immediately under the completed-minute rule.
+    // - if a signal first appears during minute T, it may dispatch only at the END of T
+    //   (i.e. once "now" reaches minute T+1) for minHold=0, and one additional full
+    //   minute later per +1 of minHold. So a brand-new live latch is anchored to T
+    //   itself — hasCompletedStreamHoldWindow already requires nowMinuteIdx to advance
+    //   past qualifiedMinuteIdx + minHoldMinutes, so anchoring at T (not T-1) is what
+    //   makes minHold=0 wait for the T -> T+1 boundary instead of firing immediately
+    //   mid-minute. Primed tickers, however, already passed Scanner hold before Stream
+    //   attached, so backdate them enough to qualify immediately.
     const minuteAlignedNow = nowMinuteIdx * 60_000;
-    const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
+    const completedSignalMinuteBoundary = minuteAlignedNow;
     const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
     next.push({
       ticker: row.ticker,
@@ -1134,6 +1149,7 @@ export function syncStreamPositions(
       let lockedForPrint = existing.lockedForPrint;
       let entryCount = existing.entryCount;
       let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
+      let pendingAddTrigger = existing.pendingAddTrigger ?? null;
       let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
@@ -1293,7 +1309,7 @@ export function syncStreamPositions(
           const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
 
-          // Trigger base is always the FIRST entry signal (never lastScaleSignal).
+          // Direction (sign) is always anchored to the FIRST entry signal.
           const entryBase = resolvedEntrySignal;
 
           // Update this minute's running peak (same direction as entry only — an opposite-
@@ -1327,8 +1343,14 @@ export function syncStreamPositions(
           if (entryBase == null || entryBase === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           } else {
-          const addNumber = entryCount; // entryCount=1 before first add, =2 before second, etc.
-          const trigger = Math.abs(entryBase) + Math.max(0, automationConfig.dilutionStep ?? 0) * addNumber;
+          // Trigger threshold is measured from the signal AT THE LAST ADD (grid rebases each
+          // time an add fires), not from a fixed entry-anchored grid. lastScaleSignal is
+          // seeded to entrySignal before any add, so this is entryBase+STEP for add #1 and
+          // (last add's signal)+STEP for every add after — a big jump that already earned one
+          // add still requires a further STEP of real movement (not just the delay timer)
+          // before the next add is granted.
+          const lastAddBase = lastScaleSignal ?? entryBase;
+          const trigger = Math.abs(lastAddBase) + Math.max(0, automationConfig.dilutionStep ?? 0);
           const sameSign =
             effectiveSigned != null &&
             Number.isFinite(effectiveSigned) &&
@@ -1351,6 +1373,7 @@ export function syncStreamPositions(
           const belowAddCap = effectiveAbs == null || effectiveAbs <= ADD_MAX_SIGMA;
           if (effectiveAbs != null && effectiveAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
+            pendingAddTrigger = trigger;
             lastScaleSignal = effectiveSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
@@ -1395,6 +1418,7 @@ export function syncStreamPositions(
         addPeakMinuteIdx,
         addPeakAbs,
         addPeakSigned,
+        pendingAddTrigger,
         updatedAt: now,
       });
       seen.add(existing.ticker);
@@ -2892,18 +2916,19 @@ export function useStreamEngine({
       for (const intent of intents) {
         const d2 = decisionMap2.get(intent.ticker);
         const pos2 = positionMap2.get(intent.ticker);
-        const entryBase2 = pos2?.entrySignal ?? pos2?.lastScaleSignal;
+        // pendingAddTrigger was captured exactly at decision time in syncStreamPositions.
+        const entryBase2 = pos2?.lastScaleSignal ?? pos2?.entrySignal;
         const isAdd2 = intent.sequence > 1;
         const isShort2 = intent.side === "Short";
         const addNum2 = intent.sequence - 1;
-        const triggerMag2 = isAdd2 && entryBase2 != null ? Math.abs(entryBase2) + dilutionStep * addNum2 : null;
+        const triggerMag2 = isAdd2 ? (pos2?.pendingAddTrigger ?? null) : null;
         const thresholdStr2 = triggerMag2 != null
           ? `${isShort2 ? "≤-" : "≥+"}${triggerMag2.toFixed(3)}σ`
           : "";
         console.log(
           `  [${intent.status}] ${intent.intent} ${intent.ticker}/${intent.benchmark}` +
           ` | ${isAdd2 ? `add#${addNum2}` : "entry"} ${intent.side}` +
-          ` sig=${sig(d2?.signal)}${isAdd2 ? ` threshold=${thresholdStr2} (|${sig(entryBase2)}|+${addNum2}×${dilutionStep})` : ""}` +
+          ` sig=${sig(d2?.signal)}${isAdd2 ? ` threshold=${thresholdStr2} (|last-add ${sig(entryBase2)}|+${dilutionStep})` : ""}` +
           ` | "${intent.reason}"`
         );
       }
@@ -3239,7 +3264,12 @@ export function useStreamEngine({
               body: JSON.stringify({
                 intentId: `cutoff-hotkey|${cutoffKey}`,
                 ticker: cutoffTicker,
-                type: "ExitActive",
+                // CutoffStop is a dedicated intent type (not ExitActive) because the live
+                // transport is TransportMode=PythonScript (TradingAppPythonScriptRunner), which
+                // derives its --action arg solely from intent.Type and ignores hotkeyOverride
+                // entirely. Sending "ExitActive" here would run the python "exit" action (Ctrl+F)
+                // instead of Ctrl+Q — hotkeyOverride only affects the unused Internal transport.
+                type: "CutoffStop",
                 note: `entry cutoff reached at ${automationConfig?.startCutoffTime ?? "09:20"}`,
                 source: "stream-auto",
                 hotkeyOverride: "Ctrl+Q",
@@ -3461,13 +3491,15 @@ export function useStreamEngine({
           }
           const pos3 = correspondingPosition;
           const curSig3 = correspondingDecision?.signal;
-          const entryBase3 = pos3?.entrySignal;
           const dilution3 = automationConfig?.dilutionStep ?? 0.3;
           const addNum3 = intent.sequence - 1;
           const isShort3 = intent.side === "Short";
-          const triggerMag3 = entryBase3 != null ? Math.abs(entryBase3) + dilution3 * addNum3 : null;
+          // pendingAddTrigger was captured exactly at decision time (syncStreamPositions) —
+          // read it rather than recomputing, since lastScaleSignal has already been overwritten
+          // to this add's own signal by the time we get here.
+          const triggerMag3 = pos3?.pendingAddTrigger ?? null;
           const triggerStr3 = triggerMag3 != null
-            ? `${isShort3 ? "≤-" : "≥+"}${triggerMag3.toFixed(3)}σ (|${sigStr(entryBase3)}|+${addNum3}×${dilution3})`
+            ? `${isShort3 ? "≤-" : "≥+"}${triggerMag3.toFixed(3)}σ`
             : "n/a";
           console.log(
             `[SEND ${dispatchTs}] ${intent.intent} ${intent.ticker}/${intent.benchmark} ${intent.side}` +
