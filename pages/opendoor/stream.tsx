@@ -1,13 +1,13 @@
 import dynamic from "next/dynamic";
 
-const StreamPageContainer = dynamic(
-  () => import("@/components/stream/StreamPageContainer"),
+const OpenDoorStreamPageContainer = dynamic(
+  () => import("@/components/stream/OpenDoorStreamPageContainer"),
   { ssr: false }
 );
 
 export default function OpenDoorStreamPage() {
   return (
-    <StreamPageContainer
+    <OpenDoorStreamPageContainer
       lsKeyPrefix="stream.opendoor"
       headerTitle="OPEN DOOR STREAM"
       navStreamHref="/opendoor/stream"

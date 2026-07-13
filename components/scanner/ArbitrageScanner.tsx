@@ -353,6 +353,11 @@ type PaperArbClosedDto = {
   peakMetricAbs?: number | null;
   endMetric?: number | null;
   endMetricAbs?: number | null;
+  // OPPOSITE-side ZAP metric abs at the close minute — the value actually compared against
+  // EndAbs for an Active-mode threshold close (endMetricAbs above stays same-side/entry-side
+  // for Start/Peak/End tracking, so it generally will NOT equal EndAbs on a threshold close;
+  // this field is the one that does). Null for WindowEnd/EndOfDay closes.
+  exitMetricAbs?: number | null;
 
   closeMode?: PaperArbCloseMode;
   minHoldCandles?: number;
@@ -1163,7 +1168,7 @@ function downloadEpisodesCsv(
     "startSigma","peakSigma","endSigma",
     "bidPct","askPct","benchBidPct",
     "tickPct","benchPct",
-    "startSigmaAbs","peakSigmaAbs","endSigmaAbs",
+    "startSigmaAbs","peakSigmaAbs","endSigmaAbs","exitSigmaAbs",
     "holdCandles","holdSec","entryCount","addsCount","dilutionStep","maxAdds","minHoldCandles","filtersOk","reason","closeMode",
     "totalPnlUsd","rawPnlUsd","hedgedPnlUsd",
     "positionNotionalUsd","tierBp","corr","beta","stockSigma",
@@ -1268,6 +1273,7 @@ function downloadEpisodesCsv(
       f4(r.startMetricAbs),
       f4(r.peakMetricAbs),
       f4(r.endMetricAbs),
+      f4(r.exitMetricAbs),
       r.endMinuteIdx != null && r.startMinuteIdx != null ? String(r.endMinuteIdx - r.startMinuteIdx) : "",
       r.endMinuteIdx != null && r.startMinuteIdx != null ? String((r.endMinuteIdx - r.startMinuteIdx) * 60) : "",
       entryCount,
@@ -16057,7 +16063,7 @@ export default function ArbitrageScanner({
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Time
                       </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={4}>
                         Metric
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
@@ -16089,6 +16095,7 @@ export default function ArbitrageScanner({
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5" title="Opposite-side ZAP field — the value actually compared against EndAbs for an Active-mode threshold close">Exit</th>
                       <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
                       <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
                       <th className="text-right p-2.5 text-emerald-500/70">End</th>
@@ -16158,6 +16165,7 @@ export default function ArbitrageScanner({
                           <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-500" title="Opposite-side ZAP field compared against EndAbs for an Active-mode threshold close">{num(r.exitMetricAbs ?? null, 3)}</td>
                           {(() => {
                             const fP = (v: number | null | undefined) => v == null
                               ? <span className="text-zinc-600">—</span>
@@ -16184,7 +16192,7 @@ export default function ArbitrageScanner({
                     })}
                     {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={27} className="p-8 text-center text-zinc-500">
+                        <td colSpan={28} className="p-8 text-center text-zinc-500">
                           No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>

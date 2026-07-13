@@ -48,6 +48,10 @@ export type StreamPosition = {
   reason: string;
   entryCount: number;
   belowThresholdTicks: number;
+  // Minute index at which the signal FIRST dropped below endSignalThreshold on this unbroken
+  // streak (null when not currently below). Used to count belowThresholdTicks in whole minute
+  // boundaries crossed, not poll ticks — see syncStreamPositions.
+  belowThresholdSinceMinuteIdx?: number | null;
   lockedForPrint: boolean;
   pendingIntent: StreamOrderIntentType | null;
   entryDispatchedAt: number | null;
@@ -773,6 +777,21 @@ function mergeStreamPositionsWithActionLog(
         : null,
       lockedForPrint: existing.lockedForPrint,
       lastSignal: existing.lastSignal ?? row.lastSignal,
+      // Same lag as entryCount/pendingIntent above: the action log only has the signal
+      // value from the LAST CONFIRMED add, not the one the engine just pre-incremented to
+      // in memory. Without preferring existing here, every merge (i.e. every poll tick
+      // before the just-fired add is confirmed) resets the grid's rebase point back to the
+      // prior add's — or the original entry's — signal, so the next trigger recomputes as
+      // if no add had happened, letting the SAME live deviation satisfy add after add
+      // instead of requiring genuine further movement past each new step.
+      lastScaleSignal: existing.lastScaleSignal ?? row.lastScaleSignal,
+      // buildStreamPositionsFromActionLog always sets these to 0/null (the action log has no
+      // concept of "ticks below end threshold" — only confirmed ENTRY/ADD/CLOSE events). Without
+      // preferring existing here, this counter would reset to 0 on every merge (i.e. every poll
+      // tick), capping it at 0-1 forever and permanently disabling active-mode normalize-exit's
+      // exitConfirmTicks confirmation window.
+      belowThresholdTicks: existing.belowThresholdTicks ?? row.belowThresholdTicks,
+      belowThresholdSinceMinuteIdx: existing.belowThresholdSinceMinuteIdx ?? row.belowThresholdSinceMinuteIdx ?? null,
       updatedAt: Math.max(existing.updatedAt, row.updatedAt),
     } : row);
   }
@@ -886,14 +905,21 @@ function syncStreamSignalLatches(
     // Stream semantics we want here:
     // - if a signal first appears during minute T, it may dispatch only at the END of T
     //   (i.e. once "now" reaches minute T+1) for minHold=0, and one additional full
-    //   minute later per +1 of minHold. So a brand-new live latch is anchored to T
-    //   itself — hasCompletedStreamHoldWindow already requires nowMinuteIdx to advance
-    //   past qualifiedMinuteIdx + minHoldMinutes, so anchoring at T (not T-1) is what
-    //   makes minHold=0 wait for the T -> T+1 boundary instead of firing immediately
-    //   mid-minute. Primed tickers, however, already passed Scanner hold before Stream
-    //   attached, so backdate them enough to qualify immediately.
+    //   minute later per +1 of minHold.
+    //
+    // This branch of the ternary below (completedSignalMinuteBoundary) is ONLY reached
+    // for a brand-new, non-primed latch that just passed the isMinuteQualified gate above
+    // — i.e. minuteQualifiedTickers (the FROZEN, fully-completed PREVIOUS minute's
+    // above-threshold set) already confirms the ticker was a candidate during minute T-1.
+    // That gate itself only starts passing once "now" has rolled into minute T (the minute
+    // after T-1), so by the time this code runs, nowMinuteIdx == T and the signal's true
+    // first-confirmed minute is T-1, not "now". Anchoring qualifiedSince to "now" here
+    // (instead of T-1) double-counts that gate's own 1-minute wait, pushing effective
+    // dispatch out to T+1 for minHold=0 instead of the intended T (== "now", the very
+    // minute the gate just confirmed) — a full extra minute of unintended delay stacked
+    // on top of hasCompletedStreamHoldWindow's own T -> T+1 wait.
     const minuteAlignedNow = nowMinuteIdx * 60_000;
-    const completedSignalMinuteBoundary = minuteAlignedNow;
+    const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
     const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
     next.push({
       ticker: row.ticker,
@@ -1135,12 +1161,45 @@ export function syncStreamPositions(
       // disabled so no other path can arm/dispatch it.
       const inPrintWindow = false;
       const activeExitMode = (automationConfig.exitExecutionMode ?? "active") === "active";
-      const belowEndThreshold = currentAbs != null && currentAbs < endThreshold;
+      // Exit/normalization checks the OPPOSITE-side ZAP field from entry: a Long position was
+      // entered on zapLsigma (the deviation you'd pay to BUY in), but closing a Long is a SELL —
+      // priced off zapSsigma, the same field a Short entry uses, since both are sell-side
+      // transactions. Symmetric for Short: entered on zapSsigma (sell-in), exits (buy to cover)
+      // on zapLsigma. ADD (scaling further into the SAME side) is unaffected — it's still a
+      // buy for Long / sell for Short, so it keeps reading the same-side field as entry (see
+      // filteredSignedZap inside the ADD block below, independent of this).
+      const exitZapSigma = existing.side === "Long"
+        ? (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma))
+        : (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma));
+      const exitSigned = exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
+      const exitAbs = exitSigned == null ? signalAbs(raw) : Math.abs(exitSigned);
+      const belowEndThreshold = exitAbs != null && exitAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
-      const exitConfirmTicks = Math.max(1, automationConfig.exitConfirmTicks ?? 3);
-      const belowThresholdTicks = belowEndThreshold
-        ? (existing.belowThresholdTicks ?? 0) + 1
-        : 0;
+      // CONF=0 means "close the instant it drops below end threshold" on Scanner (an explicit
+      // early-exit special case, no confirmation wait at all). Floor at 1 here would force at
+      // least one minute boundary of confirmation even at CONF=0 — floor at 0 instead so
+      // belowThresholdTicks (which starts at 0 on first detection) already satisfies `>= 0`
+      // immediately, matching Scanner's instant close.
+      const exitConfirmTicks = Math.max(0, automationConfig.exitConfirmTicks ?? 3);
+      // Count in whole minute boundaries crossed, not poll ticks — mirrors Scanner's
+      // ExitConfirmCandles (pendingEndHoldCount only bumps once per new tape minute, reset
+      // immediately on any candle back above EndAbs). The same shared "CONF" UI number feeds
+      // both exitConfirmTicks here and exitConfirmCandles on the Scanner request; without
+      // minute-boundary counting, Stream would confirm in ~N poll intervals (a few seconds)
+      // while Scanner requires N full minutes for the identical configured value.
+      let belowThresholdSinceMinuteIdx = existing.belowThresholdSinceMinuteIdx ?? null;
+      let belowThresholdTicks: number;
+      if (belowEndThreshold) {
+        if (belowThresholdSinceMinuteIdx == null) {
+          belowThresholdSinceMinuteIdx = nowMinuteIdx;
+          belowThresholdTicks = 0;
+        } else {
+          belowThresholdTicks = Math.max(0, nowMinuteIdx - belowThresholdSinceMinuteIdx);
+        }
+      } else {
+        belowThresholdSinceMinuteIdx = null;
+        belowThresholdTicks = 0;
+      }
       const shouldNormalizeExit = activeExitMode && belowThresholdTicks >= exitConfirmTicks;
 
       let status: StreamPosition["status"] = existing.status;
@@ -1356,7 +1415,14 @@ export function syncStreamPositions(
             Number.isFinite(effectiveSigned) &&
             effectiveSigned !== 0 &&
             Math.sign(effectiveSigned) === Math.sign(entryBase);
-          const addDelayMs = Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000;
+          // Even when DELAY=0 (no configured minimum), never allow two ADDs closer together
+          // than one real automation tick. Without this floor, the dispatch "replay" loop
+          // (sendQueuedIntents re-entering itself immediately after finishing an in-flight
+          // send, see dispatchLoopReplayRef) can reuse the SAME still-stale raw signal read
+          // across two back-to-back recomputes and fire a second ADD a few hundred ms after
+          // the first — same tick's price satisfying two grid levels at once instead of a
+          // genuinely new, separately-confirmed move.
+          const addDelayMs = Math.max(STREAM_AUTOMATION_TICK_MS, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
           // Add delay restarts from the last cap breach — same protection as entry minHold.
           // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
           // the delay runs fresh after the signal returns into range.
@@ -1364,12 +1430,11 @@ export function syncStreamPositions(
             existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt,
             lastAboveAddCapAt ?? 0
           );
-          // delay=0: block if an entry intent is already pending (one add per tick).
-          // delay>0: use time-based check; also block if pending to prevent double-fire
-          //          before the async dispatch updates lastDispatchedAt.
+          // Also block while an entry-type intent is already pending, to prevent double-fire
+          // before the async dispatch updates lastDispatchedAt.
           const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
             ? false
-            : addDelayMs === 0 || now - lastDispatchOrBreach >= addDelayMs;
+            : now - lastDispatchOrBreach >= addDelayMs;
           const belowAddCap = effectiveAbs == null || effectiveAbs <= ADD_MAX_SIGMA;
           if (effectiveAbs != null && effectiveAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
@@ -1405,6 +1470,7 @@ export function syncStreamPositions(
         lastSignal: currentSigned ?? currentAbs,
         lastScaleSignal,
         belowThresholdTicks,
+        belowThresholdSinceMinuteIdx,
         spread: currentSpread,
         spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
         status,
@@ -1484,6 +1550,12 @@ export function syncStreamPositions(
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
   }
 
+  // UNREACHABLE under the current UI wiring, kept for reference: see the matching note in
+  // buildStreamOrderIntents. autoEnabled=true here always implies strategyModeEnabled=true
+  // (autoEnabledNow in the main refresh cycle ANDs them together before either function is
+  // called), so the `if (automationConfig?.strategyModeEnabled)` branch above already returned.
+  // This is a pre-Strategy-Mode code path that predates strategyModeEnabled becoming the sole
+  // automation mechanism. Do not assume this code runs.
   const printCloseMinutes = parseTimeToMinutes(automationConfig?.printCloseTime, 9 * 60 + 30);
   // Exit Mode "print" is retired — CUTOFF (Ctrl+Q -> 1s -> Ctrl+O) is the only session-end path.
   const printWindowEnabled = false;
@@ -1613,6 +1685,13 @@ export function buildStreamOrderIntents(
     return intents.sort((a, b) => a.ticker.localeCompare(b.ticker) || a.intent.localeCompare(b.intent));
   }
 
+  // UNREACHABLE under the current UI wiring, kept for reference: the only caller
+  // (streamEngine.ts's main refresh cycle) computes `autoEnabled` as
+  // `streamAutoEnabledRef.current && Boolean(automationConfig?.strategyModeEnabled) && !panicOff`,
+  // so autoEnabled=true here always implies strategyModeEnabled=true, meaning the
+  // `if (automationConfig?.strategyModeEnabled)` branch above already returned. This is a
+  // pre-Strategy-Mode code path (simpler, no latch queue, no ADD scaling) that predates
+  // strategyModeEnabled becoming the sole automation mechanism. Do not assume this code runs.
   for (const row of decisions) {
     if (row.status === "ENTRY_READY") {
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;

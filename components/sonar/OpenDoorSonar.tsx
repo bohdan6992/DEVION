@@ -2970,6 +2970,120 @@ export default function OpenDoorSonar() {
   const [cls, setCls] = useState<ArbClass>("global");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
+  // OpenDoor exit class — replaces the inherited Arbitrage session-band selector (GLOB/BLUE/
+  // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
+  // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from cls/mode/type, which
+  // stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
+  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
+  // ADVANCED: switches the bin data source from best_params.standard (09:20-entry-only) to
+  // best_params.advanced (hourly-pooled, much larger sample — see OpenDoor.ipynb). ADVANCED
+  // always checks all 3 parameters (the per-parameter STACK/BENCH/DEV toggles are hidden and
+  // ignored while it's on) — it replaces the ALL/TOP toggle, which was inherited Arbitrage
+  // plumbing unrelated to OpenDoor.
+  const [openDoorAdvancedMode, setOpenDoorAdvancedMode] = useState(false);
+  // Which of the 3 OpenDoor parameters (Stack%, Bench%, DevSig) to check against live data.
+  // Independently toggleable — if all 3 are on, all 3 are checked (AND) in real time.
+  // Ignored (all 3 forced on) while openDoorAdvancedMode is active.
+  const [openDoorUseStack, setOpenDoorUseStack] = useState(true);
+  const [openDoorUseBench, setOpenDoorUseBench] = useState(true);
+  const [openDoorUseDevSig, setOpenDoorUseDevSig] = useState(true);
+  // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
+  // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction.
+  const [openDoorUpMinRate, setOpenDoorUpMinRate] = useState(0.6);
+  const [openDoorUpMinTotal, setOpenDoorUpMinTotal] = useState(20);
+  const [openDoorUpMinMove, setOpenDoorUpMinMove] = useState(0);
+  const [openDoorDownMinRate, setOpenDoorDownMinRate] = useState(0.6);
+  const [openDoorDownMinTotal, setOpenDoorDownMinTotal] = useState(20);
+  const [openDoorDownMinMove, setOpenDoorDownMinMove] = useState(0);
+  // Bulk best_params summary (one row per ticker, lo/hi/rate/total/avg_move for the single best
+  // bin per param x class x direction — see OpenDoor.ipynb's summary.csv). Fetched once and
+  // periodically refreshed; matching is done client-side per live signal tick (no per-ticker
+  // network round-trip).
+  const [openDoorBestByTicker, setOpenDoorBestByTicker] = useState<Record<string, Record<string, string>>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { getOpendoorList } = await import("@/lib/trapClient");
+        const rows = await getOpendoorList();
+        if (cancelled) return;
+        const byTicker: Record<string, Record<string, string>> = {};
+        for (const row of rows) {
+          const t = String(row.ticker ?? row.Ticker ?? "").toUpperCase().trim();
+          if (t) byTicker[t] = row;
+        }
+        setOpenDoorBestByTicker(byTicker);
+      } catch {
+        // best-effort — matching just yields no results until this succeeds
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 5 * 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  // Checks one live signal against the bulk best_params summary for the currently-enabled
+  // parameters (AND across enabled ones) and the selected exit class (10m/30m). UP uses the
+  // Ask-side live fields (buy-in perspective), DOWN uses Bid-side — same L=Ask/S=Bid convention
+  // established for zapLsigma/zapSsigma elsewhere in this codebase.
+  const matchOpenDoor = useCallback((s: ArbitrageSignal): { up: boolean; down: boolean } => {
+    const row = openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()];
+    if (!row) return { up: false, down: false };
+    const c = openDoorExitClass;
+
+    const stackAsk = toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct);
+    const stackBid = toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct);
+    // Bench delta-% arrives as top-level bidBench/askBench (SignalItemDto.BidBench/AskBench,
+    // camelCased by ASP.NET Core JSON serialization) — NOT a "BenchBidLstClsΔ%"-style key.
+    const benchAsk = toNum(s.askBench);
+    const benchBid = toNum(s.bidBench);
+    const devUp = toNum(s.zapLsigma);
+    const devDown = toNum(s.zapSsigma);
+
+    // ADVANCED always checks all 3 parameters (per-parameter toggles are hidden/ignored while
+    // it's on) and reads the "adv_"-prefixed columns (hourly-pooled bins) instead of the
+    // standard 09:20-only ones.
+    const prefix = openDoorAdvancedMode ? "adv_" : "";
+
+    const checkDir = (dir: "up" | "down"): boolean => {
+      const enabled: Array<{ param: string; value: number | null }> = [];
+      if (openDoorAdvancedMode || openDoorUseStack) enabled.push({ param: "stack", value: dir === "up" ? stackAsk : stackBid });
+      if (openDoorAdvancedMode || openDoorUseBench) enabled.push({ param: "bench", value: dir === "up" ? benchAsk : benchBid });
+      if (openDoorAdvancedMode || openDoorUseDevSig) enabled.push({ param: "dev", value: dir === "up" ? devUp : devDown });
+      if (enabled.length === 0) return false;
+
+      const minRateGate = dir === "up" ? openDoorUpMinRate : openDoorDownMinRate;
+      const minTotalGate = dir === "up" ? openDoorUpMinTotal : openDoorDownMinTotal;
+      const minMoveGate = dir === "up" ? openDoorUpMinMove : openDoorDownMinMove;
+
+      // summary.csv columns use Arbitrage's long/short vocabulary, not up/down.
+      const colDir = dir === "up" ? "long" : "short";
+
+      return enabled.every(({ param, value }) => {
+        if (value == null || !Number.isFinite(value)) return false;
+        const lo = toNum(row[`${prefix}${param}_${c}_best_${colDir}_lo`]);
+        const hi = toNum(row[`${prefix}${param}_${c}_best_${colDir}_hi`]);
+        const rate = toNum(row[`${prefix}${param}_${c}_best_${colDir}_rate`]);
+        const total = toNum(row[`${prefix}${param}_${c}_best_${colDir}_total`]);
+        const avgMove = toNum(row[`${prefix}${param}_${c}_best_${colDir}_avg_move`]);
+        if (lo == null || hi == null || rate == null || total == null) return false;
+        if (value < lo || value > hi) return false;
+        if (rate < minRateGate) return false;
+        if (total < minTotalGate) return false;
+        if (avgMove != null && Math.abs(avgMove) < minMoveGate) return false;
+        return true;
+      });
+    };
+
+    return { up: checkDir("up"), down: checkDir("down") };
+  }, [
+    openDoorBestByTicker, openDoorExitClass, openDoorAdvancedMode,
+    openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
+  ]);
   const [corrMin, setCorrMin] = useState("");
   const [corrMax, setCorrMax] = useState("");
   const [betaMin, setBetaMin] = useState("");
@@ -4755,6 +4869,18 @@ export default function OpenDoorSonar() {
       }));
   }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
 
+  // OpenDoor: only tickers whose live parameters land in a matching good bin — split into
+  // two columns, SHORT (down) on the left, LONG (up) on the right. This replaces the generic
+  // benchmark/beta grid below (still present, just disabled) as Sonar's primary OpenDoor view.
+  const openDoorMatchedDown = useMemo(
+    () => items.filter((s) => matchOpenDoor(s).down),
+    [items, matchOpenDoor]
+  );
+  const openDoorMatchedUp = useMemo(
+    () => items.filter((s) => matchOpenDoor(s).up),
+    [items, matchOpenDoor]
+  );
+
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
@@ -5215,97 +5341,47 @@ export default function OpenDoorSonar() {
 
           <div className="ml-auto flex flex-wrap justify-end gap-3">
 
-          {/* TOP mode toggle */}
+          {/* ADVANCED: switches bin data source to the hourly-pooled best_params.advanced set
+              and forces all 3 parameters on — replaces the inherited Arbitrage ALL/TOP toggle,
+              which had nothing to do with OpenDoor. */}
           <div className="flex h-7 items-center gap-1.5">
-            <div className="flex h-7 items-center rounded-lg bg-black/20">
-              {([false, true] as const).map((isTop) => (
-                <button
-                  key={String(isTop)}
-                  type="button"
-                  onClick={() => setTopMode(isTop)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    topMode === isTop
-                      ? isTop
-                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : secondaryButtonSoftActiveClass
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {isTop ? "TOP" : "ALL"}
-                </button>
-              ))}
-            </div>
-            {topMode && (
-              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                {([
-                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                ] as const).map(({ key, label, on, set }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => set((v) => !v)}
-                    className={clsx(
-                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                      on
-                        ? "accent-fill"
-                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => setOpenDoorAdvancedMode((v) => !v)}
+              className={clsx(
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                openDoorAdvancedMode
+                  ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                  : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+              )}
+            >
+              ADVANCED
+            </button>
           </div>
 
+          {!openDoorAdvancedMode && (
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
+            {[
+              { key: "stack", label: "STACK", on: openDoorUseStack, set: setOpenDoorUseStack },
+              { key: "bench", label: "BENCH", on: openDoorUseBench, set: setOpenDoorUseBench },
+              { key: "dev", label: "DEV", on: openDoorUseDevSig, set: setOpenDoorUseDevSig },
+            ].map((p) => (
               <button
-                key={modeKey}
+                key={p.key}
                 type="button"
-                onClick={() => setRatingMode(modeKey)}
+                onClick={() => p.set((v) => !v)}
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
+                  p.on
                     ? secondaryButtonSoftActiveClass
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                {modeKey}
+                {p.label}
               </button>
             ))}
           </div>
-
-          {fields.map((field) => (
-            <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode={field.integer ? "numeric" : "decimal"}
-                  step={field.step}
-                  min={field.min}
-                  value={field.val}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    if (!Number.isFinite(next)) {
-                      field.set(field.min);
-                      return;
-                    }
-                    field.set(field.integer ? Math.max(field.min, Math.trunc(next)) : Math.max(field.min, +next.toFixed(4)));
-                  }}
-                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, field.step)} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, -field.step)} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
-                </div>
-              </div>
-            </div>
-          ))}
+          )}
 
           {[
             { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
@@ -5336,31 +5412,62 @@ export default function OpenDoorSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {(["global", "blue", "pre", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+            {(["10m", "30m"] as const).map((c) => (
               <FilterButton
                 key={c}
-                active={cls === c}
-                label={c === "global" ? "GLOB" : c.toUpperCase()}
-                onClick={() => setCls(c)}
+                active={openDoorExitClass === c}
+                label={c}
+                onClick={() => setOpenDoorExitClass(c)}
               />
             ))}
           </div>
 
-          <div className="h-7 w-px self-center bg-white/5" />
-
-          <div className="flex h-7 items-center gap-2">
-            {(["all", "top"] as const).map((m) => (
-              <FilterButton key={m} active={mode === m} label={m.toUpperCase()} onClick={() => setMode(m)} />
-            ))}
-          </div>
-
-          <div className="h-7 w-px self-center bg-white/5" />
-
-          <div className="flex h-7 items-center gap-2">
-            {(["any", "hard", "soft"] as ArbType[]).map((t) => (
-              <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
-            ))}
-          </div>
+          {[
+            {
+              dir: "UP", accent: "text-emerald-400",
+              minRate: openDoorUpMinRate, setMinRate: setOpenDoorUpMinRate,
+              minTotal: openDoorUpMinTotal, setMinTotal: setOpenDoorUpMinTotal,
+              minMove: openDoorUpMinMove, setMinMove: setOpenDoorUpMinMove,
+            },
+            {
+              dir: "DOWN", accent: "text-rose-400",
+              minRate: openDoorDownMinRate, setMinRate: setOpenDoorDownMinRate,
+              minTotal: openDoorDownMinTotal, setMinTotal: setOpenDoorDownMinTotal,
+              minMove: openDoorDownMinMove, setMinMove: setOpenDoorDownMinMove,
+            },
+          ].map((grp) => (
+            <div key={grp.dir} className="flex h-7 items-center gap-2 rounded-lg bg-black/20 pl-2">
+              <span className={clsx("flex h-7 items-center text-[10px] font-mono font-bold uppercase tracking-wide", grp.accent)}>{grp.dir}</span>
+              {[
+                { label: "MINRATE", value: grp.minRate, set: grp.setMinRate, step: 0.1, integer: false },
+                { label: "MINTOTAL", value: grp.minTotal, set: grp.setMinTotal, step: 1, integer: true },
+                { label: "MINMOVE", value: grp.minMove, set: grp.setMinMove, step: 0.05, integer: false },
+              ].map((field) => (
+                <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+                  <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
+                  <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                    <input
+                      type="number"
+                      inputMode={field.integer ? "numeric" : "decimal"}
+                      step={field.step}
+                      min={0}
+                      value={field.value}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        field.set(Math.max(0, field.integer ? Math.trunc(next) : +next.toFixed(4)));
+                      }}
+                      className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                    />
+                    <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.set(Math.max(0, +((field.value ?? 0) + field.step).toFixed(4)))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
+                      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.set(Math.max(0, +((field.value ?? 0) - field.step).toFixed(4)))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
 
           <div className="flex-1" />
 
@@ -6776,7 +6883,56 @@ export default function OpenDoorSonar() {
           </div>
         )}
 
-        {!error && hasAny && (
+        {!error && !loading && (
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { dir: "down" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", rows: openDoorMatchedDown },
+              { dir: "up" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", rows: openDoorMatchedUp },
+            ].map((col) => (
+              <div key={col.dir} className={clsx("rounded-2xl border bg-[#0a0a0a]/40 p-3", col.border)}>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className={clsx("text-xs font-mono font-bold uppercase tracking-widest", col.accent)}>{col.title}</span>
+                  <span className="text-[10px] font-mono text-zinc-500">{col.rows.length} match{col.rows.length === 1 ? "" : "es"}</span>
+                </div>
+                {col.rows.length === 0 ? (
+                  <div className="py-6 text-center text-[11px] font-mono uppercase tracking-widest text-zinc-600">
+                    No tickers pass current OpenDoor gates
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {col.rows.map((s) => {
+                      const row = openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()];
+                      const prefix = openDoorAdvancedMode ? "adv_" : "";
+                      const c = openDoorExitClass;
+                      const devVal = col.dir === "up" ? toNum(s.zapLsigma) : toNum(s.zapSsigma);
+                      const rateVals = ["stack", "bench", "dev"]
+                        .map((p) => toNum(row?.[`${prefix}${p}_${c}_best_${col.dir}_rate`]))
+                        .filter((v): v is number => v != null);
+                      const bestRate = rateVals.length ? Math.max(...rateVals) : null;
+                      return (
+                        <div
+                          key={s.ticker}
+                          className="flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2"
+                        >
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-mono text-sm font-bold text-zinc-100">{s.ticker}</span>
+                            <span className="font-mono text-[10px] text-zinc-500 uppercase">{s.benchmark}</span>
+                          </div>
+                          <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
+                            {devVal != null && <span>DevSig {devVal.toFixed(2)}</span>}
+                            {bestRate != null && <span className={col.accent}>rate {(bestRate * 100).toFixed(0)}%</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {false && !error && hasAny && (
           <div className="space-y-3">
             {(() => {
               const visible = new Set(benchBlocks.map((b) => b.benchmark));

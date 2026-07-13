@@ -7335,6 +7335,25 @@ export default function OpenDoorScanner({
     }
   });
   const [internalTab, setInternalTab] = useState<TabKey>("active");
+  // OpenDoor exit class — replaces the inherited Arbitrage session-band selector (GLOB/BLUE/
+  // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
+  // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from ruleBand/session,
+  // which stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
+  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
+  // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
+  // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction, matching the
+  // two-column UP/DOWN layout. Deliberately fresh state, not the shared Arbitrage `activeRule`.
+  const [openDoorUpMinRate, setOpenDoorUpMinRate] = useState(0.6);
+  const [openDoorUpMinTotal, setOpenDoorUpMinTotal] = useState(20);
+  const [openDoorUpMinMove, setOpenDoorUpMinMove] = useState(0);
+  const [openDoorDownMinRate, setOpenDoorDownMinRate] = useState(0.6);
+  const [openDoorDownMinTotal, setOpenDoorDownMinTotal] = useState(20);
+  const [openDoorDownMinMove, setOpenDoorDownMinMove] = useState(0);
+  // Which of the 3 OpenDoor parameters (Stack%, Bench%, DevSig) to check against live data.
+  // Independently toggleable — if all 3 are on, all 3 are checked in real time (per spec).
+  const [openDoorUseStack, setOpenDoorUseStack] = useState(true);
+  const [openDoorUseBench, setOpenDoorUseBench] = useState(true);
+  const [openDoorUseDevSig, setOpenDoorUseDevSig] = useState(true);
   const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
   const [zapMode, setZapMode] = useState<ZapMode>("zap");
   const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
@@ -12110,92 +12129,27 @@ export default function OpenDoorScanner({
           </div>
 
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
+            {[
+              { key: "stack", label: "STACK", on: openDoorUseStack, set: setOpenDoorUseStack },
+              { key: "bench", label: "BENCH", on: openDoorUseBench, set: setOpenDoorUseBench },
+              { key: "dev", label: "DEV", on: openDoorUseDevSig, set: setOpenDoorUseDevSig },
+            ].map((p) => (
               <button
-                key={modeKey}
+                key={p.key}
                 type="button"
-                onClick={() => setRatingMode(modeKey)}
+                onClick={() => p.set((v) => !v)}
                 className={clsx(
                   "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
+                  p.on
                     ? "accent-soft"
                     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
-                {modeKey}
+                {p.label}
               </button>
             ))}
           </div>
 
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="number"
-                inputMode="decimal"
-                step={0.1}
-                min={0}
-                value={activeRule.minRate}
-                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-              />
-              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Increase min rate"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
-                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Decrease min rate"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="number"
-                inputMode="numeric"
-                step={1}
-                min={0}
-                value={activeRule.minTotal}
-                onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-              />
-              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Increase min total"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
-                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Decrease min total"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
 
           {[
@@ -12435,44 +12389,16 @@ export default function OpenDoorScanner({
           
             <div className="flex h-7 items-center gap-2">
               {[
-                { key: "GLOBAL", label: "GLOB" },
-                { key: "BLUE", label: "BLUE" },
-                { key: "PRE", label: "PRE" },
-                { key: "ARK", label: "ARK" },
-                { key: "PRINT", label: "PRINT" },
-                { key: "OPEN", label: "OPEN" },
-                { key: "INTRA", label: "INTRA" },
-                { key: "POST", label: "POST" },
+                { key: "10m", label: "10m" },
+                { key: "30m", label: "30m" },
               ].map((b) => (
                 <button
                   key={b.key}
                   type="button"
-                  onClick={() => {
-                    const nextBand = b.key as PaperArbRatingBand;
-                    if (controlledSession == null) {
-                      setRuleBand(nextBand);
-                    }
-                    setRatingEnabledBands({
-                      BLUE: nextBand === "BLUE",
-                      ARK: nextBand === "ARK" || nextBand === "PRE",
-                      PRE: nextBand === "PRE",
-                      OPEN: nextBand === "OPEN",
-                      INTRA: nextBand === "INTRA",
-                      PRINT: nextBand === "PRINT",
-                      POST: nextBand === "POST",
-                      GLOBAL: nextBand === "GLOBAL",
-                    });
-                    if (nextBand === "GLOBAL") setSession("GLOB");
-                    if (nextBand === "BLUE") setSession("BLUE");
-                    if (nextBand === "PRE") setSession("PRE");
-                    if (nextBand === "ARK") setSession("ARK");
-                    if (nextBand === "OPEN") setSession("OPEN");
-                    if (nextBand === "INTRA") setSession("INTRA");
-                    if (nextBand === "POST") setSession("POST");
-                  }}
+                  onClick={() => setOpenDoorExitClass(b.key as "10m" | "30m")}
                   className={clsx(
                     "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    ruleBand === b.key
+                    openDoorExitClass === b.key
                       ? "accent-soft"
                       : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
                   )}
@@ -12482,57 +12408,64 @@ export default function OpenDoorScanner({
                 ))}
             </div>
 
-            <div className="h-7 w-px self-center bg-white/5" />
-
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "ALL", label: "ALL" },
-                { key: "TOP", label: "TOP" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => {
-                    const next = m.key as "ALL" | "TOP";
-                    setScopeMode(next);
-                    if (next === "ALL") setTopN(1000);
-                  }}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    scopeMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="h-7 w-px self-center bg-white/5" />
-
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "any", label: "ANY" },
-                { key: "hard", label: "HARD" },
-                { key: "soft", label: "SOFT" },
-              ].map((rt) => (
-                <button
-                  key={rt.key}
-                  type="button"
-                  onClick={() => setRatingType(rt.key as PaperArbRatingType)}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    ratingType === rt.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
-                  )}
-                  title={`RatingType = ${rt.key}`}
-                >
-                  {rt.label}
-                </button>
+            {[
+              {
+                dir: "UP", accent: "text-emerald-400",
+                minRate: openDoorUpMinRate, setMinRate: setOpenDoorUpMinRate,
+                minTotal: openDoorUpMinTotal, setMinTotal: setOpenDoorUpMinTotal,
+                minMove: openDoorUpMinMove, setMinMove: setOpenDoorUpMinMove,
+              },
+              {
+                dir: "DOWN", accent: "text-rose-400",
+                minRate: openDoorDownMinRate, setMinRate: setOpenDoorDownMinRate,
+                minTotal: openDoorDownMinTotal, setMinTotal: setOpenDoorDownMinTotal,
+                minMove: openDoorDownMinMove, setMinMove: setOpenDoorDownMinMove,
+              },
+            ].map((grp) => (
+              <div key={grp.dir} className="flex h-7 items-center gap-2 rounded-lg bg-black/20 pl-2">
+                <span className={clsx("flex h-7 items-center text-[10px] font-mono font-bold uppercase tracking-wide", grp.accent)}>{grp.dir}</span>
+                {[
+                  { label: "MINRATE", value: grp.minRate, set: grp.setMinRate, step: 0.1, integer: false },
+                  { label: "MINTOTAL", value: grp.minTotal, set: grp.setMinTotal, step: 1, integer: true },
+                  { label: "MINMOVE", value: grp.minMove, set: grp.setMinMove, step: 0.05, integer: false },
+                ].map((field) => (
+                  <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+                    <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
+                    <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                      <input
+                        type="number"
+                        inputMode={field.integer ? "numeric" : "decimal"}
+                        step={field.step}
+                        min={0}
+                        value={field.value}
+                        onChange={(e) => field.set(Math.max(0, field.integer ? clampInt(e.target.value, 0) : clampNumber(e.target.value, 0)))}
+                        className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+                      />
+                      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => field.set(Math.max(0, +((field.value ?? 0) + field.step).toFixed(4)))}
+                          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                          aria-label={`Increase ${field.label}`}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => field.set(Math.max(0, +((field.value ?? 0) - field.step).toFixed(4)))}
+                          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                          aria-label={`Decrease ${field.label}`}
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ))}
-            </div>
+              </div>
+            ))}
 
             <div className="flex-1" />
 
