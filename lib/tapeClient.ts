@@ -235,7 +235,23 @@ function normalizeRowsPayload(x: TapeMinuteResponse): TapeMinuteRow[] {
 // Client
 // ------------------------
 
+export type TapeMinuteSigmaItem = {
+  ticker: string;
+  side: "Long" | "Short";
+  hiAbs: number;
+  loAbs: number;
+};
+
 export const tapeClient = {
+  // Sends per-minute hi/lo sigma from stream SSE polling so the tape server can check
+  // whether a signal stayed within [startAbs, startAbsMax] for every poll during the minute.
+  // The scanner uses loAbs for the minHoldCandles consecutive check instead of the minute-end
+  // close value — if loAbs < startAbs the signal dipped mid-minute and the streak resets.
+  reportMinuteSigmaRange(dateNy: string, minuteIdx: number, items: TapeMinuteSigmaItem[]): Promise<void> {
+    if (!items.length) return Promise.resolve();
+    return postJson(`/api/tape/arbitrage/sigma-range`, { dateNy, minuteIdx, items });
+  },
+
   // tape arbitrage
   snapshot(dateNy: string) {
     return getJson<TapeArbSnapshot>(`/api/tape/arbitrage/snapshot?dateNy=${encodeURIComponent(dateNy)}`);

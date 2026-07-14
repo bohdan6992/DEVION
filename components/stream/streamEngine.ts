@@ -17,6 +17,7 @@ import { streamSignalStore } from "./streamSignalStore";
 import { streamUpdatedAtStore } from "./streamUpdatedAtStore";
 import { streamLogStore, type StreamLogEvent } from "./streamLogStore";
 import { streamFilterPassLogStore } from "./streamFilterPassLogStore";
+import { tapeClient } from "../../lib/tapeClient";
 
 export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -267,6 +268,8 @@ type StreamSignalLatch = {
   side: "Long" | "Short";
   qualifiedSince: number;
   lastSeenAt: number;
+  bounceCount: number;    // how many signal drop/recovery cycles happened (ремонт count)
+  latchOrigin: string;   // "new" | "hist" | "primed" | "cont"
 };
 
 type StreamMinMax = {
@@ -857,7 +860,8 @@ function syncStreamSignalLatches(
   primeImmediately = false,
   latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
   primedTickers?: ReadonlySet<string>,
-  minuteQualifiedTickers?: ReadonlySet<string>
+  minuteQualifiedTickers?: ReadonlySet<string>,
+  windowExitedMinutes?: ReadonlyMap<string, number>
 ): StreamSignalLatch[] {
   if (!autoEnabled || !automationConfig?.strategyModeEnabled) return [];
 
@@ -921,14 +925,34 @@ function syncStreamSignalLatches(
     const minuteAlignedNow = nowMinuteIdx * 60_000;
     const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
     const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
+    // If this ticker exited the entry window this minute OR last minute (sigma dipped/spiked),
+    // push qualifiedSince forward so dispatch waits until the next minute boundary after the
+    // exit — matching scanner: a dip resets the consecutive-candle streak and the new start
+    // bar is only available one bar later.
+    //   exitedThisMinute (dip at T:40, recovery at T:50): qualifiedSince = T+1:00
+    //   exitedPrevMinute (dip at T:40, recovery at T+1:30): qualifiedSince = T+1:00 (= minuteAlignedNow)
+    // Both produce qualifiedSince = T+1:00, so hasCompletedStreamHoldWindow fires at T+2 for mHC=0.
+    const exitMinute = windowExitedMinutes?.get(row.ticker);
+    const freshQualifiedSince =
+      exitMinute === nowMinuteIdx ? minuteAlignedNow + 60_000 :
+      exitMinute === nowMinuteIdx - 1 ? minuteAlignedNow :
+      completedSignalMinuteBoundary;
+    // Track how many signal drop/recovery cycles this latch has seen.
+    // A bounce = latch was absent (signal below threshold) and just recovered,
+    // AND windowExitedMinutes recorded the exit → qualifiedSince pushed forward.
+    const hadBounce = !existing && exitMinute != null;
+    const prevBounceCount = existing?.bounceCount ?? 0;
+    const latchOrigin: string = existing ? "cont" : isPrimed ? "primed" : historic ? "hist" : "new";
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
       qualifiedSince: existing?.qualifiedSince
         ?? historic?.qualifiedSince
-        ?? (isPrimed ? primedQualifiedSince : completedSignalMinuteBoundary),
+        ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince),
       lastSeenAt: now,
+      bounceCount: hadBounce ? prevBounceCount + 1 : prevBounceCount,
+      latchOrigin,
     });
   }
 
@@ -2047,13 +2071,30 @@ export function useStreamEngine({
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const activeScannerTickersRef = useRef<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>(activeScannerTickers ?? []);
   const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
-  // Accumulates above-threshold tickers across ALL polls within the current (in-progress) minute.
-  const minuteAccumRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
-  // Frozen union set for the last FULLY completed minute — used to gate latch creation and
-  // hold-streak eviction, so a ticker that only crossed threshold between polls (not caught by
-  // a single point-in-time sample) still counts as qualified for that minute.
-  const minuteSnapshotRef = useRef<{ minuteIdx: number; aboveSet: Set<string> } | null>(null);
+  // Accumulates above-threshold tickers and hi/lo sigma across ALL polls within the current
+  // (in-progress) minute. aboveSet = boolean union above startAbs (existing gate logic).
+  // sigmaHiMap/sigmaLoMap = max/min |sigma| per ticker across every poll this minute,
+  // including HOLD rows — sent to the tape server on minute rollover so the scanner can use
+  // loAbs for the minHoldCandles consecutive check: the streak resets if loAbs < startAbs,
+  // meaning the signal dipped below the threshold at some point during the minute.
+  const minuteAccumRef = useRef<{
+    minuteIdx: number;
+    aboveSet: Set<string>;
+    sigmaHiMap: Map<string, number>;
+    sigmaLoMap: Map<string, number>;
+  } | null>(null);
+  const minuteSnapshotRef = useRef<{
+    minuteIdx: number;
+    aboveSet: Set<string>;
+    sigmaHiMap: Map<string, number>;
+    sigmaLoMap: Map<string, number>;
+  } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
+  // Tickers that dropped out of the entry window (sigma < startAbs or > startAbsMax)
+  // during the current minute: ticker → minuteIdx when exit occurred. Used to force
+  // qualifiedSince = current minute boundary when the latch is recreated in the same
+  // minute, so dispatch waits until the NEXT minute boundary (matching scanner semantics).
+  const windowExitMinuteRef = useRef<Map<string, number>>(new Map());
   // Tracks when each ticker first qualified above startAbs — always active, independent of automation.
   // Used for minHoldCandles display filter (same consecutive-candle logic as tape Scanner).
   const displayQualifiedSinceRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
@@ -2815,17 +2856,37 @@ export function useStreamEngine({
     // avoiding poll-timing luck deciding whether a real signal ever gets a latch at all.
     if (minuteAccumRef.current != null && minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
       minuteSnapshotRef.current = minuteAccumRef.current;
+      const completed = minuteAccumRef.current;
+      if (completed.sigmaHiMap.size > 0) {
+        const items = Array.from(completed.sigmaHiMap.entries()).map(([key, hiAbs]) => {
+          const [ticker, side] = key.split("|") as [string, "Long" | "Short"];
+          const loAbs = completed.sigmaLoMap.get(key) ?? hiAbs;
+          return { ticker, side, hiAbs, loAbs };
+        });
+        tapeClient.reportMinuteSigmaRange(localDayKey(), completed.minuteIdx, items).catch(() => {});
+      }
       minuteAccumRef.current = null;
+      // Purge window-exit records older than 1 minute. Keep the previous minute's entries
+      // so that cross-minute recovery (dip at T:40, signal back at T+1:30) is also caught.
+      windowExitMinuteRef.current.forEach((minuteIdx, ticker) => {
+        if (minuteIdx < currentMinuteIdx - 1) windowExitMinuteRef.current.delete(ticker);
+      });
     }
     // Mirror Scanner (TapeArbitrageEngine) exactly: at each minute boundary, any ticker whose
     // sigma was below startAbs for the ENTIRE boundary minute has its hold streak broken
     // (pending-start reset). Evict before the main loop so evicted tickers can be re-added with
     // a fresh qualifiedSince (counter=0), matching Scanner's "new pending start" semantics.
     const prevMinSnap = minuteSnapshotRef.current;
-    if (prevMinSnap != null && prevMinSnap.minuteIdx === currentMinuteIdx - 1) {
-      displayQualifiedSinceRef.current.forEach((_, k) => {
-        if (!prevMinSnap.aboveSet.has(k)) displayQualifiedSinceRef.current.delete(k);
-      });
+    if (prevMinSnap != null) {
+      if (prevMinSnap.minuteIdx === currentMinuteIdx - 1) {
+        displayQualifiedSinceRef.current.forEach((_, k) => {
+          if (!prevMinSnap.aboveSet.has(k)) displayQualifiedSinceRef.current.delete(k);
+        });
+      } else if (prevMinSnap.minuteIdx < currentMinuteIdx - 1) {
+        // Snapshot is stale (minute gap in SSE data): can't verify continuity, reset all.
+        // Mirrors scanner which resets the consecutive-bar streak on any tape gap.
+        displayQualifiedSinceRef.current.clear();
+      }
     }
 
     for (const row of decisionsWithWindowGuard) {
@@ -2841,11 +2902,8 @@ export function useStreamEngine({
         } else {
           displayQualifiedSinceRef.current.get(key)!.lastSeenAt = nowForDisplay;
         }
-        // Promote to "displayed" once minHoldCandles is met
-        const history = displayQualifiedSinceRef.current.get(key)!;
-        if (nowForDisplay - history.qualifiedSince >= effectiveMinHoldMs) {
-          signalDisplayedRef.current.set(key, nowForDisplay);
-        }
+        // Mark as displayed immediately — display shows all candidates, order dispatch is gated separately
+        signalDisplayedRef.current.set(key, nowForDisplay);
       } else if (isAboveEndAbs && signalDisplayedRef.current.has(key)) {
         // Decaying signal: sigma in [endAbs, startAbs) — still above endAbs close threshold, keep alive
         signalDisplayedRef.current.set(key, nowForDisplay);
@@ -2871,11 +2929,8 @@ export function useStreamEngine({
         if (absSignal < (startAbs ?? 0)) {
           return signalDisplayedRef.current.has(key);
         }
-        // Fresh signals: apply minHoldCandles
-        if (effectiveMinHoldMs <= 0) return true;
-        const history = displayQualifiedSinceRef.current.get(key);
-        if (!history) return false;
-        return nowForDisplay - history.qualifiedSince >= effectiveMinHoldMs;
+        // Fresh signals: show immediately — order dispatch is gated by minHold via latch path
+        return true;
       })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
@@ -2884,12 +2939,25 @@ export function useStreamEngine({
     // previous minute — not this in-progress accumulator, so a ticker only needs to have
     // crossed threshold at SOME point during a minute, not at the specific instant we happened
     // to poll, to count as qualified for that minute.
-    if (filtered.length > 0) {
+    if (decisionsWithWindowGuard.length > 0) {
       if (minuteAccumRef.current == null || minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
-        minuteAccumRef.current = { minuteIdx: currentMinuteIdx, aboveSet: new Set<string>() };
+        minuteAccumRef.current = {
+          minuteIdx: currentMinuteIdx,
+          aboveSet: new Set<string>(),
+          sigmaHiMap: new Map(),
+          sigmaLoMap: new Map(),
+        };
       }
       for (const row of decisionsWithWindowGuard) {
-        if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(`${row.ticker}|${row.side}`);
+        const key = `${row.ticker}|${row.side}`;
+        if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(key);
+        if (row.signal != null) {
+          const absVal = Math.abs(row.signal);
+          const prevHi = minuteAccumRef.current.sigmaHiMap.get(key);
+          const prevLo = minuteAccumRef.current.sigmaLoMap.get(key);
+          if (prevHi == null || absVal > prevHi) minuteAccumRef.current.sigmaHiMap.set(key, absVal);
+          if (prevLo == null || absVal < prevLo) minuteAccumRef.current.sigmaLoMap.set(key, absVal);
+        }
       }
     }
 
@@ -2905,7 +2973,12 @@ export function useStreamEngine({
       wantsPrime,
       latchQualifiedSinceHistoryRef.current,
       wantsPrime ? primedFromScannerRef.current : undefined,
-      minuteSnapshotRef.current?.aboveSet
+      minuteSnapshotRef.current?.minuteIdx === currentMinuteIdx - 1
+        ? minuteSnapshotRef.current!.aboveSet
+        : minuteSnapshotRef.current != null
+          ? (new Set<string>() as ReadonlySet<string>) // stale snapshot: block new latches until T+1 (aligns with scanner start-at-T)
+          : undefined, // null = startup: pass all through (existing behavior)
+      windowExitMinuteRef.current
     );
     // Consume the prime flag only when automation is running AND there were signals
     // to latch. If the stream wasn't ready yet (no decisions → no latches), keep the
@@ -2938,6 +3011,10 @@ export function useStreamEngine({
       const exitedAbove = hasEntryWindowUpperBound && startAbsMax != null && absSignal > startAbsMax;
       if (exitedBelow || exitedAbove) {
         latchQualifiedSinceHistoryRef.current.delete(row.ticker);
+        // Record that this ticker exited the window this minute. If signal recovers
+        // in the same minute, the latch will use currentMinute (not previousMinute)
+        // as qualifiedSince — forcing the hold wait to restart from this minute.
+        windowExitMinuteRef.current.set(row.ticker, currentMinuteIdx);
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
@@ -3632,6 +3709,10 @@ export function useStreamEngine({
           const _isBeta = automationConfig?.betaMode === true;
           const _effectiveRatingMode = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null;
           const _effectiveRatingType = ratingType ?? "any";
+          // For EXIT events: capture the opposite-side sigma that triggered the cover
+          const _exitSigmaAbs = isExitIntent
+            ? (toNum(_rawSig ? (_isLong ? _rawSig.zapSsigma : _rawSig.zapLsigma) : null) ?? null)
+            : null;
           const _logBase = {
             ts: dispatchAt,
             timeStr: _fmtMs(dispatchAt),
@@ -3642,6 +3723,12 @@ export function useStreamEngine({
             signalClass: signalClass ?? null,
             ratingMode: _effectiveRatingMode,
             ratingType: _effectiveRatingType,
+            // Diagnostic fields
+            intentId: intent.id,
+            isHedge: false,
+            latchBounces: _latch?.bounceCount ?? 0,
+            latchOrigin: _latch?.latchOrigin ?? null,
+            exitSigmaAbs: _exitSigmaAbs,
             ticker: intent.ticker,
             benchmark: intent.benchmark,
             side: intent.side as "Long" | "Short",
@@ -3861,6 +3948,13 @@ export function useStreamEngine({
               signalClass: signalClass ?? null,
               ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null,
               ratingType: ratingType ?? "any",
+              intentId: hedgeIntentId,
+              isHedge: true,
+              latchBounces: 0,
+              latchOrigin: null,
+              exitSigmaAbs: isExitIntent
+                ? (toNum(hedgeRaw ? (hedgeIsLong ? hedgeRaw.zapSsigma : hedgeRaw.zapLsigma) : null) ?? null)
+                : null,
               ticker: intent.benchmark,
               benchmark: intent.ticker,
               side: hedgeSide,

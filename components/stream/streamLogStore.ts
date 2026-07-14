@@ -19,6 +19,13 @@ export type StreamLogEntry = {
   ratingMode: string | null;
   ratingType: string | null;
 
+  // Diagnostic: duplication & repair tracking
+  intentId: string | null;       // unique intent ID — same ID dispatched twice = duplication bug
+  isHedge: boolean;              // true for hedge-leg dispatches
+  latchBounces: number;          // how many times signal dropped/recovered before dispatch (ремонт count)
+  latchOrigin: string | null;    // "new" | "hist" | "primed" | "cont" — how the latch was (re)created
+  exitSigmaAbs: number | null;   // for EXIT events: opposite-side σ that triggered the cover
+
   ticker: string;
   benchmark: string;
   side: "Long" | "Short";
@@ -212,7 +219,9 @@ export function useStreamLogEntries(): StreamLogEntry[] {
 // ---- CSV export -----------------------------------------------------------
 
 const CSV_HEADERS = [
-  "seq", "date", "time", "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
+  "seq", "date", "time",
+  "intentId", "isHedge", "latchBounces", "latchOrigin", "exitSigmaAbs",
+  "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
   "ticker", "bench", "side",
   "sigmaZap", "sigmaAbs", "zapSsigma", "zapLsigma", "zapPct",
   "bidPct", "askPct", "benchBidPct", "benchAskPct",
@@ -275,6 +284,11 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
       e.seq,
       localDayKey(e.ts),
       csvCell(e.timeStr),
+      csvCell(e.intentId ?? ""),
+      e.isHedge ? "1" : "0",
+      e.latchBounces,
+      csvCell(e.latchOrigin ?? ""),
+      fmt4(e.exitSigmaAbs),
       e.event,
       e.status,
       e.betaMode ? "1" : "0",

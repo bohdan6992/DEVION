@@ -7185,13 +7185,15 @@ function ScannerAnalyticsLog({
               <th className="text-left">AddTimes</th>
               <th className="text-left">Addσ</th>
               <th className="text-left">Event</th>
+              <th className="text-left text-rose-400" title="How episode closed: Active/WindowEnd/EndOfDay/Print">CloseMode</th>
               <th className="text-left">Ticker</th>
               <th className="text-left">Bench</th>
               <th className="text-left">Side</th>
               <th className="text-left text-cyan-300">DecisionCtx</th>
-              <th className="text-right text-violet-400">σZap</th>
-              <th className="text-right text-violet-300">ZAPL</th>
-              <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right text-violet-400">σStart</th>
+              <th className="text-right text-violet-300">σPeak</th>
+              <th className="text-right text-violet-300">σEnd</th>
+              <th className="text-right text-rose-300" title="Opposite-side σ at close — the actual cover trigger value">ExitσAbs</th>
               <th className="text-right">Tick%</th>
               <th className="text-right">Bench%</th>
               <th className="text-right text-sky-400">Corr</th>
@@ -7199,7 +7201,8 @@ function ScannerAnalyticsLog({
               <th className="text-right text-sky-300">σHist</th>
               <th className="text-right text-amber-400">Rating</th>
               <th className="text-right text-amber-300">Total</th>
-              <th className="text-right">Hold</th>
+              <th className="text-right">StartBar</th>
+              <th className="text-right">BarHold</th>
               <th className="text-right">MinHold</th>
               <th className="text-left text-sky-300">GateCtx</th>
               <th className="text-left text-fuchsia-300">ScaleCtx</th>
@@ -7207,8 +7210,8 @@ function ScannerAnalyticsLog({
               <th className="text-left">Filters</th>
               <th className="text-left">Reason</th>
               <th className="text-right text-emerald-400">P&amp;L</th>
-              <th className="text-left">Peak</th>
-              <th className="text-left">End</th>
+              <th className="text-left">PeakTime</th>
+              <th className="text-left">EndTime</th>
               <th className="text-right">Entries</th>
               <th className="text-right">Adds</th>
             </tr>
@@ -7242,6 +7245,14 @@ function ScannerAnalyticsLog({
               const gateCtx = buildGateContext(entryPct, exitPct);
               const scaleCtx = buildScaleContext(entryCount, addsCount);
               const execCtx = buildExecContext();
+              const closeModeStr = r.closeMode ?? "—";
+              const closeModeColor =
+                r.closeMode === "Active" ? "text-rose-400 border-rose-500/40 bg-rose-500/10" :
+                r.closeMode === "Passive" ? "text-amber-400 border-amber-500/40 bg-amber-500/10" :
+                "text-zinc-400 border-zinc-500/30 bg-zinc-500/10";
+              const exitSigmaAbs = r.exitMetricAbs != null ? Math.abs(r.exitMetricAbs) : null;
+              const startBar = minuteIdxToClockLabel(r.startMinuteIdx);
+              const barHold = Number.isFinite(holdMin) ? `${holdMin}m` : "—";
               return (
                 <tr key={r.episodeId ?? i} className="border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]">
                   <td className="text-zinc-600 whitespace-nowrap">{fmtDateLabel(r.dateNy ?? r.date ?? r.tradeDateNy ?? "—")}</td>
@@ -7253,13 +7264,19 @@ function ScannerAnalyticsLog({
                       "inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider bg-zinc-500/20 text-zinc-300 border border-zinc-500/30"
                     )}>EPISODE</span>
                   </td>
+                  <td>
+                    <span className={clsx("inline-flex items-center px-1 py-0.5 rounded text-[9px] font-mono font-bold border", closeModeColor)}>{closeModeStr}</span>
+                  </td>
                   <td className="text-zinc-100 font-semibold">{r.ticker}</td>
                   <td className="text-zinc-400">{r.benchTicker}</td>
                   <td><SideBadge side={r.side} /></td>
                   <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
                   <td className="text-right tabular-nums text-violet-300">{num(r.startMetric, 2)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{num(r.peakMetric, 2)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{num(r.endMetric, 2)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{num(r.peakMetricAbs ?? r.peakMetric, 2)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{num(r.endMetricAbs ?? r.endMetric, 2)}</td>
+                  <td className={clsx("text-right tabular-nums font-semibold", exitSigmaAbs != null && r.closeMode === "Active" ? "text-rose-300" : "text-zinc-600")}>
+                    {exitSigmaAbs != null ? exitSigmaAbs.toFixed(2) : "·"}
+                  </td>
                   <td className={clsx("text-right tabular-nums", entryPct != null && entryPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(entryPct)}</td>
                   <td className={clsx("text-right tabular-nums", exitPct != null && exitPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(exitPct)}</td>
                   <td className="text-right tabular-nums text-sky-300">{num(r.corr, 2)}</td>
@@ -7267,7 +7284,8 @@ function ScannerAnalyticsLog({
                   <td className="text-right tabular-nums text-sky-200">{num(r.sigma, 2)}</td>
                   <td className="text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
                   <td className="text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
-                  <td className="text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-500 whitespace-nowrap">{startBar}</td>
+                  <td className="text-right tabular-nums text-zinc-400">{barHold}</td>
                   <td className="text-right tabular-nums text-zinc-500">{context?.minHoldCandles ?? r.minHoldCandles ?? "—"}</td>
                   <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
                   <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
@@ -7287,7 +7305,7 @@ function ScannerAnalyticsLog({
             })}
             {!rows.length && (
               <tr>
-                <td colSpan={31} className="px-4 py-10 text-center text-zinc-600">
+                <td colSpan={35} className="px-4 py-10 text-center text-zinc-600">
                   No analytics trades yet. Run Analytics for a date range.
                 </td>
               </tr>
@@ -16054,6 +16072,11 @@ export default function ArbitrageScanner({
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
                       </th>
+                      <th className="text-left p-2.5 border-l border-white/10 text-rose-400" rowSpan={2} title="How episode closed: Active (σ threshold) / Passive (window end)">Close</th>
+                      <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Bars held (endMinuteIdx − startMinuteIdx)">Hold</th>
+                      <th className="text-right p-2.5 text-zinc-500" rowSpan={2} title="Minimum hold candles config">mHC</th>
+                      <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Number of entries (1 = initial only)">Ent</th>
+                      <th className="text-right p-2.5 text-sky-400" rowSpan={2} title="Number of scale-in adds">Adds</th>
                       <th className="text-center p-2.5 border-l border-white/10 text-emerald-400" colSpan={3}>
                         P&amp;L
                       </th>
@@ -16134,6 +16157,24 @@ export default function ArbitrageScanner({
                             <SideBadge side={r.side} />
                           </td>
 
+                          <td className="p-2.5 border-l border-white/10">
+                            {r.closeMode
+                              ? <span className={clsx("inline-flex items-center px-1 py-0.5 rounded text-[9px] font-mono font-bold border",
+                                  r.closeMode === "Active" ? "text-rose-400 border-rose-500/40 bg-rose-500/10" : "text-amber-400 border-amber-500/40 bg-amber-500/10"
+                                )}>{r.closeMode}</span>
+                              : <span className="text-zinc-700">—</span>}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-400">
+                            {Number.isFinite(r.endMinuteIdx - r.startMinuteIdx) ? `${r.endMinuteIdx - r.startMinuteIdx}m` : "—"}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.minHoldCandles ?? "—"}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-400">
+                            {r.entryCount != null ? Math.max(1, Math.trunc(Number(r.entryCount))) : 1}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-sky-300">
+                            {r.entryCount != null ? Math.max(0, Math.trunc(Number(r.entryCount)) - 1) : 0}
+                          </td>
+
                           <td className={clsx("p-2.5 text-right tabular-nums border-l border-white/10", (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
                             {num(r.rawPnlUsd ?? null, 2)}
                           </td>
@@ -16192,7 +16233,7 @@ export default function ArbitrageScanner({
                     })}
                     {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={28} className="p-8 text-center text-zinc-500">
+                        <td colSpan={33} className="p-8 text-center text-zinc-500">
                           No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>
