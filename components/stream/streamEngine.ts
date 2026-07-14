@@ -260,6 +260,12 @@ export type StreamAutomationConfig = {
   betaMode: boolean;
   /** Time-of-day (HH:MM, local) after which auto-dispatch of new ENTRY orders stops. */
   startCutoffTime: string;
+  /**
+   * PRE session only: time-of-day (HH:MM, local) within the 21:00-09:30 window at which
+   * position-taking actually begins. Defaults to 21:00 (the window's own start); e.g. "00:00"
+   * skips the whole 21:00-23:59 evening portion and only goes live at midnight.
+   */
+  preStartTime: string;
 };
 
 type StreamSignalLatch = {
@@ -466,14 +472,55 @@ function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
 function getStrategySessionStartMinutes(signalClass: string | undefined): number | null {
   const normalized = (signalClass ?? "").trim().toLowerCase();
   if (normalized === "ark") return ARK_SESSION_START_MINUTES;
-  if (normalized === "pre") return 1;
+  // PRE wraps past midnight (21:00 -> 09:30 next day) — a single "nowMinutes < X" scalar can't
+  // express that wrap-around, so it's handled separately via isWithinPreSessionLive at the gate
+  // call sites instead of a floor here.
   return null;
+}
+
+function isPreSignalClass(signalClass: string | undefined): boolean {
+  return (signalClass ?? "").trim().toLowerCase() === "pre";
+}
+
+// Maps a wall-clock minute-of-day onto PRE's own axis (mirrors Scanner's
+// TapeArbClasses.ResolvePrePhysical convention): negative for the 21:00-23:59 evening portion,
+// non-negative for the 00:00-09:30 morning portion, null if outside the PRE window entirely
+// (09:31-20:59 dead zone).
+export function toPreRelativeMinutes(clockMinutes: number): number | null {
+  if (clockMinutes >= PRE_SESSION_START_MINUTES) return clockMinutes - 1440;
+  if (clockMinutes <= PRE_SESSION_END_MINUTES) return clockMinutes;
+  return null;
+}
+
+// PRE session window (mirrors Scanner's TapeArbClasses PreFrom/PreTo): 21:00 -> 09:30 next day,
+// but the START edge is user-configurable (the "START" field next to CUTOFF) — typing e.g.
+// 00:00 skips the whole 21:00-23:59 evening portion and only goes live at midnight.
+function isWithinPreSessionLive(nowMinutes: number, preStartTime: string | undefined): boolean {
+  const configuredClock = parseTimeToMinutes(preStartTime, PRE_SESSION_START_MINUTES);
+  const startRel = toPreRelativeMinutes(configuredClock) ?? -(1440 - PRE_SESSION_START_MINUTES);
+  const nowRel = toPreRelativeMinutes(nowMinutes);
+  if (nowRel == null) return false;
+  return nowRel >= startRel && nowRel <= PRE_SESSION_END_MINUTES;
+}
+
+// For ARK (same-day window), "past cutoff" is a plain nowMinutes>=cutoff comparison — true for
+// the rest of the day too, which is harmless since ARK-classed decisions don't exist outside
+// its window anyway. For PRE (wraps past midnight), that same plain comparison would go
+// permanently true the instant nowMinutes reaches 21:00 (1260 >= a ~09:20 cutoff), immediately
+// blocking/cutting off the session at the moment it starts — so for PRE, "past cutoff" only
+// applies to the tail/morning portion of the session (00:00-09:30), never the 21:00-23:59
+// opening portion.
+function isPastSessionCutoff(nowMinutes: number, cutoffMinutes: number, isPreSession: boolean): boolean {
+  if (isPreSession) return nowMinutes <= PRE_SESSION_END_MINUTES && nowMinutes >= cutoffMinutes;
+  return nowMinutes >= cutoffMinutes;
 }
 
 // ARK session start (mirrors Scanner's TapeArbClasses.ArkFrom window). The automation toggle
 // can be switched on any time, but no new ENTRY latch/position is created before this minute —
 // it just waits, same as BLUE effectively "waits" from 00:00 (i.e. never blocks).
 const ARK_SESSION_START_MINUTES = 4 * 60; // 04:00
+const PRE_SESSION_START_MINUTES = 21 * 60; // 1260 (21:00)
+const PRE_SESSION_END_MINUTES = 9 * 60 + 30; // 570 (09:30, next-day continuation)
 
 function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
   return rawItems
@@ -857,6 +904,7 @@ function syncStreamSignalLatches(
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   sessionStartMinutes: number | null = null,
+  isPreSession = false,
   primeImmediately = false,
   latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
   primedTickers?: ReadonlySet<string>,
@@ -872,11 +920,14 @@ function syncStreamSignalLatches(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return [];
-  if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) return [];
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) return [];
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) return [];
   // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
   // it just waits here instead of creating any latches.
   if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return [];
+  // PRE wraps past midnight (21:00 -> 09:30 next day) — can't be expressed as a single scalar
+  // floor, so it's gated separately here via the wrap-aware helper.
+  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig.preStartTime)) return [];
 
   const prevMap = new Map(prev.map((row) => [row.ticker, row]));
   const next: StreamSignalLatch[] = [];
@@ -1098,6 +1149,7 @@ export function syncStreamPositions(
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   sessionStartMinutes: number | null = null,
+  isPreSession = false,
   loggedOpenTickers: ReadonlySet<string> = new Set(),
   dispatchingEntryTickers: ReadonlySet<string> = new Set()
 ): StreamPosition[] {
@@ -1284,7 +1336,7 @@ export function syncStreamPositions(
         // entries don't fire at deviations far outside the configured startAbsMax cap.
         const entryIsHold = decision?.status === "HOLD";
         const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
-        const cutoffReached = entryCutoffEnabled && nowMinutes >= startCutoffMinutes;
+        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession);
         if (inPrintWindow || entryIsHold || cutoffReached || (!entryStillReady && !withinGrace)) {
           // If a real-mode dispatch is in-flight for this ticker (between
           // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
@@ -1521,11 +1573,12 @@ export function syncStreamPositions(
     ).length;
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
-      if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
-      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) continue;
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) continue;
       // Session hasn't started yet (e.g. ARK before 04:00) — same wait-then-work behavior as
       // the latch gate above.
       if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) continue;
+      if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) continue;
       if (openCount >= maxOpenAllowed) continue;
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
       // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
@@ -1800,6 +1853,7 @@ function buildFallbackPendingEntryPositions(
   automationConfig: StreamAutomationConfig | undefined,
   entryCutoffEnabled: boolean,
   sessionStartMinutes: number | null,
+  isPreSession = false,
 ): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
 
@@ -1807,9 +1861,10 @@ function buildFallbackPendingEntryPositions(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && nowMinutes >= printStartMinutes) return existingPositions;
-  if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) return existingPositions;
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) return existingPositions;
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) return existingPositions;
   if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return existingPositions;
+  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) return existingPositions;
 
   // Respect the same entryCutoffEnabled guard used everywhere else:
   // global band (entryCutoffEnabled=false) has no position cap.
@@ -2018,6 +2073,7 @@ export function useStreamEngine({
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
   const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass);
+  const strategyIsPreSession = isPreSignalClass(signalClass);
   const actionLogStorageKey = streamActionLogStorageKey(signalClass);
   const [currentDayKey, setCurrentDayKey] = useState<string>(() => localDayKey());
   useEffect(() => {
@@ -2699,6 +2755,7 @@ export function useStreamEngine({
             type,
             source: "stream-manual",
             note: `manual ${action}`,
+            signalClass: signalClass ?? null,
             delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
             delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
           }),
@@ -2714,7 +2771,7 @@ export function useStreamEngine({
     } finally {
       setStreamManualExecutionBusy(false);
     }
-  }, [automationConfig?.queueDelayMaxSeconds, automationConfig?.queueDelayMinSeconds, refreshExecutionStatus]);
+  }, [automationConfig?.queueDelayMaxSeconds, automationConfig?.queueDelayMinSeconds, refreshExecutionStatus, signalClass]);
 
   const refresh = useCallback(async (options?: { refreshBridge?: boolean }) => {
     if (refreshInFlightRef.current) return;
@@ -2970,6 +3027,7 @@ export function useStreamEngine({
       automationConfig,
       entryCutoffEnabled,
       strategySessionStartMinutes,
+      strategyIsPreSession,
       wantsPrime,
       latchQualifiedSinceHistoryRef.current,
       wantsPrime ? primedFromScannerRef.current : undefined,
@@ -3018,7 +3076,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, strategyIsPreSession, openLoggedTickers, dispatchingEntryTickersRef.current);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3052,6 +3110,7 @@ export function useStreamEngine({
         automationConfig,
         entryCutoffEnabled,
         strategySessionStartMinutes,
+        strategyIsPreSession,
       );
       intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
     }
@@ -3368,7 +3427,7 @@ export function useStreamEngine({
     const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
     const cutoffDue =
       entryCutoffEnabled &&
-      nowMinutes >= startCutoffMinutesNow &&
+      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession) &&
       cutoffHotkeySentKeyRef.current !== cutoffKey;
 
     // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
@@ -3399,7 +3458,7 @@ export function useStreamEngine({
       // entries) then, 1s later, Ctrl+O (print-close everything open) — exactly once per
       // cutoff crossing. This runs before the separate printStartTime-driven CLOSE_ALL_PRINT
       // dispatch below, so if both times coincide Ctrl+Q still always reaches TradingApp first.
-      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutesNow) {
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession)) {
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
@@ -3449,6 +3508,7 @@ export function useStreamEngine({
                 type: "ExitPrint",
                 note: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"}`,
                 source: "stream-auto",
+                signalClass: signalClass ?? null,
                 hotkeyOverride: "Ctrl+O",
               }),
             });
@@ -3543,25 +3603,16 @@ export function useStreamEngine({
           continue;
         }
 
-        const getNightHotkeyOverride = (intentType: string): string | undefined => {
-          if (signalClass !== "blue" && signalClass !== "pre") return undefined;
-          const h = new Date().getHours();
-          if (h >= 4) return undefined;
-          switch (intentType) {
-            case "EnterLongAggressive": return "Ctrl+F3";
-            case "EnterShortAggressive": return "Ctrl+F4";
-            case "ExitActive":
-            case "ExitPrint": return "Ctrl+B";
-            default: return undefined;
-          }
-        };
-
+        // Pre-04:00 NY "early session" hotkey switching (Ctrl+F3/F4/B for BLUE/PRE) is now
+        // decided server-side, off the server's own NY clock, via TradingAppActionResolver.cs —
+        // signalClass below is what it gates on. (Previously a client-clock-based
+        // getNightHotkeyOverride computed a hotkeyOverride here, but the live PythonScript
+        // transport never consulted that field — dead code, removed.)
         const queueLeg = async (payload: {
           intentId: string;
           ticker: string;
           type: string;
           note: string;
-          hotkeyOverride?: string;
         }) => {
           const response = await fetch(tradingAppBridgeUrl("/queue"), {
             method: "POST",
@@ -3572,9 +3623,9 @@ export function useStreamEngine({
               type: payload.type,
               note: payload.note,
               source: "stream-auto",
+              signalClass: signalClass ?? null,
               delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
               delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
-              ...(payload.hotkeyOverride ? { hotkeyOverride: payload.hotkeyOverride } : {}),
             }),
           });
 
@@ -3589,7 +3640,6 @@ export function useStreamEngine({
           ticker: string;
           type: string;
           note: string;
-          hotkeyOverride?: string;
         }) => {
           let lastError: unknown = null;
           for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -3795,7 +3845,6 @@ export function useStreamEngine({
               ticker: intent.ticker,
               type,
               note: intent.reason,
-              hotkeyOverride: getNightHotkeyOverride(type),
             });
           } catch (err) {
             // Dispatch failed — roll back so it can be retried next cycle.
@@ -3999,7 +4048,6 @@ export function useStreamEngine({
                 ticker: intent.benchmark,
                 type: benchmarkType,
                 note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
-                hotkeyOverride: getNightHotkeyOverride(benchmarkType),
               });
             } catch (err) {
               dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);

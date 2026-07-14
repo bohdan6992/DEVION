@@ -17,7 +17,7 @@ import ArbitrageStreamView from "../stream/ArbitrageStreamView";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
-import { buildStreamFilterConfig, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
+import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamFilterPassLogStore, downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
@@ -452,6 +452,7 @@ type ScannerLogContext = {
   endAbs: number;
   minHoldCandles: number;
   startCutoffMinuteIdx: number | null;
+  preStartMinuteIdx: number | null;
   dilutionMode: string;
   dilutionStep: number;
   maxAdds: number;
@@ -472,6 +473,7 @@ type PaperArbAnalyticsRequest = {
   closeMode?: PaperArbCloseMode;
   minHoldCandles?: number;
   startCutoffMinuteIdx?: number | null;
+  preStartMinuteIdx?: number | null;
   priceMode?: PaperArbPriceMode;
   pnlMode?: PaperArbPnlMode;
   sizingMode?: PaperArbSizingMode;
@@ -1318,7 +1320,7 @@ function downloadEpisodesCsv(
 function sessionTimeChartRange(session: PaperArbSession): { from: number; to: number } {
   switch (session) {
     case "BLUE":  return { from: 0, to: 239 };
-    case "PRE":   return { from: 0, to: 570 };
+    case "PRE":   return { from: -180, to: 570 }; // 21:00 (prior day) -> 09:30
     case "ARK":   return { from: 241, to: 570 };
     case "OPEN":  return { from: 570, to: 600 };
     case "INTRA": return { from: 600, to: 959 };
@@ -1446,8 +1448,9 @@ function ratingBandToBinClassKey(band: PaperArbRatingBand): string {
     case "BLUE":
       return "blue";
     case "ARK":
-    case "PRE":
       return "ark";
+    case "PRE":
+      return "pre";
     case "OPEN":
       return "open";
     case "INTRA":
@@ -7415,6 +7418,9 @@ export default function ArbitrageScanner({
   const [startCutoffTime, setStartCutoffTime] = useState<string>(
     () => streamAutomationConfigOverride?.startCutoffTime ?? "09:20"
   );
+  const [preStartTime, setPreStartTime] = useState<string>(
+    () => streamAutomationConfigOverride?.preStartTime ?? "21:00"
+  );
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
   const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
@@ -8057,7 +8063,7 @@ export default function ArbitrageScanner({
 
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
-        if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
+        if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
         if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
@@ -8066,7 +8072,7 @@ export default function ArbitrageScanner({
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
 
-        if (controlledSession == null && (s.session === "BLUE" || s.session === "ARK" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB")) {
+        if (controlledSession == null && (s.session === "BLUE" || s.session === "ARK" || s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB")) {
           setSession(s.session);
           const restoredBand = ratingBandFromSession(s.session);
           if (controlledRuleBand != null) {
@@ -8087,6 +8093,15 @@ export default function ArbitrageScanner({
           const restoredCutoffTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
           setStartCutoffTime(restoredCutoffTime);
           onStreamAutomationConfigChange?.({ startCutoffTime: restoredCutoffTime });
+        }
+        if (typeof s.preStartMinuteIdx === "number" && s.preStartMinuteIdx >= -180 && s.preStartMinuteIdx <= 570) {
+          // Reverse of toPreRelativeMinutes: negative -> evening (add back the day length).
+          const clock = s.preStartMinuteIdx < 0 ? s.preStartMinuteIdx + 1440 : s.preStartMinuteIdx;
+          const h = Math.floor(clock / 60);
+          const m = clock % 60;
+          const restoredPreStartTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          setPreStartTime(restoredPreStartTime);
+          onStreamAutomationConfigChange?.({ preStartTime: restoredPreStartTime });
         }
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
@@ -8288,6 +8303,7 @@ export default function ArbitrageScanner({
       endAbs,
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+      preStartMinuteIdx: preStartToMinuteIdx(),
       pnlMode,
       priceMode,
       sizingMode,
@@ -8446,7 +8462,7 @@ export default function ArbitrageScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
@@ -9067,6 +9083,7 @@ export default function ArbitrageScanner({
     noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
     startCutoffTime,
+    preStartTime,
   }), [
     addDelayMinutes,
     closeMode,
@@ -9081,6 +9098,7 @@ export default function ArbitrageScanner({
     sizeValue,
     sizingMode,
     startCutoffTime,
+    preStartTime,
   ]);
 
   const streamTrackedSignalsEnabled =
@@ -9444,6 +9462,14 @@ export default function ArbitrageScanner({
     return h * 60 + m;
   }
 
+  // PRE's START field (position-taking start time, default 21:00) uses the same negative/
+  // non-negative relative-minute axis as TapeArbClasses.PreFrom on the backend — see
+  // toPreRelativeMinutes in streamEngine.ts for the full convention.
+  function preStartToMinuteIdx(): number {
+    const clock = parseTimeToMinuteIdx(preStartTime);
+    return clock == null ? -180 : (toPreRelativeMinutes(clock) ?? -180);
+  }
+
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const startAbsMaxNum = optNumOrNull(startAbsMax);
     const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
@@ -9469,6 +9495,7 @@ export default function ArbitrageScanner({
       closeMode,
       minHoldCandles: normalizedMinHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+      preStartMinuteIdx: preStartToMinuteIdx(),
       priceMode,
       pnlMode,
       sizingMode,
@@ -11473,6 +11500,7 @@ export default function ArbitrageScanner({
   const selectedRule = useMemo(() => {
     const bandMap: Partial<Record<PaperArbSession, PaperArbRatingBand>> = {
       BLUE: "BLUE",
+      PRE: "PRE",
       ARK: "ARK",
       OPEN: "OPEN",
       INTRA: "INTRA",
@@ -13258,6 +13286,105 @@ export default function ArbitrageScanner({
               <span className="flex h-8 items-center pr-3 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
             </div>
 
+            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="PRE session: position-taking actually begins at this time (default 21:00, the window's own start).">
+              <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">START</span>
+              {/* Hour stepper */}
+              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={23}
+                  step={1}
+                  value={Number(preStartTime.split(":")[0] ?? "21")}
+                  onChange={(e) => {
+                    const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
+                    const m = preStartTime.split(":")[1] ?? "00";
+                    const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
+                    setPreStartTime(nextPreStartTime);
+                    onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                  }}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") + 1));
+                      const m = preStartTime.split(":")[1] ?? "00";
+                      const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
+                      setPreStartTime(nextPreStartTime);
+                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                    }}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase pre-session start hour"
+                  >▲</button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") - 1));
+                      const m = preStartTime.split(":")[1] ?? "00";
+                      const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
+                      setPreStartTime(nextPreStartTime);
+                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                    }}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease pre-session start hour"
+                  >▼</button>
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
+              {/* Minute stepper */}
+              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={59}
+                  step={5}
+                  value={Number(preStartTime.split(":")[1] ?? "00")}
+                  onChange={(e) => {
+                    const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
+                    const h = preStartTime.split(":")[0] ?? "21";
+                    const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
+                    setPreStartTime(nextPreStartTime);
+                    onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                  }}
+                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") + 5));
+                      const h = preStartTime.split(":")[0] ?? "21";
+                      const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
+                      setPreStartTime(nextPreStartTime);
+                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                    }}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase pre-session start minute"
+                  >▲</button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") - 5));
+                      const h = preStartTime.split(":")[0] ?? "21";
+                      const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
+                      setPreStartTime(nextPreStartTime);
+                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
+                    }}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease pre-session start minute"
+                  >▼</button>
+                </div>
+              </div>
+            </div>
+
             <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20">
               <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>
               {/* Hour stepper */}
@@ -14342,6 +14469,7 @@ export default function ArbitrageScanner({
                     endAbs,
                     minHoldCandles,
                     startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+                    preStartMinuteIdx: preStartToMinuteIdx(),
                     dilutionMode,
                     dilutionStep,
                     maxAdds,
@@ -16044,6 +16172,7 @@ export default function ArbitrageScanner({
                         endAbs,
                         minHoldCandles,
                         startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+                        preStartMinuteIdx: preStartToMinuteIdx(),
                         dilutionMode,
                         dilutionStep,
                         maxAdds,
@@ -16262,6 +16391,7 @@ export default function ArbitrageScanner({
                 endAbs,
                 minHoldCandles,
                 startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+                preStartMinuteIdx: preStartToMinuteIdx(),
                 dilutionMode,
                 dilutionStep,
                 maxAdds,

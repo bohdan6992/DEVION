@@ -1753,6 +1753,15 @@ export default function ArbitrageStreamView({
         </div>
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Start</div>
+            {/* Read-only mirror of the new START stepper (toolbar, immediately left of CUTOFF) —
+                same reasoning as the Cutoff mirror below: that stepper is the single source of
+                truth, an editable field here would write to an override the engine ignores. */}
+            <div className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 flex items-center text-sm font-mono text-zinc-200">
+              {automationConfig.preStartTime}
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
             <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Cutoff</div>
             {/* Read-only mirror of the CUTOFF stepper (toolbar DELAY/CUTOFF control) — that
                 stepper is the single source of truth (drives local startCutoffTime state, which

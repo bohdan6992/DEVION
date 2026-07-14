@@ -35,8 +35,8 @@ export function getBestParamsRaw(row: any): Record<string, any> | null {
 export function sessionToClassKey(session: string): string {
   switch ((session ?? "").toUpperCase()) {
     case "BLUE": return "blue";
-    case "ARK":
-    case "PRE":  return "ark";
+    case "ARK":  return "ark";
+    case "PRE":  return "pre";
     case "OPEN": return "open";
     case "INTRA": return "intra";
     case "PRINT": return "print";
