@@ -56,7 +56,7 @@ function readInitialAutoRuleBand(): AutoRuleBand {
   if (typeof window === "undefined") return "GLOBAL";
   try {
     const raw = window.localStorage.getItem(AUTO_RULE_BAND_LS_KEY);
-    if (raw === "BLUE" || raw === "ARK" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
+    if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
       return raw;
     }
   } catch {
@@ -114,6 +114,7 @@ export default function AutoPageContainer() {
   const [sharedRatingRules, setSharedRatingRules] = useState<StreamRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
+    { band: "PRE", minRate: 0, minTotal: 0 },
     { band: "OPEN", minRate: 0, minTotal: 0 },
     { band: "INTRA", minRate: 0, minTotal: 0 },
     { band: "PRINT", minRate: 0, minTotal: 0 },

@@ -78,6 +78,26 @@ type PaperArbRatingRule = {
   minTotal: number;
 };
 
+const PAPER_ARB_RATING_BANDS: PaperArbRatingBand[] = ["BLUE", "ARK", "PRE", "OPEN", "INTRA", "PRINT", "POST", "GLOBAL"];
+
+function normalizePaperArbRatingRules(
+  rules: Array<{ band: PaperArbRatingBand; minRate: number; minTotal: number }>
+): PaperArbRatingRule[] {
+  const byBand = new Map<PaperArbRatingBand, PaperArbRatingRule>();
+  for (const band of PAPER_ARB_RATING_BANDS) {
+    byBand.set(band, { band, minRate: 0, minTotal: 0 });
+  }
+  for (const rule of rules) {
+    if (!PAPER_ARB_RATING_BANDS.includes(rule.band)) continue;
+    byBand.set(rule.band, {
+      band: rule.band,
+      minRate: Number(rule.minRate) || 0,
+      minTotal: Number(rule.minTotal) || 0,
+    });
+  }
+  return PAPER_ARB_RATING_BANDS.map((band) => byBand.get(band)!);
+}
+
 type ScannerAccent = {
   selection: string;
   dot: string;
@@ -7495,6 +7515,7 @@ export default function ArbitrageScanner({
   const [ratingRules, setRatingRules] = useState<PaperArbRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
+    { band: "PRE", minRate: 0, minTotal: 0 },
     { band: "OPEN", minRate: 0, minTotal: 0 },
     { band: "INTRA", minRate: 0, minTotal: 0 },
     { band: "PRINT", minRate: 0, minTotal: 0 },
@@ -8159,8 +8180,8 @@ export default function ArbitrageScanner({
               minRate: Number(x.minRate) || 0,
               minTotal: Number(x.minTotal) || 0,
             }))
-            .filter((x) => ["BLUE", "ARK", "OPEN", "INTRA", "PRINT", "POST", "GLOBAL"].includes(x.band));
-          if (rr.length) setRatingRules(rr);
+            .filter((x) => PAPER_ARB_RATING_BANDS.includes(x.band));
+          if (rr.length) setRatingRules(normalizePaperArbRatingRules(rr));
         }
         if (s.ratingEnabledBands && typeof s.ratingEnabledBands === "object") {
           setRatingEnabledBands((prev) => {
@@ -8177,7 +8198,7 @@ export default function ArbitrageScanner({
             };
 
             const hasAnyEnabled =
-              next.BLUE || next.ARK || next.OPEN || next.INTRA || next.PRINT || next.POST || next.GLOBAL;
+              next.BLUE || next.ARK || next.PRE || next.OPEN || next.INTRA || next.PRINT || next.POST || next.GLOBAL;
 
             // Backward-compat for old saved state where all bands were false.
             if (!hasAnyEnabled) next.GLOBAL = true;
@@ -11579,10 +11600,19 @@ export default function ArbitrageScanner({
   const setActiveRulePatch = (patch: Partial<PaperArbRatingRule>) => {
     setRatingRules((arr) => {
       const ix = arr.findIndex((x) => x.band === ruleBand);
-      if (ix < 0) return arr;
+      if (ix < 0) {
+        return normalizePaperArbRatingRules([
+          ...arr,
+          {
+            band: ruleBand,
+            minRate: Number(patch.minRate) || 0,
+            minTotal: Number(patch.minTotal) || 0,
+          },
+        ]);
+      }
       const cp = [...arr];
       cp[ix] = { ...cp[ix], ...patch };
-      return cp;
+      return normalizePaperArbRatingRules(cp);
     });
   };
 
@@ -12515,7 +12545,7 @@ export default function ArbitrageScanner({
                     }
                     setRatingEnabledBands({
                       BLUE: nextBand === "BLUE",
-                      ARK: nextBand === "ARK" || nextBand === "PRE",
+                      ARK: nextBand === "ARK",
                       PRE: nextBand === "PRE",
                       OPEN: nextBand === "OPEN",
                       INTRA: nextBand === "INTRA",
