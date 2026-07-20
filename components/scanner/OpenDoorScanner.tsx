@@ -6,7 +6,7 @@ import Link from "next/link";
 import { todayNyYmd } from "../../lib/time";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
-import { getArbitrageList } from "../../lib/trapClient";
+import { getArbitrageList, getOpendoorList } from "../../lib/trapClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
@@ -7376,6 +7376,182 @@ export default function OpenDoorScanner({
   const [openDoorUseStack, setOpenDoorUseStack] = useState(true);
   const [openDoorUseBench, setOpenDoorUseBench] = useState(true);
   const [openDoorUseDevSig, setOpenDoorUseDevSig] = useState(true);
+  // Historical P&L research (summary.csv only — no live paper-trading backend needed): for the
+  // selected exit class, "would we have made money buying/selling EVERY historical candidate
+  // whose entry-side bin cleared the MINRATE/MINTOTAL/MINMOVE bar?" rate/total/avg_move already
+  // ARE that answer per {param}x{class}x{direction} bin, computed once by OpenDoor.ipynb — no
+  // per-day replay data is needed, just the existing best-bin columns from /api/opendoor/summary.
+  const [openDoorRatingByTicker, setOpenDoorRatingByTicker] = useState<Record<string, Record<string, string>>>({});
+  const [openDoorRatingLoading, setOpenDoorRatingLoading] = useState(false);
+  const [openDoorRatingError, setOpenDoorRatingError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setOpenDoorRatingLoading(true);
+      try {
+        const rows = await getOpendoorList();
+        if (cancelled) return;
+        const byTicker: Record<string, Record<string, string>> = {};
+        for (const row of rows) {
+          const t = String(row.ticker ?? "").toUpperCase().trim();
+          if (t) byTicker[t] = row;
+        }
+        setOpenDoorRatingByTicker(byTicker);
+        setOpenDoorRatingError(null);
+      } catch (e: any) {
+        if (!cancelled) setOpenDoorRatingError(e?.message || "Failed to load OpenDoor ratings");
+      } finally {
+        if (!cancelled) setOpenDoorRatingLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const openDoorResearch = useMemo(() => {
+    const odNum = (v: unknown): number | null => {
+      if (v == null) return null;
+      const n = parseFloat(String(v).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const cls = openDoorExitClass;
+    const paramToggles: Array<{ param: "stack" | "bench" | "devsig"; on: boolean }> = [
+      { param: "stack", on: openDoorUseStack },
+      { param: "bench", on: openDoorUseBench },
+      { param: "devsig", on: openDoorUseDevSig },
+    ];
+    const enabledParams = paramToggles.filter((p) => p.on).map((p) => p.param);
+
+    type Candidate = {
+      ticker: string;
+      byParam: Record<string, { rate: number; total: number; avgMove: number | null }>;
+      avgMove: number | null; // simple average of the enabled params' avg_move (same underlying Stack%-move outcome)
+      minRate: number;
+      minTotal: number;
+    };
+
+    const buildSide = (
+      dir: "long" | "short",
+      minRateGate: number,
+      minTotalGate: number,
+      minMoveGate: number
+    ): { candidates: Candidate[]; totalObs: number; weightedRate: number | null; weightedAvgMove: number | null } => {
+      const candidates: Candidate[] = [];
+      if (enabledParams.length === 0) {
+        return { candidates, totalObs: 0, weightedRate: null, weightedAvgMove: null };
+      }
+
+      for (const [ticker, row] of Object.entries(openDoorRatingByTicker)) {
+        const byParam: Candidate["byParam"] = {};
+        let passesAll = true;
+
+        for (const param of enabledParams) {
+          const rate = odNum(row[`${param}_${cls}_best_${dir}_rate`]);
+          const total = odNum(row[`${param}_${cls}_best_${dir}_total`]);
+          const avgMove = odNum(row[`${param}_${cls}_best_${dir}_avg_move`]);
+
+          if (rate == null || total == null) { passesAll = false; break; }
+          if (rate < minRateGate) { passesAll = false; break; }
+          if (total < minTotalGate) { passesAll = false; break; }
+          if (avgMove != null && Math.abs(avgMove) < minMoveGate) { passesAll = false; break; }
+
+          byParam[param] = { rate, total, avgMove };
+        }
+
+        if (!passesAll) continue;
+
+        const moves = enabledParams.map((p) => byParam[p]?.avgMove).filter((v): v is number => v != null);
+        const avgMove = moves.length ? moves.reduce((a, b) => a + b, 0) / moves.length : null;
+        const minRate = Math.min(...enabledParams.map((p) => byParam[p].rate));
+        const minTotal = Math.min(...enabledParams.map((p) => byParam[p].total));
+
+        candidates.push({ ticker, byParam, avgMove, minRate, minTotal });
+      }
+
+      candidates.sort((a, b) => b.minRate - a.minRate || b.minTotal - a.minTotal);
+
+      const totalObs = candidates.reduce((sum, c) => sum + c.minTotal, 0);
+      const weightedRate = totalObs > 0
+        ? candidates.reduce((sum, c) => sum + c.minRate * c.minTotal, 0) / totalObs
+        : null;
+      const moveWeighted = candidates.filter((c) => c.avgMove != null);
+      const moveWeightedTotal = moveWeighted.reduce((sum, c) => sum + c.minTotal, 0);
+      const weightedAvgMove = moveWeightedTotal > 0
+        ? moveWeighted.reduce((sum, c) => sum + (c.avgMove as number) * c.minTotal, 0) / moveWeightedTotal
+        : null;
+
+      return { candidates, totalObs, weightedRate, weightedAvgMove };
+    };
+
+    return {
+      enabledParams,
+      long: buildSide("long", openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove),
+      short: buildSide("short", openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove),
+    };
+  }, [
+    openDoorRatingByTicker, openDoorExitClass,
+    openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
+  ]);
+
+  // Combined LONG+SHORT view for the ACTIVE-tab KPI row / table — the Arbitrage-scanner analog,
+  // but built purely from summary.csv best-bin stats (no live position engine exists for
+  // OpenDoor). P&L per candidate is sign-corrected: a SHORT profits when Stack% FALLS, so its
+  // avg_short_move (already negative, e.g. -0.68) is negated into a positive per-trade P&L.
+  // rate/total/avg_move are already "did the situation resolve in the traded direction" stats,
+  // so `rate` IS the win rate and no separate outcome classification is needed. There is no
+  // per-day trade sequence available (the notebook only persists bin aggregates), so sequence-
+  // dependent metrics like Max Drawdown / equity curve are not computable and are omitted
+  // rather than fabricated.
+  const openDoorCombined = useMemo(() => {
+    type Row = {
+      ticker: string;
+      side: "LONG" | "SHORT";
+      rate: number;
+      total: number;
+      avgMove: number | null; // raw Stack% move (signed, as recorded)
+      pnl: number | null;     // sign-corrected per-trade P&L (positive avgMove for both sides = profit)
+      byParam: Record<string, { rate: number; total: number; avgMove: number | null }>;
+    };
+
+    const rows: Row[] = [
+      ...openDoorResearch.long.candidates.map((c): Row => ({
+        ticker: c.ticker, side: "LONG", rate: c.minRate, total: c.minTotal,
+        avgMove: c.avgMove, pnl: c.avgMove, byParam: c.byParam,
+      })),
+      ...openDoorResearch.short.candidates.map((c): Row => ({
+        ticker: c.ticker, side: "SHORT", rate: c.minRate, total: c.minTotal,
+        avgMove: c.avgMove, pnl: c.avgMove != null ? -c.avgMove : null, byParam: c.byParam,
+      })),
+    ];
+    rows.sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
+
+    const withPnl = rows.filter((r) => r.pnl != null) as Array<Row & { pnl: number }>;
+    const wins = withPnl.filter((r) => r.pnl > 0);
+    const losses = withPnl.filter((r) => r.pnl < 0);
+
+    const totalObs = rows.reduce((s, r) => s + r.total, 0);
+    const totalPnl = withPnl.reduce((s, r) => s + r.pnl * r.total, 0);
+    const weightedRate = totalObs > 0 ? rows.reduce((s, r) => s + r.rate * r.total, 0) / totalObs : 0;
+    const avgTrade = totalObs > 0 ? totalPnl / totalObs : 0;
+    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl)) : 0;
+    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl)) : 0;
+    const avgWin = wins.length ? wins.reduce((s, r) => s + r.pnl, 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((s, r) => s + r.pnl, 0) / losses.length : 0;
+    const grossWin = wins.reduce((s, r) => s + r.pnl * r.total, 0);
+    const grossLoss = Math.abs(losses.reduce((s, r) => s + r.pnl * r.total, 0));
+    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
+    const expectancy = weightedRate * avgWin + (1 - weightedRate) * avgLoss;
+
+    return { rows, tickers: rows.length, totalObs, totalPnl, weightedRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
+  }, [openDoorResearch]);
+
   const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
   const [zapMode, setZapMode] = useState<ZapMode>("zap");
   const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
@@ -7983,6 +8159,95 @@ export default function OpenDoorScanner({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom]);
+
+  // ========= OpenDoor SNAPSHOT: live per-day tape replay (architecturally mirrors Arbitrage's
+  // SNAPSHOT tab — POST .../episodes/search, per-day cache, day-range build — but hits
+  // /api/paper/opendoor/episodes/search, gated by OpenDoor's own summary.csv ratings and using
+  // TapeOpenDoorEngine's fixed 09:20-entry/09:40-or-10:00-exit rule instead of Arbitrage's
+  // hedge engine. Real per-day accuracy: each row is an ACTUALLY realized trade, not a bin average.
+  type OpenDoorPaperClosed = {
+    ticker: string;
+    benchTicker?: string | null;
+    side: "Long" | "Short";
+    entryMinuteIdx: number;
+    exitMinuteIdx: number;
+    entryStack?: number | null;
+    exitStack?: number | null;
+    move?: number | null;
+    pnl?: number | null;
+    entryDevSig?: number | null;
+    entryBench?: number | null;
+    gateRate?: number | null;
+    gateTotal?: number | null;
+  };
+  const [openDoorSnapshotRows, setOpenDoorSnapshotRows] = useState<OpenDoorPaperClosed[]>([]);
+  const [openDoorSnapshotLoading, setOpenDoorSnapshotLoading] = useState(false);
+  const [openDoorSnapshotError, setOpenDoorSnapshotError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!(primaryPanel === "scanner" && tab === "analytics")) return;
+    if (!toYmd(dateFrom) || !toYmd(dateTo)) return;
+
+    let cancelled = false;
+    const load = async () => {
+      setOpenDoorSnapshotLoading(true);
+      try {
+        const resp = await apiPost<{ ok: boolean; items: OpenDoorPaperClosed[] }>("/api/paper/opendoor/episodes/search", {
+          dateFrom,
+          dateTo,
+          exitClass: openDoorExitClass,
+          useStack: openDoorUseStack,
+          useBench: openDoorUseBench,
+          useDevSig: openDoorUseDevSig,
+          upMinRate: openDoorUpMinRate,
+          upMinTotal: openDoorUpMinTotal,
+          upMinMove: openDoorUpMinMove,
+          downMinRate: openDoorDownMinRate,
+          downMinTotal: openDoorDownMinTotal,
+          downMinMove: openDoorDownMinMove,
+          sizeValue: sizeValue,
+        });
+        if (cancelled) return;
+        setOpenDoorSnapshotRows(Array.isArray(resp?.items) ? resp.items : []);
+        setOpenDoorSnapshotError(null);
+      } catch (e: any) {
+        if (!cancelled) setOpenDoorSnapshotError(e?.message || "Failed to load OpenDoor snapshot");
+      } finally {
+        if (!cancelled) setOpenDoorSnapshotLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [
+    primaryPanel, tab, dateFrom, dateTo, openDoorExitClass,
+    openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
+    sizeValue,
+  ]);
+
+  const openDoorSnapshotStats = useMemo(() => {
+    const rows = openDoorSnapshotRows.filter((r) => r.pnl != null);
+    const wins = rows.filter((r) => (r.pnl ?? 0) > 0);
+    const losses = rows.filter((r) => (r.pnl ?? 0) < 0);
+
+    const trades = rows.length;
+    const totalPnl = rows.reduce((s, r) => s + (r.pnl ?? 0), 0);
+    const winRate = trades > 0 ? wins.length / trades : 0;
+    const avgTrade = trades > 0 ? totalPnl / trades : 0;
+    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl ?? 0)) : 0;
+    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl ?? 0)) : 0;
+    const avgWin = wins.length ? wins.reduce((s, r) => s + (r.pnl ?? 0), 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((s, r) => s + (r.pnl ?? 0), 0) / losses.length : 0;
+    const grossWin = wins.reduce((s, r) => s + (r.pnl ?? 0), 0);
+    const grossLoss = Math.abs(losses.reduce((s, r) => s + (r.pnl ?? 0), 0));
+    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
+    const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
+
+    const sorted = [...openDoorSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
+
+    return { rows: sorted, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
+  }, [openDoorSnapshotRows]);
 
   // ========= Load available days on mount
   useEffect(() => {
@@ -13597,6 +13862,13 @@ export default function OpenDoorScanner({
               </div>
             </div>
 
+            {/* %/σ/Δ ZAP toggle + startAbs/startAbsMax/endAbs — Arbitrage-only sigma-threshold
+                controls (metric/startAbs feed TapeArbParams for the hidden ACTIVE/EPISODES/
+                ANALYTICS Arbitrage tables only). OpenDoor's own gating is entirely
+                STACK/BENCH/DEV + UP/DOWN MINRATE/MINTOTAL/MINMOVE — zapMode is never read by
+                openDoorResearch/openDoorCombined/the SNAPSHOT tape-replay request, so hiding
+                this doesn't touch OpenDoor's candidate selection at all. */}
+            {false && (
             <div className="ml-auto inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-1.5">
               <button
                 type="button"
@@ -13762,6 +14034,7 @@ export default function OpenDoorScanner({
               </div>
 
             </div>
+            )}
         </div>
         </div>
 
@@ -13969,6 +14242,73 @@ export default function OpenDoorScanner({
         </div>
 
         {/* CONTENT */}
+        {primaryPanel === "scanner" && (
+          <div className="mb-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-4 shadow-xl">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-[11px] font-mono uppercase tracking-wide text-zinc-400">
+                OpenDoor P&amp;L Research — {openDoorExitClass} exit class, entry 9:20
+                {openDoorResearch.enabledParams.length > 0
+                  ? ` (${openDoorResearch.enabledParams.join(" + ")})`
+                  : " (no parameters enabled)"}
+              </div>
+              {openDoorRatingLoading && <span className="text-[10px] text-zinc-600 font-mono">loading ratings…</span>}
+              {openDoorRatingError && <span className="text-[10px] text-rose-400 font-mono">{openDoorRatingError}</span>}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {(
+                [
+                  { dir: "short" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", data: openDoorResearch.short },
+                  { dir: "long" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", data: openDoorResearch.long },
+                ]
+              ).map((col) => (
+                <div key={col.dir} className={clsx("rounded-xl border bg-black/30 p-3", col.border)}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className={clsx("text-xs font-mono font-bold uppercase tracking-wide", col.accent)}>{col.title}</span>
+                    <span className="text-[10px] font-mono text-zinc-500">{col.data.candidates.length} tickers</span>
+                  </div>
+
+                  <div className="mb-3 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-lg bg-white/[0.03] py-1.5">
+                      <div className="text-[9px] font-mono uppercase text-zinc-600">Obs</div>
+                      <div className="text-xs font-mono text-zinc-200">{col.data.totalObs || "—"}</div>
+                    </div>
+                    <div className="rounded-lg bg-white/[0.03] py-1.5">
+                      <div className="text-[9px] font-mono uppercase text-zinc-600">Win Rate</div>
+                      <div className={clsx("text-xs font-mono", col.accent)}>
+                        {col.data.weightedRate != null ? `${(col.data.weightedRate * 100).toFixed(0)}%` : "—"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-white/[0.03] py-1.5">
+                      <div className="text-[9px] font-mono uppercase text-zinc-600">Avg Move</div>
+                      <div className="text-xs font-mono text-zinc-200">
+                        {col.data.weightedAvgMove != null ? `${col.data.weightedAvgMove.toFixed(2)}%` : "—"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto space-y-1">
+                    {col.data.candidates.length === 0 && (
+                      <div className="py-4 text-center text-[10px] font-mono text-zinc-600">
+                        {openDoorResearch.enabledParams.length === 0 ? "Enable STACK / BENCH / DEV" : "No candidates pass the current gates"}
+                      </div>
+                    )}
+                    {col.data.candidates.map((c) => (
+                      <div key={c.ticker} className="flex items-center justify-between rounded-lg bg-white/[0.02] px-2 py-1 text-[10px] font-mono">
+                        <span className="font-bold text-zinc-200">{c.ticker}</span>
+                        <span className="text-zinc-500">
+                          {(c.minRate * 100).toFixed(0)}% × {c.minTotal}
+                          {c.avgMove != null && <span className="ml-1.5 text-zinc-400">{c.avgMove.toFixed(2)}%</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {primaryPanel === "stream" && (
           <OpenDoorStreamView
             tab={tab}
@@ -14002,6 +14342,130 @@ export default function OpenDoorScanner({
         )}
 
         {primaryPanel === "scanner" && tab === "active" && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+              <SummaryMetricCard
+                label="TOTAL PNL (pts)"
+                value={num(openDoorCombined.totalPnl, 2)}
+                className="xl:row-span-2 xl:min-h-[124px]"
+                valueClassName={
+                  clsx(
+                    "text-4xl md:text-6xl font-bold",
+                    openDoorCombined.totalPnl > 0
+                      ? "text-[#6ee7b7]"
+                      : openDoorCombined.totalPnl < 0
+                        ? SOFT_LOSS_TEXT_CLASS
+                        : "text-zinc-200"
+                  )
+                }
+              />
+              <SummaryMetricCard label="TICKERS" value={intn(openDoorCombined.tickers)} inline />
+              <SummaryMetricCard label="OBS" value={intn(openDoorCombined.totalObs)} inline />
+              <SummaryMetricCard label="WIN RATE" value={`${num(openDoorCombined.weightedRate * 100, 1)}%`} inline />
+              <SummaryMetricCard
+                label="AVG TRADE (pts)"
+                value={num(openDoorCombined.avgTrade, 3)}
+                inline
+                valueClassName={openDoorCombined.avgTrade > 0 ? "text-emerald-300" : openDoorCombined.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="MAX WIN (pts)"
+                value={num(openDoorCombined.maxWin, 2)}
+                inline
+                valueClassName={openDoorCombined.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN (pts)"
+                value={num(openDoorCombined.avgWin, 3)}
+                inline
+                valueClassName={openDoorCombined.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(openDoorCombined.profitFactor) ? num(openDoorCombined.profitFactor, 2) : "∞"} inline />
+              <SummaryMetricCard label="EXPECTANCY (pts)" value={num(openDoorCombined.expectancy, 3)} inline />
+              <SummaryMetricCard
+                label="MAX LOSS (pts)"
+                value={num(openDoorCombined.maxLoss, 2)}
+                inline
+                valueClassName={openDoorCombined.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS (pts)"
+                value={num(openDoorCombined.avgLoss, 3)}
+                inline
+                valueClassName={openDoorCombined.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
+                  OPENDOOR CANDIDATES | rows {openDoorCombined.rows.length}
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600">
+                  {openDoorExitClass} exit · entry 9:20 · {openDoorResearch.enabledParams.join(" + ") || "no params enabled"}
+                </div>
+              </div>
+
+              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
+                <table className="min-w-[900px] w-full text-xs font-mono">
+                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
+                    <tr>
+                      <th className="text-left p-2.5">Ticker</th>
+                      <th className="text-left p-2.5">Side</th>
+                      <th className="text-right p-2.5 border-l border-white/10">Rate</th>
+                      <th className="text-right p-2.5">Obs</th>
+                      <th className="text-right p-2.5 border-l border-white/10">Avg Move</th>
+                      <th className="text-right p-2.5">P&amp;L (pts)</th>
+                      <th className="text-left p-2.5 border-l border-white/10">Per-Param (rate × total, move)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openDoorCombined.rows.map((r, i) => (
+                      <tr
+                        key={`${r.ticker}|${r.side}|${i}`}
+                        className={clsx(
+                          "border-t border-white/5 transition-colors",
+                          i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                          "hover:bg-white/[0.03]"
+                        )}
+                      >
+                        <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
+                        <td className={clsx("p-2.5 font-bold", r.side === "LONG" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{(r.rate * 100).toFixed(0)}%</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.total}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
+                          {r.avgMove != null ? `${r.avgMove.toFixed(2)}%` : "—"}
+                        </td>
+                        <td
+                          className={clsx(
+                            "p-2.5 text-right tabular-nums font-bold",
+                            (r.pnl ?? 0) > 0 ? "text-[#6ee7b7]" : (r.pnl ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
+                          )}
+                        >
+                          {r.pnl != null ? r.pnl.toFixed(3) : "—"}
+                        </td>
+                        <td className="p-2.5 text-left text-[10px] text-zinc-500 border-l border-white/10">
+                          {Object.entries(r.byParam)
+                            .map(([p, v]) => `${p}: ${(v.rate * 100).toFixed(0)}%×${v.total}${v.avgMove != null ? `, ${v.avgMove.toFixed(2)}%` : ""}`)
+                            .join("  ·  ")}
+                        </td>
+                      </tr>
+                    ))}
+                    {!openDoorCombined.rows.length && (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-zinc-500">
+                          No candidates pass the current gates. Adjust MINRATE/MINTOTAL/MINMOVE or enabled parameters.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {false && primaryPanel === "scanner" && tab === "active" && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
@@ -15968,6 +16432,138 @@ export default function OpenDoorScanner({
         )}
 
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
+                OPENDOOR SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {openDoorExitClass} exit
+              </div>
+              {openDoorSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
+              {openDoorSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{openDoorSnapshotError}</span>}
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+              <SummaryMetricCard
+                label="TOTAL PNL ($)"
+                value={num(openDoorSnapshotStats.totalPnl, 2)}
+                className="xl:row-span-2 xl:min-h-[124px]"
+                valueClassName={
+                  clsx(
+                    "text-4xl md:text-6xl font-bold",
+                    openDoorSnapshotStats.totalPnl > 0
+                      ? "text-[#6ee7b7]"
+                      : openDoorSnapshotStats.totalPnl < 0
+                        ? SOFT_LOSS_TEXT_CLASS
+                        : "text-zinc-200"
+                  )
+                }
+              />
+              <SummaryMetricCard label="TRADES" value={intn(openDoorSnapshotStats.trades)} inline />
+              <SummaryMetricCard label="WIN RATE" value={`${num(openDoorSnapshotStats.winRate * 100, 1)}%`} inline />
+              <SummaryMetricCard
+                label="AVG TRADE ($)"
+                value={num(openDoorSnapshotStats.avgTrade, 2)}
+                inline
+                valueClassName={openDoorSnapshotStats.avgTrade > 0 ? "text-emerald-300" : openDoorSnapshotStats.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="MAX WIN ($)"
+                value={num(openDoorSnapshotStats.maxWin, 2)}
+                inline
+                valueClassName={openDoorSnapshotStats.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN ($)"
+                value={num(openDoorSnapshotStats.avgWin, 2)}
+                inline
+                valueClassName={openDoorSnapshotStats.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(openDoorSnapshotStats.profitFactor) ? num(openDoorSnapshotStats.profitFactor, 2) : "∞"} inline />
+              <SummaryMetricCard label="EXPECTANCY ($)" value={num(openDoorSnapshotStats.expectancy, 2)} inline />
+              <SummaryMetricCard
+                label="MAX LOSS ($)"
+                value={num(openDoorSnapshotStats.maxLoss, 2)}
+                inline
+                valueClassName={openDoorSnapshotStats.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS ($)"
+                value={num(openDoorSnapshotStats.avgLoss, 2)}
+                inline
+                valueClassName={openDoorSnapshotStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
+                  REALIZED TRADES | rows {openDoorSnapshotStats.rows.length} | size ${sizeValue}/trade
+                </div>
+              </div>
+
+              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
+                <table className="min-w-[1100px] w-full text-xs font-mono">
+                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
+                    <tr>
+                      <th className="text-left p-2.5">Ticker</th>
+                      <th className="text-left p-2.5">Side</th>
+                      <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
+                      <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5 border-l border-white/10">Entry Fill</th>
+                      <th className="text-right p-2.5">Exit Fill</th>
+                      <th className="text-right p-2.5">Move (pts)</th>
+                      <th className="text-right p-2.5">P&amp;L ($)</th>
+                      <th className="text-right p-2.5 border-l border-white/10">DevSig</th>
+                      <th className="text-right p-2.5">Bench</th>
+                      <th className="text-right p-2.5 border-l border-white/10">Gate Rate×Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openDoorSnapshotStats.rows.map((r, i) => (
+                      <tr
+                        key={`${r.ticker}|${r.side}|${r.entryMinuteIdx}|${i}`}
+                        className={clsx(
+                          "border-t border-white/5 transition-colors",
+                          i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                          "hover:bg-white/[0.03]"
+                        )}
+                      >
+                        <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
+                        <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
+                        <td
+                          className={clsx(
+                            "p-2.5 text-right tabular-nums font-bold",
+                            (r.pnl ?? 0) > 0 ? "text-[#6ee7b7]" : (r.pnl ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
+                          )}
+                        >
+                          {num(r.pnl ?? null, 2)}
+                        </td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{num(r.entryDevSig ?? null, 3)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.entryBench ?? null, 3)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
+                          {r.gateRate != null ? `${(r.gateRate * 100).toFixed(0)}%` : "—"}×{r.gateTotal ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!openDoorSnapshotStats.rows.length && (
+                      <tr>
+                        <td colSpan={11} className="p-8 text-center text-zinc-500">
+                          {openDoorSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {false && primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             <div className="grid gap-3 xl:grid-cols-2">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">

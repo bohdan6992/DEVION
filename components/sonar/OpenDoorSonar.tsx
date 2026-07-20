@@ -3050,7 +3050,7 @@ export default function OpenDoorSonar() {
       const enabled: Array<{ param: string; value: number | null }> = [];
       if (openDoorAdvancedMode || openDoorUseStack) enabled.push({ param: "stack", value: dir === "up" ? stackAsk : stackBid });
       if (openDoorAdvancedMode || openDoorUseBench) enabled.push({ param: "bench", value: dir === "up" ? benchAsk : benchBid });
-      if (openDoorAdvancedMode || openDoorUseDevSig) enabled.push({ param: "dev", value: dir === "up" ? devUp : devDown });
+      if (openDoorAdvancedMode || openDoorUseDevSig) enabled.push({ param: "devsig", value: dir === "up" ? devUp : devDown });
       if (enabled.length === 0) return false;
 
       const minRateGate = dir === "up" ? openDoorUpMinRate : openDoorDownMinRate;
@@ -3068,7 +3068,12 @@ export default function OpenDoorSonar() {
         const total = toNum(row[`${prefix}${param}_${c}_best_${colDir}_total`]);
         const avgMove = toNum(row[`${prefix}${param}_${c}_best_${colDir}_avg_move`]);
         if (lo == null || hi == null || rate == null || total == null) return false;
-        if (value < lo || value > hi) return false;
+        // Bins are signed FLOOR bins (bin label "0.0" step=1.0 covers [0.0,1.0), not the single
+        // point 0.0). lo/hi are the first/last MERGED bin's own floor labels, so the bin's TRUE
+        // covered range is [lo, hi+step) — an unmerged single bin has lo===hi, and checking
+        // value<=hi (no +step) would reject nearly every real value except an exact match.
+        const step = param === "devsig" ? 0.3 : 1.0;
+        if (value < lo || value >= hi + step) return false;
         if (rate < minRateGate) return false;
         if (total < minTotalGate) return false;
         if (avgMove != null && Math.abs(avgMove) < minMoveGate) return false;

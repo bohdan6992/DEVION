@@ -20,152 +20,72 @@ import {
   X,
   DoorOpen,
   Clock,
-  BarChart2,
+  TrendingUp,
+  Percent,
 } from "lucide-react";
 
 /* ============================= Types ============================= */
+// Ratings come from summary.csv (opendoor v2 schema): per {param}x{class} there is a single
+// BEST bin per direction — stack/devsig/bench_10m/30m_best_long/short_rate/total/lo/hi/avg_move
+// (adv_-prefixed variants pool hourly ADVANCED-mode checkpoints instead of the 09:20-only entry).
 
 type RawRow = Record<string, string>;
 
-type SortKey =
-  | "ticker"
-  | "open_glob_total"
-  | "open_glob_up_rate"
-  | "open_glob_down_rate"
-  | "open_5m_total"
-  | "open_5m_up_rate"
-  | "open_5m_down_rate"
-  | "open_10m_total"
-  | "open_10m_up_rate"
-  | "open_10m_down_rate"
-  | "open_15m_total"
-  | "open_15m_up_rate"
-  | "open_15m_down_rate"
-  | "open_20m_total"
-  | "open_20m_up_rate"
-  | "open_20m_down_rate"
-  | "open_30m_total"
-  | "open_30m_up_rate"
-  | "open_30m_down_rate";
-
-type SortDir = "asc" | "desc";
-
-type DisplayRow = {
-  ticker: string;
-
-  open_glob_total: string;
-  open_glob_up_rate: string;
-  open_glob_down_rate: string;
-
-  open_5m_total: string;
-  open_5m_up_rate: string;
-  open_5m_down_rate: string;
-
-  open_10m_total: string;
-  open_10m_up_rate: string;
-  open_10m_down_rate: string;
-
-  open_15m_total: string;
-  open_15m_up_rate: string;
-  open_15m_down_rate: string;
-
-  open_20m_total: string;
-  open_20m_up_rate: string;
-  open_20m_down_rate: string;
-
-  open_30m_total: string;
-  open_30m_up_rate: string;
-  open_30m_down_rate: string;
-
-  __raw: RawRow;
-};
-
-type FilterState = Record<string, { min: string; max: string }>;
-
-/* ============================= UI Config ============================= */
-
-const GROUPS = [
-  {
-    id: "glob",
-    label: "OPEN GLOBAL",
-    color: "text-orange-300",
-    border: "border-orange-500",
-    bg: "bg-orange-500/10",
-    icon: DoorOpen,
-    cols: ["open_glob_total", "open_glob_up_rate", "open_glob_down_rate"],
-  },
-  {
-    id: "m5",
-    label: "OPEN 5M",
-    color: "text-emerald-400",
-    border: "border-emerald-500",
-    bg: "bg-emerald-500/10",
-    icon: Clock,
-    cols: ["open_5m_total", "open_5m_up_rate", "open_5m_down_rate"],
-  },
-  {
-    id: "m10",
-    label: "OPEN 10M",
-    color: "text-cyan-400",
-    border: "border-cyan-500",
-    bg: "bg-cyan-500/10",
-    icon: Clock,
-    cols: ["open_10m_total", "open_10m_up_rate", "open_10m_down_rate"],
-  },
-  {
-    id: "m15",
-    label: "OPEN 15M",
-    color: "text-violet-400",
-    border: "border-violet-500",
-    bg: "bg-violet-500/10",
-    icon: Clock,
-    cols: ["open_15m_total", "open_15m_up_rate", "open_15m_down_rate"],
-  },
-  {
-    id: "m20",
-    label: "OPEN 20M",
-    color: "text-fuchsia-400",
-    border: "border-fuchsia-500",
-    bg: "bg-fuchsia-500/10",
-    icon: Clock,
-    cols: ["open_20m_total", "open_20m_up_rate", "open_20m_down_rate"],
-  },
-  {
-    id: "m30",
-    label: "OPEN 30M",
-    color: "text-amber-400",
-    border: "border-amber-500",
-    bg: "bg-amber-500/10",
-    icon: BarChart2,
-    cols: ["open_30m_total", "open_30m_up_rate", "open_30m_down_rate"],
-  },
+const PARAMS = [
+  { id: "stack", label: "STACK%", color: "text-emerald-400", border: "border-emerald-500", bg: "bg-emerald-500/10", icon: Percent },
+  { id: "devsig", label: "DEVSIG", color: "text-cyan-400", border: "border-cyan-500", bg: "bg-cyan-500/10", icon: TrendingUp },
+  { id: "bench", label: "BENCH%", color: "text-amber-400", border: "border-amber-500", bg: "bg-amber-500/10", icon: DoorOpen },
 ] as const;
 
-const COL_LABELS: Record<string, string> = {
-  open_glob_total: "Tot",
-  open_glob_up_rate: "Up",
-  open_glob_down_rate: "Dn",
+const CLASSES = [
+  { id: "10m", label: "10M" },
+  { id: "30m", label: "30M" },
+] as const;
 
-  open_5m_total: "Tot",
-  open_5m_up_rate: "Up",
-  open_5m_down_rate: "Dn",
+const SUFFIXES = ["long_rate", "long_total", "short_rate", "short_total"] as const;
+type Suffix = (typeof SUFFIXES)[number];
 
-  open_10m_total: "Tot",
-  open_10m_up_rate: "Up",
-  open_10m_down_rate: "Dn",
-
-  open_15m_total: "Tot",
-  open_15m_up_rate: "Up",
-  open_15m_down_rate: "Dn",
-
-  open_20m_total: "Tot",
-  open_20m_up_rate: "Up",
-  open_20m_down_rate: "Dn",
-
-  open_30m_total: "Tot",
-  open_30m_up_rate: "Up",
-  open_30m_down_rate: "Dn",
+const SUFFIX_LABEL: Record<Suffix, string> = {
+  long_rate: "L%",
+  long_total: "L#",
+  short_rate: "S%",
+  short_total: "S#",
 };
+
+type Group = {
+  id: string; // `${param}_${cls}`
+  label: string;
+  color: string;
+  border: string;
+  bg: string;
+  icon: typeof Clock;
+  param: (typeof PARAMS)[number]["id"];
+  cls: (typeof CLASSES)[number]["id"];
+  cols: string[]; // canonical (unprefixed) column keys: `${param}_${cls}_${suffix}`
+};
+
+const GROUPS: Group[] = PARAMS.flatMap((p) =>
+  CLASSES.map((c) => ({
+    id: `${p.id}_${c.id}`,
+    label: `${p.label} ${c.label}`,
+    color: p.color,
+    border: p.border,
+    bg: p.bg,
+    icon: p.icon,
+    param: p.id,
+    cls: c.id,
+    cols: SUFFIXES.map((s) => `${p.id}_${c.id}_${s}`),
+  }))
+);
+
+const COL_LABEL: Record<string, string> = Object.fromEntries(
+  GROUPS.flatMap((g) => g.cols.map((col, idx) => [col, SUFFIX_LABEL[SUFFIXES[idx]]]))
+);
+
+type SortKey = "ticker" | string;
+type SortDir = "asc" | "desc";
+type DisplayRow = { ticker: string; __raw: RawRow } & Record<string, string>;
+type FilterState = Record<string, { min: string; max: string }>;
 
 const ROWS_PER_PAGE = 50;
 
@@ -212,39 +132,33 @@ function flattenItem(item: any): RawRow {
   const out: RawRow = {};
   if (!item || typeof item !== "object") return out;
 
-  // 1) top-level
   for (const [k, v] of Object.entries(item)) {
     if (k === "extras" || k === "Extras") continue;
     out[String(k)] = toStr(v);
   }
 
-  // 2) merge extras (саме там open_* поля)
   const extras = (item as any).extras ?? (item as any).Extras ?? null;
   if (extras && typeof extras === "object") {
-    for (const [k, v] of Object.entries(extras)) {
-      const key = String(k);
-
-      // ✅ прибираємо mean/median повністю
-      if (key.endsWith("_mean_move") || key.endsWith("_median_move")) continue;
-
-      out[key] = toStr(v);
-    }
+    for (const [k, v] of Object.entries(extras)) out[String(k)] = toStr(v);
   }
 
-  // normalize ticker
   const t = out.ticker || (item as any).Ticker;
   if (t != null) out.ticker = String(t).trim().toUpperCase();
 
   return out;
 }
 
-
-function toDisplayRow(r: RawRow): DisplayRow {
+function toDisplayRow(r: RawRow, advanced: boolean): DisplayRow {
   const ticker = (pick(r, ["ticker", "Ticker"]) || "").toUpperCase();
+  const prefix = advanced ? "adv_" : "";
 
   const row: any = { ticker, __raw: r };
   for (const g of GROUPS) {
-    for (const col of g.cols) row[col] = pick(r, [col], "");
+    for (let i = 0; i < SUFFIXES.length; i++) {
+      const canonical = g.cols[i];
+      const rawKey = `${prefix}${g.param}_${g.cls}_best_${SUFFIXES[i]}`;
+      row[canonical] = pick(r, [rawKey], "");
+    }
   }
   return row as DisplayRow;
 }
@@ -293,11 +207,12 @@ const FilterInput = ({
 export default function OpenDoorMatrixPage() {
   const router = useRouter();
 
-  const [rawRows, setRawRows] = useState<DisplayRow[]>([]);
+  const [rawItems, setRawItems] = useState<RawRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [advanced, setAdvanced] = useState(false);
 
-  const [sortKey, setSortKey] = useState<SortKey>("open_glob_total");
+  const [sortKey, setSortKey] = useState<SortKey>("stack_10m_long_rate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<FilterState>({});
@@ -314,10 +229,9 @@ export default function OpenDoorMatrixPage() {
       try {
         const json = await getOpenDoorSummary();
         const items = Array.isArray((json as any)?.items) ? (json as any).items : [];
+        const flat = items.map(flattenItem).filter((x) => x.ticker);
 
-        const display = items.map(flattenItem).map(toDisplayRow).filter((x) => x.ticker);
-
-        if (!cancelled) setRawRows(display);
+        if (!cancelled) setRawItems(flat);
       } catch (e: any) {
         if (!cancelled) setError(e?.message || "Failed to load");
       } finally {
@@ -330,6 +244,8 @@ export default function OpenDoorMatrixPage() {
       cancelled = true;
     };
   }, []);
+
+  const rawRows = useMemo(() => rawItems.map((r) => toDisplayRow(r, advanced)), [rawItems, advanced]);
 
   const processedRows = useMemo(() => {
     let data = rawRows;
@@ -417,10 +333,24 @@ export default function OpenDoorMatrixPage() {
             <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tighter flex items-center gap-3">
               OpenDoor <span className="text-orange-400">Matrix</span>
             </h1>
-            <p className="text-zinc-500 text-sm mt-1 font-mono">Open-window stats: totals, up/down rates</p>
+            <p className="text-zinc-500 text-sm mt-1 font-mono">
+              Stack% / DevSig / Bench% — best-bin Long/Short rating per 10m/30m exit class
+            </p>
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setAdvanced((v) => !v)}
+              className={`h-10 px-4 rounded-lg border flex items-center gap-2 text-xs font-bold tracking-wide transition-all ${
+                advanced
+                  ? "bg-amber-500/10 border-amber-500/50 text-amber-400"
+                  : "bg-zinc-900/50 border-white/10 text-zinc-400 hover:bg-white/5"
+              }`}
+              title="Switch to adv_-prefixed columns (hourly-pooled checkpoints)"
+            >
+              ADVANCED
+            </button>
+
             <div className="relative group w-full md:w-64">
               <Search
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-emerald-400 transition-colors"
@@ -477,7 +407,7 @@ export default function OpenDoorMatrixPage() {
                   </div>
                   <div className="space-y-2">
                     {group.cols.map((col) => (
-                      <FilterInput key={col} label={COL_LABELS[col]} colKey={col} filters={filters} onChange={handleFilterChange} />
+                      <FilterInput key={col} label={COL_LABEL[col]} colKey={col} filters={filters} onChange={handleFilterChange} />
                     ))}
                   </div>
                 </div>
@@ -541,11 +471,11 @@ export default function OpenDoorMatrixPage() {
 
                     {GROUPS.map((g) =>
                       g.cols.map((col, idx) => {
-                        const isActive = sortKey === (col as SortKey);
+                        const isActive = sortKey === col;
                         return (
                           <th
                             key={col}
-                            onClick={() => handleSort(col as SortKey)}
+                            onClick={() => handleSort(col)}
                             className={`
                               px-2 py-3 cursor-pointer text-right min-w-[70px] select-none hover:bg-white/5 transition-colors border-l border-white/[0.03]
                               ${isActive ? "text-emerald-400 bg-emerald-500/5" : ""}
@@ -553,7 +483,7 @@ export default function OpenDoorMatrixPage() {
                             `}
                           >
                             <div className="flex items-center justify-end gap-1">
-                              {COL_LABELS[col]}
+                              {COL_LABEL[col]}
                               {isActive && (sortDir === "asc" ? <ArrowUp size={8} /> : <ArrowDown size={8} />)}
                             </div>
                           </th>
@@ -566,7 +496,7 @@ export default function OpenDoorMatrixPage() {
                 <tbody className="divide-y divide-white/[0.02]">
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={40} className="py-12 text-center text-zinc-600 font-mono text-xs">
+                      <td colSpan={1 + GROUPS.reduce((n, g) => n + g.cols.length, 0)} className="py-12 text-center text-zinc-600 font-mono text-xs">
                         NO DATA MATCHING FILTERS
                       </td>
                     </tr>
@@ -631,7 +561,7 @@ export default function OpenDoorMatrixPage() {
                 <button
                   onClick={() => setPage(1)}
                   disabled={page === 1}
-                  className="p-1.5 rounded hover:bg:white/10 text-zinc-400 disabled:opacity-30 transition-colors"
+                  className="p-1.5 rounded hover:bg-white/10 text-zinc-400 disabled:opacity-30 transition-colors"
                 >
                   <ChevronsLeft size={14} />
                 </button>

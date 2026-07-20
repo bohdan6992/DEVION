@@ -61,9 +61,11 @@ export type StreamPosition = {
   lastAboveAddCapAt: number | null;  // last time add signal exceeded ADD_MAX_SIGMA (resets add delay)
   openedAt: number;
   updatedAt: number;
-  // Running peak |deviation| seen so far during the CURRENT (in-progress) minute, used for the
-  // ADD trigger check so a threshold crossing between two polls isn't missed just because the
-  // latest poll happens to read a lower value. Reset whenever the minute rolls over.
+  // ADD trigger bar value: |deviation| captured once at the first poll seen after a new
+  // minute begins, then held fixed for the rest of that minute — mirrors SCANNER, which
+  // only ever evaluates one reading per completed tape minute, never a live intra-minute
+  // peak. A signal crossing the add trigger mid-minute is only acted on at the NEXT
+  // minute's opening snapshot, if that snapshot still qualifies.
   addPeakMinuteIdx?: number | null;
   addPeakAbs?: number | null;
   addPeakSigned?: number | null;
@@ -1288,13 +1290,15 @@ export function syncStreamPositions(
       let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
-      // Running peak |deviation| for the CURRENT (in-progress) minute — reset on minute rollover.
-      // Used by the ADD trigger check below so a threshold crossing between two polls isn't
-      // missed just because the specific poll we're on right now reads a lower value.
+      // ADD trigger bar value: captured ONCE at the first poll seen after a new minute
+      // begins, then held fixed for the rest of that minute — mirrors SCANNER, which only
+      // ever evaluates one reading per completed tape minute (bar-close), never a live
+      // intra-minute peak. A signal that crosses the add trigger mid-minute is simply not
+      // observed until the NEXT minute's opening snapshot; if that snapshot still qualifies
+      // (same sign, still clears the trigger), the add fires then.
       let addPeakMinuteIdx = existing.addPeakMinuteIdx ?? null;
-      let addPeakAbs = addPeakMinuteIdx === nowMinuteIdx ? (existing.addPeakAbs ?? null) : null;
-      let addPeakSigned = addPeakMinuteIdx === nowMinuteIdx ? (existing.addPeakSigned ?? null) : null;
-      addPeakMinuteIdx = nowMinuteIdx;
+      let addPeakAbs = existing.addPeakAbs ?? null;
+      let addPeakSigned = existing.addPeakSigned ?? null;
       const decision = decisionMap.get(existing.ticker);
       const entryStillReady = decision?.status === "ENTRY_READY";
       const hasUndispatchedEntry =
@@ -1447,33 +1451,20 @@ export function syncStreamPositions(
           // Direction (sign) is always anchored to the FIRST entry signal.
           const entryBase = resolvedEntrySignal;
 
-          // Update this minute's running peak (same direction as entry only — an opposite-
-          // direction excursion must not count toward the add trigger or the cap).
-          if (
-            filteredAbs != null &&
-            filteredSigned != null &&
-            entryBase != null &&
-            entryBase !== 0 &&
-            Math.sign(filteredSigned) === Math.sign(entryBase) &&
-            (addPeakAbs == null || filteredAbs > addPeakAbs)
-          ) {
+          // Take a fresh bar snapshot only when a new minute has begun since the last one
+          // captured; otherwise keep using the value already captured at this minute's open.
+          if (addPeakMinuteIdx !== nowMinuteIdx) {
+            addPeakMinuteIdx = nowMinuteIdx;
             addPeakAbs = filteredAbs;
             addPeakSigned = filteredSigned;
           }
-          // Effective value = the stronger of "right now" and "peak seen so far this minute" —
-          // so a threshold crossing between two polls isn't lost just because the latest poll
-          // happens to read a lower value (mirrors SCANNER's mid-minute Hi-sigma sampling).
-          const effectiveAbs = addPeakAbs != null && (filteredAbs == null || addPeakAbs > filteredAbs) ? addPeakAbs : filteredAbs;
-          const effectiveSigned = effectiveAbs === addPeakAbs && addPeakSigned != null ? addPeakSigned : filteredSigned;
 
           // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
           // and restart the add delay timer (same hold protection as entry window).
           const ADD_MAX_SIGMA = 4.0;
-          if (effectiveAbs != null && effectiveAbs > ADD_MAX_SIGMA) {
+          if (addPeakAbs != null && addPeakAbs > ADD_MAX_SIGMA) {
             lastAboveAddCapAt = now;
             if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
-            addPeakAbs = null;
-            addPeakSigned = null;
           }
           if (entryBase == null || entryBase === 0) {
             if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
@@ -1487,17 +1478,10 @@ export function syncStreamPositions(
           const lastAddBase = lastScaleSignal ?? entryBase;
           const trigger = Math.abs(lastAddBase) + Math.max(0, automationConfig.dilutionStep ?? 0);
           const sameSign =
-            effectiveSigned != null &&
-            Number.isFinite(effectiveSigned) &&
-            effectiveSigned !== 0 &&
-            Math.sign(effectiveSigned) === Math.sign(entryBase);
-          // Even when DELAY=0 (no configured minimum), never allow two ADDs closer together
-          // than one real automation tick. Without this floor, the dispatch "replay" loop
-          // (sendQueuedIntents re-entering itself immediately after finishing an in-flight
-          // send, see dispatchLoopReplayRef) can reuse the SAME still-stale raw signal read
-          // across two back-to-back recomputes and fire a second ADD a few hundred ms after
-          // the first — same tick's price satisfying two grid levels at once instead of a
-          // genuinely new, separately-confirmed move.
+            addPeakSigned != null &&
+            Number.isFinite(addPeakSigned) &&
+            addPeakSigned !== 0 &&
+            Math.sign(addPeakSigned) === Math.sign(entryBase);
           const addDelayMs = Math.max(STREAM_AUTOMATION_TICK_MS, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
           // Add delay restarts from the last cap breach — same protection as entry minHold.
           // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
@@ -1511,25 +1495,22 @@ export function syncStreamPositions(
           const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
             ? false
             : now - lastDispatchOrBreach >= addDelayMs;
-          const belowAddCap = effectiveAbs == null || effectiveAbs <= ADD_MAX_SIGMA;
-          if (effectiveAbs != null && effectiveAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
+          const belowAddCap = addPeakAbs == null || addPeakAbs <= ADD_MAX_SIGMA;
+          if (addPeakAbs != null && addPeakAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
             pendingAddTrigger = trigger;
-            lastScaleSignal = effectiveSigned;
+            lastScaleSignal = addPeakSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
-            // Consume the peak once acted on, so it doesn't immediately re-trigger next tick.
-            addPeakAbs = null;
-            addPeakSigned = null;
           } else {
             // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
-            // next threshold yet). But if signal reversed sign, clear the intent — the
-            // position has moved against entry and the pending order is no longer valid.
+            // next threshold yet). But if the bar's value reversed sign, clear the intent —
+            // the position has moved against entry and the pending order is no longer valid.
             const signalReversed =
-              filteredSigned != null &&
-              Number.isFinite(filteredSigned) &&
-              filteredSigned !== 0 &&
-              Math.sign(filteredSigned) !== Math.sign(entryBase);
+              addPeakSigned != null &&
+              Number.isFinite(addPeakSigned) &&
+              addPeakSigned !== 0 &&
+              Math.sign(addPeakSigned) !== Math.sign(entryBase);
             if (!isEntryOrderIntent(existing.pendingIntent) || signalReversed) {
               pendingIntent = null;
             }
