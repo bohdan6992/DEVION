@@ -466,18 +466,22 @@ function signalSpreadBidPct(row: ArbitrageSignal | null | undefined): number | n
   );
 }
 
-function hasStrategyEntryCutoff(signalClass: string | undefined): boolean {
-  const normalized = (signalClass ?? "").trim().toLowerCase();
-  return normalized === "ark" || normalized === "pre";
+// Every session class (GLOB/BLUE/PRE/ARK/PRINT/OPEN/INTRA/POST) is now gated purely by the
+// user's own START/CUTOFF fields — no more built-in per-class time restriction. signalClass
+// is kept as a parameter for call-site compatibility only.
+function hasStrategyEntryCutoff(_signalClass: string | undefined): boolean {
+  return true;
 }
 
-function getStrategySessionStartMinutes(signalClass: string | undefined): number | null {
+// Floor for new entries, mirrors Scanner's TapeArbClasses explicit-start override — same
+// user-configured "START" field for every class. PRE wraps past midnight (21:00 -> 09:30
+// next day), so a single "nowMinutes < X" scalar can't express that wrap-around; it's handled
+// separately via isWithinPreSessionLive at the gate call sites instead of a floor here.
+function getStrategySessionStartMinutes(signalClass: string | undefined, startTime: string | undefined): number | null {
   const normalized = (signalClass ?? "").trim().toLowerCase();
-  if (normalized === "ark") return ARK_SESSION_START_MINUTES;
-  // PRE wraps past midnight (21:00 -> 09:30 next day) — a single "nowMinutes < X" scalar can't
-  // express that wrap-around, so it's handled separately via isWithinPreSessionLive at the gate
-  // call sites instead of a floor here.
-  return null;
+  if (normalized === "pre") return null;
+  if (startTime == null) return null;
+  return parseTimeToMinutes(startTime, 0);
 }
 
 function isPreSignalClass(signalClass: string | undefined): boolean {
@@ -517,10 +521,6 @@ function isPastSessionCutoff(nowMinutes: number, cutoffMinutes: number, isPreSes
   return nowMinutes >= cutoffMinutes;
 }
 
-// ARK session start (mirrors Scanner's TapeArbClasses.ArkFrom window). The automation toggle
-// can be switched on any time, but no new ENTRY latch/position is created before this minute —
-// it just waits, same as BLUE effectively "waits" from 00:00 (i.e. never blocks).
-const ARK_SESSION_START_MINUTES = 4 * 60; // 04:00
 const PRE_SESSION_START_MINUTES = 21 * 60; // 1260 (21:00)
 const PRE_SESSION_END_MINUTES = 9 * 60 + 30; // 570 (09:30, next-day continuation)
 
@@ -2053,7 +2053,7 @@ export function useStreamEngine({
   const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
-  const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass);
+  const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass, automationConfig?.preStartTime);
   const strategyIsPreSession = isPreSignalClass(signalClass);
   const actionLogStorageKey = streamActionLogStorageKey(signalClass);
   const [currentDayKey, setCurrentDayKey] = useState<string>(() => localDayKey());
