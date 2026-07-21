@@ -3584,9 +3584,10 @@ export function useStreamEngine({
           continue;
         }
 
-        // Pre-04:00 NY "early session" hotkey switching (Ctrl+F3/F4/B for BLUE/PRE) is now
-        // decided server-side, off the server's own NY clock, via TradingAppActionResolver.cs —
-        // signalClass below is what it gates on. (Previously a client-clock-based
+        // Pre-04:00 NY "early session" hotkey switching (Ctrl+F3/F4/B) is decided server-side,
+        // off the server's own NY clock, via TradingAppActionResolver.cs — purely a function of
+        // wall-clock time now, applies to every session class (not just BLUE/PRE), since classes
+        // no longer have built-in time windows. (Previously a client-clock-based
         // getNightHotkeyOverride computed a hotkeyOverride here, but the live PythonScript
         // transport never consulted that field — dead code, removed.)
         const queueLeg = async (payload: {
