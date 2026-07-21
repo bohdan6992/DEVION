@@ -61,14 +61,19 @@ export type StreamPosition = {
   lastAboveAddCapAt: number | null;  // last time add signal exceeded ADD_MAX_SIGMA (resets add delay)
   openedAt: number;
   updatedAt: number;
-  // ADD trigger bar value: |deviation| captured once at the first poll seen after a new
-  // minute begins, then held fixed for the rest of that minute — mirrors SCANNER, which
-  // only ever evaluates one reading per completed tape minute, never a live intra-minute
-  // peak. A signal crossing the add trigger mid-minute is only acted on at the NEXT
-  // minute's opening snapshot, if that snapshot still qualifies.
+  // ADD trigger bar value: addPeakAbs/addPeakSigned track the latest live poll within the
+  // in-progress minute (continuously updated). confirmedAddAbs/confirmedAddSigned only
+  // update once a minute boundary is crossed, to that minute's LAST observed value — i.e.
+  // the value at the close of a fully-completed minute — mirroring SCANNER's bar-close
+  // (only available for the following minute's evaluation) and the same hold-to-boundary
+  // requirement already used for new entries (aboveSet): a trigger crossing must still be
+  // true at its minute's close, not just at whichever poll first noticed it, before an add
+  // can fire. The trigger check and lastScaleSignal anchor both read the CONFIRMED value.
   addPeakMinuteIdx?: number | null;
   addPeakAbs?: number | null;
   addPeakSigned?: number | null;
+  confirmedAddAbs?: number | null;
+  confirmedAddSigned?: number | null;
   // σ trigger threshold that armed the currently-pending add (captured at decision time in
   // syncStreamPositions, where `trigger` is exact) — read at dispatch time for logging instead
   // of recomputing, since lastScaleSignal is already overwritten to the new value by then.
@@ -1290,15 +1295,15 @@ export function syncStreamPositions(
       let entryDispatchedAt = existing.entryDispatchedAt ?? null;
       let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
       let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
-      // ADD trigger bar value: captured ONCE at the first poll seen after a new minute
-      // begins, then held fixed for the rest of that minute — mirrors SCANNER, which only
-      // ever evaluates one reading per completed tape minute (bar-close), never a live
-      // intra-minute peak. A signal that crosses the add trigger mid-minute is simply not
-      // observed until the NEXT minute's opening snapshot; if that snapshot still qualifies
-      // (same sign, still clears the trigger), the add fires then.
+      // ADD trigger bar value — see StreamPosition.confirmedAddAbs doc: addPeakAbs tracks the
+      // latest live poll, confirmedAddAbs only advances to that value once its minute has
+      // fully closed (boundary crossed), so the fire check always uses a boundary-confirmed
+      // reading, not a mid-minute touch.
       let addPeakMinuteIdx = existing.addPeakMinuteIdx ?? null;
       let addPeakAbs = existing.addPeakAbs ?? null;
       let addPeakSigned = existing.addPeakSigned ?? null;
+      let confirmedAddAbs = existing.confirmedAddAbs ?? null;
+      let confirmedAddSigned = existing.confirmedAddSigned ?? null;
       const decision = decisionMap.get(existing.ticker);
       const entryStillReady = decision?.status === "ENTRY_READY";
       const hasUndispatchedEntry =
@@ -1451,18 +1456,22 @@ export function syncStreamPositions(
           // Direction (sign) is always anchored to the FIRST entry signal.
           const entryBase = resolvedEntrySignal;
 
-          // Take a fresh bar snapshot only when a new minute has begun since the last one
-          // captured; otherwise keep using the value already captured at this minute's open.
+          // On a minute-boundary crossing, the OLD addPeakAbs/addPeakSigned (the last poll
+          // seen while still inside the minute that just closed) becomes the new confirmed
+          // value — only now is it eligible to drive a fire decision. Then start tracking the
+          // new minute fresh. Within the same minute, addPeakAbs simply tracks every poll.
           if (addPeakMinuteIdx !== nowMinuteIdx) {
+            confirmedAddAbs = addPeakAbs;
+            confirmedAddSigned = addPeakSigned;
             addPeakMinuteIdx = nowMinuteIdx;
-            addPeakAbs = filteredAbs;
-            addPeakSigned = filteredSigned;
           }
+          addPeakAbs = filteredAbs;
+          addPeakSigned = filteredSigned;
 
           // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
           // and restart the add delay timer (same hold protection as entry window).
           const ADD_MAX_SIGMA = 4.0;
-          if (addPeakAbs != null && addPeakAbs > ADD_MAX_SIGMA) {
+          if (confirmedAddAbs != null && confirmedAddAbs > ADD_MAX_SIGMA) {
             lastAboveAddCapAt = now;
             if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
           }
@@ -1478,10 +1487,10 @@ export function syncStreamPositions(
           const lastAddBase = lastScaleSignal ?? entryBase;
           const trigger = Math.abs(lastAddBase) + Math.max(0, automationConfig.dilutionStep ?? 0);
           const sameSign =
-            addPeakSigned != null &&
-            Number.isFinite(addPeakSigned) &&
-            addPeakSigned !== 0 &&
-            Math.sign(addPeakSigned) === Math.sign(entryBase);
+            confirmedAddSigned != null &&
+            Number.isFinite(confirmedAddSigned) &&
+            confirmedAddSigned !== 0 &&
+            Math.sign(confirmedAddSigned) === Math.sign(entryBase);
           const addDelayMs = Math.max(STREAM_AUTOMATION_TICK_MS, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
           // Add delay restarts from the last cap breach — same protection as entry minHold.
           // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
@@ -1495,11 +1504,11 @@ export function syncStreamPositions(
           const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
             ? false
             : now - lastDispatchOrBreach >= addDelayMs;
-          const belowAddCap = addPeakAbs == null || addPeakAbs <= ADD_MAX_SIGMA;
-          if (addPeakAbs != null && addPeakAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
+          const belowAddCap = confirmedAddAbs == null || confirmedAddAbs <= ADD_MAX_SIGMA;
+          if (confirmedAddAbs != null && confirmedAddAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
             pendingAddTrigger = trigger;
-            lastScaleSignal = addPeakSigned;
+            lastScaleSignal = confirmedAddSigned;
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
           } else {
@@ -1507,10 +1516,10 @@ export function syncStreamPositions(
             // next threshold yet). But if the bar's value reversed sign, clear the intent —
             // the position has moved against entry and the pending order is no longer valid.
             const signalReversed =
-              addPeakSigned != null &&
-              Number.isFinite(addPeakSigned) &&
-              addPeakSigned !== 0 &&
-              Math.sign(addPeakSigned) !== Math.sign(entryBase);
+              confirmedAddSigned != null &&
+              Number.isFinite(confirmedAddSigned) &&
+              confirmedAddSigned !== 0 &&
+              Math.sign(confirmedAddSigned) !== Math.sign(entryBase);
             if (!isEntryOrderIntent(existing.pendingIntent) || signalReversed) {
               pendingIntent = null;
             }
@@ -1541,6 +1550,8 @@ export function syncStreamPositions(
         addPeakMinuteIdx,
         addPeakAbs,
         addPeakSigned,
+        confirmedAddAbs,
+        confirmedAddSigned,
         pendingAddTrigger,
         updatedAt: now,
       });
@@ -2972,11 +2983,12 @@ export function useStreamEngine({
       })
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
-    // Union this poll's above-threshold tickers into the current (in-progress) minute's
+    // Track this poll's above-threshold tickers into the current (in-progress) minute's
     // accumulator. New latches are gated on minuteSnapshotRef — the frozen, fully-completed
-    // previous minute — not this in-progress accumulator, so a ticker only needs to have
-    // crossed threshold at SOME point during a minute, not at the specific instant we happened
-    // to poll, to count as qualified for that minute.
+    // previous minute — not this in-progress accumulator. aboveSet reflects the state as of
+    // the LAST poll before the minute closed (see the add/delete below), not "touched at any
+    // point" — a single-instant spike (e.g. a bad tick) that reverted before the boundary must
+    // not be enough to qualify a brand-new latch.
     if (decisionsWithWindowGuard.length > 0) {
       if (minuteAccumRef.current == null || minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
         minuteAccumRef.current = {
@@ -2988,7 +3000,14 @@ export function useStreamEngine({
       }
       for (const row of decisionsWithWindowGuard) {
         const key = `${row.ticker}|${row.side}`;
+        // aboveSet reflects the LATEST poll's state, not "was ever above threshold this
+        // minute" — add/delete on every poll (not just add) so a ticker that touched
+        // threshold, dropped, and never recovered is correctly absent by the time the
+        // minute closes. Flickering (touch → drop → touch again) is fine as long as it's
+        // back above threshold by the last poll before the boundary — see isMinuteQualified
+        // below, which gates new latches on this snapshot.
         if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(key);
+        else minuteAccumRef.current.aboveSet.delete(key);
         if (row.signal != null) {
           const absVal = Math.abs(row.signal);
           const prevHi = minuteAccumRef.current.sigmaHiMap.get(key);
