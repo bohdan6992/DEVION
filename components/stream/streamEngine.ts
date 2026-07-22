@@ -514,16 +514,42 @@ function isWithinPreSessionLive(nowMinutes: number, preStartTime: string | undef
   return nowRel >= startRel && nowRel <= PRE_SESSION_END_MINUTES;
 }
 
-// For ARK (same-day window), "past cutoff" is a plain nowMinutes>=cutoff comparison — true for
-// the rest of the day too, which is harmless since ARK-classed decisions don't exist outside
-// its window anyway. For PRE (wraps past midnight), that same plain comparison would go
-// permanently true the instant nowMinutes reaches 21:00 (1260 >= a ~09:20 cutoff), immediately
-// blocking/cutting off the session at the moment it starts — so for PRE, "past cutoff" only
-// applies to the tail/morning portion of the session (00:00-09:30), never the 21:00-23:59
-// opening portion.
-function isPastSessionCutoff(nowMinutes: number, cutoffMinutes: number, isPreSession: boolean): boolean {
+// For a same-day window (start <= cutoff, e.g. ARK's START=04:00/CUTOFF=09:00), "past cutoff"
+// is a plain nowMinutes>=cutoff comparison — true for the rest of the day too, which is
+// harmless since there's no later same-day start to protect. For a WRAPPING window (start >
+// cutoff, e.g. START=23:00/CUTOFF=09:00 next day — including PRE, whose start is user-
+// configurable via preStartTime but effectively always wraps), that same plain comparison
+// would go permanently true the instant nowMinutes reaches cutoff and stay true through the
+// evening's own start too, immediately force-closing/blocking a session that just began —
+// so for a wrapping window, "past cutoff" only applies to the tail/morning portion (before
+// the next start), never the evening portion right after start.
+// wrapStartMinutes: the session's own configured START, used only to detect wraparound
+// (wrapStartMinutes > cutoffMinutes) — pass null/omit for a window known to never wrap.
+function isPastSessionCutoff(
+  nowMinutes: number,
+  cutoffMinutes: number,
+  isPreSession: boolean,
+  wrapStartMinutes: number | null = null
+): boolean {
   if (isPreSession) return nowMinutes <= PRE_SESSION_END_MINUTES && nowMinutes >= cutoffMinutes;
+  if (wrapStartMinutes != null && wrapStartMinutes > cutoffMinutes) {
+    return nowMinutes < wrapStartMinutes && nowMinutes >= cutoffMinutes;
+  }
   return nowMinutes >= cutoffMinutes;
+}
+
+// Wrap-aware counterpart to the plain "nowMinutes < startMinutes" floor check: for a WRAPPING
+// window (startMinutes > cutoffMinutes, e.g. START=23:00/CUTOFF=09:00 next day), the session is
+// still considered started during the early-morning tail (nowMinutes < cutoffMinutes) even
+// though nowMinutes has wrapped back to a small number — only the dead zone strictly between
+// today's cutoff and tonight's start (cutoffMinutes <= nowMinutes < startMinutes) counts as
+// "before start". For a same-day window (startMinutes <= cutoffMinutes), this is the original
+// plain comparison.
+function isBeforeSessionStart(nowMinutes: number, startMinutes: number, cutoffMinutes: number | null): boolean {
+  if (cutoffMinutes == null || startMinutes <= cutoffMinutes) {
+    return nowMinutes < startMinutes;
+  }
+  return nowMinutes >= cutoffMinutes && nowMinutes < startMinutes;
 }
 
 const PRE_SESSION_START_MINUTES = 21 * 60; // 1260 (21:00)
@@ -927,11 +953,13 @@ function syncStreamSignalLatches(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) return [];
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) return [];
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) return [];
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) return [];
   // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
-  // it just waits here instead of creating any latches.
-  if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return [];
+  // it just waits here instead of creating any latches. Wrap-aware: if START (e.g. 23:00) is
+  // later than CUTOFF (e.g. 09:00 next day), a small nowMinutes after midnight still counts
+  // as "started" (continuing last evening's session), not "before start".
+  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return [];
   // PRE wraps past midnight (21:00 -> 09:30 next day) — can't be expressed as a single scalar
   // floor, so it's gated separately here via the wrap-aware helper.
   if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig.preStartTime)) return [];
@@ -1158,7 +1186,8 @@ export function syncStreamPositions(
   sessionStartMinutes: number | null = null,
   isPreSession = false,
   loggedOpenTickers: ReadonlySet<string> = new Set(),
-  dispatchingEntryTickers: ReadonlySet<string> = new Set()
+  dispatchingEntryTickers: ReadonlySet<string> = new Set(),
+  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
 ): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
@@ -1345,7 +1374,7 @@ export function syncStreamPositions(
         // entries don't fire at deviations far outside the configured startAbsMax cap.
         const entryIsHold = decision?.status === "HOLD";
         const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
-        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession);
+        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes);
         if (inPrintWindow || entryIsHold || cutoffReached || (!entryStillReady && !withinGrace)) {
           // If a real-mode dispatch is in-flight for this ticker (between
           // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
@@ -1565,11 +1594,11 @@ export function syncStreamPositions(
     ).length;
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) continue;
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) continue;
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) continue;
       // Session hasn't started yet (e.g. ARK before 04:00) — same wait-then-work behavior as
       // the latch gate above.
-      if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) continue;
+      if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) continue;
       if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) continue;
       if (openCount >= maxOpenAllowed) continue;
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
@@ -1587,14 +1616,20 @@ export function syncStreamPositions(
         : (toNum(filteredRawEntry?.zapSsigma) ?? toNum(raw?.zapSsigma));
       const currentSigned = zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
       if (currentSigned == null) continue; // no signal — cannot anchor add triggers, skip
+      // Anchor the DISPATCHED entry value to the last poll of the minute that just closed
+      // (frozenEntrySignalMap), not whatever the live poll shows right now — dispatch can run
+      // a few ticks after the boundary, during which the price may keep moving. Falls back to
+      // the live value when no frozen snapshot exists yet (startup / first minute).
+      const frozenSigned = frozenEntrySignalMap.get(`${latch.ticker}|${latch.side}`);
+      const entrySignedValue = frozenSigned ?? currentSigned;
       const currentSpread = signalSpread(raw);
       next.push({
         ticker: latch.ticker,
         benchmark: latch.benchmark,
         side: latch.side,
-        entrySignal: currentSigned,
+        entrySignal: entrySignedValue,
         lastSignal: currentSigned,
-        lastScaleSignal: currentSigned,
+        lastScaleSignal: entrySignedValue,
         belowThresholdTicks: 0,
         spread: currentSpread,
         spreadBidPct: signalSpreadBidPct(raw),
@@ -1846,6 +1881,7 @@ function buildFallbackPendingEntryPositions(
   entryCutoffEnabled: boolean,
   sessionStartMinutes: number | null,
   isPreSession = false,
+  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
 ): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
 
@@ -1853,9 +1889,9 @@ function buildFallbackPendingEntryPositions(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession)) return existingPositions;
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession)) return existingPositions;
-  if (entryCutoffEnabled && sessionStartMinutes != null && nowMinutes < sessionStartMinutes) return existingPositions;
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) return existingPositions;
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) return existingPositions;
+  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return existingPositions;
   if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) return existingPositions;
 
   // Respect the same entryCutoffEnabled guard used everywhere else:
@@ -1880,14 +1916,18 @@ function buildFallbackPendingEntryPositions(
     const signed = latch.side === "Long"
       ? (toNum(raw?.zapLsigma) ?? signalSigned(raw) ?? signalAbs(raw))
       : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw));
+    // See syncStreamPositions: anchor to the value at the closed minute's last poll, not
+    // whatever the live poll shows at dispatch time.
+    const frozenSigned = frozenEntrySignalMap.get(`${latch.ticker}|${latch.side}`);
+    const entrySignedValue = frozenSigned ?? signed;
 
     next.push({
       ticker: latch.ticker,
       benchmark: latch.benchmark,
       side: latch.side,
-      entrySignal: signed,
+      entrySignal: entrySignedValue,
       lastSignal: signed,
-      lastScaleSignal: signed,
+      lastScaleSignal: entrySignedValue,
       belowThresholdTicks: 0,
       spread: signalSpread(raw),
       spreadBidPct: signalSpreadBidPct(raw),
@@ -2130,12 +2170,14 @@ export function useStreamEngine({
     aboveSet: Set<string>;
     sigmaHiMap: Map<string, number>;
     sigmaLoMap: Map<string, number>;
+    lastSignedMap: Map<string, number>;
   } | null>(null);
   const minuteSnapshotRef = useRef<{
     minuteIdx: number;
     aboveSet: Set<string>;
     sigmaHiMap: Map<string, number>;
     sigmaLoMap: Map<string, number>;
+    lastSignedMap: Map<string, number>;
   } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
   // Tickers that dropped out of the entry window (sigma < startAbs or > startAbsMax)
@@ -2996,6 +3038,7 @@ export function useStreamEngine({
           aboveSet: new Set<string>(),
           sigmaHiMap: new Map(),
           sigmaLoMap: new Map(),
+          lastSignedMap: new Map(),
         };
       }
       for (const row of decisionsWithWindowGuard) {
@@ -3014,6 +3057,12 @@ export function useStreamEngine({
           const prevLo = minuteAccumRef.current.sigmaLoMap.get(key);
           if (prevHi == null || absVal > prevHi) minuteAccumRef.current.sigmaHiMap.set(key, absVal);
           if (prevLo == null || absVal < prevLo) minuteAccumRef.current.sigmaLoMap.set(key, absVal);
+          // Unconditional overwrite (not min/max) — the LAST poll's signed value seen this
+          // minute, i.e. the value as of the moment the minute closes. Used to anchor a new
+          // entry's dispatched signal to "value at the boundary", not whatever a later poll
+          // happens to show once dispatch actually fires — mirrors SCANNER's single bar-close
+          // read at the start of the same minute (same physical instant, from either side).
+          minuteAccumRef.current.lastSignedMap.set(key, row.signal);
         }
       }
     }
@@ -3076,7 +3125,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, strategyIsPreSession, openLoggedTickers, dispatchingEntryTickersRef.current);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, strategyIsPreSession, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3111,6 +3160,7 @@ export function useStreamEngine({
         entryCutoffEnabled,
         strategySessionStartMinutes,
         strategyIsPreSession,
+        minuteSnapshotRef.current?.lastSignedMap,
       );
       intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
     }
@@ -3427,7 +3477,7 @@ export function useStreamEngine({
     const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
     const cutoffDue =
       entryCutoffEnabled &&
-      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession) &&
+      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession, strategySessionStartMinutes) &&
       cutoffHotkeySentKeyRef.current !== cutoffKey;
 
     // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
@@ -3458,7 +3508,7 @@ export function useStreamEngine({
       // entries) then, 1s later, Ctrl+O (print-close everything open) — exactly once per
       // cutoff crossing. This runs before the separate printStartTime-driven CLOSE_ALL_PRINT
       // dispatch below, so if both times coincide Ctrl+Q still always reaches TradingApp first.
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession)) {
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession, strategySessionStartMinutes)) {
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
