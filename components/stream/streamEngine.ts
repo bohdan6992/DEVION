@@ -283,6 +283,12 @@ type StreamSignalLatch = {
   lastSeenAt: number;
   bounceCount: number;    // how many signal drop/recovery cycles happened (ремонт count)
   latchOrigin: string;   // "new" | "hist" | "primed" | "cont"
+  // Real wall-clock time of the FIRST poll where hasCompletedStreamHoldWindow became true for
+  // this latch (i.e. the moment dispatch first became eligible) — null until then. Distinct
+  // from qualifiedSince, which is minute-aligned and already >=60s in the past by the time hold
+  // completes, so it can't itself be used to measure "how many real seconds has this actually
+  // held since becoming dispatch-eligible" — see ENTRY_DISPATCH_CONFIRM_MS.
+  holdCompletedAt: number | null;
 };
 
 type StreamMinMax = {
@@ -665,12 +671,19 @@ function readStreamActionLog(storageKey: string): StreamActionLogEntry[] {
 }
 
 function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): StreamPosition[] {
-  const todaysEntries = entries
-    .filter((entry) => entry.dayKey === dayKey)
-    .sort((a, b) => a.at - b.at);
+  // NOT filtered to entry.dayKey === dayKey: a position opened before midnight in a
+  // forward-wrapping session (e.g. START=21:00) is still legitimately open once the calendar
+  // date rolls over, but its action-log entry keeps YESTERDAY's dayKey. Filtering to today's
+  // dayKey exactly used to silently drop it from "open positions" the instant the date changed
+  // — entryDispatchedAt/loggedOpenTickers then never matched it again, so it got stuck showing
+  // "awaiting execution confirmation" forever and never became ADD-eligible. `entries` is
+  // already pruned to <3 calendar days by pruneStreamActionLog, so replaying all of it
+  // chronologically (oldest first) is safe: a ticker's last event (ENTRY/ADD vs CLOSE) still
+  // correctly determines whether it's open, regardless of which day that event happened on.
+  const chronological = entries.slice().sort((a, b) => a.at - b.at);
   const openByTicker = new Map<string, StreamPosition>();
 
-  for (const entry of todaysEntries) {
+  for (const entry of chronological) {
     if (entry.kind === "CLOSE") {
       openByTicker.delete(entry.ticker);
       continue;
@@ -1029,13 +1042,22 @@ function syncStreamSignalLatches(
     const hadBounce = !existing && exitMinute != null;
     const prevBounceCount = existing?.bounceCount ?? 0;
     const latchOrigin: string = existing ? "cont" : isPrimed ? "primed" : historic ? "hist" : "new";
+    const resolvedQualifiedSince = existing?.qualifiedSince
+      ?? historic?.qualifiedSince
+      ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince);
+    // First poll where dispatch became eligible for THIS latch — recorded once, then held
+    // fixed (not re-armed on every poll) for as long as the latch keeps qualifying. Whenever
+    // `existing` is null (fresh latch, or recovered from history after a full drop),
+    // qualifiedSince is necessarily also fresh above, so restarting the confirm window here
+    // too is automatically correct — no separate "did qualifiedSince change" check needed.
+    const holdCompletedAt = existing?.holdCompletedAt
+      ?? (hasCompletedStreamHoldWindow(resolvedQualifiedSince, nowMinuteIdx, minHoldMinutes) ? now : null);
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
-      qualifiedSince: existing?.qualifiedSince
-        ?? historic?.qualifiedSince
-        ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince),
+      qualifiedSince: resolvedQualifiedSince,
+      holdCompletedAt,
       lastSeenAt: now,
       bounceCount: hadBounce ? prevBounceCount + 1 : prevBounceCount,
       latchOrigin,
@@ -1471,7 +1493,7 @@ export function syncStreamPositions(
           entryDispatchedAt != null &&
           atOrAboveEndThreshold &&
           !inPrintWindow &&
-          !(entryCutoffEnabled && nowMinutes >= startCutoffMinutes) &&
+          !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) &&
           automationConfig.scaleMode === "scale_in" &&
           entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0)
         ) {
@@ -1604,6 +1626,14 @@ export function syncStreamPositions(
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
       // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
       if (!hasCompletedStreamHoldWindow(latch.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
+      // Require the latch to have kept qualifying for a few real seconds since dispatch FIRST
+      // became eligible — see ENTRY_DISPATCH_CONFIRM_MS doc. Must use holdCompletedAt, not
+      // qualifiedSince: qualifiedSince is minute-aligned and already >=60s in the past by the
+      // time hasCompletedStreamHoldWindow (checked above) ever passes, so comparing against it
+      // here would never block anything. Re-evaluated every poll: if the signal was a bad tick,
+      // it drops ENTRY_READY or the latch itself within these few seconds and this loop simply
+      // never reaches the dispatch below for it.
+      if (latch.holdCompletedAt == null || now - latch.holdCompletedAt < ENTRY_DISPATCH_CONFIRM_MS) continue;
       // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
       // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
       const latchDecision = decisionMap.get(latch.ticker);
@@ -1911,6 +1941,10 @@ function buildFallbackPendingEntryPositions(
   for (const latch of qualifiedLatches) {
     if (existingByTicker.has(latch.ticker)) continue;
     if (openCount >= maxOpenAllowed) break;
+    // See syncStreamPositions/ENTRY_DISPATCH_CONFIRM_MS: require the latch to have kept
+    // qualifying for a few real seconds since dispatch first became eligible (holdCompletedAt,
+    // not qualifiedSince — the latter is always >=60s stale by this point).
+    if (latch.holdCompletedAt == null || now - latch.holdCompletedAt < ENTRY_DISPATCH_CONFIRM_MS) continue;
 
     const raw = signalMap.get(latch.ticker);
     const signed = latch.side === "Long"
@@ -2003,6 +2037,14 @@ const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
 const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
 const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
 const STREAM_AUTOMATION_TICK_MS = 1000;
+// Minimum real wall-clock time a newly-qualified latch must keep qualifying before a NEW entry
+// actually dispatches — guards against a single bad tick that happened to land exactly on the
+// boundary poll used to freeze the entry value (see frozenEntrySignalMap docs). A genuine signal
+// stays qualified through several 1s poll ticks; a bad tick reverts almost immediately and the
+// latch drops out of ENTRY_READY (or loses its latch entirely) before this window elapses, so it
+// never reaches dispatch. Does not change WHICH value gets used (still the frozen boundary
+// value) — only delays WHEN dispatch is allowed to fire.
+const ENTRY_DISPATCH_CONFIRM_MS = 3000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
