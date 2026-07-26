@@ -283,12 +283,6 @@ type StreamSignalLatch = {
   lastSeenAt: number;
   bounceCount: number;    // how many signal drop/recovery cycles happened (ремонт count)
   latchOrigin: string;   // "new" | "hist" | "primed" | "cont"
-  // Real wall-clock time of the FIRST poll where hasCompletedStreamHoldWindow became true for
-  // this latch (i.e. the moment dispatch first became eligible) — null until then. Distinct
-  // from qualifiedSince, which is minute-aligned and already >=60s in the past by the time hold
-  // completes, so it can't itself be used to measure "how many real seconds has this actually
-  // held since becoming dispatch-eligible" — see ENTRY_DISPATCH_CONFIRM_MS.
-  holdCompletedAt: number | null;
 };
 
 type StreamMinMax = {
@@ -415,6 +409,43 @@ function currentMinutesLocal(): number {
   }
   const now = new Date();
   return now.getHours() * 60 + now.getMinutes();
+}
+
+// NY calendar date (yyyy-MM-dd), independent of the browser's own timezone/locale — unlike
+// localDayKey() (browser-local calendar day), this matches the "dateNy" convention Scanner's
+// TapeArbitrageEngine uses to key its sigma-range sidecar file. dayOffset=-1 gets yesterday's
+// NY date (shift by a full 24h of wall time before formatting so DST transitions on the
+// shifted day are still handled correctly by the timeZone formatter).
+function currentNyDateKey(dayOffset = 0): string {
+  try {
+    const base = new Date(Date.now() + dayOffset * 86_400_000);
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(base);
+    const yyyy = parts.find((part) => part.type === "year")?.value;
+    const mm = parts.find((part) => part.type === "month")?.value;
+    const dd = parts.find((part) => part.type === "day")?.value;
+    if (yyyy && mm && dd) return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    // Fallback below.
+  }
+  return localDayKey(Date.now() + dayOffset * 86_400_000);
+}
+
+// Temporary diagnostic for the "START=21:00 doesn't dispatch" investigation — logs at most
+// once per (minute, tag, ticker) so it doesn't flood the console on every poll tick. Safe to
+// delete once the entry-gating root cause is confirmed.
+const __streamGateLogSeen = new Set<string>();
+function logStreamGateBlock(tag: string, details: Record<string, unknown>): void {
+  const key = `${Math.floor(Date.now() / 60_000)}|${tag}|${details.ticker ?? ""}`;
+  if (__streamGateLogSeen.has(key)) return;
+  __streamGateLogSeen.add(key);
+  if (__streamGateLogSeen.size > 2000) __streamGateLogSeen.clear();
+  // eslint-disable-next-line no-console
+  console.debug(`[stream-gate-debug] ${tag}`, details);
 }
 
 function intentId(parts: Array<string | number>): string {
@@ -957,7 +988,10 @@ function syncStreamSignalLatches(
   minuteQualifiedTickers?: ReadonlySet<string>,
   windowExitedMinutes?: ReadonlyMap<string, number>
 ): StreamSignalLatch[] {
-  if (!autoEnabled || !automationConfig?.strategyModeEnabled) return [];
+  if (!autoEnabled || !automationConfig?.strategyModeEnabled) {
+    logStreamGateBlock("latches:disabled", { autoEnabled, strategyModeEnabled: automationConfig?.strategyModeEnabled });
+    return [];
+  }
 
   const now = Date.now();
   const minHoldMinutes = Math.max(0, automationConfig.minHoldMinutes ?? 0);
@@ -966,16 +1000,28 @@ function syncStreamSignalLatches(
   const nowMinutes = currentMinutesLocal();
   const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) return [];
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) return [];
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) {
+    logStreamGateBlock("latches:pastPrintStart", { nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes });
+    return [];
+  }
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) {
+    logStreamGateBlock("latches:pastCutoff", { nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes });
+    return [];
+  }
   // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
   // it just waits here instead of creating any latches. Wrap-aware: if START (e.g. 23:00) is
   // later than CUTOFF (e.g. 09:00 next day), a small nowMinutes after midnight still counts
   // as "started" (continuing last evening's session), not "before start".
-  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return [];
+  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
+    logStreamGateBlock("latches:beforeStart", { nowMinutes, sessionStartMinutes, startCutoffMinutes });
+    return [];
+  }
   // PRE wraps past midnight (21:00 -> 09:30 next day) — can't be expressed as a single scalar
   // floor, so it's gated separately here via the wrap-aware helper.
-  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig.preStartTime)) return [];
+  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig.preStartTime)) {
+    logStreamGateBlock("latches:preNotLive", { nowMinutes, preStartTime: automationConfig.preStartTime });
+    return [];
+  }
 
   const prevMap = new Map(prev.map((row) => [row.ticker, row]));
   const next: StreamSignalLatch[] = [];
@@ -998,7 +1044,16 @@ function syncStreamSignalLatches(
     // sub-minute bounce must not survive a minute boundary that showed the signal below.
     if (!existing && !isPrimed) {
       const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${row.ticker}|${row.side}`);
-      if (!isMinuteQualified) continue;
+      if (!isMinuteQualified) {
+        logStreamGateBlock("latches:notMinuteQualified", {
+          ticker: row.ticker,
+          side: row.side,
+          status: row.status,
+          historic: Boolean(historic),
+          minuteQualifiedTickersSize: minuteQualifiedTickers?.size ?? null,
+        });
+        continue;
+      }
     }
     // qualifiedSince is aligned to minute boundaries so hold check (minute index
     // arithmetic) gives integer-exact results matching tape candle counting.
@@ -1024,18 +1079,17 @@ function syncStreamSignalLatches(
     const minuteAlignedNow = nowMinuteIdx * 60_000;
     const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
     const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
-    // If this ticker exited the entry window this minute OR last minute (sigma dipped/spiked),
-    // push qualifiedSince forward so dispatch waits until the next minute boundary after the
-    // exit — matching scanner: a dip resets the consecutive-candle streak and the new start
-    // bar is only available one bar later.
-    //   exitedThisMinute (dip at T:40, recovery at T:50): qualifiedSince = T+1:00
-    //   exitedPrevMinute (dip at T:40, recovery at T+1:30): qualifiedSince = T+1:00 (= minuteAlignedNow)
-    // Both produce qualifiedSince = T+1:00, so hasCompletedStreamHoldWindow fires at T+2 for mHC=0.
+    // NOTE: this used to push qualifiedSince forward by a full extra minute whenever
+    // windowExitedMinutes recorded a bounce (dip + recovery) in this or the prior minute — a
+    // crude penalty from when isMinuteQualified above only checked a single instant. Now that
+    // isMinuteQualified requires ENTRY_HOLD_BEFORE_BOUNDARY_MS (10s) of genuinely continuous
+    // holding before the boundary (see aboveSinceRef), passing that gate already proves the
+    // bounce resolved in time — an EXTRA minute of delay on top would contradict the explicit
+    // requirement that "appeared, dropped, reappeared, held the last ~10s" dispatches at THIS
+    // boundary, not the next one. So a brand-new latch always anchors to the immediately
+    // preceding minute boundary, bounce or not.
     const exitMinute = windowExitedMinutes?.get(row.ticker);
-    const freshQualifiedSince =
-      exitMinute === nowMinuteIdx ? minuteAlignedNow + 60_000 :
-      exitMinute === nowMinuteIdx - 1 ? minuteAlignedNow :
-      completedSignalMinuteBoundary;
+    const freshQualifiedSince = completedSignalMinuteBoundary;
     // Track how many signal drop/recovery cycles this latch has seen.
     // A bounce = latch was absent (signal below threshold) and just recovered,
     // AND windowExitedMinutes recorded the exit → qualifiedSince pushed forward.
@@ -1045,19 +1099,11 @@ function syncStreamSignalLatches(
     const resolvedQualifiedSince = existing?.qualifiedSince
       ?? historic?.qualifiedSince
       ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince);
-    // First poll where dispatch became eligible for THIS latch — recorded once, then held
-    // fixed (not re-armed on every poll) for as long as the latch keeps qualifying. Whenever
-    // `existing` is null (fresh latch, or recovered from history after a full drop),
-    // qualifiedSince is necessarily also fresh above, so restarting the confirm window here
-    // too is automatically correct — no separate "did qualifiedSince change" check needed.
-    const holdCompletedAt = existing?.holdCompletedAt
-      ?? (hasCompletedStreamHoldWindow(resolvedQualifiedSince, nowMinuteIdx, minHoldMinutes) ? now : null);
     next.push({
       ticker: row.ticker,
       benchmark: row.benchmark,
       side: row.side,
       qualifiedSince: resolvedQualifiedSince,
-      holdCompletedAt,
       lastSeenAt: now,
       bounceCount: hadBounce ? prevBounceCount + 1 : prevBounceCount,
       latchOrigin,
@@ -1362,6 +1408,13 @@ export function syncStreamPositions(
         (isEntryOrderIntent(existing.pendingIntent) || existing.entryCount <= 1);
 
       if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
+        logStreamGateBlock("position:awaitingActionLogConfirmation", {
+          ticker: existing.ticker,
+          entryDispatchedAt,
+          entryCount: existing.entryCount,
+          openedAt: existing.openedAt,
+          ageMs: now - entryDispatchedAt,
+        });
         // Keep in next so the position stays in state across refresh cycles.
         // Without this, setStreamPositions removes it → mergeStreamPositionsWithActionLog
         // can't restore it → latch recreates a new position with a different openedAt
@@ -1489,14 +1542,32 @@ export function syncStreamPositions(
               ? "holding above end threshold"
               : "holding";
 
-        if (
+        const addGateOk =
           entryDispatchedAt != null &&
           atOrAboveEndThreshold &&
           !inPrintWindow &&
           !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) &&
           automationConfig.scaleMode === "scale_in" &&
-          entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0)
-        ) {
+          entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0);
+        if (!addGateOk && automationConfig.scaleMode === "scale_in" && entryDispatchedAt != null) {
+          logStreamGateBlock("add:outerGate", {
+            ticker: existing.ticker,
+            entryDispatchedAt,
+            atOrAboveEndThreshold,
+            currentAbs,
+            endThreshold,
+            inPrintWindow,
+            cutoffBlocking: entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes),
+            nowMinutes,
+            startCutoffMinutes,
+            isPreSession,
+            sessionStartMinutes,
+            scaleMode: automationConfig.scaleMode,
+            entryCount,
+            maxAdds: automationConfig.maxAdds,
+          });
+        }
+        if (addGateOk) {
           const filteredSignal = filteredRaw;
           const filteredSignedZap = existing.side === "Long"
             ? (toNum(filteredSignal?.zapLsigma) ?? toNum(raw?.zapLsigma))
@@ -1563,6 +1634,20 @@ export function syncStreamPositions(
             pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
             reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
           } else {
+            logStreamGateBlock("add:triggerNotMet", {
+              ticker: existing.ticker,
+              confirmedAddAbs,
+              confirmedAddSigned,
+              trigger,
+              lastAddBase,
+              belowAddCap,
+              sameSign,
+              addDelayPassed,
+              addDelayMs,
+              lastDispatchOrBreach,
+              pendingIntent: existing.pendingIntent,
+              msUntilDelayPassed: addDelayMs - (now - lastDispatchOrBreach),
+            });
             // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
             // next threshold yet). But if the bar's value reversed sign, clear the intent —
             // the position has moved against entry and the pending order is no longer valid.
@@ -1616,28 +1701,51 @@ export function syncStreamPositions(
     ).length;
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) continue;
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) {
+        logStreamGateBlock("positions:pastPrintStart", { ticker: latch.ticker, nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes });
+        continue;
+      }
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) {
+        logStreamGateBlock("positions:pastCutoff", { ticker: latch.ticker, nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes });
+        continue;
+      }
       // Session hasn't started yet (e.g. ARK before 04:00) — same wait-then-work behavior as
       // the latch gate above.
-      if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) continue;
-      if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) continue;
-      if (openCount >= maxOpenAllowed) continue;
+      if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
+        logStreamGateBlock("positions:beforeStart", { ticker: latch.ticker, nowMinutes, sessionStartMinutes, startCutoffMinutes });
+        continue;
+      }
+      if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) {
+        logStreamGateBlock("positions:preNotLive", { ticker: latch.ticker, nowMinutes, preStartTime: automationConfig?.preStartTime });
+        continue;
+      }
+      if (openCount >= maxOpenAllowed) {
+        logStreamGateBlock("positions:maxOpen", { ticker: latch.ticker, openCount, maxOpenAllowed });
+        continue;
+      }
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
-      // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison.
-      if (!hasCompletedStreamHoldWindow(latch.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
-      // Require the latch to have kept qualifying for a few real seconds since dispatch FIRST
-      // became eligible — see ENTRY_DISPATCH_CONFIRM_MS doc. Must use holdCompletedAt, not
-      // qualifiedSince: qualifiedSince is minute-aligned and already >=60s in the past by the
-      // time hasCompletedStreamHoldWindow (checked above) ever passes, so comparing against it
-      // here would never block anything. Re-evaluated every poll: if the signal was a bad tick,
-      // it drops ENTRY_READY or the latch itself within these few seconds and this loop simply
-      // never reaches the dispatch below for it.
-      if (latch.holdCompletedAt == null || now - latch.holdCompletedAt < ENTRY_DISPATCH_CONFIRM_MS) continue;
+      // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison. The
+      // "must have held for real seconds before dispatch" protection now lives upstream, in
+      // the latch's OWN creation gate (minuteQualifiedTickers / aboveSinceRef, requiring 10s of
+      // continuous qualification before the boundary) — no separate post-creation delay here,
+      // so dispatch fires right at the boundary, matching Scanner's own minute labeling.
+      if (!hasCompletedStreamHoldWindow(latch.qualifiedSince, nowMinuteIdx, minHoldMinutes)) {
+        logStreamGateBlock("positions:holdWindow", {
+          ticker: latch.ticker,
+          qualifiedSince: latch.qualifiedSince,
+          qualifiedMinuteIdx: Math.floor(latch.qualifiedSince / 60_000),
+          nowMinuteIdx,
+          minHoldMinutes,
+        });
+        continue;
+      }
       // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
       // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
       const latchDecision = decisionMap.get(latch.ticker);
-      if (!latchDecision || latchDecision.status !== "ENTRY_READY") continue;
+      if (!latchDecision || latchDecision.status !== "ENTRY_READY") {
+        logStreamGateBlock("positions:notEntryReady", { ticker: latch.ticker, status: latchDecision?.status ?? "missing" });
+        continue;
+      }
 
       const raw = filteredSignalMap.get(latch.ticker) ?? signalMap.get(latch.ticker);
       const filteredRawEntry = filteredSignalMap.get(latch.ticker);
@@ -1941,10 +2049,6 @@ function buildFallbackPendingEntryPositions(
   for (const latch of qualifiedLatches) {
     if (existingByTicker.has(latch.ticker)) continue;
     if (openCount >= maxOpenAllowed) break;
-    // See syncStreamPositions/ENTRY_DISPATCH_CONFIRM_MS: require the latch to have kept
-    // qualifying for a few real seconds since dispatch first became eligible (holdCompletedAt,
-    // not qualifiedSince — the latter is always >=60s stale by this point).
-    if (latch.holdCompletedAt == null || now - latch.holdCompletedAt < ENTRY_DISPATCH_CONFIRM_MS) continue;
 
     const raw = signalMap.get(latch.ticker);
     const signed = latch.side === "Long"
@@ -2037,14 +2141,13 @@ const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
 const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
 const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
 const STREAM_AUTOMATION_TICK_MS = 1000;
-// Minimum real wall-clock time a newly-qualified latch must keep qualifying before a NEW entry
-// actually dispatches — guards against a single bad tick that happened to land exactly on the
-// boundary poll used to freeze the entry value (see frozenEntrySignalMap docs). A genuine signal
-// stays qualified through several 1s poll ticks; a bad tick reverts almost immediately and the
-// latch drops out of ENTRY_READY (or loses its latch entirely) before this window elapses, so it
-// never reaches dispatch. Does not change WHICH value gets used (still the frozen boundary
-// value) — only delays WHEN dispatch is allowed to fire.
-const ENTRY_DISPATCH_CONFIRM_MS = 3000;
+// Minimum real wall-clock time a signal must keep qualifying continuously, counting BACKWARD
+// from a minute boundary, before that boundary is allowed to seed a new latch (see
+// aboveSinceRef / minuteQualifiedTickers). E.g. for boundary 08:51:00, the signal must have been
+// continuously above threshold since at least 08:50:50. A bad tick that only appears right at
+// the boundary won't have an aboveSinceRef timestamp old enough and simply won't qualify that
+// minute — dispatch itself still fires exactly at the boundary, using the frozen boundary value.
+const ENTRY_HOLD_BEFORE_BOUNDARY_MS = 10_000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -2201,6 +2304,15 @@ export function useStreamEngine({
   const primeImmediateEntriesRef = useRef<boolean>(false);
   const activeScannerTickersRef = useRef<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>(activeScannerTickers ?? []);
   const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
+  // Continuously tracked (NOT reset per minute) per ticker|side: wall-clock time the CURRENT
+  // unbroken "above threshold" streak began. Deleted the instant the ticker drops to HOLD status
+  // (streak broken), set fresh the instant it next qualifies. Used to gate new-latch creation on
+  // ENTRY_HOLD_BEFORE_BOUNDARY_MS: a signal must have been continuously qualifying for at least
+  // that many real seconds counting backward from a minute boundary for that boundary to seed a
+  // latch — see minuteQualifiedTickers at the syncStreamSignalLatches call site. Flickering
+  // (touch → drop → touch again) is fine as long as the LAST touch-back happened early enough
+  // that the streak since then already covers the required window by the boundary.
+  const aboveSinceRef = useRef<Map<string, { since: number; lastSeenAt: number }>>(new Map());
   // Accumulates above-threshold tickers and hi/lo sigma across ALL polls within the current
   // (in-progress) minute. aboveSet = boolean union above startAbs (existing gate logic).
   // sigmaHiMap/sigmaLoMap = max/min |sigma| per ticker across every poll this minute,
@@ -2996,7 +3108,16 @@ export function useStreamEngine({
           const loAbs = completed.sigmaLoMap.get(key) ?? hiAbs;
           return { ticker, side, hiAbs, loAbs };
         });
-        tapeClient.reportMinuteSigmaRange(localDayKey(), completed.minuteIdx, items).catch(() => {});
+        // dateNy must be Scanner's NY-anchor date, not the browser's own local calendar day
+        // (localDayKey()) — for a browser timezone ahead of NY (e.g. Kyiv), those two diverge
+        // for hours around a wrapping overnight session (START > CUTOFF, e.g. 21:00->09:00),
+        // which would file this minute's sigma range under the wrong sidecar day and make
+        // TapeArbitrageEngine's LoadSigmaRange(dateNy) find nothing for the whole session.
+        const sigmaRangeCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+        const sigmaRangeIsWrapSession = strategySessionStartMinutes != null && strategySessionStartMinutes > sigmaRangeCutoffMinutes;
+        const sigmaRangeInYesterdaysTail = sigmaRangeIsWrapSession && currentMinutesLocal() < strategySessionStartMinutes!;
+        const sigmaRangeDateNy = currentNyDateKey(sigmaRangeInYesterdaysTail ? -1 : 0);
+        tapeClient.reportMinuteSigmaRange(sigmaRangeDateNy, completed.minuteIdx, items).catch(() => {});
       }
       minuteAccumRef.current = null;
       // Purge window-exit records older than 1 minute. Keep the previous minute's entries
@@ -3047,6 +3168,12 @@ export function useStreamEngine({
     displayQualifiedSinceRef.current.forEach((v, k) => {
       if (nowForDisplay - v.lastSeenAt > 120_000) displayQualifiedSinceRef.current.delete(k);
     });
+    // aboveSinceRef has no minute-boundary eviction of its own (it's intentionally cross-minute
+    // persistent) — same 2-minute fallback so a ticker that drops out of the decisions feed
+    // entirely (not just flips to HOLD) doesn't linger forever.
+    aboveSinceRef.current.forEach((v, k) => {
+      if (nowForDisplay - v.lastSeenAt > 120_000) aboveSinceRef.current.delete(k);
+    });
     // Evict displayed: not seen >60s = dropped below endAbs or disappeared.
     signalDisplayedRef.current.forEach((lastSeen, k) => {
       if (nowForDisplay - lastSeen > 60_000) signalDisplayedRef.current.delete(k);
@@ -3093,6 +3220,16 @@ export function useStreamEngine({
         // below, which gates new latches on this snapshot.
         if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(key);
         else minuteAccumRef.current.aboveSet.delete(key);
+        // aboveSinceRef: continuous (cross-minute) streak tracker — see its declaration doc.
+        // Unlike aboveSet above, this is never reset on minute rollover; it only resets when
+        // the streak itself actually breaks (status flips to HOLD).
+        if (row.status !== "HOLD") {
+          const existingSince = aboveSinceRef.current.get(key);
+          if (!existingSince) aboveSinceRef.current.set(key, { since: nowForDisplay, lastSeenAt: nowForDisplay });
+          else existingSince.lastSeenAt = nowForDisplay;
+        } else {
+          aboveSinceRef.current.delete(key);
+        }
         if (row.signal != null) {
           const absVal = Math.abs(row.signal);
           const prevHi = minuteAccumRef.current.sigmaHiMap.get(key);
@@ -3122,11 +3259,20 @@ export function useStreamEngine({
       wantsPrime,
       latchQualifiedSinceHistoryRef.current,
       wantsPrime ? primedFromScannerRef.current : undefined,
-      minuteSnapshotRef.current?.minuteIdx === currentMinuteIdx - 1
-        ? minuteSnapshotRef.current!.aboveSet
-        : minuteSnapshotRef.current != null
-          ? (new Set<string>() as ReadonlySet<string>) // stale snapshot: block new latches until T+1 (aligns with scanner start-at-T)
-          : undefined, // null = startup: pass all through (existing behavior)
+      // A ticker|side qualifies to seed a brand-new latch only once it's been continuously
+      // above threshold for at least ENTRY_HOLD_BEFORE_BOUNDARY_MS real seconds, counted
+      // backward from the current minute boundary — see aboveSinceRef doc. Replaces the old
+      // single-instant "was it above at the last poll before the boundary" snapshot check with
+      // a genuine multi-second confirmation window, so dispatch can fire right at the boundary
+      // (no separate post-creation delay needed) while still rejecting a bad tick that only
+      // appeared right at the boundary itself.
+      (() => {
+        const qualified = new Set<string>();
+        aboveSinceRef.current.forEach((v, key) => {
+          if (v.since <= currentMinuteAligned - ENTRY_HOLD_BEFORE_BOUNDARY_MS) qualified.add(key);
+        });
+        return qualified as ReadonlySet<string>;
+      })(),
       windowExitMinuteRef.current
     );
     // Consume the prime flag only when automation is running AND there were signals
