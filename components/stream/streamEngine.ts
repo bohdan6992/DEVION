@@ -435,6 +435,17 @@ function currentNyDateKey(dayOffset = 0): string {
   return localDayKey(Date.now() + dayOffset * 86_400_000);
 }
 
+// The action-log "day" a moment belongs to, anchored to the session's own START time (e.g.
+// 21:00) instead of calendar midnight — so an overnight session (21:00 -> 09:00 next day) is
+// one continuous "trading day" that only resets at the next START, not at midnight partway
+// through. Before START is configured (sessionStartMinutes == null), falls back to the plain
+// NY calendar date. nowMinutes before sessionStartMinutes means we're still in the tail of the
+// session that started YESTERDAY (NY date), so it gets yesterday's date; at/after START, today's.
+function currentTradingDayKey(sessionStartMinutes: number | null): string {
+  if (sessionStartMinutes == null) return currentNyDateKey();
+  return currentMinutesLocal() < sessionStartMinutes ? currentNyDateKey(-1) : currentNyDateKey();
+}
+
 // Temporary diagnostic for the "START=21:00 doesn't dispatch" investigation — logs at most
 // once per (minute, tag, ticker) so it doesn't flood the console on every poll tick. Safe to
 // delete once the entry-gating root cause is confirmed.
@@ -1498,6 +1509,11 @@ export function syncStreamPositions(
           status = "OPEN";
           reason = "awaiting entry dispatch";
         } else {
+          logStreamGateBlock("position:noRawSignal", {
+            ticker: existing.ticker,
+            entryDispatchedAt,
+            ageMs: now - entryDispatchedAt,
+          });
           status = inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN");
           reason = inPrintWindow ? "09:20 print exit armed" : "tracked from action log | waiting for live signal";
           if (inPrintWindow) {
@@ -1529,6 +1545,17 @@ export function syncStreamPositions(
           status = "CLOSED";
           reason = `signal below end threshold ${endThreshold.toFixed(2)}`;
           pendingIntent = existing.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE";
+          logStreamGateBlock("position:normalizeExitClosed", {
+            ticker: existing.ticker,
+            currentAbs,
+            exitAbs,
+            endThreshold,
+            entryCount: existing.entryCount,
+            entryDispatchedAt,
+            ageMs: entryDispatchedAt != null ? now - entryDispatchedAt : null,
+            belowThresholdTicks,
+            exitConfirmTicks,
+          });
         }
       } else {
         status = "OPEN";
@@ -2252,15 +2279,16 @@ export function useStreamEngine({
   const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass, automationConfig?.preStartTime);
   const strategyIsPreSession = isPreSignalClass(signalClass);
   const actionLogStorageKey = streamActionLogStorageKey(signalClass);
-  const [currentDayKey, setCurrentDayKey] = useState<string>(() => localDayKey());
+  const [currentDayKey, setCurrentDayKey] = useState<string>(() => currentTradingDayKey(strategySessionStartMinutes));
   useEffect(() => {
-    // Re-check day key every minute so the log resets at midnight without page reload.
+    // Re-check day key every minute so the log resets at the session's own START (e.g. 21:00)
+    // rather than calendar midnight — an overnight session must stay one continuous "day".
     const timer = setInterval(() => {
-      const next = localDayKey();
+      const next = currentTradingDayKey(strategySessionStartMinutes);
       setCurrentDayKey((prev) => (prev === next ? prev : next));
     }, 60_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [strategySessionStartMinutes]);
   const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>(() => readStreamActionLog(actionLogStorageKey));
   const [streamPositions, setStreamPositions] = useState<StreamPosition[]>(() => buildStreamPositionsFromActionLog(readStreamActionLog(actionLogStorageKey), currentDayKey));
   const [streamOrderIntents, setStreamOrderIntents] = useState<StreamOrderIntent[]>([]);
@@ -2289,6 +2317,22 @@ export function useStreamEngine({
   const streamAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
   const primaryStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
   const trackedStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
+  // Last time each SSE stream actually delivered a message (snapshot or diff). The server only
+  // sends a "diff" event when something genuinely changed (no periodic heartbeat — see
+  // SignalsStreamBroker), so a long gap alone doesn't prove a problem (could just be a quiet
+  // ticker). Connection health (below) is the reliable signal instead.
+  const primaryStreamLastMessageAtRef = useRef<number>(0);
+  const trackedStreamLastMessageAtRef = useRef<number>(0);
+  // Tracks actual SSE connection health via onerror/onopen (not "any message recently" — see
+  // above). If the backend goes down mid-session, EventSource auto-reconnects on its own but
+  // there's no built-in "this data might be stale" signal — primaryStreamSignalsRef/
+  // trackedStreamSignalsRef just freeze at their last values with nothing indicating anything is
+  // wrong, and automation would keep computing ADD/exit decisions off dead sigma readings
+  // instead of the real, moving live values. These refs make that state observable in the
+  // stream-gate-debug console log instead of only being inferable after the fact from a missing
+  // add.
+  const primaryStreamConnectedRef = useRef<boolean>(true);
+  const trackedStreamConnectedRef = useRef<boolean>(true);
   const streamActionLogRef = useRef<StreamActionLogEntry[]>(streamActionLog);
   const localRefreshTimerRef = useRef<number | null>(null);
   const streamExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(streamExecutionStore.getSnapshot());
@@ -2587,11 +2631,13 @@ export function useStreamEngine({
     const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
     primaryStreamSignalsRef.current = normalized;
+    primaryStreamLastMessageAtRef.current = Date.now();
     scheduleLocalRefresh();
   }, [scheduleLocalRefresh]);
 
   const applyStreamDiffToRef = useCallback((
     targetRef: { current: ArbitrageSignal[] },
+    lastMessageAtRef: { current: number },
     payload: any
   ) => {
     const added = Array.isArray(payload?.added) ? payload.added : [];
@@ -2623,6 +2669,7 @@ export function useStreamEngine({
     }
 
     targetRef.current = Array.from(nextMap.values());
+    lastMessageAtRef.current = Date.now();
     scheduleLocalRefresh();
   }, [scheduleLocalRefresh]);
 
@@ -2630,6 +2677,7 @@ export function useStreamEngine({
     const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
     trackedStreamSignalsRef.current = normalized;
+    trackedStreamLastMessageAtRef.current = Date.now();
     scheduleLocalRefresh();
   }, [scheduleLocalRefresh]);
 
@@ -2646,10 +2694,29 @@ export function useStreamEngine({
     };
     const handleDiff = (event: MessageEvent<string>) => {
       try {
-        applyStreamDiffToRef(primaryStreamSignalsRef, JSON.parse(String(event.data)));
+        applyStreamDiffToRef(primaryStreamSignalsRef, primaryStreamLastMessageAtRef, JSON.parse(String(event.data)));
       } catch {
         // ignore malformed stream payloads and keep previous snapshot
       }
+    };
+    // No built-in "reconnected/resynced" event from EventSource — log so a dead backend (SSE
+    // silently frozen while automation keeps running on stale sigma) is visible in the console,
+    // not just inferred after the fact from a missing add.
+    source.onerror = () => {
+      const wasConnected = primaryStreamConnectedRef.current;
+      primaryStreamConnectedRef.current = false;
+      if (wasConnected) {
+        logStreamGateBlock("sse:primaryStreamDisconnected", {
+          readyState: source.readyState,
+          lastMessageAgeMs: primaryStreamLastMessageAtRef.current ? Date.now() - primaryStreamLastMessageAtRef.current : null,
+        });
+      }
+    };
+    source.onopen = () => {
+      if (!primaryStreamConnectedRef.current) {
+        logStreamGateBlock("sse:primaryStreamReconnected", { downForMs: primaryStreamLastMessageAtRef.current ? Date.now() - primaryStreamLastMessageAtRef.current : null });
+      }
+      primaryStreamConnectedRef.current = true;
     };
 
     source.onmessage = handlePayload;
@@ -2680,10 +2747,26 @@ export function useStreamEngine({
     };
     const handleDiff = (event: MessageEvent<string>) => {
       try {
-        applyStreamDiffToRef(trackedStreamSignalsRef, JSON.parse(String(event.data)));
+        applyStreamDiffToRef(trackedStreamSignalsRef, trackedStreamLastMessageAtRef, JSON.parse(String(event.data)));
       } catch {
         // ignore malformed stream payloads and keep previous snapshot
       }
+    };
+    source.onerror = () => {
+      const wasConnected = trackedStreamConnectedRef.current;
+      trackedStreamConnectedRef.current = false;
+      if (wasConnected) {
+        logStreamGateBlock("sse:trackedStreamDisconnected", {
+          readyState: source.readyState,
+          lastMessageAgeMs: trackedStreamLastMessageAtRef.current ? Date.now() - trackedStreamLastMessageAtRef.current : null,
+        });
+      }
+    };
+    source.onopen = () => {
+      if (!trackedStreamConnectedRef.current) {
+        logStreamGateBlock("sse:trackedStreamReconnected", { downForMs: trackedStreamLastMessageAtRef.current ? Date.now() - trackedStreamLastMessageAtRef.current : null });
+      }
+      trackedStreamConnectedRef.current = true;
     };
 
     source.onmessage = handlePayload;
@@ -2966,6 +3049,17 @@ export function useStreamEngine({
     refreshInFlightRef.current = true;
 
     try {
+    // Surface SSE connection state alongside every other stream-gate-debug log, so a missed
+    // add/entry can be directly correlated with "was the live signal feed actually connected at
+    // that moment" instead of only inferred afterward from a gap in the data.
+    if (!primaryStreamConnectedRef.current || !trackedStreamConnectedRef.current) {
+      logStreamGateBlock("data:streamDisconnectedDuringRefresh", {
+        primaryConnected: primaryStreamConnectedRef.current,
+        trackedConnected: trackedStreamConnectedRef.current,
+        primaryTickerCount: primaryStreamSignalsRef.current.length,
+        trackedTickerCount: trackedStreamSignalsRef.current.length,
+      });
+    }
     const refreshBridge = options?.refreshBridge !== false;
     const normalizedByTicker = new Map(
       primaryStreamSignalsRef.current.map((row) => [row.ticker, row] as const)
@@ -3765,7 +3859,7 @@ export function useStreamEngine({
               const dispatchAt = Date.now();
               const closeEntries: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
                 id: `${row.ticker}|CLOSE|${dispatchAt}`,
-                dayKey: localDayKey(),
+                dayKey: currentTradingDayKey(strategySessionStartMinutes),
                 ticker: row.ticker,
                 benchmark: row.benchmark,
                 side: row.side,
@@ -4146,7 +4240,7 @@ export function useStreamEngine({
               openLoggedPositions
                 .map((row) => ({
                   id: `${row.ticker}|CLOSE|${dispatchAt}`,
-                  dayKey: localDayKey(),
+                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
                   ticker: row.ticker,
                   benchmark: row.benchmark,
                   side: row.side,
@@ -4165,7 +4259,7 @@ export function useStreamEngine({
             const _prevDispatch = correspondingPosition.lastDispatchedAt ?? correspondingPosition.entryDispatchedAt ?? null;
             _dispatchActionLog([{
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
-              dayKey: localDayKey(),
+              dayKey: currentTradingDayKey(strategySessionStartMinutes),
               ticker: intent.ticker,
               benchmark: intent.benchmark,
               side: intent.side,
@@ -4183,7 +4277,7 @@ export function useStreamEngine({
           } else if (isExitIntent && correspondingPosition) {
             _dispatchActionLog([{
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
-              dayKey: localDayKey(),
+              dayKey: currentTradingDayKey(strategySessionStartMinutes),
               ticker: intent.ticker,
               benchmark: intent.benchmark,
               side: intent.side,

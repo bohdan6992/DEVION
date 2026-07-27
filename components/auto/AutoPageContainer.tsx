@@ -140,7 +140,7 @@ export default function AutoPageContainer() {
 
   useEffect(() => {
     let cancelled = false;
-    const pullRemoteState = async () => {
+    const pullRemoteState = async (source: string) => {
       try {
         const response = await fetch(bridgeUrl("/api/stream/automation/state"), { cache: "no-store" });
         const json = await response.json().catch(() => ({}));
@@ -149,17 +149,42 @@ export default function AutoPageContainer() {
         const remoteAutoEnabled = Boolean(state.autoEnabled);
         const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
         if (Date.now() < localChangeGuardRef.current) return;
-        setStreamAutoEnabled((prev) => prev === remoteAutoEnabled ? prev : remoteAutoEnabled);
+        setStreamAutoEnabled((prev) => {
+          if (prev === remoteAutoEnabled) return prev;
+          // Visible without needing the stream-gate-debug filter — a silent kill-switch if this
+          // fires unexpectedly (e.g. the server lost its "enabled" state across a backend
+          // restart, and this pull — which on THIS page only runs once, at mount — leaves
+          // automation stuck off for the rest of the session with nothing to retry it).
+          // eslint-disable-next-line no-console
+          console.warn(`[stream-remote-sync] streamAutoEnabled ${prev} -> ${remoteAutoEnabled} (remote state, source=${source})`, { at: new Date().toISOString() });
+          return remoteAutoEnabled;
+        });
         setAutomationConfig((prev) => {
           const next = { ...prev, strategyModeEnabled: remoteStrategyModeEnabled };
+          if (prev.strategyModeEnabled !== remoteStrategyModeEnabled) {
+            // eslint-disable-next-line no-console
+            console.warn(`[stream-remote-sync] strategyModeEnabled ${prev.strategyModeEnabled} -> ${remoteStrategyModeEnabled} (remote state, source=${source})`, { at: new Date().toISOString() });
+          }
           return prev.strategyModeEnabled === remoteStrategyModeEnabled ? prev : next;
         });
       } catch {
         // keep local state if remote sync is unavailable
       }
     };
-    void pullRemoteState();
-    return () => { cancelled = true; };
+    void pullRemoteState("mount");
+    // Re-sync whenever the tab regains focus/visibility (e.g. after the machine slept or the
+    // tab was backgrounded for hours) — mount-only was the one-shot gap: if the backend was
+    // flaky exactly at mount time, nothing ever retried for the rest of the session.
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") void pullRemoteState("focus/visibility");
+    };
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+    };
   }, []);
 
   useEffect(() => {

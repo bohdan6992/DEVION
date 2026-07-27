@@ -320,12 +320,30 @@ export default function StreamPageContainer({
       ) {
         return;
       }
-      setStreamAutoEnabled((prev) => (prev === remoteAutoEnabled ? prev : remoteAutoEnabled));
+      setStreamAutoEnabled((prev) => {
+        if (prev === remoteAutoEnabled) return prev;
+        // Visible without needing the stream-gate-debug filter — this is a silent kill-switch
+        // if it fires unexpectedly (e.g. remote/server lost its "enabled" state after a backend
+        // restart, and this pullRemoteState call — triggered by mount or the tab regaining
+        // focus/visibility — just turned local automation off to match).
+        // eslint-disable-next-line no-console
+        console.warn(`[stream-remote-sync] streamAutoEnabled ${prev} -> ${remoteAutoEnabled} (remote state overwrote local)`, {
+          at: new Date().toISOString(),
+          source: document.visibilityState === "visible" ? "focus/visibility/mount" : "background",
+        });
+        return remoteAutoEnabled;
+      });
       setAutomationConfig((prev) => {
         const next = {
           ...prev,
           strategyModeEnabled: remoteStrategyModeEnabled,
         };
+        if (prev.strategyModeEnabled !== remoteStrategyModeEnabled) {
+          // eslint-disable-next-line no-console
+          console.warn(`[stream-remote-sync] strategyModeEnabled ${prev.strategyModeEnabled} -> ${remoteStrategyModeEnabled} (remote state overwrote local)`, {
+            at: new Date().toISOString(),
+          });
+        }
         return sameStreamAutomationConfig(prev, next) ? prev : next;
       });
     } catch {
