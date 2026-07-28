@@ -8161,23 +8161,25 @@ export default function ArbitrageScanner({
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
-        if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") {
+        const preferStreamAutomationDilution =
+          isStreamOnlyShell && streamAutomationConfigOverride != null;
+        if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
           setDilutionMode(s.dilutionMode);
           onStreamAutomationConfigChange?.({
             scaleMode: s.dilutionMode === "Diluted" ? "scale_in" : "single",
           });
         }
-        if (typeof s.dilutionStep === "number") {
+        if (!preferStreamAutomationDilution && typeof s.dilutionStep === "number") {
           const restoredDilutionStep = normalizeDilutionStepValue(s.dilutionStep);
           setDilutionStep(restoredDilutionStep);
           onStreamAutomationConfigChange?.({ dilutionStep: restoredDilutionStep });
         }
-        if (typeof s.maxAdds === "number") {
+        if (!preferStreamAutomationDilution && typeof s.maxAdds === "number") {
           const restoredMaxAdds = normalizeMaxAddsValue(s.maxAdds);
           setMaxAdds(restoredMaxAdds);
           onStreamAutomationConfigChange?.({ maxAdds: restoredMaxAdds });
         }
-        if (typeof s.addDelayMinutes === "number") {
+        if (!preferStreamAutomationDilution && typeof s.addDelayMinutes === "number") {
           const restoredAddDelayMinutes = Math.max(0, Math.trunc(s.addDelayMinutes));
           setAddDelayMinutes(restoredAddDelayMinutes);
           onStreamAutomationConfigChange?.({ addDelayMinutes: restoredAddDelayMinutes });
