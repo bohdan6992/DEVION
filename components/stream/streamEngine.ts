@@ -1609,7 +1609,8 @@ export function syncStreamPositions(
           // seen while still inside the minute that just closed) becomes the new confirmed
           // value — only now is it eligible to drive a fire decision. Then start tracking the
           // new minute fresh. Within the same minute, addPeakAbs simply tracks every poll.
-          if (addPeakMinuteIdx !== nowMinuteIdx) {
+          const addMinuteAdvanced = addPeakMinuteIdx == null || addPeakMinuteIdx !== nowMinuteIdx;
+          if (addMinuteAdvanced) {
             confirmedAddAbs = addPeakAbs;
             confirmedAddSigned = addPeakSigned;
             addPeakMinuteIdx = nowMinuteIdx;
@@ -1654,7 +1655,7 @@ export function syncStreamPositions(
             ? false
             : now - lastDispatchOrBreach >= addDelayMs;
           const belowAddCap = confirmedAddAbs == null || confirmedAddAbs <= ADD_MAX_SIGMA;
-          if (confirmedAddAbs != null && confirmedAddAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
+          if (addMinuteAdvanced && confirmedAddAbs != null && confirmedAddAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
             entryCount += 1;
             pendingAddTrigger = trigger;
             lastScaleSignal = confirmedAddSigned;
@@ -1670,6 +1671,7 @@ export function syncStreamPositions(
               belowAddCap,
               sameSign,
               addDelayPassed,
+              addMinuteAdvanced,
               addDelayMs,
               lastDispatchOrBreach,
               pendingIntent: existing.pendingIntent,

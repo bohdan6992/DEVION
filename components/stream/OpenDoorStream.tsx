@@ -19,6 +19,7 @@ import type {
   StreamAutomationConfig,
   StreamDecisionRow,
   StreamManualOrderAction,
+  StreamPosition,
   TradingAppExecutionSnapshot,
 } from "./streamEngine";
 
@@ -33,6 +34,11 @@ type StreamDecisionTableRow = {
   spread: number | null;
   spreadBidPct: number | null;
   netEdge: number | null;
+  entrySignal?: number | null;
+  addBaseSignal?: number | null;
+  confirmedAddSignal?: number | null;
+  nextAddTrigger?: number | null;
+  addState?: string;
   status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
 };
 
@@ -371,9 +377,51 @@ function MetricCard({
   );
 }
 
-const STREAM_DECISION_TABLE_MIN_WIDTH = 880;
+const STREAM_DECISION_TABLE_MIN_WIDTH = 1100;
 const STREAM_DECISION_ROW_HEIGHT = 57;
 const STREAM_DECISION_VIRTUAL_THRESHOLD = 240;
+
+function nextAddTriggerForPosition(position: StreamPosition | undefined, automationConfig: StreamAutomationConfig): number | null {
+  if (!position) return null;
+  if (automationConfig.scaleMode !== "scale_in") return null;
+  const maxAdds = Math.max(0, automationConfig.maxAdds ?? 0);
+  const addsUsed = Math.max(0, (position.entryCount ?? 1) - 1);
+  if (addsUsed >= maxAdds) return null;
+  const addBaseSignal = position.lastScaleSignal ?? position.entrySignal;
+  if (addBaseSignal == null || !Number.isFinite(addBaseSignal)) return null;
+  return Math.abs(addBaseSignal) + Math.max(0, automationConfig.dilutionStep ?? 0);
+}
+
+function addStateForPosition(
+  position: StreamPosition | undefined,
+  row: { signal: number | null },
+  automationConfig: StreamAutomationConfig,
+  nowMs: number
+): string {
+  if (!position) return "-";
+  if (automationConfig.scaleMode !== "scale_in") return "OFF";
+  const maxAdds = Math.max(0, automationConfig.maxAdds ?? 0);
+  const addsUsed = Math.max(0, (position.entryCount ?? 1) - 1);
+  if (addsUsed >= maxAdds) return "MAXED";
+  if (position.entryDispatchedAt == null) return "WAIT ENTRY";
+  const entryBase = position.entrySignal;
+  const addBase = position.lastScaleSignal ?? position.entrySignal;
+  if (entryBase == null || addBase == null) return "WAIT BASE";
+  const confirmed = position.confirmedAddSigned;
+  if (confirmed == null || !Number.isFinite(confirmed)) return "WAIT CONFIRM";
+  if (Math.sign(confirmed) !== Math.sign(entryBase)) return "REVERSED";
+  const trigger = nextAddTriggerForPosition(position, automationConfig);
+  if (trigger == null) return "OFF";
+  if (Math.abs(confirmed) < trigger) return "WAIT SIG";
+  const lastDispatchOrBreach = Math.max(
+    position.lastDispatchedAt ?? position.entryDispatchedAt ?? position.openedAt,
+    position.lastAboveAddCapAt ?? 0
+  );
+  const addDelayMs = Math.max(15000, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
+  if (nowMs - lastDispatchOrBreach < addDelayMs) return "WAIT DELAY";
+  if (Math.abs(row.signal ?? 0) < Math.max(0, automationConfig.endSignalThreshold ?? 0)) return "WAIT LIVE";
+  return "READY";
+}
 
 function StreamDecisionVirtualRow({
   ariaAttributes,
@@ -389,7 +437,7 @@ function StreamDecisionVirtualRow({
       {...ariaAttributes}
       style={style}
       className={clsx(
-        "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        "grid grid-cols-[120px_96px_88px_74px_78px_78px_74px_74px_86px_108px_132px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
         index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
         "hover:bg-white/[0.03]"
       )}
@@ -400,6 +448,11 @@ function StreamDecisionVirtualRow({
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+      <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+      <div className="px-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+      <div className="px-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+      <div className="px-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
       <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
@@ -454,8 +507,8 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
   const gridStyle: React.CSSProperties = {
     display: "grid",
     gridTemplateColumns: hasDismiss
-      ? "148px 120px 116px 1fr 1fr 1fr 172px 36px"
-      : "148px 120px 116px 1fr 1fr 1fr 172px",
+      ? "120px 96px 88px 74px 78px 78px 74px 74px 86px 108px 132px 36px"
+      : "120px 96px 88px 74px 78px 78px 74px 74px 86px 108px 132px",
   };
 
   return (
@@ -493,6 +546,11 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
             <div className="p-2.5 text-right">Signal</div>
             <div className="p-2.5 text-right">SpreadBid%</div>
             <div className="p-2.5 text-right">Net Edge</div>
+            <div className="p-2.5 text-right">Entryσ</div>
+            <div className="p-2.5 text-right">Baseσ</div>
+            <div className="p-2.5 text-right">Confσ</div>
+            <div className="p-2.5 text-right">NextAddσ</div>
+            <div className="p-2.5 text-left">Add</div>
             <div className="p-2.5 text-left">Status</div>
             {hasDismiss && <div className="p-2.5" />}
           </div>
@@ -534,6 +592,11 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+                  <div className="px-2.5 py-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+                  <div className="px-2.5 py-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
                   <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   {hasDismiss && (
                     <div className="flex items-center justify-center px-1">
@@ -1227,6 +1290,21 @@ export default function OpenDoorStreamView({
     () => new Set(activeDecisionRows.map((row) => row.ticker)),
     [activeDecisionRows]
   );
+  const activeTableRows = useMemo(() => {
+    const nowMs = Date.now();
+    const positionByTicker = new Map(streamPositions.map((row) => [row.ticker, row]));
+    return activeDecisionRows.map((row) => {
+      const position = positionByTicker.get(row.ticker);
+      return {
+        ...row,
+        entrySignal: position?.entrySignal ?? null,
+        addBaseSignal: position?.lastScaleSignal ?? position?.entrySignal ?? null,
+        confirmedAddSignal: position?.confirmedAddSigned ?? null,
+        nextAddTrigger: nextAddTriggerForPosition(position, automationConfig),
+        addState: addStateForPosition(position, row, automationConfig, nowMs),
+      };
+    });
+  }, [activeDecisionRows, automationConfig, streamPositions]);
   const signalDecisionIds = useMemo(
     () => streamDecisionIds.filter((id) => !activeTickers.has(id)),
     [activeTickers, streamDecisionIds]
@@ -1397,10 +1475,10 @@ export default function OpenDoorStreamView({
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <StreamDecisionTable
               title="ACTIVE"
-              rows={activeDecisionRows}
+              rows={activeTableRows}
               emptyMessage="No active STREAM situations yet."
               onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
-              onDismissAll={onDismissActivePositions && activeDecisionRows.length > 0 ? () => onDismissActivePositions(activeDecisionRows.map((r) => r.ticker)) : undefined}
+              onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
             />
             <StreamSignalsDecisionTable
               title="SIGNALS"
