@@ -42,6 +42,12 @@ function samePosition(left: StreamPosition, right: StreamPosition): boolean {
     sameNullableNumber(left.entrySignal, right.entrySignal) &&
     sameNullableNumber(left.lastSignal, right.lastSignal) &&
     sameNullableNumber(left.lastScaleSignal, right.lastScaleSignal) &&
+    sameNullableNumber(left.addPeakMinuteIdx, right.addPeakMinuteIdx) &&
+    sameNullableNumber(left.addPeakAbs, right.addPeakAbs) &&
+    sameNullableNumber(left.addPeakSigned, right.addPeakSigned) &&
+    sameNullableNumber(left.confirmedAddAbs, right.confirmedAddAbs) &&
+    sameNullableNumber(left.confirmedAddSigned, right.confirmedAddSigned) &&
+    sameNullableNumber(left.pendingAddTrigger, right.pendingAddTrigger) &&
     sameNullableNumber(left.spread, right.spread) &&
     left.status === right.status &&
     left.reason === right.reason &&
@@ -49,7 +55,9 @@ function samePosition(left: StreamPosition, right: StreamPosition): boolean {
     left.lockedForPrint === right.lockedForPrint &&
     left.pendingIntent === right.pendingIntent &&
     sameNullableNumber(left.entryDispatchedAt, right.entryDispatchedAt) &&
+    sameNullableNumber(left.lastDispatchedAt, right.lastDispatchedAt) &&
     sameNullableNumber(left.lastConfirmedActiveAt, right.lastConfirmedActiveAt) &&
+    sameNullableNumber(left.lastAboveAddCapAt, right.lastAboveAddCapAt) &&
     left.openedAt === right.openedAt &&
     left.updatedAt === right.updatedAt
   );

@@ -923,6 +923,18 @@ function mergeStreamPositionsWithActionLog(
       // if no add had happened, letting the SAME live deviation satisfy add after add
       // instead of requiring genuine further movement past each new step.
       lastScaleSignal: existing.lastScaleSignal ?? row.lastScaleSignal,
+      lastDispatchedAt: existing.lastDispatchedAt ?? row.lastDispatchedAt,
+      lastAboveAddCapAt: existing.lastAboveAddCapAt ?? row.lastAboveAddCapAt ?? null,
+      // Action log restores only confirmed ENTRY/ADD/CLOSE events and knows nothing about the
+      // in-flight minute being tracked for future ADD eligibility. Preserve the live engine's
+      // minute-close state across every merge; otherwise confirmedAdd*/addPeak* get reset to
+      // null on each poll and ACTIVE stays stuck on WAIT CONF forever.
+      addPeakMinuteIdx: existing.addPeakMinuteIdx ?? row.addPeakMinuteIdx ?? null,
+      addPeakAbs: existing.addPeakAbs ?? row.addPeakAbs ?? null,
+      addPeakSigned: existing.addPeakSigned ?? row.addPeakSigned ?? null,
+      confirmedAddAbs: existing.confirmedAddAbs ?? row.confirmedAddAbs ?? null,
+      confirmedAddSigned: existing.confirmedAddSigned ?? row.confirmedAddSigned ?? null,
+      pendingAddTrigger: existing.pendingAddTrigger ?? row.pendingAddTrigger ?? null,
       // buildStreamPositionsFromActionLog always sets these to 0/null (the action log has no
       // concept of "ticks below end threshold" — only confirmed ENTRY/ADD/CLOSE events). Without
       // preferring existing here, this counter would reset to 0 on every merge (i.e. every poll
