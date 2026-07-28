@@ -7445,12 +7445,45 @@ export default function ArbitrageScanner({
   const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
   const [sizeValue, setSizeValue] = useState<number>(1000);
-  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>("Undiluted");
-  const [dilutionStep, setDilutionStep] = useState<number>(0.3);
-  const [maxAdds, setMaxAdds] = useState<number>(3);
-  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(0);
+  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>(
+    () => streamAutomationConfigOverride?.scaleMode === "single" ? "Undiluted" : "Diluted"
+  );
+  const [dilutionStep, setDilutionStep] = useState<number>(
+    () => normalizeDilutionStepValue(streamAutomationConfigOverride?.dilutionStep ?? 0.3)
+  );
+  const [maxAdds, setMaxAdds] = useState<number>(
+    () => normalizeMaxAddsValue(streamAutomationConfigOverride?.maxAdds ?? 3)
+  );
+  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(
+    () => Math.max(0, Math.trunc(streamAutomationConfigOverride?.addDelayMinutes ?? 0))
+  );
   const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
   const normalizedMinHoldCandles = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
+
+  const applyDilutionMode = useCallback((nextMode: PaperArbDilutionMode) => {
+    setDilutionMode(nextMode);
+    onStreamAutomationConfigChange?.({
+      scaleMode: nextMode === "Diluted" ? "scale_in" : "single",
+    });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyDilutionStep = useCallback((nextValue: number) => {
+    const normalized = normalizeDilutionStepValue(nextValue);
+    setDilutionStep(normalized);
+    onStreamAutomationConfigChange?.({ dilutionStep: normalized });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyMaxAdds = useCallback((nextValue: number) => {
+    const normalized = normalizeMaxAddsValue(nextValue);
+    setMaxAdds(normalized);
+    onStreamAutomationConfigChange?.({ maxAdds: normalized });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyAddDelayMinutes = useCallback((nextValue: number) => {
+    const normalized = Math.max(0, Math.min(60, Math.trunc(nextValue || 0)));
+    setAddDelayMinutes(normalized);
+    onStreamAutomationConfigChange?.({ addDelayMinutes: normalized });
+  }, [onStreamAutomationConfigChange]);
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -8128,10 +8161,27 @@ export default function ArbitrageScanner({
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
-        if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
-        if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
-        if (typeof s.maxAdds === "number") setMaxAdds(normalizeMaxAddsValue(s.maxAdds));
-        if (typeof s.addDelayMinutes === "number") setAddDelayMinutes(Math.max(0, Math.trunc(s.addDelayMinutes)));
+        if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") {
+          setDilutionMode(s.dilutionMode);
+          onStreamAutomationConfigChange?.({
+            scaleMode: s.dilutionMode === "Diluted" ? "scale_in" : "single",
+          });
+        }
+        if (typeof s.dilutionStep === "number") {
+          const restoredDilutionStep = normalizeDilutionStepValue(s.dilutionStep);
+          setDilutionStep(restoredDilutionStep);
+          onStreamAutomationConfigChange?.({ dilutionStep: restoredDilutionStep });
+        }
+        if (typeof s.maxAdds === "number") {
+          const restoredMaxAdds = normalizeMaxAddsValue(s.maxAdds);
+          setMaxAdds(restoredMaxAdds);
+          onStreamAutomationConfigChange?.({ maxAdds: restoredMaxAdds });
+        }
+        if (typeof s.addDelayMinutes === "number") {
+          const restoredAddDelayMinutes = Math.max(0, Math.trunc(s.addDelayMinutes));
+          setAddDelayMinutes(restoredAddDelayMinutes);
+          onStreamAutomationConfigChange?.({ addDelayMinutes: restoredAddDelayMinutes });
+        }
         if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score" || s.optimizerRangeRankMetric === "tailDamage") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
@@ -12997,7 +13047,7 @@ export default function ArbitrageScanner({
                 <button
                   key={m.key}
                   type="button"
-                  onClick={() => setDilutionMode(m.key as PaperArbDilutionMode)}
+                  onClick={() => applyDilutionMode(m.key as PaperArbDilutionMode)}
                   className={clsx(
                     "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     dilutionMode === m.key
@@ -13019,7 +13069,7 @@ export default function ArbitrageScanner({
                   min={0.1}
                   step={0.1}
                   value={formatDilutionStepValue(dilutionStep)}
-                  onChange={(e) => setDilutionStep(normalizeDilutionStepValue(Number(e.target.value)))}
+                  onChange={(e) => applyDilutionStep(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13030,7 +13080,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, 1))}
+                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, 1))}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase dilution step"
@@ -13040,7 +13090,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, -1))}
+                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, -1))}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease dilution step"
@@ -13061,7 +13111,7 @@ export default function ArbitrageScanner({
                   max={9}
                   step={1}
                   value={maxAdds}
-                  onChange={(e) => setMaxAdds(normalizeMaxAddsValue(Number(e.target.value)))}
+                  onChange={(e) => applyMaxAdds(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13072,7 +13122,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v + 1))}
+                    onClick={() => applyMaxAdds(maxAdds + 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase max additions"
@@ -13082,7 +13132,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v - 1))}
+                    onClick={() => applyMaxAdds(maxAdds - 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease max additions"
@@ -13103,7 +13153,7 @@ export default function ArbitrageScanner({
                   max={60}
                   step={1}
                   value={addDelayMinutes}
-                  onChange={(e) => setAddDelayMinutes(Math.max(0, Math.min(60, Math.trunc(Number(e.target.value) || 0))))}
+                  onChange={(e) => applyAddDelayMinutes(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13114,7 +13164,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setAddDelayMinutes((v) => Math.min(60, v + 1))}
+                    onClick={() => applyAddDelayMinutes(addDelayMinutes + 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase add delay minutes"
@@ -13124,7 +13174,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setAddDelayMinutes((v) => Math.max(0, v - 1))}
+                    onClick={() => applyAddDelayMinutes(addDelayMinutes - 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease add delay minutes"

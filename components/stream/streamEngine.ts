@@ -1576,7 +1576,7 @@ export function syncStreamPositions(
           !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) &&
           automationConfig.scaleMode === "scale_in" &&
           entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0);
-        if (!addGateOk && automationConfig.scaleMode === "scale_in" && entryDispatchedAt != null) {
+        if (!addGateOk && entryDispatchedAt != null) {
           logStreamGateBlock("add:outerGate", {
             ticker: existing.ticker,
             entryDispatchedAt,
