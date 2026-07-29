@@ -24,6 +24,7 @@ import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
+import { rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 
 // =========================
 // API base (Tape/Scope style)
@@ -8473,8 +8474,11 @@ export default function ArbitrageScanner({
       maxVolNFfromLstCls,
       requireHasNews,
       excludeHasNews,
-      requireHasReport,
-      excludeHasReport,
+      // Report filtering is done client-side now (see passesStaticMetricRangeFilters) so the
+      // scanner, Sonar and Stream share one rule. Sending these would make the server pre-filter
+      // with its coarse HasReport boolean, which removes strictly more rows and would win.
+      requireHasReport: null,
+      excludeHasReport: null,
       minNewsCnt,
       maxNewsCnt,
       requireIsPTP,
@@ -9334,6 +9338,15 @@ export default function ArbitrageScanner({
         } catch {
           // best effort cleanup
         }
+        try {
+          await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: false }),
+          });
+        } catch {
+          // best-effort — a stale armed schedule is a minor annoyance, not a safety issue
+        }
         onStreamAutomationConfigChange?.({ strategyModeEnabled: false });
         applyStreamAutoEnabled(false);
         resetStreamAutomationState();
@@ -9358,6 +9371,35 @@ export default function ArbitrageScanner({
       }
       onStreamAutomationConfigChange?.({ strategyModeEnabled: true });
       applyStreamAutoEnabled(true);
+
+      // Arming while START is still in the future is what makes "press Start now, walk away"
+      // actually reliable: the server itself re-flips AutoEnabled/StrategyModeEnabled on at
+      // START, independent of whether this tab is still open/in-sync when that moment arrives.
+      // It complements (doesn't replace) the browser-side wait — the signal/dispatch engine
+      // that decides entries and adds still only runs while this tab is alive.
+      const startMinuteIdx = parseTimeToMinuteIdx(preStartTime);
+      if (startMinuteIdx != null) {
+        try {
+          const nowNyParts = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+          }).formatToParts(new Date());
+          const nowHh = Number(nowNyParts.find((p) => p.type === "hour")?.value ?? NaN);
+          const nowMm = Number(nowNyParts.find((p) => p.type === "minute")?.value ?? NaN);
+          const nowMinuteIdx = Number.isFinite(nowHh) && Number.isFinite(nowMm) ? nowHh * 60 + nowMm : null;
+          if (nowMinuteIdx != null && nowMinuteIdx < startMinuteIdx) {
+            await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: true, nyTime: preStartTime }),
+            });
+          }
+        } catch {
+          // best-effort resilience layer — the immediate /start above already covers this tab's own session
+        }
+      }
     } finally {
       setStreamAutomationTogglePending(null);
     }
@@ -10559,6 +10601,15 @@ export default function ArbitrageScanner({
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
+    // Report gate: same rule as Sonar and Stream (rowReportAffectsTodaySession over the raw vendor
+    // marker), so one toggle behaves identically on every surface. Deliberately NOT the server's
+    // HasReport boolean — the tape collapses the marker to "any marker means yes" at write time,
+    // which discards the date and the release time the rule is built on.
+    if (requireHasReport || excludeHasReport) {
+      const affectsToday = rowReportAffectsTodaySession(row);
+      if (excludeHasReport && affectsToday) return false;
+      if (requireHasReport && !affectsToday) return false;
+    }
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 

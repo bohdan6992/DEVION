@@ -12,6 +12,7 @@ import PresetPicker from "@/components/presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "@/types/presets";
+import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 
 /* =========================
    TYPES
@@ -601,61 +602,13 @@ const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
   return null;
 };
 
-const getNewYorkMonthDay = (): { month: number; day: number } => {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date());
-    const month = Number(parts.find((part) => part.type === "month")?.value ?? NaN);
-    const day = Number(parts.find((part) => part.type === "day")?.value ?? NaN);
-    if (Number.isFinite(month) && Number.isFinite(day)) return { month, day };
-  } catch {
-  }
-  const now = new Date();
-  return { month: now.getMonth() + 1, day: now.getDate() };
-};
-
 const parseTodayReportFlag = (value: any): boolean | null => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-
-  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
-  if (iso) {
-    const month = Number(iso[2]);
-    const day = Number(iso[3]);
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
-
-  const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
-  if (slash) {
-    const left = Number(slash[2]);
-    const right = Number(slash[3]);
-    let day = left;
-    let month = right;
-    if (left <= 12 && right > 12) {
-      month = left;
-      day = right;
-    }
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
-
+  const byDate = parseReportDateAffectsTodaySession(value);
+  if (byDate != null) return byDate;
   return toBool(value);
 };
 
-const hasTodayReport = (s: ArbitrageSignal): boolean => {
-  const parsed =
-    parseTodayReportFlag((s as any).report) ??
-    parseTodayReportFlag((s as any).Report) ??
-    parseTodayReportFlag((s as any).meta?.report) ??
-    parseTodayReportFlag((s as any).meta?.Report) ??
-    toBool((s as any)._reportBool);
-
-  return parsed === true;
-};
+const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySession(s);
 
 const isSignalGoldActive = (
   s: ArbitrageSignal,
@@ -2369,6 +2322,142 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
   lavender: "bg-violet-300",
   cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
 };
+
+
+/* =========================================================================
+   SHARED SIGNAL DETAIL PANEL
+   The tape-metadata card the Sonar shows for the selected ticker. Exported so
+   the Stream renders the identical thing instead of growing its own copy —
+   every value is derived from the signal object both surfaces already hold,
+   plus an optional live snapshot for fields that go stale on the tape row.
+   ========================================================================= */
+export type SignalDetailPanelProps = {
+  signal: any | null;
+  /** Rating type currently selected ("any" | "hard" | "soft") — drives the N figure. */
+  ratingType?: string;
+  /** Optional fresher field map merged over the signal (same shape Sonar fetches). */
+  liveSnap?: Record<string, any> | null;
+  className?: string;
+};
+
+export function SignalDetailPanel({ signal, ratingType = "any", liveSnap = null, className }: SignalDetailPanelProps) {
+  const activeData = signal;
+
+  const bestObj = activeData?.best ?? activeData?.Best ?? null;
+  const bestParams = getBestParams(activeData);
+  const printMedian = safeObj(bestParams?.dev_print_last5_median ?? bestParams?.DevPrintLast5Median);
+
+  const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "-")).toUpperCase();
+  const activeExchange2 = getStrAny(activeData, ["exchange", "Exchange"], "-");
+  const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
+  const activeSigma = toNum(bestObj?.sigma ?? bestObj?.Sigma) ?? getNumAny(activeData, ["sig", "Sig", "sigma", "Sigma"]);
+  const mdPrintPos = toNum(bestObj?.printMedianPos ?? bestObj?.PrintMedianPos) ?? toNum(printMedian?.pos ?? printMedian?.Pos);
+  const mdPrintNeg = toNum(bestObj?.printMedianNeg ?? bestObj?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
+
+  const bestRating = toNum(bestObj?.rating);
+  const bestTotalHard = toNum(bestObj?.hard);
+  const bestTotalSoft = toNum(bestObj?.soft);
+  const bestTotalAny =
+    bestTotalHard != null || bestTotalSoft != null
+      ? (bestTotalHard ?? 0) + (bestTotalSoft ?? 0)
+      : toNum(bestObj?.total);
+  const bestTotalEff = ratingType === "hard" ? bestTotalHard : ratingType === "soft" ? bestTotalSoft : bestTotalAny;
+
+  const sectorFallback = getStrAny(activeData, ["sector", "Sector", "lvl2", "level2", "Level2"], "-");
+  const marketCapFallback = getNumAny(activeData, ["marketCapM", "MarketCapM", "marketcapm"]);
+
+  const isUsableLive = (v: any) => {
+    if (v == null) return false;
+    if (typeof v === "string") { const t = v.trim(); return t.length > 0 && t !== "-" && t !== "—"; }
+    return true;
+  };
+  const liveSnapFiltered = liveSnap
+    ? Object.fromEntries(Object.entries(liveSnap).filter(([, v]) => isUsableLive(v)))
+    : null;
+  const s = activeData
+    ? (liveSnapFiltered && Object.keys(liveSnapFiltered).length > 0 ? { ...activeData, ...liveSnapFiltered } : activeData)
+    : null;
+
+  const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
+  const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
+  const bidDelta = s ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct ?? (s as any)["BidLstClsDelta%"]) : null;
+  const askDelta = s ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct ?? (s as any)["AskLstClsDelta%"]) : null;
+
+  const accentTextClass = "accent-text";
+  const accentLineClass = "accent-line";
+
+  const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
+    <div key={label} className="border border-white/0 rounded-xl bg-black/40 px-3 py-2">
+      <span className="block text-[10px] uppercase tracking-[0.14em] text-zinc-600 font-mono">{label}</span>
+      <span className={`mt-1 block text-[12px] font-mono tabular-nums truncate ${colorClass}`}>{value ?? "-"}</span>
+    </div>
+  );
+
+  if (!signal) return null;
+
+  return (
+    <div className={clsx("relative overflow-hidden border border-white/10 rounded-2xl bg-black/40", className)}>
+      <div className={`absolute inset-y-0 left-0 w-px ${accentLineClass}`} />
+
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-white/10">
+        <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">
+          {getStrAny(activeData, ["ticker", "Ticker"], "-")}
+        </span>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
+          <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
+          <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
+          <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
+          <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
+          <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
+          <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
+          <span>MD Print Pos: <span className="text-zinc-200">{mdPrintPos == null ? "-" : fmtNum(mdPrintPos, 2)}</span></span>
+          <span>MD Print Neg: <span className="text-zinc-200">{mdPrintNeg == null ? "-" : fmtNum(mdPrintNeg, 2)}</span></span>
+        </div>
+      </div>
+
+      <div className="relative p-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
+                    {renderCell("Company", s ? getCompany(s) : "-")}
+                    {renderCell("PreMhHiLstPrc%", s ? fmtPct(numPreMhBidLstPrcPct(s), 2) : "-")}
+                    {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
+                    {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
+                    {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
+                    {renderCell("RoundLot", s ? (numRoundLot(s) == null ? "-" : fmtMaybeInt(numRoundLot(s))) : "-")}
+                    {renderCell("VolRel", s ? fmtNum(numVolRel(s), 2) : "-")}
+                    {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
+                    {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
+                    {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : sectorFallback) : "-")}
+                    {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
+                    {renderCell("SpreadBid%", s ? (numSpreadBidPct(s) == null ? "-" : fmtNum(numSpreadBidPct(s)!, 4)) : "-")}
+                    {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
+                    {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
+                    {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
+                    {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "-", s ? "text-rose-300" : "text-zinc-500")}
+                    {renderCell("LstCls", s ? (numLastClose(s) == null ? "-" : fmtNum(numLastClose(s)!, 2)) : "-")}
+                    {renderCell("VWAP", s ? (numVWAP(s) == null ? "-" : fmtNum(numVWAP(s)!, 2)) : "-")}
+                    {renderCell("Country", s ? getCountry(s) : "-")}
+                    {renderCell("AvPreMhVol90NF", s ? fmtMaybeInt(numAvPreMhVol90NF(s)) : "-")}
+                    {renderCell("AvPreMhValue20NF", s ? fmtMaybeInt(numAvPreMhValue20NF(s)) : "-")}
+                    {renderCell("AvPreMhValue90NF", s ? fmtMaybeInt(numAvPreMhValue90NF(s)) : "-")}
+                    {renderCell("AvgDailyValue20", s ? fmtMaybeInt(numAvgDailyValue20(s)) : "-")}
+                    {renderCell("AvgDailyValue90", s ? fmtMaybeInt(numAvgDailyValue90(s)) : "-")}
+                    {renderCell("Volatility20", s ? fmtPct(numVolatility20(s), 2) : "-")}
+                    {renderCell("Volatility90", s ? fmtPct(numVolatility90(s), 2) : "-")}
+                    {renderCell("LstPrcLstCls%", s ? fmtPct(numLstPrcLstClsPctSafe(s), 2) : "-")}
+                    {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? marketCapFallback) : "-", s ? "text-emerald-400" : "text-zinc-500")}
+                    {renderCell("PreMhLoLstPrc%", s ? fmtPct(numPreMhLoLstPrcPct(s), 2) : "-")}
+                    {renderCell("PreMhHiLstCls%", s ? fmtPct(numPreMhHiLstClsPct(s), 2) : "-")}
+                    {renderCell("PreMhLoLstCls%", s ? fmtPct(numPreMhLoLstClsPct(s), 2) : "-")}
+                    {renderCell("ImbExch9:25", s ? fmtMaybeInt(numImbExch925(s)) : "-")}
+                    {renderCell("ImbExch15:55", s ? fmtMaybeInt(numImbExch1555(s)) : "-")}
+                    {renderCell("AvPostMhVol90NF", s ? fmtMaybeInt(numAvPostMhVol90NF(s)) : "-")}
+                    {renderCell("PreMhMDV20NF", s ? fmtMaybeInt(numPreMhMDV20NF(s)) : "-")}
+                    {renderCell("PreMhMDV90NF", s ? fmtMaybeInt(numPreMhMDV90NF(s)) : "-")}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
   const out: ArbitrageSignal[] = [];

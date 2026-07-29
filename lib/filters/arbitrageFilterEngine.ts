@@ -1,4 +1,5 @@
 import type { ArbitrageFilterConfigV1, MinMax, ReportMode, ZapMode } from "@/lib/filters/arbitrageFilterConfigV1";
+import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "@/lib/filters/reportTiming";
 
 type AnyRow = Record<string, any>;
 
@@ -65,50 +66,9 @@ function readRowBool(value: any): boolean | null {
   return null;
 }
 
-function getNewYorkMonthDay(): { month: number; day: number } {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date());
-    const month = Number(parts.find((part) => part.type === "month")?.value ?? NaN);
-    const day = Number(parts.find((part) => part.type === "day")?.value ?? NaN);
-    if (Number.isFinite(month) && Number.isFinite(day)) {
-      return { month, day };
-    }
-  } catch {
-  }
-
-  const now = new Date();
-  return { month: now.getMonth() + 1, day: now.getDate() };
-}
-
 function parseReportTextAsToday(value: any): boolean | null {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-
-  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
-  if (iso) {
-    const month = Number(iso[2]);
-    const day = Number(iso[3]);
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
-
-  const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
-  if (slash) {
-    const left = Number(slash[2]);
-    const right = Number(slash[3]);
-    let day = left;
-    let month = right;
-    if (left <= 12 && right > 12) {
-      month = left;
-      day = right;
-    }
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
+  const byDate = parseReportDateAffectsTodaySession(value);
+  if (byDate != null) return byDate;
 
   const normalized = readRowBool(value);
   if (normalized != null) return normalized;
@@ -116,14 +76,7 @@ function parseReportTextAsToday(value: any): boolean | null {
 }
 
 function readTodayReportBool(row: AnyRow): boolean {
-  const parsed =
-    parseReportTextAsToday(row.report) ??
-    parseReportTextAsToday(row.Report) ??
-    parseReportTextAsToday(row.meta?.report) ??
-    parseReportTextAsToday(row.meta?.Report) ??
-    readRowBool(row._reportBool);
-
-  return parsed === true;
+  return rowReportAffectsTodaySession(row);
 }
 
 function passMinMax(x: any, mm?: MinMax): boolean {

@@ -4265,12 +4265,23 @@ export function useStreamEngine({
                   reason: "print window close all",
                 }))
             );
-          } else if (isEntryIntent && correspondingPosition) {
-            const isAdd = correspondingPosition.entryCount > 1;
+          } else if (isEntryIntent) {
+            const isAdd = intent.sequence > 1;
             const deviation = isAdd
-              ? (correspondingPosition.lastScaleSignal ?? correspondingPosition.lastSignal ?? correspondingPosition.entrySignal)
-              : (correspondingPosition.entrySignal ?? correspondingPosition.lastSignal);
-            const _prevDispatch = correspondingPosition.lastDispatchedAt ?? correspondingPosition.entryDispatchedAt ?? null;
+              ? (
+                correspondingPosition?.lastScaleSignal ??
+                correspondingPosition?.lastSignal ??
+                correspondingPosition?.entrySignal ??
+                curSig3 ??
+                null
+              )
+              : (
+                correspondingPosition?.entrySignal ??
+                correspondingPosition?.lastSignal ??
+                curSig3 ??
+                null
+              );
+            const _prevDispatch = correspondingPosition?.lastDispatchedAt ?? correspondingPosition?.entryDispatchedAt ?? null;
             _dispatchActionLog([{
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
@@ -4281,7 +4292,7 @@ export function useStreamEngine({
               deviation,
               at: dispatchAt,
               intent: intent.intent,
-              reason: correspondingPosition.reason || undefined,
+              reason: correspondingPosition?.reason || intent.reason || undefined,
               sequence: intent.sequence,
               addThreshold: isAdd ? (triggerMag3 ?? null) : null,
               sinceLastMs: isAdd && _prevDispatch != null ? Math.max(0, dispatchAt - _prevDispatch) : null,

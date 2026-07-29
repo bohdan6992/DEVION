@@ -24,6 +24,7 @@ import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
+import { rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 
 // =========================
 // API base (Tape/Scope style)
@@ -1776,7 +1777,7 @@ const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRang
   imbexch1555: "on",
 };
 
-const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchParameterKey>> = [
+const SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL: Array<ScopeResearchOption<ScopeResearchParameterKey>> = [
   { value: "startMinuteIdx", label: "Start Time", format: "clock" },
   { value: "peakMinuteIdx", label: "Peak Time", format: "clock" },
   { value: "endMinuteIdx", label: "End Time", format: "clock" },
@@ -1830,6 +1831,19 @@ const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchP
   { value: "imbExch925", label: "ImbExch925", format: "number" },
   { value: "imbExch1555", label: "ImbExch1555", format: "number" },
 ];
+
+// Arbitrage-only research axes. OpenDoor tracks no sigma metric and no peak — the mapper leaves
+// those slots null and MinHoldCandles is a constant 0 — so offering them would render empty charts
+// that look like a bug. The groups below filter off the trimmed list, so they shrink automatically.
+const OPEN_DOOR_UNSUPPORTED_SCOPE_PARAMS = new Set<ScopeResearchParameterKey>([
+  "startMetricAbs", "peakMetricAbs", "endMetricAbs",
+  "reversionAbs", "reversionPct",
+  "peakMinuteIdx", "timeToPeak",
+  "minHoldCandles",
+]);
+
+const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchParameterKey>> =
+  SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL.filter((o) => !OPEN_DOOR_UNSUPPORTED_SCOPE_PARAMS.has(o.value));
 
 const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
   {
@@ -1901,7 +1915,7 @@ const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
   },
 ];
 
-const SCOPE_RESEARCH_RESULT_OPTIONS: Array<ScopeResearchOption<ScopeResearchResultKey>> = [
+const SCOPE_RESEARCH_RESULT_OPTIONS_ALL: Array<ScopeResearchOption<ScopeResearchResultKey>> = [
   { value: "avgPnlUsd", label: "Avg/Trade", format: "number" },
   { value: "totalPnlUsd", label: "TotalPnL", format: "currency" },
   { value: "winRate", label: "WinRate", format: "percent" },
@@ -1912,6 +1926,14 @@ const SCOPE_RESEARCH_RESULT_OPTIONS: Array<ScopeResearchOption<ScopeResearchResu
   { value: "peakMetricAbs", label: "Peak Abs", format: "number" },
   { value: "endMetricAbs", label: "End Abs", format: "number" },
 ];
+
+// No hedge leg and no sigma tracking in OpenDoor: these four are always null on the mapped rows.
+const OPEN_DOOR_UNSUPPORTED_SCOPE_RESULTS = new Set<ScopeResearchResultKey>([
+  "benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs",
+]);
+
+const SCOPE_RESEARCH_RESULT_OPTIONS: Array<ScopeResearchOption<ScopeResearchResultKey>> =
+  SCOPE_RESEARCH_RESULT_OPTIONS_ALL.filter((o) => !OPEN_DOOR_UNSUPPORTED_SCOPE_RESULTS.has(o.value));
 
 function scopeResearchResultOptionsForChart(chartType: ScopeResearchChartType): Array<ScopeResearchOption<ScopeResearchResultKey>> {
   if (chartType === "results_by_bins" || chartType === "results_more_less_parameter") {
@@ -1998,7 +2020,7 @@ const SCOPE_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = (["RATING GATES", "ZAP
 const DEFAULT_SCOPE_RESEARCH_DRAFTS: Record<ScopePanelKey, ScopeResearchDraft> = {
   left: {
     chartType: "results_by_bins",
-    parameterKey: "peakMetricAbs",
+    parameterKey: "rating",
     resultKey: "totalPnlUsd",
     bucketCount: 8,
     minSamples: 12,
@@ -2010,7 +2032,7 @@ const DEFAULT_SCOPE_RESEARCH_DRAFTS: Record<ScopePanelKey, ScopeResearchDraft> =
   },
   right: {
     chartType: "scatter_by_date",
-    parameterKey: "startMetricAbs",
+    parameterKey: "spread",
     resultKey: "totalPnlUsd",
     bucketCount: 8,
     minSamples: 12,
@@ -2520,6 +2542,15 @@ function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResearchPara
       return "startMetricAbs";
     case "endabs":
       return "endMetricAbs";
+    // In OpenDoor rows these two carry the gating bin's own historical rate and sample count
+    // (GateRate/GateTotal via the mapper) — i.e. the statistic that actually selected the trade.
+    // They are the most informative axes here, so map them onto the row fields rather than leaving
+    // them unresolvable. For Arbitrage rows the same fields hold its session rating, so bucketing
+    // by them stays meaningful there too.
+    case "minrate":
+      return "rating";
+    case "mintotal":
+      return "ratingTotal";
     case "adv20":
       return "adv20";
     case "adv20nf":
@@ -3433,7 +3464,7 @@ async function loadDaysApi(): Promise<string[]> {
   const endpoints = [
     "/api/tape/available-nonempty-days",
     "/api/tape/available-days",
-    "/api/paper/arbitrage/days",
+    "/api/paper/opendoor/days",
   ];
 
   let lastError: unknown = null;
@@ -7361,6 +7392,15 @@ export default function OpenDoorScanner({
   // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
   // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from ruleBand/session,
   // which stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
+  // Range analysis runs entirely client-side for OpenDoor: optimizerRangeParameters buckets the
+  // episodes already on screen, so no /optimizer/ranges call is needed (the Arbitrage endpoint
+  // buckets Arbitrage episodes by Arbitrage-only axes and is deliberately not used).
+  const OPEN_DOOR_OPTIMIZER_ENABLED = true;
+
+  // Scenario runs are on too — see runEpisodesOptimizer, which evaluates them off the range
+  // buckets client-side rather than calling /scope/evaluate.
+  const OPEN_DOOR_SCENARIO_RUNNER_ENABLED = true;
+
   const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
   // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
   // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction, matching the
@@ -7598,7 +7638,10 @@ export default function OpenDoorScanner({
   // global filters (variant)
   const [metric, setMetric] = useState<PaperArbMetric>("SigmaZap");
   const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
-  const [startAbs, setStartAbs] = useState<number>(0.1);
+  // OpenDoor does not pre-gate its situation list on deviation — candidate selection is entirely
+  // STACK/BENCH/DEV plus the UP/DOWN MINRATE/MINTOTAL/MINMOVE gates, and any further narrowing is
+  // done in the UI on top of the full list. 0 is the backend's "no start-deviation gate" value.
+  const [startAbs, setStartAbs] = useState<number>(0);
   const [startAbsMax, setStartAbsMax] = useState<string>("");
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
@@ -7612,11 +7655,47 @@ export default function OpenDoorScanner({
   const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
   const [sizeValue, setSizeValue] = useState<number>(1000);
-  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>("Undiluted");
-  const [dilutionStep, setDilutionStep] = useState<number>(0.3);
-  const [maxAdds, setMaxAdds] = useState<number>(3);
-  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(0);
+  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>(
+    () => streamAutomationConfigOverride?.scaleMode === "single" ? "Undiluted" : "Diluted"
+  );
+  const [dilutionStep, setDilutionStep] = useState<number>(
+    () => normalizeDilutionStepValue(streamAutomationConfigOverride?.dilutionStep ?? 0.3)
+  );
+  const [maxAdds, setMaxAdds] = useState<number>(
+    () => normalizeMaxAddsValue(streamAutomationConfigOverride?.maxAdds ?? 3)
+  );
+  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(
+    () => Math.max(0, Math.trunc(streamAutomationConfigOverride?.addDelayMinutes ?? 0))
+  );
   const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
+
+  // Every dilution/scale-in control must push its value into the stream automation engine, not
+  // just local state — otherwise the engine keeps running on streamAutomationConfigOverride's own
+  // defaults while the toolbar shows something else.
+  const applyDilutionMode = useCallback((nextMode: PaperArbDilutionMode) => {
+    setDilutionMode(nextMode);
+    onStreamAutomationConfigChange?.({
+      scaleMode: nextMode === "Diluted" ? "scale_in" : "single",
+    });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyDilutionStep = useCallback((nextValue: number) => {
+    const normalized = normalizeDilutionStepValue(nextValue);
+    setDilutionStep(normalized);
+    onStreamAutomationConfigChange?.({ dilutionStep: normalized });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyMaxAdds = useCallback((nextValue: number) => {
+    const normalized = normalizeMaxAddsValue(nextValue);
+    setMaxAdds(normalized);
+    onStreamAutomationConfigChange?.({ maxAdds: normalized });
+  }, [onStreamAutomationConfigChange]);
+
+  const applyAddDelayMinutes = useCallback((nextValue: number) => {
+    const normalized = Math.max(0, Math.min(60, Math.trunc(nextValue || 0)));
+    setAddDelayMinutes(normalized);
+    onStreamAutomationConfigChange?.({ addDelayMinutes: normalized });
+  }, [onStreamAutomationConfigChange]);
 
   // analytics options
   const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
@@ -7918,6 +7997,8 @@ export default function OpenDoorScanner({
   const [optimizerComboRows, setOptimizerComboRows] = useState<OptimizerResultRow[]>([]);
   const [optimizerLoading, setOptimizerLoading] = useState<boolean>(false);
   const [optimizerErr, setOptimizerErr] = useState<string | null>(null);
+  // Result of the last run-button press. Empty until then, so nothing is computed in the background.
+  const [optimizerRangeParameters, setOptimizerRangeParameters] = useState<PaperArbOptimizerParameterDto[]>([]);
   const [optimizerProgress, setOptimizerProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [optimizerRanges, setOptimizerRanges] = useState<PaperArbOptimizerRangesResponse | null>(null);
   const [optimizerRangesLoading, setOptimizerRangesLoading] = useState<boolean>(false);
@@ -8100,9 +8181,10 @@ export default function OpenDoorScanner({
       if (toYmd(dateFrom) && toYmd(dateTo) && dateFrom > dateTo) e.push("dateFrom must be <= dateTo");
     }
 
-    if (!(startAbs > 0)) e.push("startAbs must be > 0");
+    if (!(startAbs >= 0)) e.push("startAbs must be >= 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    if (zapMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    // With startAbs = 0 the start gate is off, so "close tighter than you entered" is vacuous.
+    if (zapMode !== "delta" && startAbs > 0 && endAbs > startAbs) e.push("endAbs must be <= startAbs");
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
@@ -8185,14 +8267,17 @@ export default function OpenDoorScanner({
   const [openDoorSnapshotError, setOpenDoorSnapshotError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!(primaryPanel === "scanner" && tab === "analytics")) return;
+    // Must mirror the SNAPSHOT block's own render condition exactly — in a streamOnly shell the
+    // table renders under the "episodes" tab, so gating the fetch on "analytics" alone left it
+    // permanently empty there.
+    if (!(primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")))) return;
     if (!toYmd(dateFrom) || !toYmd(dateTo)) return;
 
     let cancelled = false;
     const load = async () => {
       setOpenDoorSnapshotLoading(true);
       try {
-        const resp = await apiPost<{ ok: boolean; items: OpenDoorPaperClosed[] }>("/api/paper/opendoor/episodes/search", {
+        const resp = await apiPost<{ ok: boolean; items: any[] }>("/api/paper/opendoor/episodes/search", {
           dateFrom,
           dateTo,
           exitClass: openDoorExitClass,
@@ -8208,7 +8293,29 @@ export default function OpenDoorScanner({
           sizeValue: sizeValue,
         });
         if (cancelled) return;
-        setOpenDoorSnapshotRows(Array.isArray(resp?.items) ? resp.items : []);
+        // The endpoint now speaks the shared PaperArbClosedDto shape (so the EPISODES tab, filters
+        // and Visual Scope can consume it unchanged). This table predates that and reads OpenDoor's
+        // own field names, so translate once here rather than touching every cell below.
+        // Entry/exit fills are side-dependent: Long buys the ask and sells the bid, Short the reverse.
+        const rows: OpenDoorPaperClosed[] = (Array.isArray(resp?.items) ? resp.items : []).map((r: any) => {
+          const isLong = String(r?.side ?? "") === "Long";
+          return {
+            ticker: String(r?.ticker ?? ""),
+            benchTicker: r?.benchTicker ?? null,
+            side: isLong ? "Long" : "Short",
+            entryMinuteIdx: Number(r?.startMinuteIdx),
+            exitMinuteIdx: Number(r?.endMinuteIdx),
+            entryStack: (isLong ? r?.startAskPct : r?.startBidPct) ?? null,
+            exitStack: (isLong ? r?.endBidPct : r?.endAskPct) ?? null,
+            move: r?.move ?? null,
+            pnl: r?.totalPnlUsd ?? null,
+            entryDevSig: r?.entryDevSig ?? null,
+            entryBench: r?.startBenchLstPrcLstClsPct ?? null,
+            gateRate: r?.rating ?? null,
+            gateTotal: r?.ratingTotal ?? null,
+          };
+        });
+        setOpenDoorSnapshotRows(rows);
         setOpenDoorSnapshotError(null);
       } catch (e: any) {
         if (!cancelled) setOpenDoorSnapshotError(e?.message || "Failed to load OpenDoor snapshot");
@@ -8219,7 +8326,7 @@ export default function OpenDoorScanner({
     load();
     return () => { cancelled = true; };
   }, [
-    primaryPanel, tab, dateFrom, dateTo, openDoorExitClass,
+    primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, openDoorExitClass,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
@@ -8338,7 +8445,11 @@ export default function OpenDoorScanner({
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
         if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
-        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
+        // zapMode is deliberately NOT restored, for the same reason as startAbs below: the %/σ/Δ ZAP
+        // toggle is an Arbitrage-only control and does not exist in the OpenDoor toolbar. A stale
+        // "delta" persisted by an older build would set UsePrintMedianDelta on the requests, and the
+        // engine then computes GetEffectiveStartAbs = printMedian + startAbs — reinstating a ~0.1
+        // deviation gate despite startAbs being 0, with nothing in the UI to reveal it.
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -8357,7 +8468,9 @@ export default function OpenDoorScanner({
         }
         if (s.metric === "SigmaZap" || s.metric === "ZapPct") setMetric(s.metric);
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
-        if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
+        // startAbs is deliberately NOT restored: the control was removed from the OpenDoor toolbar,
+        // so a value persisted by an older build (0.1) would silently switch the start-deviation
+        // gate back on with no way to see or clear it.
         if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
@@ -8380,10 +8493,29 @@ export default function OpenDoorScanner({
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
-        if (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted") setDilutionMode(s.dilutionMode);
-        if (typeof s.dilutionStep === "number") setDilutionStep(normalizeDilutionStepValue(s.dilutionStep));
-        if (typeof s.maxAdds === "number") setMaxAdds(normalizeMaxAddsValue(s.maxAdds));
-        if (typeof s.addDelayMinutes === "number") setAddDelayMinutes(Math.max(0, Math.trunc(s.addDelayMinutes)));
+        const preferStreamAutomationDilution =
+          isStreamOnlyShell && streamAutomationConfigOverride != null;
+        if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
+          setDilutionMode(s.dilutionMode);
+          onStreamAutomationConfigChange?.({
+            scaleMode: s.dilutionMode === "Diluted" ? "scale_in" : "single",
+          });
+        }
+        if (!preferStreamAutomationDilution && typeof s.dilutionStep === "number") {
+          const restoredDilutionStep = normalizeDilutionStepValue(s.dilutionStep);
+          setDilutionStep(restoredDilutionStep);
+          onStreamAutomationConfigChange?.({ dilutionStep: restoredDilutionStep });
+        }
+        if (!preferStreamAutomationDilution && typeof s.maxAdds === "number") {
+          const restoredMaxAdds = normalizeMaxAddsValue(s.maxAdds);
+          setMaxAdds(restoredMaxAdds);
+          onStreamAutomationConfigChange?.({ maxAdds: restoredMaxAdds });
+        }
+        if (!preferStreamAutomationDilution && typeof s.addDelayMinutes === "number") {
+          const restoredAddDelayMinutes = Math.max(0, Math.trunc(s.addDelayMinutes));
+          setAddDelayMinutes(restoredAddDelayMinutes);
+          onStreamAutomationConfigChange?.({ addDelayMinutes: restoredAddDelayMinutes });
+        }
         if (s.optimizerRangeRankMetric === "avgPnlUsd" || s.optimizerRangeRankMetric === "totalPnlUsd" || s.optimizerRangeRankMetric === "winRate" || s.optimizerRangeRankMetric === "score" || s.optimizerRangeRankMetric === "tailDamage") {
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
@@ -8673,8 +8805,11 @@ export default function OpenDoorScanner({
       maxVolNFfromLstCls,
       requireHasNews,
       excludeHasNews,
-      requireHasReport,
-      excludeHasReport,
+      // Report filtering is done client-side now (see passesStaticMetricRangeFilters) so the
+      // scanner, Sonar and Stream share one rule. Sending these would make the server pre-filter
+      // with its coarse HasReport boolean, which removes strictly more rows and would win.
+      requireHasReport: null,
+      excludeHasReport: null,
       minNewsCnt,
       maxNewsCnt,
       requireIsPTP,
@@ -9129,9 +9264,9 @@ export default function OpenDoorScanner({
   ]);
 
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
-    const mm = (minRaw: string, maxRaw: string) => ({
-      min: optNumOrNull(minRaw),
-      max: optNumOrNull(maxRaw),
+    const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
+      min: rangeValueOrNull(key, minRaw),
+      max: rangeValueOrNull(key, maxRaw),
     });
     const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
 
@@ -9150,45 +9285,45 @@ export default function OpenDoorScanner({
         applySet: new Set(splitListUpper(tickersText)),
         pinMap,
         bounds: {
-        Corr: mm(minCorr, maxCorr),
-        Beta: mm(minBeta, maxBeta),
-        Sigma: mm(minSigma, maxSigma),
-        ADV20: mm(minAdv20, maxAdv20),
-        ADV20NF: mm(minAdv20NF, maxAdv20NF),
-        ADV90: mm(minAdv90, maxAdv90),
-        ADV90NF: mm(minAdv90NF, maxAdv90NF),
-        AvPreMhv: mm(minAvPreMhv, maxAvPreMhv),
-        RoundLot: mm(minRoundLot, maxRoundLot),
-        VWAP: mm(minVWAP, maxVWAP),
-        SpreadBidPct: mm(minSpread, maxSpread),
-        LstPrcL: mm(minLstPrcL, maxLstPrcL),
-        LstCls: mm(minLstCls, maxLstCls),
-        YCls: mm(minYCls, maxYCls),
-        TCls: mm(minTCls, maxTCls),
-        ClsToClsPct: mm(minClsToClsPct, maxClsToClsPct),
-        Lo: mm(minLo, maxLo),
-        LstClsNewsCnt: mm(minLstClsNewsCnt, maxLstClsNewsCnt),
-        MarketCapM: mm(minMarketCapM, maxMarketCapM),
-        PreMhVolNF: mm(minPreMktVolNF, maxPreMktVolNF),
-        VolNFfromLstCls: mm(minVolNFfromLstCls, maxVolNFfromLstCls),
-        AvPostMhVol90NF: mm(minAvPostMhVol90NF, maxAvPostMhVol90NF),
-        AvPreMhVol90NF: mm(minAvPreMhVol90NF, maxAvPreMhVol90NF),
-        AvPreMhValue20NF: mm(minAvPreMhValue20NF, maxAvPreMhValue20NF),
-        AvPreMhValue90NF: mm(minAvPreMhValue90NF, maxAvPreMhValue90NF),
-        AvgDailyValue20: mm(minAvgDailyValue20, maxAvgDailyValue20),
-        AvgDailyValue90: mm(minAvgDailyValue90, maxAvgDailyValue90),
-        Volatility20: mm(minVolatility20, maxVolatility20),
-        Volatility90: mm(minVolatility90, maxVolatility90),
-        PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
-        PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
-        VolRel: mm(minVolRel, maxVolRel),
-        PreMhBidLstPrcPct: mm(minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
-        PreMhLoLstPrcPct: mm(minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
-        PreMhHiLstClsPct: mm(minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
-        PreMhLoLstClsPct: mm(minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
-        LstPrcLstClsPct: mm(minLstPrcLstClsPct, maxLstPrcLstClsPct),
-        ImbExch925: mm(minImbExch925, maxImbExch925),
-        ImbExch1555: mm(minImbExch1555, maxImbExch1555),
+        Corr: mm("corr", minCorr, maxCorr),
+        Beta: mm("beta", minBeta, maxBeta),
+        Sigma: mm("sigma", minSigma, maxSigma),
+        ADV20: mm("adv20", minAdv20, maxAdv20),
+        ADV20NF: mm("adv20nf", minAdv20NF, maxAdv20NF),
+        ADV90: mm("adv90", minAdv90, maxAdv90),
+        ADV90NF: mm("adv90nf", minAdv90NF, maxAdv90NF),
+        AvPreMhv: mm("avpremhv", minAvPreMhv, maxAvPreMhv),
+        RoundLot: mm("roundlot", minRoundLot, maxRoundLot),
+        VWAP: mm("vwap", minVWAP, maxVWAP),
+        SpreadBidPct: mm("spread", minSpread, maxSpread),
+        LstPrcL: mm("lstprcl", minLstPrcL, maxLstPrcL),
+        LstCls: mm("lstcls", minLstCls, maxLstCls),
+        YCls: mm("ycls", minYCls, maxYCls),
+        TCls: mm("tcls", minTCls, maxTCls),
+        ClsToClsPct: mm("clstocls", minClsToClsPct, maxClsToClsPct),
+        Lo: mm("lo", minLo, maxLo),
+        LstClsNewsCnt: mm("lstclsnewscnt", minLstClsNewsCnt, maxLstClsNewsCnt),
+        MarketCapM: mm("marketcapm", minMarketCapM, maxMarketCapM),
+        PreMhVolNF: mm("premhvolnf", minPreMktVolNF, maxPreMktVolNF),
+        VolNFfromLstCls: mm("volnffromlstcls", minVolNFfromLstCls, maxVolNFfromLstCls),
+        AvPostMhVol90NF: mm("avpostmhvol90nf", minAvPostMhVol90NF, maxAvPostMhVol90NF),
+        AvPreMhVol90NF: mm("avpremhvol90nf", minAvPreMhVol90NF, maxAvPreMhVol90NF),
+        AvPreMhValue20NF: mm("avpremhvalue20nf", minAvPreMhValue20NF, maxAvPreMhValue20NF),
+        AvPreMhValue90NF: mm("avpremhvalue90nf", minAvPreMhValue90NF, maxAvPreMhValue90NF),
+        AvgDailyValue20: mm("avgdailyvalue20", minAvgDailyValue20, maxAvgDailyValue20),
+        AvgDailyValue90: mm("avgdailyvalue90", minAvgDailyValue90, maxAvgDailyValue90),
+        Volatility20: mm("volatility20", minVolatility20, maxVolatility20),
+        Volatility90: mm("volatility90", minVolatility90, maxVolatility90),
+        PreMhMDV20NF: mm("premhmdv20nf", minPreMhMDV20NF, maxPreMhMDV20NF),
+        PreMhMDV90NF: mm("premhmdv90nf", minPreMhMDV90NF, maxPreMhMDV90NF),
+        VolRel: mm("volrel", minVolRel, maxVolRel),
+        PreMhBidLstPrcPct: mm("premhbidlstprc", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
+        PreMhLoLstPrcPct: mm("premhlolstprc", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
+        PreMhHiLstClsPct: mm("premhhilstcls", minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
+        PreMhLoLstClsPct: mm("premhlolstcls", minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
+        LstPrcLstClsPct: mm("lstprclstcls", minLstPrcLstClsPct, maxLstPrcLstClsPct),
+        ImbExch925: mm("imbexch925", minImbExch925, maxImbExch925),
+        ImbExch1555: mm("imbexch1555", minImbExch1555, maxImbExch1555),
       },
       excludeDividend: excludeDividend,
       excludeNews: excludeHasNews,
@@ -9326,6 +9461,7 @@ export default function OpenDoorScanner({
       startAbs,
       tickersText,
       zapMode,
+      sharedRangeFilterModes,
     ]);
 
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
@@ -9435,9 +9571,8 @@ export default function OpenDoorScanner({
       side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
     })),
     onFetchActiveTickers: async () => {
-      const params = buildGetParams(dateNy);
-      const qs = buildPaperQuery(params);
-      const j = await apiGet<any>(`/api/paper/arbitrage/active${qs}`);
+      const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
+      const j = await apiGet<any>(`/api/paper/opendoor/active${qs}`);
       const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
       return rows.map((r) => ({
         ticker: r.ticker,
@@ -9578,6 +9713,37 @@ export default function OpenDoorScanner({
   };
 
   // ========= Build query params for GET /active & /episodes
+  // ---- OpenDoor request shape ----
+  // The inherited buildGetParams/buildPostRequest below describe an Arbitrage episode search
+  // (deviation thresholds, hold windows, close modes). OpenDoor's engine takes none of that: entry
+  // and exit are fixed by the clock, so the only inputs are the exit class, which of the three
+  // parameters gate, the UP/DOWN gate levels and the per-trade notional.
+  function buildOpenDoorParams() {
+    const reqTickers = requestScopedTickers;
+    return {
+      exitClass: openDoorExitClass,
+      useStack: openDoorUseStack,
+      useBench: openDoorUseBench,
+      useDevSig: openDoorUseDevSig,
+      upMinRate: openDoorUpMinRate,
+      upMinTotal: openDoorUpMinTotal,
+      upMinMove: openDoorUpMinMove,
+      downMinRate: openDoorDownMinRate,
+      downMinTotal: openDoorDownMinTotal,
+      downMinMove: openDoorDownMinMove,
+      tickers: reqTickers.length ? reqTickers : null,
+      sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
+    };
+  }
+
+  function buildOpenDoorGetParams(d: string) {
+    return { dateNy: d, ...buildOpenDoorParams() };
+  }
+
+  function buildOpenDoorPostRequest(from: string, to: string) {
+    return { dateFrom: from, dateTo: to, ...buildOpenDoorParams() };
+  }
+
   function buildGetParams(d: string) {
     const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const reqTickers = requestScopedTickers;
@@ -9931,7 +10097,11 @@ export default function OpenDoorScanner({
   }
 
   async function fetchEpisodesSearchRows(req: PaperArbAnalyticsRequest): Promise<PaperArbClosedDto[]> {
-    const key = JSON.stringify(req);
+    // Callers still hand over the inherited Arbitrage request object (it also drives the analytics
+    // endpoint), but the OpenDoor search takes an entirely different body — only the date range is
+    // shared. Translating here keeps every call site untouched.
+    const body = buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
+    const key = JSON.stringify(body);
     const now = Date.now();
     const cached = episodesSearchCacheRef.current.get(key);
     if (cached && now - cached.ts <= EPISODES_SEARCH_CACHE_TTL_MS) {
@@ -9941,7 +10111,7 @@ export default function OpenDoorScanner({
     const inFlight = episodesSearchInFlightRef.current.get(key);
     if (inFlight) return inFlight;
 
-    const requestPromise = apiPost<any>("/api/paper/arbitrage/episodes/search", req)
+    const requestPromise = apiPost<any>("/api/paper/opendoor/episodes/search", body)
       .then((j) => normalizeRows<PaperArbClosedDto>(j) ?? [])
       .then((rows) => {
         episodesSearchCacheRef.current.set(key, { ts: Date.now(), rows });
@@ -9973,17 +10143,15 @@ export default function OpenDoorScanner({
       }
       if (tab === "active") {
         setAnalytics(null);
-        const params = buildGetParams(dateNy);
-        const qs = buildPaperQuery(params);
-        const j = await apiGet<any>(`/api/paper/arbitrage/active${qs}`);
+        const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
+        const j = await apiGet<any>(`/api/paper/opendoor/active${qs}`);
         const rows = normalizeRows<PaperArbActiveRow>(j);
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
         setAnalytics(null);
         if (!(episodesUseSearch || forceEpisodesSearch)) {
-          const params = buildGetParams(dateNy);
-          const qs = buildPaperQuery(params);
-          const j = await apiGet<any>(`/api/paper/arbitrage/episodes${qs}`);
+          const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
+          const j = await apiGet<any>(`/api/paper/opendoor/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
           setEpisodesRows(rows ?? []);
         } else {
@@ -9992,16 +10160,13 @@ export default function OpenDoorScanner({
           setEpisodesRows(rows);
         }
       } else {
+        // No /analytics call here on purpose. Its response was only ever rendered by the inherited
+        // Arbitrage ANALYTICS block, which OpenDoor does not use — every aggregate this scanner
+        // shows (analyticsSummary, the equity curve, scope-research) is derived client-side from
+        // filteredEpisodes. Calling the Arbitrage endpoint would have recomputed the same day with
+        // the hedge engine and reported numbers that contradict the rows underneath them.
         const req = buildPostRequest(dateFrom, dateTo);
-        req.includeEquityCurve = includeEquityCurve;
-        req.equityCurveMode = equityCurveMode;
-        req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
-        const [analyticsResp, rows] = await Promise.all([
-          apiPost<PaperArbAnalyticsResponse>("/api/paper/arbitrage/analytics", req),
-          fetchEpisodesSearchRows(req),
-        ]);
-
-        setAnalytics(analyticsResp ?? null);
+        const rows = await fetchEpisodesSearchRows(req);
         setEpisodesRows(rows);
       }
       setUpdatedAt(new Date());
@@ -10046,7 +10211,10 @@ export default function OpenDoorScanner({
         req.startAbs = c.s;
         req.startAbsMax = null;
         req.endAbs = c.e;
-        const j = await apiPost<any>("/api/paper/arbitrage/episodes/search", req);
+        const j = await apiPost<any>(
+          "/api/paper/opendoor/episodes/search",
+          buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom)
+        );
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
         const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
         const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
@@ -10368,6 +10536,16 @@ export default function OpenDoorScanner({
   };
 
   async function loadOptimizerRangesByGroup(from: string, to: string) {
+    // Same reason as runEpisodesOptimizer: /optimizer/ranges buckets ARBITRAGE episodes by
+    // Arbitrage-only parameters (sigma thresholds, rating gates), none of which describe a
+    // fixed 09:20 -> 09:40/10:00 trade. Left inert rather than feeding the panel wrong ranges.
+    setOptimizerRanges(null);
+    setOptimizerRangesErr(null);
+    setOptimizerRangesLoading(false);
+    return;
+  }
+
+  async function loadOptimizerRangesByGroupArbitrageLegacy(from: string, to: string) {
     if (scannerBinFilterEnabled({ ratingMode, metric })) {
       setOptimizerRanges(null);
       setOptimizerRangesErr(null);
@@ -10545,7 +10723,92 @@ export default function OpenDoorScanner({
     setOptimizerRangesLoading(false);
   }
 
+  // OpenDoor evaluates optimizer scenarios client-side instead of calling /scope/evaluate.
+  //
+  // Arbitrage needs the server because narrowing a filter there changes which EPISODES EXIST — the
+  // hedge engine has to replay the day under the new thresholds. OpenDoor has no such feedback
+  // loop: entry and exit are fixed by the clock, so a filter can only ever keep or drop trades that
+  // already happened. That makes "what if I restricted parameter X to range Y" a pure partition of
+  // the rows on screen — which optimizerRangeParameters has already computed, bucket by bucket.
+  // So the scenarios are read straight off those buckets rather than recomputed.
   async function runEpisodesOptimizer() {
+    if (optimizerLoading) return;
+    setOptimizerLoading(true);
+    setOptimizerErr(null);
+
+    try {
+      const rows: OptimizerResultRow[] = [];
+
+      const pnls = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
+      const baseTrades = pnls.length;
+      const baseWins = pnls.filter((v) => v > 0).length;
+      const baseLosses = pnls.filter((v) => v < 0).length;
+      const baseTotal = pnls.reduce((sum, v) => sum + v, 0);
+      const baseAvg = baseTrades > 0 ? baseTotal / baseTrades : 0;
+
+      rows.push({
+        id: "baseline",
+        parameter: "BASE",
+        variant: "all",
+        summary: `all ${intn(baseTrades)} episodes`,
+        trades: baseTrades,
+        wins: baseWins,
+        losses: baseLosses,
+        winRate: baseTrades > 0 ? baseWins / baseTrades : 0,
+        totalPnlUsd: baseTotal,
+        avgPnlUsd: baseAvg,
+        score: baseAvg,
+      });
+
+      const parameters = buildOptimizerRangeParameters();
+      setOptimizerRangeParameters(parameters);
+
+      for (const parameter of parameters) {
+        const buckets = [
+          ...(parameter.buckets ?? []),
+          ...(parameter.lowerTailBuckets ?? []),
+          ...(parameter.upperTailBuckets ?? []),
+        ];
+        for (const bucket of buckets) {
+          if (!bucket || bucket.trades <= 0) continue;
+          rows.push({
+            id: `${parameter.key}|${bucket.bucketId}`,
+            parameter: parameter.label,
+            variant: bucket.label,
+            summary: `${parameter.label} in ${bucket.label}`,
+            trades: bucket.trades,
+            wins: bucket.wins,
+            losses: bucket.losses,
+            winRate: bucket.winRate,
+            totalPnlUsd: bucket.totalPnlUsd,
+            avgPnlUsd: bucket.avgPnlUsd,
+            score: bucket.score,
+          });
+        }
+      }
+
+      rows.sort((a, b) => {
+        if (a.id === "baseline") return -1;
+        if (b.id === "baseline") return 1;
+        return b.score - a.score;
+      });
+
+      setOptimizerRows(rows);
+      // Pair overlay compares two parameters at once; it has no client-side equivalent yet.
+      setOptimizerComboRows([]);
+      setOptimizerErr(
+        rows.length <= 1
+          ? "No episodes on screen to optimize over — run a date with results first."
+          : null
+      );
+    } catch (e: any) {
+      setOptimizerErr(e?.message ?? String(e));
+    } finally {
+      setOptimizerLoading(false);
+    }
+  }
+
+  async function runEpisodesOptimizerArbitrageLegacy() {
     if (optimizerLoading) return;
     const from = dateMode === "day" ? dateNy : dateFrom;
     const to = dateMode === "day" ? dateNy : dateTo;
@@ -10758,6 +11021,15 @@ export default function OpenDoorScanner({
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
+    // Report gate: same rule as Sonar and Stream (rowReportAffectsTodaySession over the raw vendor
+    // marker), so one toggle behaves identically on every surface. Deliberately NOT the server's
+    // HasReport boolean — the tape collapses the marker to "any marker means yes" at write time,
+    // which discards the date and the release time the rule is built on.
+    if (requireHasReport || excludeHasReport) {
+      const affectsToday = rowReportAffectsTodaySession(row);
+      if (excludeHasReport && affectsToday) return false;
+      if (requireHasReport && !affectsToday) return false;
+    }
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 
@@ -11367,7 +11639,10 @@ export default function OpenDoorScanner({
         return b.trades - a.trades;
       });
   }, [optimizerRows, optimizerBaselineRow]);
-  const optimizerRangeParameters = useMemo(() => {
+  // Deliberately NOT a memo over filteredEpisodes. Bucketing 47 axes is real work, and recomputing
+  // it on every data change would run the optimizer continuously in the background. It stays a
+  // builder invoked by the run button, so the panel behaves the way it always did: idle until asked.
+  const buildOptimizerRangeParameters = useCallback((): PaperArbOptimizerParameterDto[] => {
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     if (useBinRatingFilter) {
       const selectedKeySet = new Set(scopeSelectedParameterKeys);
@@ -11454,15 +11729,30 @@ export default function OpenDoorScanner({
         continue;
       }
 
-      if (!["corr", "beta", "sigma"].includes(definition.key)) continue;
+      // corr/beta/sigma get the dedicated builder because it can also fall back to the ticker-meta
+      // map when the episode row itself carries no value.
+      if (["corr", "beta", "sigma"].includes(definition.key)) {
+        const metaParameter = buildFallbackOptimizerParameter(
+          filteredEpisodes,
+          definition.key as "corr" | "beta" | "sigma",
+          definition.label,
+          definition.group,
+          optimizerBucketCount,
+          arbitrageTickerMetaByTicker
+        );
+        if (metaParameter) parameterMap.set(definition.key, metaParameter);
+        continue;
+      }
 
-      const fallbackParameter = buildFallbackOptimizerParameter(
+      // Every other numeric axis is bucketed client-side from the episodes already on screen.
+      // OpenDoor has no server-side /optimizer/ranges (the Arbitrage one buckets Arbitrage
+      // episodes by Arbitrage-only axes), but it does not need one: the buckets are a pure
+      // aggregation of totalPnlUsd over rows grouped by a parameter value, and every value comes
+      // from the same scopeResearchParameterValue extractor the Visual Scope already uses.
+      const fallbackParameter = buildFallbackScopeOptimizerParameter(
         filteredEpisodes,
-        definition.key as "corr" | "beta" | "sigma",
-        definition.label,
-        definition.group,
-        optimizerBucketCount,
-        arbitrageTickerMetaByTicker
+        definition,
+        optimizerBucketCount
       );
 
       if (fallbackParameter) {
@@ -12543,167 +12833,6 @@ export default function OpenDoorScanner({
           ))}
         </div>
 
-        {false && tab === "analytics" && (
-          <div className="mb-3 flex flex-wrap justify-end gap-3">
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
-                <button
-                  key={modeKey}
-                  type="button"
-                  onClick={() => setRatingMode(modeKey)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    ratingMode === modeKey
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {modeKey}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={0.1}
-                  min={0}
-                  value={activeRule.minRate}
-                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase min rate"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease min rate"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  step={1}
-                  min={0}
-                  value={activeRule.minTotal}
-                  onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
-                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase min total"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease min total"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {[
-              { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
-              { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
-              { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
-            ].map((field) => (
-              <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
-                <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
-                  {field.label}
-                </span>
-                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={field.step}
-                    value={field.minValue}
-                    onChange={(e) => field.setMin(e.target.value)}
-                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                    placeholder="min"
-                  />
-                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
-                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={field.step}
-                    value={field.maxValue}
-                    onChange={(e) => field.setMax(e.target.value)}
-                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                    placeholder="max"
-                  />
-                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
-                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
 
         <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
@@ -13159,7 +13288,7 @@ export default function OpenDoorScanner({
                 <button
                   key={m.key}
                   type="button"
-                  onClick={() => setDilutionMode(m.key as PaperArbDilutionMode)}
+                  onClick={() => applyDilutionMode(m.key as PaperArbDilutionMode)}
                   className={clsx(
                     "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
                     dilutionMode === m.key
@@ -13181,7 +13310,7 @@ export default function OpenDoorScanner({
                   min={0.1}
                   step={0.1}
                   value={formatDilutionStepValue(dilutionStep)}
-                  onChange={(e) => setDilutionStep(normalizeDilutionStepValue(Number(e.target.value)))}
+                  onChange={(e) => applyDilutionStep(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13192,7 +13321,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, 1))}
+                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, 1))}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase dilution step"
@@ -13202,7 +13331,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setDilutionStep((v) => stepDilutionStepValue(v, -1))}
+                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, -1))}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease dilution step"
@@ -13223,7 +13352,7 @@ export default function OpenDoorScanner({
                   max={9}
                   step={1}
                   value={maxAdds}
-                  onChange={(e) => setMaxAdds(normalizeMaxAddsValue(Number(e.target.value)))}
+                  onChange={(e) => applyMaxAdds(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13234,7 +13363,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v + 1))}
+                    onClick={() => applyMaxAdds(maxAdds + 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase max additions"
@@ -13244,7 +13373,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMaxAdds((v) => normalizeMaxAddsValue(v - 1))}
+                    onClick={() => applyMaxAdds(maxAdds - 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease max additions"
@@ -13265,7 +13394,7 @@ export default function OpenDoorScanner({
                   max={60}
                   step={1}
                   value={addDelayMinutes}
-                  onChange={(e) => setAddDelayMinutes(Math.max(0, Math.min(60, Math.trunc(Number(e.target.value) || 0))))}
+                  onChange={(e) => applyAddDelayMinutes(Number(e.target.value))}
                   disabled={dilutionMode !== "Diluted"}
                   className={clsx(
                     "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
@@ -13276,7 +13405,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setAddDelayMinutes((v) => Math.min(60, v + 1))}
+                    onClick={() => applyAddDelayMinutes(addDelayMinutes + 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Increase add delay minutes"
@@ -13286,7 +13415,7 @@ export default function OpenDoorScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setAddDelayMinutes((v) => Math.max(0, v - 1))}
+                    onClick={() => applyAddDelayMinutes(addDelayMinutes - 1)}
                     disabled={dilutionMode !== "Diluted"}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                     aria-label="Decrease add delay minutes"
@@ -13862,179 +13991,6 @@ export default function OpenDoorScanner({
               </div>
             </div>
 
-            {/* %/σ/Δ ZAP toggle + startAbs/startAbsMax/endAbs — Arbitrage-only sigma-threshold
-                controls (metric/startAbs feed TapeArbParams for the hidden ACTIVE/EPISODES/
-                ANALYTICS Arbitrage tables only). OpenDoor's own gating is entirely
-                STACK/BENCH/DEV + UP/DOWN MINRATE/MINTOTAL/MINMOVE — zapMode is never read by
-                openDoorResearch/openDoorCombined/the SNAPSHOT tape-replay request, so hiding
-                this doesn't touch OpenDoor's candidate selection at all. */}
-            {false && (
-            <div className="ml-auto inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "zap") {
-                    setZapMode("off");
-                    setMetric("SigmaZap");
-                  } else {
-                    setZapMode("zap");
-                    setMetric("ZapPct");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "zap"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "sigma") {
-                    setZapMode("off");
-                  } else {
-                    setZapMode("sigma");
-                    setMetric("SigmaZap");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "sigma"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "delta") {
-                    setZapMode("off");
-                  } else {
-                    setZapMode("delta");
-                    setMetric("SigmaZap");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "delta"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-                title="Require start sigma to be above direction-specific print median plus the first input delta"
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
-              </button>
-
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={startAbs}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase start abs"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease start abs"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={startAbsMax}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setStartAbsMax(e.target.value)}
-                  placeholder="start max"
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpStartAbsMax(0.1)}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase start max"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpStartAbsMax(-0.1)}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease start max"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.05}
-                  min={0}
-                  value={endAbs}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase end abs"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease end abs"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-
-            </div>
-            )}
         </div>
         </div>
 
@@ -14465,334 +14421,6 @@ export default function OpenDoorScanner({
           </div>
         )}
 
-        {false && primaryPanel === "scanner" && tab === "active" && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <SummaryMetricCard
-                label="TOTAL PNL"
-                value={num(activeAnalyticsSummary.totalPnlUsd, 2)}
-                className="xl:row-span-2 xl:min-h-[124px]"
-                valueClassName={
-                  clsx(
-                    "text-4xl md:text-6xl font-bold",
-                    activeAnalyticsSummary.totalPnlUsd > 0
-                      ? "text-[#6ee7b7]"
-                      : activeAnalyticsSummary.totalPnlUsd < 0
-                        ? SOFT_LOSS_TEXT_CLASS
-                        : "text-zinc-200"
-                  )
-                }
-              />
-              <SummaryMetricCard
-                label="TRADES"
-                value={intn(activeAnalyticsSummary.trades)}
-                inline
-              />
-              <SummaryMetricCard
-                label="WIN RATE"
-                value={`${num(activeAnalyticsSummary.winRate * 100, 1)}%`}
-                inline
-              />
-              <SummaryMetricCard
-                label="AVG TRADE"
-                value={num(activeAnalyticsSummary.avgPnlUsd, 2)}
-                inline
-                valueClassName={
-                  activeAnalyticsSummary.avgPnlUsd > 0
-                    ? "text-emerald-300"
-                    : activeAnalyticsSummary.avgPnlUsd < 0
-                      ? SOFT_LOSS_TEXT_CLASS
-                      : "text-zinc-200"
-                }
-              />
-              <SummaryMetricCard
-                label="MAX WIN"
-                value={num(activeAnalyticsSummary.maxWinUsd, 2)}
-                inline
-                valueClassName={activeAnalyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG WIN"
-                value={num(activeAnalyticsSummary.avgWinUsd, 2)}
-                inline
-                valueClassName={activeAnalyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="PROFIT FACTOR"
-                value={num(activeAnalyticsSummary.profitFactor, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="EXPECTANCY"
-                value={num(activeAnalyticsSummary.expectancyUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX DRAWDOWN"
-                value={num(activeAnalyticsSummary.maxDrawdownUsd, 2)}
-                inline
-              />
-              <SummaryMetricCard
-                label="MAX LOSS"
-                value={num(activeAnalyticsSummary.maxLossUsd, 2)}
-                inline
-                valueClassName={activeAnalyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG LOSS"
-                value={num(activeAnalyticsSummary.avgLossUsd, 2)}
-                inline
-                valueClassName={activeAnalyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-            </div>
-
-            {activeRealtimeSorted.length > 0 ? (
-              <>
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                  {(activeAnalyticsSummary.equityCurve?.length ?? 0) > 0 && (
-                    <div className="p-0">
-                      <EquityChart
-                        points={activeAnalyticsSummary.equityCurve}
-                        title={`EQUITY CURVE | ${equityCurveMode}`}
-                        meta={`points ${intn(activeAnalyticsSummary.equityCurve?.length ?? 0)}`}
-                      />
-                    </div>
-                  )}
-
-                  <div className="p-0">
-                    <StartsEndsByTimeChart
-                      rows={activeRealtimeSorted}
-                      title="START VS CURRENT BY TIME | 5M"
-                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-                  <div className="p-0">
-                    <StartsByTimeChart
-                      rows={activeRealtimeSorted}
-                      title="START EVENTS BY TIME (OK/BAD) | 5M"
-                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                  <div className="p-0">
-                    <PeakStrengthByTimeChart
-                      rows={activeRealtimeSorted}
-                      title="PEAK STRENGTH BY TIME | 5M"
-                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                  <div className="p-0">
-                    <PeakReversionTwoThirdsChart
-                      rows={activeRealtimeSorted}
-                      title="PEAK REVERSION ≥ 2/3 | 5M"
-                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
-                No active realtime rows yet. Run scanner for live open events to render charts.
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  ACTIVE TRADES | rows {activeRealtimeSorted.length}
-                </div>
-                <div className="text-[10px] font-mono text-zinc-600">live open events</div>
-              </div>
-
-              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[1840px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
-                    <tr>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
-                        Bp
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Time
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Metric
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Legs
-                      </th>
-                    </tr>
-                    <tr className="text-zinc-400">
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>CurrentTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>Current{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeRealtimeSorted.map((r, i) => {
-                      const pnl = r.totalPnlUsd ?? 0;
-                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
-                      const benchAmountUsd =
-                        pnlMode === "Hedged" &&
-                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
-                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
-                          : null;
-                      return (
-                        <tr
-                          key={`${r.ticker}|active|${i}`}
-                          className={clsx(
-                            "border-t border-white/5 transition-colors",
-                            i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                            "hover:bg-white/[0.03]"
-                          )}
-                        >
-                          <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                          <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
-                          <td className="p-2.5">
-                            <SideBadge side={r.side} />
-                          </td>
-
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
-                              pnl > 0 ? "text-[#6ee7b7]" : pnl < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
-                            )}
-                          >
-                            {num(r.totalPnlUsd ?? null, 2)}
-                          </td>
-                          <td className="p-2.5 text-right tabular-nums border-l border-white/10">
-                            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
-                              <span className="text-zinc-500">Ticker</span>{" "}
-                              <span className="text-zinc-300">
-                                {tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}
-                              </span>
-                            </div>
-                            <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
-                              <span className="text-zinc-500">Bench</span>{" "}
-                              <span className="text-zinc-300">
-                                {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
-                            {minuteIdxToClockLabel(r.startMinuteIdx)}
-                          </td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">
-                            {minuteIdxToClockLabel(r.peakMinuteIdx)}
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
-                            )}
-                          >
-                            {minuteIdxToClockLabel(r.endMinuteIdx)}
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums border-l border-white/10",
-                              (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.rawPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.rawPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.rawPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.benchPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.benchPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.benchPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
-                            )}
-                          >
-                            <span
-                              className={clsx(
-                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
-                                (r.hedgedPnlUsd ?? 0) > 0
-                                  ? "bg-[#6ee7b7]/12"
-                                  : (r.hedgedPnlUsd ?? 0) < 0
-                                    ? "bg-transparent"
-                                    : "bg-white/[0.04]"
-                              )}
-                            >
-                              {num(r.hedgedPnlUsd ?? null, 2)}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {!activeRealtimeSorted.length && (
-                      <tr>
-                        <td colSpan={13} className="p-8 text-center text-zinc-500">
-                          No active open trades yet. Run Scanner for live rows.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
 
         {primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell && (
           <div className="space-y-3">
@@ -14872,11 +14500,14 @@ export default function OpenDoorScanner({
                   CSV ({filteredEpisodes.length})
                 </button>
               ) : <div />}
-              <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-                Scope Engine
-              </div>
+              {OPEN_DOOR_OPTIMIZER_ENABLED && (
+                <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
+                  Scope Engine
+                </div>
+              )}
             </div>
 
+            {OPEN_DOOR_OPTIMIZER_ENABLED && (
             <GlassCard className="px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 shrink-0">
@@ -15042,6 +14673,7 @@ export default function OpenDoorScanner({
               {optimizerErr && <div className="mt-1 text-xs font-mono text-rose-300">{optimizerErr}</div>}
 
             </GlassCard>
+            )}
 
             {optimizerComboRows.length > 0 && (
             <GlassCard className="p-3">
@@ -15842,7 +15474,7 @@ export default function OpenDoorScanner({
                                         ...prev[panel.key].extraFilters,
                                         {
                                           id: `${panel.key}-${Date.now()}-${prev[panel.key].extraFilters.length}`,
-                                          parameterKey: "peakMetricAbs",
+                                          parameterKey: "rating",
                                           from: "",
                                           to: "",
                                         },
@@ -15974,7 +15606,7 @@ export default function OpenDoorScanner({
                                         ...prev[panel.key].parallelFilters,
                                         {
                                           id: `${panel.key}-parallel-${Date.now()}-${prev[panel.key].parallelFilters.length}`,
-                                          parameterKey: "peakMetricAbs",
+                                          parameterKey: "rating",
                                           from: "",
                                           to: "",
                                         },
@@ -16563,341 +16195,6 @@ export default function OpenDoorScanner({
           </div>
         )}
 
-        {false && primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
-          <div className="space-y-3">
-            <div className="grid gap-3 xl:grid-cols-2">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <SummaryMetricCard
-                  label="TOTAL PNL"
-                  value={num(analyticsSummary.totalPnlUsd, 2)}
-                  className="xl:row-span-2 xl:min-h-[124px]"
-                  valueClassName={
-                    clsx(
-                      "text-4xl md:text-6xl font-bold",
-                      analyticsSummary.totalPnlUsd > 0
-                        ? "text-[#6ee7b7]"
-                        : analyticsSummary.totalPnlUsd < 0
-                          ? SOFT_LOSS_TEXT_CLASS
-                          : "text-zinc-200"
-                    )
-                  }
-                />
-                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
-                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
-                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
-                <SummaryMetricCard label="STREAMFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
-                <SummaryMetricCard
-                  label="AVG TRADE"
-                  value={num(analyticsSummary.avgPnlUsd, 2)}
-                  inline
-                  valueClassName={
-                    analyticsSummary.avgPnlUsd > 0
-                      ? "text-emerald-300"
-                      : analyticsSummary.avgPnlUsd < 0
-                        ? SOFT_LOSS_TEXT_CLASS
-                        : "text-zinc-200"
-                  }
-                />
-                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
-                <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
-                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
-                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
-              </div>
-            </div>
-
-            {analytics !== null && (analyticsSorted.length > 0 ? (
-              <>
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                  {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
-                    <div className="p-0">
-                      <EquityChart
-                        points={analyticsSummary.equityCurve}
-                        title={`EQUITY CURVE | ${equityCurveMode}`}
-                        meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)}`}
-                      />
-                    </div>
-                  )}
-
-                  <div className="p-0">
-                    <StartsEndsByTimeChart
-                      rows={analyticsSorted}
-                      title="START VS END BY TIME | 5M"
-                      meta={`rows ${intn(analyticsSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-                  <div className="p-0">
-                    <StartsByTimeChart
-                      rows={analyticsSorted}
-                      title="START EVENTS BY TIME (OK/BAD) | 5M"
-                      meta={`rows ${intn(analyticsSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                  <div className="p-0">
-                    <PeakStrengthByTimeChart
-                      rows={analyticsSorted}
-                      title="PEAK STRENGTH BY TIME | 5M"
-                      meta={`rows ${intn(analyticsSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                  <div className="p-0">
-                    <PeakReversionTwoThirdsChart
-                      rows={analyticsSorted}
-                      title="PEAK REVERSION ≥ 2/3 | 5M"
-                      meta={`rows ${intn(analyticsSorted.length)}`}
-                      xFrom={sessionTimeChartRange(session).from}
-                      xTo={sessionTimeChartRange(session).to}
-                    />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
-                No analytics rows yet. Run analytics for selected date/day range to render charts.
-              </div>
-            ))}
-
-            {analytics !== null && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  ANALYTICS TRADES | rows {analyticsSorted.length}
-                </div>
-                <div className="flex items-center gap-2">
-                  {analyticsSorted.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => downloadEpisodesCsv(analyticsSorted, `scanner-analytics-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, {
-                        session,
-                        ruleBand,
-                        metric,
-                        closeMode,
-                        priceMode,
-                        pnlMode,
-                        scopeMode,
-                        topN,
-                        offset,
-                        startAbs,
-                        startAbsMax,
-                        endAbs,
-                        minHoldCandles,
-                        startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
-                        preStartMinuteIdx: preStartToMinuteIdx(),
-                        dilutionMode,
-                        dilutionStep,
-                        maxAdds,
-                        zapMode,
-                      })}
-                      className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
-                      title="Download analytics episodes as CSV"
-                    >
-                      CSV
-                    </button>
-                  )}
-                  <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
-                </div>
-              </div>
-
-              <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="analytics-trades-table min-w-[1560px] w-full text-[10px] font-mono">
-                  <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
-                    <tr>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-400" colSpan={3}>
-                        P&amp;L
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
-                        Bp
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Time
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
-                        Metric
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
-                        Ticker %
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-amber-500/70" colSpan={3}>
-                        Bid %
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-orange-500/70" colSpan={3}>
-                        Ask %
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
-                        Bench %
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-violet-400/70" rowSpan={2}>
-                        Gap%
-                      </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-pink-400/70" rowSpan={2}>
-                        SpreadBid%
-                      </th>
-                    </tr>
-                    <tr className="text-zinc-400">
-                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-300"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Ticker{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 text-emerald-200"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 text-emerald-400"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Total{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>EndTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
-                      <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
-                      <th className="text-right p-2.5 text-emerald-500/70">End</th>
-                      <th className="text-right p-2.5 border-l border-white/10 text-amber-500/70">Start</th>
-                      <th className="text-right p-2.5 text-amber-500/70">Peak</th>
-                      <th className="text-right p-2.5 text-amber-500/70">End</th>
-                      <th className="text-right p-2.5 border-l border-white/10 text-orange-500/70">Start</th>
-                      <th className="text-right p-2.5 text-orange-500/70">Peak</th>
-                      <th className="text-right p-2.5 text-orange-500/70">End</th>
-                      <th className="text-right p-2.5 border-l border-white/10 text-sky-500/70">Start</th>
-                      <th className="text-right p-2.5 text-sky-500/70">Peak</th>
-                      <th className="text-right p-2.5 text-sky-500/70">End</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analyticsSorted.map((r, i) => {
-                      const pnl = r.totalPnlUsd ?? 0;
-                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
-                      const benchAmountUsd =
-                        pnlMode === "Hedged" &&
-                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
-                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
-                          : null;
-                      return (
-                        <tr
-                          key={`${r.ticker}|analytics|${i}`}
-                          className={clsx(
-                            "border-t border-white/5 transition-colors",
-                            i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                            "hover:bg-white/[0.03]"
-                          )}
-                        >
-                          <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                          <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
-                          <td className="p-2.5">
-                            <SideBadge side={r.side} />
-                          </td>
-
-                          <td className={clsx("p-2.5 text-right tabular-nums border-l border-white/10", (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
-                            {num(r.rawPnlUsd ?? null, 2)}
-                          </td>
-                          <td className={clsx("p-2.5 text-right tabular-nums", (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
-                            {num(r.benchPnlUsd ?? null, 2)}
-                          </td>
-                          <td className={clsx("p-2.5 text-right tabular-nums", (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
-                            {num(r.hedgedPnlUsd ?? null, 2)}
-                          </td>
-                          <td className="p-2.5 text-right tabular-nums border-l border-white/10 whitespace-nowrap">
-                            <span className="text-zinc-500">T</span><span className="text-zinc-300">{tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}</span>
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
-                            {minuteIdxToClockLabel(r.startMinuteIdx)}
-                          </td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-300">
-                            {minuteIdxToClockLabel(r.peakMinuteIdx)}
-                          </td>
-                          <td
-                            className={clsx(
-                              "p-2.5 text-right tabular-nums",
-                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
-                            )}
-                          >
-                            {minuteIdxToClockLabel(r.endMinuteIdx)}
-                          </td>
-
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
-                          {(() => {
-                            const fP = (v: number | null | undefined) => v == null
-                              ? <span className="text-zinc-600">—</span>
-                              : <span className={v >= 0 ? "text-emerald-400" : "text-rose-400"}>{v >= 0 ? "+" : ""}{v.toFixed(2)}%</span>;
-                            return (<>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.lstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.endLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBidPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBidPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBidPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startAskPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakAskPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.endAskPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBenchLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBenchLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBenchLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-violet-300">{fP(r.gapPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-pink-300">{fP(r.spreadBidPct)}</td>
-                            </>);
-                          })()}
-                        </tr>
-                      );
-                    })}
-                    {!analyticsSorted.length && (
-                      <tr>
-                        <td colSpan={27} className="p-8 text-center text-zinc-500">
-                          No analytics trades yet. Run Analytics for a date range.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-            </div>
-            )}
-            <ScannerAnalyticsLog
-              rows={analyticsSorted}
-              priceMode={priceMode}
-              context={{
-                session,
-                ruleBand,
-                metric,
-                closeMode,
-                priceMode,
-                pnlMode,
-                scopeMode,
-                topN,
-                offset,
-                startAbs,
-                startAbsMax,
-                endAbs,
-                minHoldCandles,
-                startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
-                preStartMinuteIdx: preStartToMinuteIdx(),
-                dilutionMode,
-                dilutionStep,
-                maxAdds,
-                zapMode,
-              }}
-            />
-          </div>
-        )}
 
         <style jsx global>{`
           .analytics-trades-table th,

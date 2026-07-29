@@ -12,6 +12,7 @@ import PresetPicker from "@/components/presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "@/lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "@/types/presets";
+import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 
 /* =========================
    TYPES
@@ -601,61 +602,13 @@ const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
   return null;
 };
 
-const getNewYorkMonthDay = (): { month: number; day: number } => {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date());
-    const month = Number(parts.find((part) => part.type === "month")?.value ?? NaN);
-    const day = Number(parts.find((part) => part.type === "day")?.value ?? NaN);
-    if (Number.isFinite(month) && Number.isFinite(day)) return { month, day };
-  } catch {
-  }
-  const now = new Date();
-  return { month: now.getMonth() + 1, day: now.getDate() };
-};
-
 const parseTodayReportFlag = (value: any): boolean | null => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-
-  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
-  if (iso) {
-    const month = Number(iso[2]);
-    const day = Number(iso[3]);
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
-
-  const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
-  if (slash) {
-    const left = Number(slash[2]);
-    const right = Number(slash[3]);
-    let day = left;
-    let month = right;
-    if (left <= 12 && right > 12) {
-      month = left;
-      day = right;
-    }
-    const today = getNewYorkMonthDay();
-    return month === today.month && day === today.day;
-  }
-
+  const byDate = parseReportDateAffectsTodaySession(value);
+  if (byDate != null) return byDate;
   return toBool(value);
 };
 
-const hasTodayReport = (s: ArbitrageSignal): boolean => {
-  const parsed =
-    parseTodayReportFlag((s as any).report) ??
-    parseTodayReportFlag((s as any).Report) ??
-    parseTodayReportFlag((s as any).meta?.report) ??
-    parseTodayReportFlag((s as any).meta?.Report) ??
-    toBool((s as any)._reportBool);
-
-  return parsed === true;
-};
+const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySession(s);
 
 const isSignalGoldActive = (
   s: ArbitrageSignal,
@@ -2372,14 +2325,9 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
 
 export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
   const out: ArbitrageSignal[] = [];
-  const mr = toNum(f.minRate);
-  const mt = toNum(f.minTotal);
-  const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
-  const useSigBinFilter = f.ratingMode === "BINS" && f.zapMode === "sigma";
-
-  const base = Number(f.zapShowAbs ?? 0);
-  const zapThr = Math.max(0.3, base);
-  const sigThr = Math.max(0.05, base);
+  // minRate/minTotal/ratingMode and the zap/sigma thresholds off the snapshot are intentionally
+  // not read here: OpenDoor neither rates by Arbitrage bins nor gates on start deviation. The
+  // snapshot still carries them because it is the shared Scanner/Stream/Sonar filter shape.
   const eqNeedle = f.equityType.trim().toLowerCase();
 
   const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
@@ -2422,28 +2370,10 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     }
     if (failedRangeBound) continue;
 
-    if (useBinRatingFilter) {
-      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
-    } else if (useSigBinFilter) {
-      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
-      const binStats = getSessionBinRating(s, f.cls as ArbClass);
-      if (binStats === null) continue;
-      if (mr != null && binStats.rate < mr) continue;
-      if (mt != null && binStats.total < mt) continue;
-    } else {
-      const effMr = Math.max(0, Number(mr) || 0);
-      const effMt = Math.max(0, Math.trunc(Number(mt) || 0));
-      if (effMr > 0 || effMt > 0) {
-        if (mr != null) {
-          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-          if (r == null || r < mr) continue;
-        }
-        if (mt != null) {
-          const t = getBestTotalByType(s, f.type as any);
-          if (t == null || t < mt) continue;
-        }
-      }
-    }
+    // No Arbitrage rating gate here. OpenDoor rates a signal against its OWN summary.csv bins
+    // (matchOpenDoor: STACK/BENCH/DEV x exit class x direction, with its own MINRATE/MINTOTAL/
+    // MINMOVE levels). Running Arbitrage's session/bin rating first would pre-thin the feed by a
+    // completely different statistic before OpenDoor ever looks at it.
 
     if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
 
@@ -2496,42 +2426,14 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (!et.includes(eqNeedle)) continue;
     }
 
-    if (f.zapMode !== "off" && !s.isStaticFallback) {
-      const dir = s.direction;
-      const isShort = dir === "down";
-      const isLong = dir === "up";
-      if (!isShort && !isLong) continue;
-
-      if (!posActive) {
-        if (f.zapMode === "zap") {
-          if (isShort) {
-            const v = toNum(s.zapS);
-            if (v == null || v < zapThr) continue;
-          } else {
-            const v = toNum(s.zapL);
-            if (v == null || v > -zapThr) continue;
-          }
-        } else if (f.zapMode === "delta") {
-          const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
-          const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < deltaThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -deltaThr) continue;
-          }
-        } else {
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < sigThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -sigThr) continue;
-          }
-        }
-      }
-    }
+    // No start-deviation gate here either. Arbitrage requires the signal to have already moved a
+    // threshold distance (zap / sigma / print-median delta) before it is worth looking at; OpenDoor
+    // does not — it enters at 09:20 regardless of how far the name has travelled, and decides
+    // purely on whether the entry snapshot lands inside a historically profitable bin. Keeping the
+    // gate meant matchOpenDoor only ever saw the residue of an unrelated filter.
+    //
+    // The TOP-window filter above is deliberately left in place: it stays under the user's own
+    // topMode toggle, so it only narrows the feed when explicitly asked for.
 
     out.push(s);
   }
