@@ -1492,19 +1492,77 @@ function binSignKeyForSide(side: TapeArbSide): "pos" | "neg" | null {
   return null;
 }
 
-function parseBinIntervals(value: any): Array<{ lo: number; hi: number; rate: number; total: number }> {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      const obj = safeObj(item);
-      const lo = optNumOrNull(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
-      const hi = optNumOrNull(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
-      const rate = optNumOrNull(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
-      const total = optNumOrNull(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count);
-      if (lo == null || hi == null || rate == null || total == null) return null;
-      return { lo: Math.min(lo, hi), hi: Math.max(lo, hi), rate, total };
-    })
-    .filter((item): item is { lo: number; hi: number; rate: number; total: number } => item != null);
+type BinInterval = { lo: number; hi: number; rate: number; total: number };
+const EMPTY_BIN_INTERVALS: BinInterval[] = [];
+
+// best_params payloads are large, deeply nested and immutable for the lifetime of a row object,
+// but the rating/window helpers below used to re-walk and re-parse them for every row on every
+// filter pass. These WeakMaps parse each payload once and let the entries be collected with the
+// rows they came from.
+const binIntervalsCache = new WeakMap<object, BinInterval[]>();
+
+function parseBinIntervals(value: any): BinInterval[] {
+  if (!Array.isArray(value)) return EMPTY_BIN_INTERVALS;
+  const cached = binIntervalsCache.get(value);
+  if (cached) return cached;
+  const out: BinInterval[] = [];
+  for (const item of value) {
+    const obj = safeObj(item);
+    const lo = optNumOrNull(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
+    const hi = optNumOrNull(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
+    const rate = optNumOrNull(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
+    const total = optNumOrNull(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count);
+    if (lo == null || hi == null || rate == null || total == null) continue;
+    out.push({ lo: Math.min(lo, hi), hi: Math.max(lo, hi), rate, total });
+  }
+  binIntervalsCache.set(value, out);
+  return out;
+}
+
+type ParsedBestParams = {
+  sigmaPeakBins: Record<string, any> | null;
+  sigmaBinStats: Record<string, any> | null;
+  sigmaBinStep: number;
+  sigmaBinMin: number;
+  sigmaBinMax: number;
+  topWindows: Record<string, any> | null;
+};
+
+const EMPTY_PARSED_BEST_PARAMS: ParsedBestParams = {
+  sigmaPeakBins: null,
+  sigmaBinStats: null,
+  sigmaBinStep: 0.5,
+  sigmaBinMin: 0.5,
+  sigmaBinMax: 10.0,
+  topWindows: null,
+};
+
+const parsedBestParamsCache = new WeakMap<object, ParsedBestParams>();
+
+function parseBestParams(row: any): ParsedBestParams {
+  const root = safeObj(getBestParams(row));
+  if (!root) return EMPTY_PARSED_BEST_PARAMS;
+  const cached = parsedBestParamsCache.get(root);
+  if (cached) return cached;
+
+  const bwAny = safeObj(root.best_windows_any ?? root.BestWindowsAny);
+  const stitched = safeObj(bwAny?.stitched ?? bwAny?.Stitched);
+  const sigBinParams = safeObj(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
+  const parsed: ParsedBestParams = {
+    sigmaPeakBins: safeObj(stitched?.sigma_peak_bins ?? stitched?.SigmaPeakBins),
+    sigmaBinStats: safeObj(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats),
+    sigmaBinStep: Number(sigBinParams?.step ?? 0.5),
+    sigmaBinMin: Number(sigBinParams?.min ?? 0.5),
+    sigmaBinMax: Number(sigBinParams?.max ?? 10.0),
+    topWindows: safeObj(root.top_windows ?? root.TopWindows),
+  };
+  parsedBestParamsCache.set(root, parsed);
+  return parsed;
+}
+
+function bestParamsBinIntervals(parsed: ParsedBestParams, classKey: string, signKey: "pos" | "neg"): BinInterval[] {
+  const classBins = safeObj(parsed.sigmaPeakBins?.[classKey]);
+  return parseBinIntervals(classBins?.[signKey]);
 }
 
 function scannerBinRatingSnapshot(args: {
@@ -1517,19 +1575,7 @@ function scannerBinRatingSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const binsRoot =
-    safeObj(root?.best_windows_any)?.stitched ??
-    safeObj(root?.BestWindowsAny)?.stitched ??
-    safeObj(root?.best_windows_any)?.Stitched ??
-    safeObj(root?.BestWindowsAny)?.Stitched ??
-    null;
-  const sigmaPeakBins =
-    safeObj(binsRoot)?.sigma_peak_bins ??
-    safeObj(binsRoot)?.SigmaPeakBins ??
-    null;
-  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
-  const intervals = parseBinIntervals(classBins?.[signKey]);
+  const intervals = bestParamsBinIntervals(parseBestParams(row), classKey, signKey);
   if (!intervals.length) return null;
   const absSigma = Math.abs(sigmaAbs);
   const match = intervals.find((interval) => absSigma >= interval.lo && absSigma <= interval.hi);
@@ -1537,28 +1583,16 @@ function scannerBinRatingSnapshot(args: {
 }
 
 function passesBinRatingByBestParams(args: {
-  bestParams: any;
+  row: any;
   classKey: string;
   signKey: "pos" | "neg" | null;
   sigmaAbs: number | null | undefined;
   minRate: number;
   minTotal: number;
 }) {
-  const { bestParams, classKey, signKey, sigmaAbs, minRate, minTotal } = args;
+  const { row, classKey, signKey, sigmaAbs, minRate, minTotal } = args;
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
-  const root = safeObj(bestParams);
-  const binsRoot =
-    safeObj(root?.best_windows_any)?.stitched ??
-    safeObj(root?.BestWindowsAny)?.stitched ??
-    safeObj(root?.best_windows_any)?.Stitched ??
-    safeObj(root?.BestWindowsAny)?.Stitched ??
-    null;
-  const sigmaPeakBins =
-    safeObj(binsRoot)?.sigma_peak_bins ??
-    safeObj(binsRoot)?.SigmaPeakBins ??
-    null;
-  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
-  const intervals = parseBinIntervals(classBins?.[signKey]);
+  const intervals = bestParamsBinIntervals(parseBestParams(row), classKey, signKey);
   if (!intervals.length) return false;
 
   const effectiveMinRate = Math.max(0, Number(minRate) || 0);
@@ -1590,17 +1624,13 @@ function scannerSigBinSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const bwAny = safeObj(root?.best_windows_any ?? root?.BestWindowsAny);
-  const stitched = safeObj(bwAny?.stitched ?? bwAny?.Stitched);
-  const allStats = safeObj(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
-  const clsStats = safeObj(allStats?.[classKey]);
+  const parsed = parseBestParams(row);
+  const clsStats = safeObj(parsed.sigmaBinStats?.[classKey]);
   const signStats = safeObj(clsStats?.[signKey]);
   // compute bin key matching Python: floor(abs / step) * step formatted to 1 decimal
-  const sigBinParams = safeObj(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
-  const step = Number(sigBinParams?.step ?? 0.5);
-  const min = Number(sigBinParams?.min ?? 0.5);
-  const max = Number(sigBinParams?.max ?? 10.0);
+  const step = parsed.sigmaBinStep;
+  const min = parsed.sigmaBinMin;
+  const max = parsed.sigmaBinMax;
   const v = Math.max(min, Math.min(max, Math.abs(sigmaAbs)));
   const binKey = (Math.floor(v / step) * step).toFixed(1);
   const entry = safeObj(signStats?.[binKey]);
@@ -1621,8 +1651,7 @@ function scannerTopWindowSnapshot(args: {
   const signKey = binSignKeyForSide(side);
   if (!signKey) return null;
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const tw = safeObj(safeObj(root?.top_windows ?? root?.TopWindows)?.[classKey]);
+  const tw = safeObj(parseBestParams(row).topWindows?.[classKey]);
   const entry = safeObj(tw?.[signKey]);
   if (!entry) return null;
   const sigmaTw = safeObj(entry.sigma);
@@ -1665,7 +1694,7 @@ function passesScannerBinRatingFilter(args: {
   const signKey = binSignKeyForSide(side);
   const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
   return passesBinRatingByBestParams({
-    bestParams: getBestParams(row),
+    row,
     classKey,
     signKey,
     sigmaAbs,
@@ -1933,6 +1962,21 @@ function scopeResearchResultOptionsForChart(chartType: ScopeResearchChartType): 
   );
 }
 
+// The <GlassSelect> option list for a chart type is a pure function of that chart type, so cache it
+// per type. Building it inline in JSX produced a fresh array of fresh objects on every render and
+// defeated the dropdown's memo.
+const scopeResearchResultSelectOptionsCache = new Map<ScopeResearchChartType, GlassSelectOption[]>();
+function scopeResearchResultSelectOptions(chartType: ScopeResearchChartType): GlassSelectOption[] {
+  const cached = scopeResearchResultSelectOptionsCache.get(chartType);
+  if (cached) return cached;
+  const built = scopeResearchResultOptionsForChart(chartType).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+  scopeResearchResultSelectOptionsCache.set(chartType, built);
+  return built;
+}
+
 function scopeResearchNormalizeResultKey(
   chartType: ScopeResearchChartType,
   resultKey: ScopeResearchResultKey
@@ -1940,6 +1984,37 @@ function scopeResearchNormalizeResultKey(
   const allowed = scopeResearchResultOptionsForChart(chartType);
   return allowed.some((option) => option.value === resultKey) ? resultKey : "totalPnlUsd";
 }
+
+// Static <GlassSelect> option lists. Hoisted out of JSX so GlassSelect's React.memo sees a stable
+// `options` reference — an inline array literal is a new reference on every parent render and would
+// re-render the dropdown (and rebuild its portal panel) on every keystroke elsewhere in the page.
+const STREAM_SORT_KEY_OPTIONS: GlassSelectOption[] = [
+  { value: "alpha", label: "ABC" },
+  { value: "sigma", label: "SIG" },
+  { value: "netEdge", label: "EDGE" },
+];
+
+const RANGE_PRESET_OPTIONS: GlassSelectOption[] = [
+  { value: "3d", label: "3 DAYS" },
+  { value: "5d", label: "5 DAYS" },
+  { value: "10d", label: "10 DAYS" },
+  { value: "15d", label: "15 DAYS" },
+  { value: "20d", label: "20 DAYS" },
+  { value: "30d", label: "30 DAYS" },
+];
+
+const OPTIMIZER_RANK_METRIC_OPTIONS: GlassSelectOption[] = [
+  { value: "avgPnlUsd", label: "Avg/Trade" },
+  { value: "totalPnlUsd", label: "TotalPnL" },
+  { value: "winRate", label: "WinRate" },
+  { value: "score", label: "Score" },
+  { value: "tailDamage", label: "Tail Dmg ↓" },
+];
+
+const SCOPE_THRESHOLD_MODE_OPTIONS: GlassSelectOption[] = [
+  { value: "more_than", label: ">= x" },
+  { value: "less_than", label: "<= x" },
+];
 
 const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
   "RATING GATES": "RATING FILTERS",
@@ -2213,143 +2288,169 @@ function getOptimizerFallbackValue(
   tickerMeta?: { corr?: number | null; beta?: number | null; sigma?: number | null } | null
 ): number | null {
   const anyRow = row as any;
-  const pick = (...values: any[]) => {
-    for (const value of values) {
-      const parsed = numOrNull(value);
-      if (parsed != null) return parsed;
-    }
-    return null;
+  // Hot path: called up to 3x per row per filter pass. Short-circuits on the first hit instead of
+  // building a 13-element rest array and parsing every candidate.
+  const first = (a?: any, b?: any, c?: any, d?: any): number | null => {
+    let parsed = numOrNull(a);
+    if (parsed != null) return parsed;
+    parsed = numOrNull(b);
+    if (parsed != null) return parsed;
+    parsed = numOrNull(c);
+    if (parsed != null) return parsed;
+    return numOrNull(d);
   };
 
   if (key === "corr") {
-    return pick(
-      row.corr,
-      anyRow?.Corr,
-      anyRow?.cor,
-      anyRow?.Cor,
-      anyRow?.correlation,
-      anyRow?.Correlation,
-      anyRow?.best?.corr,
-      anyRow?.best?.Corr,
-      anyRow?.meta?.corr,
-      anyRow?.meta?.Corr,
-      anyRow?.static?.corr,
-      anyRow?.static?.Corr,
-      tickerMeta?.corr
+    return (
+      first(row.corr, anyRow?.Corr, anyRow?.cor, anyRow?.Cor) ??
+      first(anyRow?.correlation, anyRow?.Correlation, anyRow?.best?.corr, anyRow?.best?.Corr) ??
+      first(anyRow?.meta?.corr, anyRow?.meta?.Corr, anyRow?.static?.corr, anyRow?.static?.Corr) ??
+      numOrNull(tickerMeta?.corr)
     );
   }
 
   if (key === "beta") {
-    return pick(
-      row.beta,
-      anyRow?.Beta,
-      anyRow?.best?.beta,
-      anyRow?.best?.Beta,
-      anyRow?.meta?.beta,
-      anyRow?.meta?.Beta,
-      anyRow?.static?.beta,
-      anyRow?.static?.Beta,
-      tickerMeta?.beta
+    return (
+      first(row.beta, anyRow?.Beta, anyRow?.best?.beta, anyRow?.best?.Beta) ??
+      first(anyRow?.meta?.beta, anyRow?.meta?.Beta, anyRow?.static?.beta, anyRow?.static?.Beta) ??
+      numOrNull(tickerMeta?.beta)
     );
   }
 
-  return pick(
-    row.sigma,
-    anyRow?.sig,
-    anyRow?.Sig,
-    anyRow?.Sigma,
-    anyRow?.best?.sigma,
-    anyRow?.best?.Sigma,
-    anyRow?.meta?.sigma,
-    anyRow?.meta?.Sigma,
-    anyRow?.static?.sigma,
-    anyRow?.static?.Sigma,
-    tickerMeta?.sigma
+  return (
+    first(row.sigma, anyRow?.sig, anyRow?.Sig, anyRow?.Sigma) ??
+    first(anyRow?.best?.sigma, anyRow?.best?.Sigma, anyRow?.meta?.sigma, anyRow?.meta?.Sigma) ??
+    first(anyRow?.static?.sigma, anyRow?.static?.Sigma) ??
+    numOrNull(tickerMeta?.sigma)
   );
 }
 
-function buildFallbackOptimizerParameter(
-  rows: PaperArbClosedDto[],
-  key: "corr" | "beta" | "sigma",
-  label: string,
-  group: OptimizerRangeGroupKey,
-  bucketCount: number,
-  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
-): PaperArbOptimizerParameterDto | null {
-  const source = rows
-    .map((row) => ({
-      row,
-      value: getOptimizerFallbackValue(
-        row,
-        key,
-        tickerMetaByTicker?.[String(row.ticker ?? "").trim().toUpperCase()] ?? null
-      ),
-    }))
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
+// ---------------------------------------------------------------------------
+// Numeric optimizer-parameter bucketing (shared engine)
+//
+// Every "fallback" optimizer parameter is the same shape of work: take one numeric value per
+// episode, split the observed range into equal-width buckets, and summarise trades/wins/losses/PnL
+// for each bucket plus a cumulative "<= to" and ">= from" tail per bucket.
+//
+// The previous implementation re-scanned the whole source array once per bucket AND once per tail
+// bucket, i.e. 3 x rows x buckets predicate calls for every parameter, with a fresh intermediate
+// array each time. With ~50 parameters that dominated the Analytics tab.
+//
+// This version sorts the values once and answers every bucket and tail from prefix sums in O(log n),
+// which is exact — the binary-search boundaries reproduce the original half-open/closed comparisons
+// element for element.
+// ---------------------------------------------------------------------------
+type OptimizerValueEntry = { value: number; pnl: number };
 
-  if (!source.length) return null;
+function buildNumericOptimizerParameter(args: {
+  key: string;
+  label: string;
+  group: OptimizerRangeGroupKey;
+  bucketCount: number;
+  entries: OptimizerValueEntry[];
+  valueDigits?: number;
+}): PaperArbOptimizerParameterDto | null {
+  const { key, label, group, bucketCount, entries, valueDigits = 2 } = args;
+  if (!entries.length) return null;
 
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
+  const sorted = entries.slice().sort((a, b) => a.value - b.value);
+  const total = sorted.length;
 
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
+  // prefix[i] covers sorted[0..i)
+  const prefTotal = new Float64Array(total + 1);
+  const prefWins = new Int32Array(total + 1);
+  const prefLosses = new Int32Array(total + 1);
+  for (let i = 0; i < total; i += 1) {
+    const pnl = sorted[i]!.pnl;
+    prefTotal[i + 1] = prefTotal[i]! + pnl;
+    prefWins[i + 1] = prefWins[i]! + (pnl > 0 ? 1 : 0);
+    prefLosses[i + 1] = prefLosses[i]! + (pnl < 0 ? 1 : 0);
+  }
+
+  // first index with value >= target
+  const lowerBound = (target: number) => {
+    let lo = 0;
+    let hi = total;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sorted[mid]!.value < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  // first index with value > target
+  const upperBound = (target: number) => {
+    let lo = 0;
+    let hi = total;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sorted[mid]!.value <= target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
   };
 
   const buildBucket = (
     bucketId: string,
     bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
+    lo: number,
+    hi: number,
     fromValue?: number | null,
     toValue?: number | null
   ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
+    const trades = Math.max(0, hi - lo);
+    const totalPnlUsd = prefTotal[hi]! - prefTotal[lo]!;
+    const wins = prefWins[hi]! - prefWins[lo]!;
+    const losses = prefLosses[hi]! - prefLosses[lo]!;
+    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     return {
       bucketId,
       label: bucketLabel,
       fromValue: fromValue ?? null,
       toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
+      trades,
+      wins,
+      losses,
+      totalPnlUsd,
+      avgPnlUsd,
+      winRate: trades > 0 ? wins / trades : 0,
+      score: avgPnlUsd,
+      coveragePct: total > 0 ? trades / total : 0,
     };
   };
 
+  const observedMin = sorted[0]!.value;
+  const observedMax = sorted[total - 1]!.value;
+  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
+  const span = observedMax - observedMin;
+
   const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
+  if (span <= 0) {
+    buckets.push(
+      buildBucket(
+        `${key}-bucket-0`,
+        `${num(observedMin, valueDigits)} .. ${num(observedMax, valueDigits)}`,
+        0,
+        total,
+        observedMin,
+        observedMax
+      )
+    );
   } else {
     const step = span / safeBucketCount;
     for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
+      const isLast = index === safeBucketCount - 1;
+      const fromValue = observedMin + step * index;
+      const toValue = isLast ? observedMax : observedMin + step * (index + 1);
+      const lo = lowerBound(fromValue);
+      const hi = isLast ? upperBound(toValue) : lowerBound(toValue);
+      if (hi <= lo) continue;
       buckets.push(
         buildBucket(
           `${key}-bucket-${index}`,
-          `${num(fromValue, 2)} .. ${num(toValue, 2)}`,
-          items,
+          `${num(fromValue, valueDigits)} .. ${num(toValue, valueDigits)}`,
+          lo,
+          hi,
           fromValue,
           toValue
         )
@@ -2360,8 +2461,9 @@ function buildFallbackOptimizerParameter(
   const lowerTailBuckets = buckets.map((bucket, index) =>
     buildBucket(
       `${key}-lt-${index}`,
-      `<= ${num(bucket.toValue, 2)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
+      `<= ${num(bucket.toValue, valueDigits)}`,
+      0,
+      bucket.toValue == null ? total : upperBound(bucket.toValue),
       observedMin,
       bucket.toValue ?? observedMax
     )
@@ -2369,21 +2471,22 @@ function buildFallbackOptimizerParameter(
   const upperTailBuckets = buckets.map((bucket, index) =>
     buildBucket(
       `${key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, 2)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
+      `>= ${num(bucket.fromValue, valueDigits)}`,
+      bucket.fromValue == null ? 0 : lowerBound(bucket.fromValue),
+      total,
       bucket.fromValue ?? observedMin,
       observedMax
     )
   );
 
-  const base = summarize(source);
+  const base = buildBucket("base", "base", 0, total, observedMin, observedMax);
   return {
     key,
     group,
     label,
     observedMin,
     observedMax,
-    valueCount: source.length,
+    valueCount: total,
     baseTrades: base.trades,
     baseWins: base.wins,
     baseLosses: base.losses,
@@ -2396,6 +2499,27 @@ function buildFallbackOptimizerParameter(
   };
 }
 
+function buildFallbackOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  key: "corr" | "beta" | "sigma",
+  label: string,
+  group: OptimizerRangeGroupKey,
+  bucketCount: number,
+  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
+): PaperArbOptimizerParameterDto | null {
+  const entries: OptimizerValueEntry[] = [];
+  for (const row of rows) {
+    const value = getOptimizerFallbackValue(
+      row,
+      key,
+      tickerMetaByTicker?.[String(row.ticker ?? "").trim().toUpperCase()] ?? null
+    );
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
+  }
+  return buildNumericOptimizerParameter({ key, label, group, bucketCount, entries });
+}
+
 function buildFallbackBinRatingOptimizerParameter(
   rows: PaperArbClosedDto[],
   key: "minrate" | "mintotal",
@@ -2404,119 +2528,26 @@ function buildFallbackBinRatingOptimizerParameter(
   bucketCount: number,
   session: PaperArbSession
 ): PaperArbOptimizerParameterDto | null {
-  const source = rows
-    .map((row) => {
-      const snapshot = scannerBinRatingSnapshot({
-        row,
-        session,
-        side: row.side,
-        sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
-      });
-      const value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
-      return { row, value };
-    })
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
-
-  if (!source.length) return null;
-
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
-
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
-  };
-
-  const buildBucket = (
-    bucketId: string,
-    bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
-    fromValue?: number | null,
-    toValue?: number | null
-  ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
-    return {
-      bucketId,
-      label: bucketLabel,
-      fromValue: fromValue ?? null,
-      toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
-    };
-  };
-
-  const valueDigits = key === "minrate" ? 2 : 0;
-  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, valueDigits)} .. ${num(observedMax, valueDigits)}`, source, observedMin, observedMax));
-  } else {
-    const step = span / safeBucketCount;
-    for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
-      buckets.push(buildBucket(`${key}-bucket-${index}`, `${num(fromValue, valueDigits)} .. ${num(toValue, valueDigits)}`, items, fromValue, toValue));
-    }
+  const entries: OptimizerValueEntry[] = [];
+  for (const row of rows) {
+    const snapshot = scannerBinRatingSnapshot({
+      row,
+      session,
+      side: row.side,
+      sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
+    });
+    const value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
   }
-
-  const lowerTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-lt-${index}`,
-      `<= ${num(bucket.toValue, valueDigits)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
-      observedMin,
-      bucket.toValue ?? observedMax
-    )
-  );
-  const upperTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, valueDigits)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
-      bucket.fromValue ?? observedMin,
-      observedMax
-    )
-  );
-
-  const base = summarize(source);
-  return {
+  return buildNumericOptimizerParameter({
     key,
-    group,
     label,
-    observedMin,
-    observedMax,
-    valueCount: source.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
+    group,
+    bucketCount,
+    entries,
+    valueDigits: key === "minrate" ? 2 : 0,
+  });
 }
 
 function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResearchParameterKey | null {
@@ -2616,112 +2647,19 @@ function buildFallbackScopeOptimizerParameter(
   const parameterKey = optimizerKeyToScopeResearchParameterKey(definition.key);
   if (!parameterKey) return null;
 
-  const source = rows
-    .map((row) => ({
-      row,
-      value: scopeResearchParameterValue(row, parameterKey),
-    }))
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
-
-  if (!source.length) return null;
-
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
-
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
-  };
-
-  const buildBucket = (
-    bucketId: string,
-    bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
-    fromValue?: number | null,
-    toValue?: number | null
-  ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
-    return {
-      bucketId,
-      label: bucketLabel,
-      fromValue: fromValue ?? null,
-      toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
-    };
-  };
-
-  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${definition.key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
-  } else {
-    const step = span / safeBucketCount;
-    for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
-      buckets.push(buildBucket(`${definition.key}-bucket-${index}`, `${num(fromValue, 2)} .. ${num(toValue, 2)}`, items, fromValue, toValue));
-    }
+  const entries: OptimizerValueEntry[] = [];
+  for (const row of rows) {
+    const value = scopeResearchParameterValue(row, parameterKey);
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
   }
-
-  const lowerTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${definition.key}-lt-${index}`,
-      `<= ${num(bucket.toValue, 2)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
-      observedMin,
-      bucket.toValue ?? observedMax
-    )
-  );
-  const upperTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${definition.key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, 2)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
-      bucket.fromValue ?? observedMin,
-      observedMax
-    )
-  );
-
-  const base = summarize(source);
-  return {
+  return buildNumericOptimizerParameter({
     key: definition.key,
-    group: definition.group,
     label: definition.label,
-    observedMin,
-    observedMax,
-    valueCount: source.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
+    group: definition.group,
+    bucketCount,
+    entries,
+  });
 }
 
 // Builds a categorical PaperArbOptimizerParameterDto by grouping episodes on a string key.
@@ -2746,9 +2684,14 @@ function buildCategoricalOptimizerParameter(
 
   const summarize = (rs: PaperArbClosedDto[]) => {
     const trades = rs.length;
-    const wins = rs.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
+    let wins = 0;
+    let totalPnlUsd = 0;
+    for (const r of rs) {
+      const pnl = r.totalPnlUsd ?? 0;
+      totalPnlUsd += pnl;
+      if (pnl > 0) wins += 1;
+    }
     const losses = trades - wins;
-    const totalPnlUsd = rs.reduce((s, r) => s + (r.totalPnlUsd ?? 0), 0);
     const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     const winRate = trades > 0 ? wins / trades : 0;
     const coveragePct = rows.length > 0 ? trades / rows.length : 0;
@@ -2757,23 +2700,17 @@ function buildCategoricalOptimizerParameter(
   };
 
   const base = summarize(rows);
-  // Sort by totalPnlUsd descending for display
+  // Summarise each category once, then sort the finished buckets. The comparator used to call
+  // summarize() on both operands, re-scanning whole categories O(n log n) times.
   const buckets: PaperArbOptimizerRangeBucketDto[] = Array.from(groups.entries())
-    .sort((a, b) => {
-      const sa = summarize(a[1]);
-      const sb = summarize(b[1]);
-      return sb.totalPnlUsd - sa.totalPnlUsd;
-    })
-    .map(([catVal, rs]) => {
-      const s = summarize(rs);
-      return {
-        bucketId: `${key}-cat-${catVal}`,
-        label: catVal,
-        fromValue: null,
-        toValue: null,
-        ...s,
-      };
-    });
+    .map(([catVal, rs]) => ({
+      bucketId: `${key}-cat-${catVal}`,
+      label: catVal,
+      fromValue: null,
+      toValue: null,
+      ...summarize(rs),
+    }))
+    .sort((a, b) => b.totalPnlUsd - a.totalPnlUsd);
 
   // Tail buckets: worst N (most negative) at each end — for categorical, "lower tail" = worst performers
   const sorted = [...buckets].sort((a, b) => a.totalPnlUsd - b.totalPnlUsd);
@@ -2887,10 +2824,18 @@ function scopeResearchPercentile(sortedValues: number[], p: number): number {
   return left + (right - left) * weight;
 }
 
-function scopeResearchSummarize(values: number[]): ScopeResearchStats {
-  const sorted = [...values].sort((a, b) => a - b);
+// Same stats as scopeResearchSummarize, but for an array that is ALREADY sorted ascending.
+// Callers that build sorted subsets incrementally (bucket merges, threshold prefixes) use this
+// to avoid re-sorting the same values once per bucket/threshold.
+function scopeResearchSummarizeSorted(sorted: number[]): ScopeResearchStats {
   const count = sorted.length;
-  const total = sorted.reduce((sum, value) => sum + value, 0);
+  let total = 0;
+  let wins = 0;
+  for (let i = 0; i < count; i += 1) {
+    const value = sorted[i] ?? 0;
+    total += value;
+    if (value > 0) wins += 1;
+  }
   const avg = count ? total / count : 0;
   const median = scopeResearchPercentile(sorted, 0.5);
   const q1 = scopeResearchPercentile(sorted, 0.25);
@@ -2903,7 +2848,7 @@ function scopeResearchSummarize(values: number[]): ScopeResearchStats {
     total,
     avg,
     median,
-    winRate: count ? sorted.filter((value) => value > 0).length / count : 0,
+    winRate: count ? wins / count : 0,
     score: avg,
     q1,
     q3,
@@ -2912,6 +2857,26 @@ function scopeResearchSummarize(values: number[]): ScopeResearchStats {
     min: sorted[0] ?? 0,
     max: sorted[count - 1] ?? 0,
   };
+}
+
+function scopeResearchSummarize(values: number[]): ScopeResearchStats {
+  return scopeResearchSummarizeSorted([...values].sort((a, b) => a - b));
+}
+
+// Merges two ascending arrays into a new ascending array without re-sorting.
+function mergeSortedNumbers(left: number[], right: number[]): number[] {
+  if (!left.length) return right.slice();
+  if (!right.length) return left.slice();
+  const out = new Array<number>(left.length + right.length);
+  let i = 0;
+  let j = 0;
+  let k = 0;
+  while (i < left.length && j < right.length) {
+    out[k++] = (left[i] ?? 0) <= (right[j] ?? 0) ? left[i++]! : right[j++]!;
+  }
+  while (i < left.length) out[k++] = left[i++]!;
+  while (j < right.length) out[k++] = right[j++]!;
+  return out;
 }
 
 function scopeResearchEdges(values: number[], bucketCount: number): number[] {
@@ -3144,6 +3109,11 @@ function computeScopeResearch(
   const parameterValues = points.map((point) => point.parameter);
   const edges = fixedEdges && fixedEdges.length >= 2 ? fixedEdges : scopeResearchEdges(parameterValues, selection.bucketCount);
   const minSamples = Math.max(1, Math.trunc(selection.minSamples) || 1);
+
+  // Sorting once by parameter turns bucket assignment into a single merge pass (was O(points x buckets)
+  // with a rescan from bucket 0 per point) and turns each threshold subset into a contiguous slice
+  // (was a full predicate scan over every point, per threshold).
+  const pointsByParameter = [...points].sort((a, b) => a.parameter - b.parameter);
   const rawBuckets =
     edges.length < 2
       ? []
@@ -3155,118 +3125,149 @@ function computeScopeResearch(
 
   if (rawBuckets.length) {
     const lastIdx = rawBuckets.length - 1;
-    for (const point of points) {
+    let bucketIdx = 0;
+    for (const point of pointsByParameter) {
       const p = point.parameter;
-      for (let i = 0; i <= lastIdx; i++) {
-        const b = rawBuckets[i]!;
-        if (i === lastIdx ? p >= b.from && p <= b.to : p >= b.from && p < b.to) {
-          b.values.push(point.result);
-          break;
-        }
+      // Advance past buckets this (and every later) point has already cleared.
+      while (bucketIdx <= lastIdx) {
+        const b = rawBuckets[bucketIdx]!;
+        if (p < b.from) break;
+        if (bucketIdx === lastIdx ? p <= b.to : p < b.to) break;
+        bucketIdx += 1;
+      }
+      if (bucketIdx > lastIdx) break; // remaining points sit past the last bucket
+      const b = rawBuckets[bucketIdx]!;
+      if (p >= b.from && (bucketIdx === lastIdx ? p <= b.to : p < b.to)) {
+        b.values.push(point.result);
       }
     }
   }
 
-  const bins = rawBuckets
-    .map((bucket) =>
-      bucket.values.length < minSamples
-        ? null
-        : ({
-            label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
-            from: bucket.from,
-            to: bucket.to,
-            values: [...bucket.values],
-            ...scopeResearchSummarize(bucket.values),
-          } satisfies ScopeResearchBinRow)
-    )
-    .filter(Boolean) as ScopeResearchBinRow[];
+  // Bucket values arrive in parameter order; sort each bucket once so both the bin summary and the
+  // threshold prefixes below can be built without any further sorting.
+  const bucketSortedValues = rawBuckets.map((bucket) => bucket.values.sort((a, b) => a - b));
+
+  const bins: ScopeResearchBinRow[] = [];
+  for (let i = 0; i < rawBuckets.length; i += 1) {
+    const bucket = rawBuckets[i]!;
+    const sortedValues = bucketSortedValues[i]!;
+    if (sortedValues.length < minSamples) continue;
+    bins.push({
+      label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
+      from: bucket.from,
+      to: bucket.to,
+      values: sortedValues,
+      ...scopeResearchSummarizeSorted(sortedValues),
+    });
+  }
 
   const thresholdSeeds = edges.slice(1, -1).length ? edges.slice(1, -1) : edges.slice(0, -1);
-  const thresholds = thresholdSeeds
-    .map((threshold) => {
-      const subset = points
-        .filter((point) => (selection.thresholdMode === "less_than" ? point.parameter <= threshold : point.parameter >= threshold))
-        .map((point) => point.result);
-      if (subset.length < minSamples) return null;
-      return {
-        label: `${selection.thresholdMode === "less_than" ? "<=" : ">="} ${scopeResearchFormatValue(
+  const isLessThan = selection.thresholdMode === "less_than";
+  const thresholds: ScopeResearchThresholdRow[] = [];
+  if (thresholdSeeds.length) {
+    // Threshold subsets are nested (each `<=` prefix contains the previous one, each `>=` suffix is
+    // contained by the previous one), so walk them in that order and merge the new slice into the
+    // running sorted array instead of rebuilding and re-sorting the whole subset every time.
+    const segmentBoundary = (threshold: number) => {
+      // index of the first point strictly outside the `<=` prefix for this threshold
+      let lo = 0;
+      let hi = pointsByParameter.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        const value = pointsByParameter[mid]!.parameter;
+        const inside = isLessThan ? value <= threshold : value < threshold;
+        if (inside) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
+
+    const order = isLessThan
+      ? thresholdSeeds.map((threshold, index) => ({ threshold, index }))
+      : thresholdSeeds.map((threshold, index) => ({ threshold, index })).reverse();
+
+    const rows: Array<ScopeResearchThresholdRow | null> = new Array(thresholdSeeds.length).fill(null);
+    let running: number[] = [];
+    let cursor = isLessThan ? 0 : pointsByParameter.length;
+
+    for (const { threshold, index } of order) {
+      const boundary = segmentBoundary(threshold);
+      const segment: number[] = [];
+      if (isLessThan) {
+        for (let i = cursor; i < boundary; i += 1) segment.push(pointsByParameter[i]!.result);
+        cursor = Math.max(cursor, boundary);
+      } else {
+        for (let i = boundary; i < cursor; i += 1) segment.push(pointsByParameter[i]!.result);
+        cursor = Math.min(cursor, boundary);
+      }
+      if (segment.length) {
+        segment.sort((a, b) => a - b);
+        running = mergeSortedNumbers(running, segment);
+      }
+      if (running.length < minSamples) continue;
+      rows[index] = {
+        label: `${isLessThan ? "<=" : ">="} ${scopeResearchFormatValue(
           threshold,
           parameter.format,
           parameter.format === "percent" ? 3 : 2
         )}`,
         threshold,
-        ...scopeResearchSummarize(subset),
-      } satisfies ScopeResearchThresholdRow;
-    })
-    .filter(Boolean) as ScopeResearchThresholdRow[];
+        ...scopeResearchSummarizeSorted(running),
+      };
+    }
 
-  const bestBin = bins.length
-    ? [...bins].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const bestThreshold = thresholds.length
-    ? [...thresholds].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const bestBox = bins.length
-    ? [...bins].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const parallelSeries = includeParallel
-    ? selection.parallelFilters
-        .map((filter) => {
-          const computed = computeScopeResearch(
-            rows,
-            {
-              ...selection,
-              extraFilters: [...selection.extraFilters, filter],
-              parallelFilters: [],
-            },
-            fallbackDate,
-            edges,
-            false
-          );
-          if (!computed) return null;
-          const seriesRows =
-            selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins;
-          if (seriesRows.length < 2) return null;
-          return {
-            id: filter.id,
-            label: scopeResearchFilterLabel(filter),
-            rows: seriesRows,
-          };
-        })
-        .filter(Boolean) as ScopeResearchComputed["parallelSeries"]
-    : [];
-  const parallelPointSeries = includeParallel
-    ? selection.parallelFilters
-        .map((filter) => {
-          const computed = computeScopeResearch(
-            rows,
-            {
-              ...selection,
-              extraFilters: [...selection.extraFilters, filter],
-              parallelFilters: [],
-            },
-            fallbackDate,
-            edges,
-            false
-          );
-          if (!computed || !computed.points.length) return null;
-          return {
-            id: filter.id,
-            label: scopeResearchFilterLabel(filter),
-            points: computed.points,
-          };
-        })
-        .filter(Boolean) as ScopeResearchComputed["parallelPointSeries"]
-    : [];
+    for (const row of rows) {
+      if (row) thresholds.push(row);
+    }
+  }
+
+  // Single linear pass instead of copying + fully sorting the array just to read element 0.
+  // bestBin and bestBox were identical sorts of the same array.
+  const pickBest = <T extends ScopeResearchStats>(candidates: T[]): T | null => {
+    let best: T | null = null;
+    let bestMetric = 0;
+    for (const candidate of candidates) {
+      const metric = scopeResearchMetricValue(candidate, selection.resultKey);
+      if (best == null || metric > bestMetric || (metric === bestMetric && candidate.count > best.count)) {
+        best = candidate;
+        bestMetric = metric;
+      }
+    }
+    return best;
+  };
+  const bestBin = pickBest(bins);
+  const bestThreshold = pickBest(thresholds);
+  const bestBox = bestBin;
+  // Each parallel filter is evaluated exactly once; both the bin/threshold series and the
+  // raw point series are read off that single result (they used to run the same recursive
+  // computeScopeResearch twice with identical arguments).
+  const parallelSeries: ScopeResearchComputed["parallelSeries"] = [];
+  const parallelPointSeries: ScopeResearchComputed["parallelPointSeries"] = [];
+  if (includeParallel) {
+    for (const filter of selection.parallelFilters) {
+      const computed = computeScopeResearch(
+        rows,
+        {
+          ...selection,
+          extraFilters: [...selection.extraFilters, filter],
+          parallelFilters: [],
+        },
+        fallbackDate,
+        edges,
+        false
+      );
+      if (!computed) continue;
+      const label = scopeResearchFilterLabel(filter);
+      const seriesRows =
+        selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins;
+      if (seriesRows.length >= 2) {
+        parallelSeries.push({ id: filter.id, label, rows: seriesRows });
+      }
+      if (computed.points.length) {
+        parallelPointSeries.push({ id: filter.id, label, points: computed.points });
+      }
+    }
+  }
 
   return {
     selection,
@@ -3495,7 +3496,7 @@ function NebulaBackground() {
   );
 }
 
-function GlassCard({
+function GlassCardImpl({
   children,
   className,
   glow = false,
@@ -3519,8 +3520,9 @@ function GlassCard({
     </div>
   );
 }
+const GlassCard = React.memo(GlassCardImpl);
 
-function GlassInput({
+function GlassInputImpl({
   value,
   onChange,
   placeholder,
@@ -3561,6 +3563,7 @@ function GlassInput({
     />
   );
 }
+const GlassInput = React.memo(GlassInputImpl);
 
 const SCANNER_PANEL_SURFACE =
   "scanner-panel-surface border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-200 hover:border-white/[0.12] hover:bg-[#101010]/60";
@@ -3582,7 +3585,7 @@ const SOFT_LOSS_STROKE = "rgba(243,166,178,0.55)";
 const SOFT_LOSS_LINE = "rgba(243,166,178,0.6)";
 const SOFT_LOSS_CHIP = "border-[rgba(243,166,178,0.18)] bg-[rgba(243,166,178,0.08)] text-[#f3a6b2]/90";
 
-function SummaryMetricCard({
+function SummaryMetricCardImpl({
   label,
   value,
   valueClassName,
@@ -3619,8 +3622,9 @@ function SummaryMetricCard({
     </GlassCard>
   );
 }
+const SummaryMetricCard = React.memo(SummaryMetricCardImpl);
 
-function GlassSelect({
+function GlassSelectImpl({
   value,
   onChange,
   options,
@@ -3845,6 +3849,7 @@ function GlassSelect({
     </div>
   );
 }
+const GlassSelect = React.memo(GlassSelectImpl);
 
 const ChevronIcon = ({ open }: { open: boolean }) => (
   <svg
@@ -4115,7 +4120,7 @@ const MultiSelectFilter = ({
   );
 };
 
-function MinMaxRow({
+function MinMaxRowImpl({
   label,
   filterKey,
   minValue,
@@ -4224,8 +4229,9 @@ function MinMaxRow({
     </div>
   );
 }
+const MinMaxRow = React.memo(MinMaxRowImpl);
 
-function Segmented({
+function SegmentedImpl({
   value,
   onChange,
   options,
@@ -4259,8 +4265,9 @@ function Segmented({
     </div>
   );
 }
+const Segmented = React.memo(SegmentedImpl);
 
-function SideBadge({ side }: { side: TapeArbSide }) {
+function SideBadgeImpl({ side }: { side: TapeArbSide }) {
   const s = normalizeSide(side);
   const isLong = s.isLong === true;
   const isShort = s.isLong === false;
@@ -4281,11 +4288,12 @@ function SideBadge({ side }: { side: TapeArbSide }) {
     </span>
   );
 }
+const SideBadge = React.memo(SideBadgeImpl);
 
 // =========================
 // Simple SVG line chart (equity curve)
 // =========================
-function EquityChart({
+function EquityChartImpl({
   points,
   title,
   meta,
@@ -4539,8 +4547,9 @@ function EquityChart({
     </div>
   );
 }
+const EquityChart = React.memo(EquityChartImpl);
 
-function OptimizerBarChart({
+function OptimizerBarChartImpl({
   rows,
   valueKey,
   title,
@@ -4604,8 +4613,9 @@ function OptimizerBarChart({
     </div>
   );
 }
+const OptimizerBarChart = React.memo(OptimizerBarChartImpl);
 
-function OptimizerDualMetricChart({
+function OptimizerDualMetricChartImpl({
   rows,
   leftKey,
   rightKey,
@@ -4686,6 +4696,7 @@ function OptimizerDualMetricChart({
     </div>
   );
 }
+const OptimizerDualMetricChart = React.memo(OptimizerDualMetricChartImpl);
 
 function EyeToggleIcon({ closed, className }: { closed: boolean; className?: string }) {
   return (
@@ -4773,7 +4784,7 @@ function CrosshairIcon({ className, style }: { className?: string; style?: React
   );
 }
 
-function OptimizerParameterRangeCard({
+function OptimizerParameterRangeCardImpl({
   parameter,
   rankMetric,
   minTradesFilter,
@@ -5008,8 +5019,9 @@ function OptimizerParameterRangeCard({
     </GlassCard>
   );
 }
+const OptimizerParameterRangeCard = React.memo(OptimizerParameterRangeCardImpl);
 
-function StartsByTimeChart({
+function StartsByTimeChartImpl({
   rows,
   title,
   meta,
@@ -5177,8 +5189,9 @@ function StartsByTimeChart({
     </div>
   );
 }
+const StartsByTimeChart = React.memo(StartsByTimeChartImpl);
 
-function StartsEndsByTimeChart({
+function StartsEndsByTimeChartImpl({
   rows,
   title,
   meta,
@@ -5316,8 +5329,9 @@ function StartsEndsByTimeChart({
     </div>
   );
 }
+const StartsEndsByTimeChart = React.memo(StartsEndsByTimeChartImpl);
 
-function PeakStrengthByTimeChart({
+function PeakStrengthByTimeChartImpl({
   rows,
   title,
   meta,
@@ -5510,8 +5524,9 @@ function PeakStrengthByTimeChart({
     </div>
   );
 }
+const PeakStrengthByTimeChart = React.memo(PeakStrengthByTimeChartImpl);
 
-function PeakReversionTwoThirdsChart({
+function PeakReversionTwoThirdsChartImpl({
   rows,
   title,
   meta,
@@ -5731,8 +5746,9 @@ function PeakReversionTwoThirdsChart({
     </div>
   );
 }
+const PeakReversionTwoThirdsChart = React.memo(PeakReversionTwoThirdsChartImpl);
 
-function ScopeResearchSeriesChart({
+function ScopeResearchSeriesChartImpl({
   rows,
   parallelSeries = [],
   title,
@@ -5987,8 +6003,9 @@ function ScopeResearchSeriesChart({
     </div>
   );
 }
+const ScopeResearchSeriesChart = React.memo(ScopeResearchSeriesChartImpl);
 
-function ScopeResearchBoxChart({
+function ScopeResearchBoxChartImpl({
   rows,
   title,
   meta,
@@ -6136,8 +6153,9 @@ function ScopeResearchBoxChart({
     </div>
   );
 }
+const ScopeResearchBoxChart = React.memo(ScopeResearchBoxChartImpl);
 
-function ScopeResearchDistributionChart({
+function ScopeResearchDistributionChartImpl({
   points,
   title,
   meta,
@@ -6300,8 +6318,9 @@ function ScopeResearchDistributionChart({
     </div>
   );
 }
+const ScopeResearchDistributionChart = React.memo(ScopeResearchDistributionChartImpl);
 
-function ScopeResearchViolinChart({
+function ScopeResearchViolinChartImpl({
   rows,
   title,
   meta,
@@ -6484,8 +6503,9 @@ function ScopeResearchViolinChart({
     </div>
   );
 }
+const ScopeResearchViolinChart = React.memo(ScopeResearchViolinChartImpl);
 
-function ScopeResearchScatterByDateChart({
+function ScopeResearchScatterByDateChartImpl({
   points,
   parallelSeries = [],
   title,
@@ -6665,8 +6685,9 @@ function ScopeResearchScatterByDateChart({
     </div>
   );
 }
+const ScopeResearchScatterByDateChart = React.memo(ScopeResearchScatterByDateChartImpl);
 
-function ScopeResearchCumsumChart({
+function ScopeResearchCumsumChartImpl({
   points,
   parallelSeries = [],
   title,
@@ -6864,8 +6885,9 @@ function ScopeResearchCumsumChart({
     </div>
   );
 }
+const ScopeResearchCumsumChart = React.memo(ScopeResearchCumsumChartImpl);
 
-function ScopeResearchTradePerformanceChart({
+function ScopeResearchTradePerformanceChartImpl({
   points,
   parallelSeries = [],
   title,
@@ -7063,6 +7085,7 @@ function ScopeResearchTradePerformanceChart({
     </div>
   );
 }
+const ScopeResearchTradePerformanceChart = React.memo(ScopeResearchTradePerformanceChartImpl);
 
 function fmtHms(d: Date | null): string {
   if (!d) return "";
@@ -7111,7 +7134,7 @@ type ArbitrageScannerProps = {
   navSonarHref?: string;
 };
 
-function ScannerAnalyticsLog({
+function ScannerAnalyticsLogImpl({
   rows,
   priceMode,
   context,
@@ -7340,6 +7363,7 @@ function ScannerAnalyticsLog({
     </div>
   );
 }
+const ScannerAnalyticsLog = React.memo(ScannerAnalyticsLogImpl);
 
 export default function ArbitrageScanner({
   initialPrimaryPanel = "scanner",
@@ -7844,12 +7868,15 @@ export default function ArbitrageScanner({
     });
   }, []);
 
-  const toggleSharedRangeFilterMode = (key: SharedRangeFilterKey) => {
+  // Passed to all ~36 MinMaxRow instances. It only ever uses the functional setter form, so it has
+  // no dependencies — keeping the identity stable is what lets React.memo actually skip those rows
+  // (a fresh closure per render would invalidate every one of them on every parent render).
+  const toggleSharedRangeFilterMode = useCallback((key: SharedRangeFilterKey) => {
     setSharedRangeFilterModes((prev) => ({
       ...prev,
       [key]: prev[key] === "off" ? "on" : "off",
     }));
-  };
+  }, []);
 
   const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
     sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
@@ -8049,7 +8076,7 @@ export default function ArbitrageScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDeleteDay = async (d: string) => {
+  const handleDeleteDay = useCallback(async (d: string) => {
     try {
       const res = await fetch(`/api/tape/day?dateNy=${encodeURIComponent(d)}`, { method: "DELETE" });
       if (!res.ok) return;
@@ -8064,7 +8091,7 @@ export default function ArbitrageScanner({
     } catch {
       // silently ignore
     }
-  };
+  }, [dateNy]);
 
   const sortedDaysAsc = useMemo(() => {
     return [...(days ?? [])].filter((d) => toYmd(d)).sort((a, b) => a.localeCompare(b));
@@ -8081,7 +8108,41 @@ export default function ArbitrageScanner({
     return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
   }, [sortedDaysDesc, dateFrom, dateTo]);
 
-  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  // These three feed always-visible header dropdowns. They used to be built inline in JSX, so the
+  // day list was re-mapped into fresh objects on every single render of the scanner.
+  const daySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d })),
+    [sortedDaysDesc, dateNy]
+  );
+  const fromDaySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]),
+    [fromDayOptions, dateFrom]
+  );
+  const toDaySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]),
+    [toDayOptions, dateTo]
+  );
+
+  // Stable handlers for the same header dropdowns — an inline arrow would invalidate GlassSelect's
+  // memo on every render regardless of how stable `options` is.
+  const handleDaySelectChange = useCallback((e: { target: { value: string } }) => {
+    const d = e.target.value;
+    setDateNy(d);
+    setDateFrom(d);
+    setDateTo(d);
+  }, []);
+  const handleDateFromSelectChange = useCallback((e: { target: { value: string } }) => {
+    const v = e.target.value;
+    setDateFrom(v);
+    if (toYmd(dateTo) && v > dateTo) setDateTo(v);
+  }, [dateTo]);
+  const handleDateToSelectChange = useCallback((e: { target: { value: string } }) => {
+    const v = e.target.value;
+    setDateTo(v);
+    if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
+  }, [dateFrom]);
+
+  const applyRangePreset = useCallback((preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
     setDateMode("last");
     if (tab === "episodes") setEpisodesUseSearch(true);
     setRangePreset(preset);
@@ -8104,7 +8165,13 @@ export default function ArbitrageScanner({
     const to = slice[slice.length - 1] ?? src[src.length - 1];
     setDateFrom(from);
     setDateTo(to);
-  };
+  }, [tab, sortedDaysAsc]);
+
+  const handleRangePresetSelectChange = useCallback(
+    (e: { target: { value: string } }) =>
+      applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d"),
+    [applyRangePreset]
+  );
 
   // ========= Persist/restore filters (like reference terminal)
   useLayoutEffect(() => {
@@ -8808,15 +8875,37 @@ export default function ArbitrageScanner({
     }
   };
 
+  // persistedFilters is a ~200-field object, so serialising and writing it synchronously on every
+  // keystroke blocked the main thread. Debounce the write; the last state within the window wins,
+  // and the timer is flushed on unmount so nothing is lost when navigating away.
+  const persistedFiltersRef = useRef(persistedFilters);
+  persistedFiltersRef.current = persistedFilters;
   useEffect(() => {
     if (!filtersHydratedRef.current) return;
     if (filtersRestoringRef.current) return;
-    try {
-      localStorage.setItem(filtersLsKey, JSON.stringify(persistedFilters));
-    } catch {
-      // ignore quota/storage errors
-    }
-  }, [persistedFilters]);
+    const writeFilters = () => {
+      try {
+        localStorage.setItem(filtersLsKey, JSON.stringify(persistedFiltersRef.current));
+      } catch {
+        // ignore quota/storage errors
+      }
+    };
+    const timer = window.setTimeout(writeFilters, 400);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [persistedFilters, filtersLsKey]);
+
+  useEffect(() => {
+    return () => {
+      if (!filtersHydratedRef.current || filtersRestoringRef.current) return;
+      try {
+        localStorage.setItem(filtersLsKey, JSON.stringify(persistedFiltersRef.current));
+      } catch {
+        // ignore quota/storage errors
+      }
+    };
+  }, [filtersLsKey]);
 
   const derivedStreamSignalClass = useMemo(() => {
     if (ruleBand === "GLOBAL") return "global";
@@ -10565,6 +10654,10 @@ export default function ArbitrageScanner({
     dateTo,
   ]);
 
+  // The ticker box drives a full re-filter of every row. Deferring it keeps the input responsive:
+  // React renders the typed character immediately and re-runs the filters at lower priority.
+  const deferredQTicker = React.useDeferredValue(qTicker);
+
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
   const pinSet = useMemo(() => new Set(splitListUpper(benchTickersText)), [benchTickersText]);
@@ -10573,12 +10666,17 @@ export default function ArbitrageScanner({
     if (listMode === "pin") return Array.from(pinSet);
     if (listMode !== "ignore") return [] as string[];
 
+    // Two walks instead of materialising a concatenated copy of both row arrays.
     const seen = new Set<string>();
-    for (const row of [...activeRows, ...episodesRows]) {
-      const ticker = tickerKey((row as any)?.ticker);
-      if (!ticker || ignoreSet.has(ticker)) continue;
-      seen.add(ticker);
-    }
+    const collect = (rows: Array<{ ticker?: string | null }>) => {
+      for (const row of rows) {
+        const ticker = tickerKey(row?.ticker);
+        if (!ticker || ignoreSet.has(ticker)) continue;
+        seen.add(ticker);
+      }
+    };
+    collect(activeRows as Array<{ ticker?: string | null }>);
+    collect(episodesRows as Array<{ ticker?: string | null }>);
     return Array.from(seen);
   }, [listMode, applySet, pinSet, ignoreSet, activeRows, episodesRows]);
 
@@ -10647,7 +10745,7 @@ export default function ArbitrageScanner({
 
   // ========= Client-side filters
   const filteredActive = useMemo(() => {
-    const tq = qTicker.trim().toUpperCase();
+    const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
@@ -10723,10 +10821,10 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
-    const tq = qTicker.trim().toUpperCase();
+    const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
@@ -10800,7 +10898,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -10862,6 +10960,19 @@ export default function ArbitrageScanner({
     return String(a).localeCompare(String(b));
   };
   const dirMul = (dir: SortDir) => (dir === "asc" ? 1 : -1);
+
+  // Decorate-sort-undecorate: episodeSortValue used to run inside the comparator, i.e. 2 * n * log n
+  // times per sort (and localeCompare was re-created per comparison). Now each row's key is derived
+  // exactly once.
+  const sortRowsByKey = <T extends PaperArbClosedDto>(rows: T[], key: EpisodeSortKey, dir: SortDir): T[] => {
+    const mul = dirMul(dir);
+    const decorated = rows.map((row, index) => ({ row, index, value: episodeSortValue(row, key) }));
+    decorated.sort((a, b) => {
+      const delta = cmpVal(a.value, b.value);
+      return delta !== 0 ? delta * mul : a.index - b.index;
+    });
+    return decorated.map((entry) => entry.row);
+  };
 
   const episodeSortValue = (r: PaperArbClosedDto, key: EpisodeSortKey): string | number => {
     switch (key) {
@@ -10973,23 +11084,35 @@ export default function ArbitrageScanner({
     });
   }, [filteredActive, dateNy, closeMode, normalizedMinHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
 
-  const activeRealtimeSorted = useMemo(() => {
-    const mul = dirMul(analyticsSort.dir);
-    return [...activeRealtimeRows].sort((a, b) => cmpVal(episodeSortValue(a, analyticsSort.key), episodeSortValue(b, analyticsSort.key)) * mul);
-  }, [activeRealtimeRows, analyticsSort, closeMode, minHoldCandles]);
+  const activeRealtimeSorted = useMemo(
+    () => sortRowsByKey(activeRealtimeRows, analyticsSort.key, analyticsSort.dir),
+    [activeRealtimeRows, analyticsSort, closeMode, minHoldCandles]
+  );
 
   const activeAnalyticsSummary = useMemo(() => {
-    const pnl = activeRealtimeRows.map((r) => r.totalPnlUsd ?? 0);
-    const trades = pnl.length;
-    const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
-    const wins = pnl.filter((x) => x > 0).length;
-    const losses = pnl.filter((x) => x < 0).length;
+    // Single pass instead of one map plus six filter/reduce scans and two spread-based extremes.
+    const trades = activeRealtimeRows.length;
+    let totalPnlUsd = 0;
+    let wins = 0;
+    let losses = 0;
+    let sumWin = 0;
+    let sumLossAbs = 0;
+    let maxWinUsd = 0;
+    let maxLossUsd = 0;
+    for (let i = 0; i < trades; i += 1) {
+      const x = activeRealtimeRows[i]!.totalPnlUsd ?? 0;
+      totalPnlUsd += x;
+      if (x > 0) {
+        wins += 1;
+        sumWin += x;
+      } else if (x < 0) {
+        losses += 1;
+        sumLossAbs -= x;
+      }
+      if (i === 0 || x > maxWinUsd) maxWinUsd = x;
+      if (i === 0 || x < maxLossUsd) maxLossUsd = x;
+    }
     const winRate = trades > 0 ? wins / trades : 0;
-    const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
-    const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
-
-    const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
-    const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
     const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
     const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     const avgWin = wins > 0 ? sumWin / wins : 0;
@@ -11064,15 +11187,20 @@ export default function ArbitrageScanner({
     };
   }, [activeRealtimeRows, equityCurveMode, dateNy]);
 
-  const episodesSorted = useMemo(() => {
-    const mul = dirMul(episodesSort.dir);
-    return [...filteredEpisodes].sort((a, b) => cmpVal(episodeSortValue(a, episodesSort.key), episodeSortValue(b, episodesSort.key)) * mul);
-  }, [filteredEpisodes, episodesSort, closeMode, minHoldCandles]);
+  const episodesSorted = useMemo(
+    () => sortRowsByKey(filteredEpisodes, episodesSort.key, episodesSort.dir),
+    [filteredEpisodes, episodesSort, closeMode, minHoldCandles]
+  );
 
-  const analyticsSorted = useMemo(() => {
-    const mul = dirMul(analyticsSort.dir);
-    return [...filteredEpisodes].sort((a, b) => cmpVal(episodeSortValue(a, analyticsSort.key), episodeSortValue(b, analyticsSort.key)) * mul);
-  }, [filteredEpisodes, analyticsSort, closeMode, minHoldCandles]);
+  const analyticsSorted = useMemo(
+    () =>
+      // Episodes and Analytics render the same filtered set; when the sort matches, reuse the array
+      // instead of sorting the same rows a second time.
+      episodesSort.key === analyticsSort.key && episodesSort.dir === analyticsSort.dir
+        ? episodesSorted
+        : sortRowsByKey(filteredEpisodes, analyticsSort.key, analyticsSort.dir),
+    [filteredEpisodes, episodesSorted, episodesSort, analyticsSort, closeMode, minHoldCandles]
+  );
 
   const episodesSummary = useMemo(() => {
     const rows = filteredEpisodes;
@@ -11087,7 +11215,16 @@ export default function ArbitrageScanner({
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
+  // The SCOPE / OPTIMIZER / VISUAL SCOPE panels live inside the EPISODES tab only. Their memos used
+  // to recompute over every filtered episode regardless of which tab was on screen, so a filter
+  // change on ACTIVE or ANALYTICS still paid for work nothing could see.
+  const scopePanelsMounted = primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell;
+
   const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
+    if (!scopePanelsMounted) {
+      const empty = { min: null as number | null, max: null as number | null, count: 0 };
+      return { left: empty, right: empty };
+    }
     const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
       let min = Infinity, max = -Infinity, count = 0;
       for (const row of filteredEpisodes) {
@@ -11106,14 +11243,17 @@ export default function ArbitrageScanner({
       left: buildBounds(scopeResearchDrafts.left.parameterKey),
       right: buildBounds(scopeResearchDrafts.right.parameterKey),
     };
-  }, [filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
+  }, [scopePanelsMounted, filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
 
   const scopeResearchComputedByPanel = useMemo<Record<ScopePanelKey, ScopeResearchComputed | null>>(
-    () => ({
-      left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
-      right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
-    }),
-    [dateFrom, filteredEpisodes, scopeResearchSelections]
+    () =>
+      scopePanelsMounted
+        ? {
+            left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
+            right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
+          }
+        : { left: null, right: null },
+    [scopePanelsMounted, dateFrom, filteredEpisodes, scopeResearchSelections]
   );
   const scopePanels: Array<{ key: ScopePanelKey; label: string }> = [
     { key: "left", label: "LEFT" },
@@ -11222,6 +11362,7 @@ export default function ArbitrageScanner({
       });
   }, [optimizerRows, optimizerBaselineRow]);
   const optimizerRangeParameters = useMemo(() => {
+    if (!scopePanelsMounted) return [] as PaperArbOptimizerParameterDto[];
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     if (useBinRatingFilter) {
       const selectedKeySet = new Set(scopeSelectedParameterKeys);
@@ -11325,7 +11466,7 @@ export default function ArbitrageScanner({
     }
 
     return [...parameterMap.values()];
-  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
+  }, [scopePanelsMounted, optimizerRanges, filteredEpisodes, optimizerBucketCount, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
   const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
     optimizerRangeRankMetric === "winRate"
       ? bucket.winRate
@@ -11495,19 +11636,34 @@ export default function ArbitrageScanner({
     return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
-    const pnl = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
-    const situations = pnl.length;
-    const trades = filteredEpisodes.reduce((sum, row) => sum + episodeTradeCount(row), 0);
-    const streamflowUsd = filteredEpisodes.reduce((sum, row) => sum + episodeStreamflowUsd(row), 0);
-    const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
-    const wins = pnl.filter((x) => x > 0).length;
-    const losses = pnl.filter((x) => x < 0).length;
+    // Single pass instead of one map plus eight filter/reduce scans and two spread-based extremes.
+    const situations = filteredEpisodes.length;
+    let trades = 0;
+    let streamflowUsd = 0;
+    let totalPnlUsd = 0;
+    let wins = 0;
+    let losses = 0;
+    let sumWin = 0;
+    let sumLossAbs = 0;
+    let maxWinUsd = 0;
+    let maxLossUsd = 0;
+    for (let i = 0; i < situations; i += 1) {
+      const row = filteredEpisodes[i]!;
+      trades += episodeTradeCount(row);
+      streamflowUsd += episodeStreamflowUsd(row);
+      const x = row.totalPnlUsd ?? 0;
+      totalPnlUsd += x;
+      if (x > 0) {
+        wins += 1;
+        sumWin += x;
+      } else if (x < 0) {
+        losses += 1;
+        sumLossAbs -= x;
+      }
+      if (i === 0 || x > maxWinUsd) maxWinUsd = x;
+      if (i === 0 || x < maxLossUsd) maxLossUsd = x;
+    }
     const winRate = situations > 0 ? wins / situations : 0;
-    const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
-    const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
-
-    const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
-    const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
     const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
     const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     const avgWin = wins > 0 ? sumWin / wins : 0;
@@ -11586,6 +11742,37 @@ export default function ArbitrageScanner({
       equityCurve,
     };
   }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
+
+  // Hoisted out of JSX so the memoized ScannerAnalyticsLog gets a stable prop identity — an inline
+  // object literal would be a new reference on every render and defeat the memo entirely.
+  const scannerAnalyticsLogContext = useMemo<ScannerLogContext>(
+    () => ({
+      session,
+      ruleBand,
+      metric,
+      closeMode,
+      priceMode,
+      pnlMode,
+      scopeMode,
+      topN,
+      offset,
+      startAbs,
+      startAbsMax,
+      endAbs,
+      minHoldCandles,
+      startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+      preStartMinuteIdx: preStartToMinuteIdx(),
+      dilutionMode,
+      dilutionStep,
+      maxAdds,
+      zapMode,
+    }),
+    [
+      session, ruleBand, metric, closeMode, priceMode, pnlMode, scopeMode, topN, offset,
+      startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime,
+      dilutionMode, dilutionStep, maxAdds, zapMode,
+    ]
+  );
 
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
@@ -13793,11 +13980,7 @@ export default function ArbitrageScanner({
                 <GlassSelect
                   value={streamSortKey}
                   onChange={(e) => setStreamSortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
-                  options={[
-                    { value: "alpha", label: "ABC" },
-                    { value: "sigma", label: "SIG" },
-                    { value: "netEdge", label: "EDGE" },
-                  ]}
+                  options={STREAM_SORT_KEY_OPTIONS}
                   className="!h-7 !min-w-[74px] !w-[74px] !py-0 !px-2 !bg-transparent !border-0 !focus:border-0 text-right rounded-full"
                 />
               </div>
@@ -14029,13 +14212,8 @@ export default function ArbitrageScanner({
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={dateNy}
-                      onChange={(e) => {
-                        const d = e.target.value;
-                        setDateNy(d);
-                        setDateFrom(d);
-                        setDateTo(d);
-                      }}
-                      options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
+                      onChange={handleDaySelectChange}
+                      options={daySelectOptions}
                       className="!inline-flex !w-[112px] !min-w-[112px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={112}
                       panelAnchorRef={daySelectWrapperRef}
@@ -14046,15 +14224,8 @@ export default function ArbitrageScanner({
                   <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
-                      options={[
-                        { value: "3d", label: "3 DAYS" },
-                        { value: "5d", label: "5 DAYS" },
-                        { value: "10d", label: "10 DAYS" },
-                        { value: "15d", label: "15 DAYS" },
-                        { value: "20d", label: "20 DAYS" },
-                        { value: "30d", label: "30 DAYS" },
-                      ]}
+                      onChange={handleRangePresetSelectChange}
+                      options={RANGE_PRESET_OPTIONS}
                       className="!inline-flex !w-[90px] !min-w-[90px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={110}
                       panelAnchorRef={rangePresetWrapperRef}
@@ -14065,12 +14236,8 @@ export default function ArbitrageScanner({
                     <div ref={dateFromSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateFrom}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateFrom(v);
-                          if (toYmd(dateTo) && v > dateTo) setDateTo(v);
-                        }}
-                        options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
+                        onChange={handleDateFromSelectChange}
+                        options={fromDaySelectOptions}
                         className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                         panelWidth={124}
                         panelAnchorRef={dateFromSelectWrapperRef}
@@ -14079,12 +14246,8 @@ export default function ArbitrageScanner({
                     <div ref={dateToSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateTo}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateTo(v);
-                          if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
-                        }}
-                        options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                        onChange={handleDateToSelectChange}
+                        options={toDaySelectOptions}
                         className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                         panelWidth={124}
                         panelAnchorRef={dateToSelectWrapperRef}
@@ -14900,13 +15063,7 @@ export default function ArbitrageScanner({
                           <GlassSelect
                             value={optimizerRangeRankMetric}
                             onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
-                            options={[
-                              { value: "avgPnlUsd", label: "Avg/Trade" },
-                              { value: "totalPnlUsd", label: "TotalPnL" },
-                              { value: "winRate", label: "WinRate" },
-                              { value: "score", label: "Score" },
-                              { value: "tailDamage", label: "Tail Dmg ↓" },
-                            ]}
+                            options={OPTIMIZER_RANK_METRIC_OPTIONS}
                             className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                           />
                         </div>
@@ -15122,13 +15279,7 @@ export default function ArbitrageScanner({
                               <GlassSelect
                                 value={optimizerRangeRankMetric}
                                 onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
-                                options={[
-                                  { value: "avgPnlUsd", label: "Avg/Trade" },
-                                  { value: "totalPnlUsd", label: "TotalPnL" },
-                                  { value: "winRate", label: "WinRate" },
-                                  { value: "score", label: "Score" },
-                                  { value: "tailDamage", label: "Tail Dmg ↓" },
-                                ]}
+                                options={OPTIMIZER_RANK_METRIC_OPTIONS}
                                 className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                               />
                             </div>
@@ -15389,7 +15540,7 @@ export default function ArbitrageScanner({
                                   [panel.key]: { ...prev[panel.key], resultKey: e.target.value as ScopeResearchResultKey },
                                 }))
                               }
-                              options={scopeResearchResultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
+                              options={scopeResearchResultSelectOptions(draft.chartType)}
                               className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
@@ -15535,10 +15686,7 @@ export default function ArbitrageScanner({
                                   [panel.key]: { ...prev[panel.key], thresholdMode: e.target.value as ScopeResearchThresholdMode },
                                 }))
                               }
-                              options={[
-                                { value: "more_than", label: ">= x" },
-                                { value: "less_than", label: "<= x" },
-                              ]}
+                              options={SCOPE_THRESHOLD_MODE_OPTIONS}
                               className={clsx(
                                 "min-w-[92px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right",
                                 draft.chartType !== "results_more_less_parameter" && "opacity-60"
@@ -15905,7 +16053,7 @@ export default function ArbitrageScanner({
                     <GlassSelect
                       value={scopeResearchResultKey}
                       onChange={(e) => setScopeResearchResultKey(e.target.value as ScopeResearchResultKey)}
-                      options={scopeResearchResultOptionsForChart(scopeResearchChartType).map((option) => ({ value: option.value, label: option.label }))}
+                      options={scopeResearchResultSelectOptions(scopeResearchChartType)}
                     />
                   </div>
                   <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
@@ -16509,27 +16657,7 @@ export default function ArbitrageScanner({
             <ScannerAnalyticsLog
               rows={analyticsSorted}
               priceMode={priceMode}
-              context={{
-                session,
-                ruleBand,
-                metric,
-                closeMode,
-                priceMode,
-                pnlMode,
-                scopeMode,
-                topN,
-                offset,
-                startAbs,
-                startAbsMax,
-                endAbs,
-                minHoldCandles,
-                startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
-                preStartMinuteIdx: preStartToMinuteIdx(),
-                dilutionMode,
-                dilutionStep,
-                maxAdds,
-                zapMode,
-              }}
+              context={scannerAnalyticsLogContext}
             />
           </div>
         )}

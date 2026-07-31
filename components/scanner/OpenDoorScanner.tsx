@@ -9733,6 +9733,27 @@ export default function OpenDoorScanner({
       downMinMove: openDoorDownMinMove,
       tickers: reqTickers.length ? reqTickers : null,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
+
+      // Toolbar flag/multi-select filters, mirroring what the Arbitrage scanner sends. Enforced
+      // server-side in PaperOpenDoorController.PassesToolbarFilters, after the per-day cache.
+      // REP is absent on purpose: it stays client-side, where the shared date/time report rule is.
+      requireHasNews: requireHasNews ? true : null,
+      excludeHasNews: excludeHasNews ? true : null,
+      requireIsPTP: requireIsPTP ? true : null,
+      requireIsSSR: requireIsSSR ? true : null,
+      requireIsETF: requireIsETF ? true : null,
+      requireIsCrap: requireIsCrap ? true : null,
+      excludePTP: excludePTP ? true : null,
+      excludeSSR: excludeSSR ? true : null,
+      excludeETF: excludeETF ? true : null,
+      excludeCrap: excludeCrap ? true : null,
+
+      exchanges: exchangeEnabled === "include" && selExchanges.size ? Array.from(selExchanges) : null,
+      countries: countryEnabled === "include" && selCountries.size ? Array.from(selCountries) : null,
+      sectorsL3: sectorEnabled === "include" && selSectors.size ? Array.from(selSectors) : null,
+      excludeExchanges: exchangeEnabled === "exclude" && selExchanges.size ? Array.from(selExchanges) : null,
+      excludeCountries: countryEnabled === "exclude" && selCountries.size ? Array.from(selCountries) : null,
+      excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
     };
   }
 
@@ -11020,7 +11041,69 @@ export default function OpenDoorScanner({
 
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
+  // Shared min/max filters used to be enforced only by the Arbitrage endpoint, which received them
+  // in the request body. OpenDoor talks to its own endpoint, whose request carries none of them, so
+  // without this they silently did nothing and the P&L never moved when a bound was set.
+  // Nothing needs to go back to the server: episode rows already carry the whole static block
+  // (TapeStaticMeta), and scopeResearchParameterValue is the same extractor the Visual Scope uses.
+  // corr/beta/sigma are absent here on purpose - they are checked below with a ticker-meta fallback.
+  const sharedRangeChecks: Array<[SharedRangeFilterKey, string, string]> = [
+    ["adv20", minAdv20, maxAdv20],
+    ["adv20nf", minAdv20NF, maxAdv20NF],
+    ["adv90", minAdv90, maxAdv90],
+    ["adv90nf", minAdv90NF, maxAdv90NF],
+    ["avpremhv", minAvPreMhv, maxAvPreMhv],
+    ["roundlot", minRoundLot, maxRoundLot],
+    ["vwap", minVWAP, maxVWAP],
+    ["spread", minSpread, maxSpread],
+    ["lstprcl", minLstPrcL, maxLstPrcL],
+    ["lstcls", minLstCls, maxLstCls],
+    ["ycls", minYCls, maxYCls],
+    ["tcls", minTCls, maxTCls],
+    ["clstocls", minClsToClsPct, maxClsToClsPct],
+    ["lo", minLo, maxLo],
+    ["lstclsnewscnt", minLstClsNewsCnt, maxLstClsNewsCnt],
+    ["marketcapm", minMarketCapM, maxMarketCapM],
+    ["premhvolnf", minPreMktVolNF, maxPreMktVolNF],
+    ["volnffromlstcls", minVolNFfromLstCls, maxVolNFfromLstCls],
+    ["avpostmhvol90nf", minAvPostMhVol90NF, maxAvPostMhVol90NF],
+    ["avpremhvol90nf", minAvPreMhVol90NF, maxAvPreMhVol90NF],
+    ["avpremhvalue20nf", minAvPreMhValue20NF, maxAvPreMhValue20NF],
+    ["avpremhvalue90nf", minAvPreMhValue90NF, maxAvPreMhValue90NF],
+    ["avgdailyvalue20", minAvgDailyValue20, maxAvgDailyValue20],
+    ["avgdailyvalue90", minAvgDailyValue90, maxAvgDailyValue90],
+    ["volatility20", minVolatility20, maxVolatility20],
+    ["volatility90", minVolatility90, maxVolatility90],
+    ["premhmdv20nf", minPreMhMDV20NF, maxPreMhMDV20NF],
+    ["premhmdv90nf", minPreMhMDV90NF, maxPreMhMDV90NF],
+    ["volrel", minVolRel, maxVolRel],
+    ["premhbidlstprc", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct],
+    ["premhlolstprc", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct],
+    ["premhhilstcls", minPreMhHiLstClsPct, maxPreMhHiLstClsPct],
+    ["premhlolstcls", minPreMhLoLstClsPct, maxPreMhLoLstClsPct],
+    ["lstprclstcls", minLstPrcLstClsPct, maxLstPrcLstClsPct],
+    ["imbexch925", minImbExch925, maxImbExch925],
+    ["imbexch1555", minImbExch1555, maxImbExch1555],
+  ];
+
+  const passesSharedRangeBounds = (row: PaperArbClosedDto) => {
+    for (const [key, minRaw, maxRaw] of sharedRangeChecks) {
+      const min = rangeValueOrNull(key, minRaw);
+      const max = rangeValueOrNull(key, maxRaw);
+      if (min == null && max == null) continue;
+
+      const parameterKey = optimizerKeyToScopeResearchParameterKey(key);
+      const value = parameterKey ? scopeResearchParameterValue(row, parameterKey) : null;
+      if (value == null) return false;
+      if (min != null && value < min) return false;
+      if (max != null && value > max) return false;
+    }
+    return true;
+  };
+
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
+    if (!passesSharedRangeBounds(row)) return false;
+
     // Report gate: same rule as Sonar and Stream (rowReportAffectsTodaySession over the raw vendor
     // marker), so one toggle behaves identically on every surface. Deliberately NOT the server's
     // HasReport boolean — the tape collapses the marker to "any marker means yes" at write time,
@@ -11142,7 +11225,7 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
@@ -11219,7 +11302,7 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -14198,72 +14281,6 @@ export default function OpenDoorScanner({
         </div>
 
         {/* CONTENT */}
-        {primaryPanel === "scanner" && (
-          <div className="mb-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-4 shadow-xl">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] font-mono uppercase tracking-wide text-zinc-400">
-                OpenDoor P&amp;L Research — {openDoorExitClass} exit class, entry 9:20
-                {openDoorResearch.enabledParams.length > 0
-                  ? ` (${openDoorResearch.enabledParams.join(" + ")})`
-                  : " (no parameters enabled)"}
-              </div>
-              {openDoorRatingLoading && <span className="text-[10px] text-zinc-600 font-mono">loading ratings…</span>}
-              {openDoorRatingError && <span className="text-[10px] text-rose-400 font-mono">{openDoorRatingError}</span>}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {(
-                [
-                  { dir: "short" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", data: openDoorResearch.short },
-                  { dir: "long" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", data: openDoorResearch.long },
-                ]
-              ).map((col) => (
-                <div key={col.dir} className={clsx("rounded-xl border bg-black/30 p-3", col.border)}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className={clsx("text-xs font-mono font-bold uppercase tracking-wide", col.accent)}>{col.title}</span>
-                    <span className="text-[10px] font-mono text-zinc-500">{col.data.candidates.length} tickers</span>
-                  </div>
-
-                  <div className="mb-3 grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-lg bg-white/[0.03] py-1.5">
-                      <div className="text-[9px] font-mono uppercase text-zinc-600">Obs</div>
-                      <div className="text-xs font-mono text-zinc-200">{col.data.totalObs || "—"}</div>
-                    </div>
-                    <div className="rounded-lg bg-white/[0.03] py-1.5">
-                      <div className="text-[9px] font-mono uppercase text-zinc-600">Win Rate</div>
-                      <div className={clsx("text-xs font-mono", col.accent)}>
-                        {col.data.weightedRate != null ? `${(col.data.weightedRate * 100).toFixed(0)}%` : "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-lg bg-white/[0.03] py-1.5">
-                      <div className="text-[9px] font-mono uppercase text-zinc-600">Avg Move</div>
-                      <div className="text-xs font-mono text-zinc-200">
-                        {col.data.weightedAvgMove != null ? `${col.data.weightedAvgMove.toFixed(2)}%` : "—"}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="max-h-64 overflow-y-auto space-y-1">
-                    {col.data.candidates.length === 0 && (
-                      <div className="py-4 text-center text-[10px] font-mono text-zinc-600">
-                        {openDoorResearch.enabledParams.length === 0 ? "Enable STACK / BENCH / DEV" : "No candidates pass the current gates"}
-                      </div>
-                    )}
-                    {col.data.candidates.map((c) => (
-                      <div key={c.ticker} className="flex items-center justify-between rounded-lg bg-white/[0.02] px-2 py-1 text-[10px] font-mono">
-                        <span className="font-bold text-zinc-200">{c.ticker}</span>
-                        <span className="text-zinc-500">
-                          {(c.minRate * 100).toFixed(0)}% × {c.minTotal}
-                          {c.avgMove != null && <span className="ml-1.5 text-zinc-400">{c.avgMove.toFixed(2)}%</span>}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {primaryPanel === "stream" && (
           <OpenDoorStreamView
