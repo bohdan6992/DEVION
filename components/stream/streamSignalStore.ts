@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useSyncExternalStore } from "react";
+import { useStreamStores } from "./streamStoreRegistry";
 import type { ArbitrageSignal } from "../sonar/ArbitrageSonar";
 
 export type StreamSignalMeta = {
@@ -90,7 +91,7 @@ function buildMeta(signals: ArbitrageSignal[]): StreamSignalMeta {
   };
 }
 
-class StreamSignalStore {
+export class StreamSignalStore {
   private meta: StreamSignalMeta = EMPTY_META;
   private listeners = new Set<() => void>();
 
@@ -119,12 +120,11 @@ class StreamSignalStore {
   };
 }
 
-export const streamSignalStore = new StreamSignalStore();
-
 export function useStreamSignalMeta(): StreamSignalMeta {
+  const store = useStreamStores().signal;
   return useSyncExternalStore(
-    streamSignalStore.subscribe,
-    () => streamSignalStore.getMeta(),
+    store.subscribe,
+    () => store.getMeta(),
     () => EMPTY_META
   );
 }

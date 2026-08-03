@@ -5,13 +5,14 @@ import AutoSizer from "react-virtualized-auto-sizer";
 import { List, type RowComponentProps } from "react-window";
 import React, { memo, useDeferredValue, useMemo, useState } from "react";
 import { useStreamActionLogRows } from "./streamActionLogStore";
-import { getStreamDecisionRow, useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
+import { useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
 import { useStreamExecutionSnapshot } from "./streamExecutionStore";
 import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrderIntentStore";
 import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
 import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
-import { streamLogStore, downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
+import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
+import { useStreamStores } from "./streamStoreRegistry";
 import type {
   StreamActionLogEntry,
   MainWindowDataSnapshot,
@@ -629,6 +630,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   emptyMessage: string;
 }) {
   const deferredRowIds = useDeferredValue(rowIds);
+  const decisionStore = useStreamStores().decision;
   const useVirtualRows = deferredRowIds.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
 
   return (
@@ -678,7 +680,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
           ) : (
             <div className="text-xs font-mono">
               {deferredRowIds.map((id, i) => {
-                const row = getStreamDecisionRow(id);
+                const row = decisionStore.getRow(id);
                 if (!row) return null;
                 return (
                   <div
@@ -750,9 +752,10 @@ function actionLogTxtRow(row: StreamActionLogEntry): string {
 
 const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows: StreamActionLogEntry[] }) {
   const structuredLogEntries = useStreamLogEntries();
+  const logStore = useStreamStores().log;
 
   const handleDownloadCsv = () => {
-    const entries = streamLogStore.getEntries();
+    const entries = logStore.getEntries();
     if (entries.length === 0) return;
     downloadStreamLog(entries);
   };
@@ -1290,11 +1293,12 @@ export default function ArbitrageStreamView({
   const showAutomationWorkspace = isAutoView || (isStreamAutoTab && (tab === "analytics" || tab === "episodes"));
   const automationRunning = streamAutoEnabled && strategyModeEnabled && !panicOff;
   const automationControlAllowed = automationLaunchEnabled && showAutomationWorkspace;
+  const decisionStore = useStreamStores().decision;
   const streamDecisionIds = useStreamDecisionIds();
   const streamDecisionVersion = useStreamDecisionVersion();
   const streamDecisionRowsSnapshot = useMemo(
     () => streamDecisionIds
-      .map((id) => getStreamDecisionRow(id))
+      .map((id) => decisionStore.getRow(id))
       .filter((row): row is NonNullable<typeof row> => row !== null),
     [streamDecisionIds, streamDecisionVersion]
   );
@@ -1323,7 +1327,7 @@ export default function ArbitrageStreamView({
   );
   const entryReadyCount = useMemo(
     () => signalDecisionIds.reduce((count, id) => {
-      return getStreamDecisionRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
+      return decisionStore.getRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
     }, 0),
     [streamDecisionVersion, signalDecisionIds]
   );
@@ -1339,7 +1343,7 @@ export default function ArbitrageStreamView({
   const closedCount = streamPositionMeta.closedCount;
   const blockedEdgeCount = useMemo(
     () => signalDecisionIds.reduce((count, id) => {
-      return getStreamDecisionRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
+      return decisionStore.getRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
     }, 0),
     [streamDecisionVersion, signalDecisionIds]
   );

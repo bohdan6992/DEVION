@@ -19,7 +19,9 @@ import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
-import { streamFilterPassLogStore, downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
+import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
+import { useStreamStores } from "../stream/streamStoreRegistry";
+import { useStreamInstance } from "../stream/streamInstance";
 import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
@@ -7667,7 +7669,6 @@ export default function OpenDoorScanner({
   const [addDelayMinutes, setAddDelayMinutes] = useState<number>(
     () => Math.max(0, Math.trunc(streamAutomationConfigOverride?.addDelayMinutes ?? 0))
   );
-  const [exitConfirmTicks, setExitConfirmTicks] = useState<number>(3);
 
   // Every dilution/scale-in control must push its value into the stream automation engine, not
   // just local state — otherwise the engine keeps running on streamAutomationConfigOverride's own
@@ -9482,7 +9483,6 @@ export default function OpenDoorScanner({
     dilutionStep,
     addDelayMinutes,
     minHoldMinutes: minHoldCandles,
-    exitConfirmTicks: streamAutomationConfigOverride?.exitConfirmTicks ?? exitConfirmTicks,
     exitMode: streamAutomationConfigOverride?.exitMode ?? "normalize",
     printStartTime: streamAutomationConfigOverride?.printStartTime ?? "09:20",
     printCloseTime: streamAutomationConfigOverride?.printCloseTime ?? "09:30",
@@ -9496,7 +9496,6 @@ export default function OpenDoorScanner({
     dilutionMode,
     dilutionStep,
     endAbs,
-    exitConfirmTicks,
     maxAdds,
     minHoldCandles,
     streamAutomationConfigOverride,
@@ -9582,6 +9581,8 @@ export default function OpenDoorScanner({
     onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
+  const streamInstance = useStreamInstance();
+  const filterPassLogStore = useStreamStores().filterPassLog;
   const streamSignalMeta = useStreamSignalMeta();
   const tapeMeta = useTapeMeta();
   const streamPositionMeta = useStreamPositionMeta();
@@ -9654,6 +9655,9 @@ export default function OpenDoorScanner({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             source: "scanner-header",
+            // Stop only THIS strategy. Omitting strategyId means the operator panic-stop, which
+            // halts every strategy and clears the whole shared queue.
+            strategyId: streamInstance.strategyId,
           }),
         });
         const json = await response.json().catch(() => ({}));
@@ -9682,6 +9686,7 @@ export default function OpenDoorScanner({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           source: "scanner-header",
+          strategyId: streamInstance.strategyId,
         }),
       });
       const json = await response.json().catch(() => ({}));
@@ -9787,7 +9792,7 @@ export default function OpenDoorScanner({
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
       maxAdds,
       addDelayMinutes,
-      exitConfirmCandles: exitConfirmTicks,
+      exitConfirmCandles: mh + 1,
       ratingType: ratingType ?? "any",
 
       tickers: reqTickers.length ? reqTickers : null,
@@ -9963,7 +9968,7 @@ export default function OpenDoorScanner({
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
       maxAdds,
       addDelayMinutes,
-      exitConfirmCandles: exitConfirmTicks,
+      exitConfirmCandles: mh + 1,
 
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
@@ -11986,11 +11991,11 @@ export default function OpenDoorScanner({
   }, [filteredEpisodes, metric, startAbs, endAbs, session, closeMode, minHoldCandles, priceMode, pnlMode, dilutionMode, dilutionStep, maxAdds, dateFrom, dateTo]);
 
   const downloadStreamFilterPassLog = useCallback(() => {
-    const entries = streamFilterPassLogStore.getEntries();
+    const entries = filterPassLogStore.getEntries();
     if (!entries.length) return;
     const suffix = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     downloadFilterPassLog(entries, `stream-filter-pass-${suffix}.csv`);
-  }, []);
+  }, [filterPassLogStore]);
 
   const episodeEntryCount = (row: PaperArbClosedDto) => {
     const count = Math.trunc(row.entryCount ?? 1);
@@ -13509,40 +13514,6 @@ export default function OpenDoorScanner({
               </div>
             </div>
 
-            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CONF</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={30}
-                  step={1}
-                  value={exitConfirmTicks}
-                  onChange={(e) => setExitConfirmTicks(Math.max(1, Math.min(30, Math.trunc(Number(e.target.value) || 3))))}
-                  className={clsx(
-                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all",
-                    "accent-text"
-                  )}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setExitConfirmTicks((v) => Math.min(30, v + 1))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase exit confirm ticks"
-                  >▲</button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setExitConfirmTicks((v) => Math.max(1, v - 1))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease exit confirm ticks"
-                  >▼</button>
-                </div>
-              </div>
-            </div>
 
 
             <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
@@ -13690,7 +13661,7 @@ export default function OpenDoorScanner({
               <span className="flex h-8 items-center pr-3 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
             </div>
 
-            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="PRE session: position-taking actually begins at this time (default 21:00, the window's own start).">
+            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="Position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning.">
               <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">START</span>
               {/* Hour stepper */}
               <div className="group relative h-8 w-9 overflow-hidden rounded-md">
@@ -13789,7 +13760,7 @@ export default function OpenDoorScanner({
               </div>
             </div>
 
-            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20">
+            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
               <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>
               {/* Hour stepper */}
               <div className="group relative h-8 w-9 overflow-hidden rounded-md">

@@ -6,17 +6,22 @@ import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { applyExactSonarClientFilters, buildSignalsStreamUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
-import { streamActionLogStore } from "./streamActionLogStore";
-import { getStreamDecisionRow, streamDecisionStore } from "./streamDecisionStore";
 import { streamExecutionStore } from "./streamExecutionStore";
+import { useStreamInstance, type StreamInstance } from "./streamInstance";
 import { connectStreamOcrFeed } from "./streamOcrFeed";
-import { streamOrderIntentStore } from "./streamOrderIntentStore";
 import { streamBookStore, resetStreamOcrStores } from "./streamOcrStores";
-import { streamPositionStore } from "./streamPositionStore";
-import { streamSignalStore } from "./streamSignalStore";
-import { streamUpdatedAtStore } from "./streamUpdatedAtStore";
-import { streamLogStore, type StreamLogEvent } from "./streamLogStore";
-import { streamFilterPassLogStore } from "./streamFilterPassLogStore";
+import { type StreamLogEvent } from "./streamLogStore";
+import { getStreamStores } from "./streamStoreRegistry";
+import { acquireSharedStreamStores, releaseSharedStreamStores, hasOtherSharedStreamUsers } from "./streamSharedStores";
+import { subscribeToStreamSse } from "./streamSseHub";
+import { startStreamTicker } from "./streamTicker";
+import {
+  acquireStreamTicker,
+  heartbeatStreamStrategy,
+  registerStreamStrategy,
+  releaseAllStreamTickers,
+  releaseStreamTicker,
+} from "./streamStrategyClient";
 import { tapeClient } from "../../lib/tapeClient";
 
 export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
@@ -259,7 +264,6 @@ export type StreamAutomationConfig = {
   dilutionStep: number;
   addDelayMinutes: number;
   minHoldMinutes: number;
-  exitConfirmTicks: number;
   exitMode: "normalize" | "print";
   printStartTime: string;
   printCloseTime: string;
@@ -391,14 +395,14 @@ function parseTimeToMinutes(value: string | undefined, fallbackMinutes: number):
   return Math.max(0, Math.min(23 * 60 + 59, hh * 60 + mm));
 }
 
-function currentMinutesLocal(): number {
+function nyMinutesAt(timestamp: number): number {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       hour12: false,
       hour: "2-digit",
       minute: "2-digit",
-    }).formatToParts(new Date());
+    }).formatToParts(new Date(timestamp));
     const hh = Number(parts.find((part) => part.type === "hour")?.value ?? NaN);
     const mm = Number(parts.find((part) => part.type === "minute")?.value ?? NaN);
     if (Number.isFinite(hh) && Number.isFinite(mm)) {
@@ -407,8 +411,12 @@ function currentMinutesLocal(): number {
   } catch {
     // Fallback to local clock if Intl/timezone support is unavailable.
   }
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+  const at = new Date(timestamp);
+  return at.getHours() * 60 + at.getMinutes();
+}
+
+function currentMinutesLocal(): number {
+  return nyMinutesAt(Date.now());
 }
 
 // NY calendar date (yyyy-MM-dd), independent of the browser's own timezone/locale — unlike
@@ -416,9 +424,9 @@ function currentMinutesLocal(): number {
 // TapeArbitrageEngine uses to key its sigma-range sidecar file. dayOffset=-1 gets yesterday's
 // NY date (shift by a full 24h of wall time before formatting so DST transitions on the
 // shifted day are still handled correctly by the timeZone formatter).
-function currentNyDateKey(dayOffset = 0): string {
+function nyDateKeyAt(timestamp: number, dayOffset = 0): string {
   try {
-    const base = new Date(Date.now() + dayOffset * 86_400_000);
+    const base = new Date(timestamp + dayOffset * 86_400_000);
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       year: "numeric",
@@ -432,7 +440,11 @@ function currentNyDateKey(dayOffset = 0): string {
   } catch {
     // Fallback below.
   }
-  return localDayKey(Date.now() + dayOffset * 86_400_000);
+  return localDayKey(timestamp + dayOffset * 86_400_000);
+}
+
+function currentNyDateKey(dayOffset = 0): string {
+  return nyDateKeyAt(Date.now(), dayOffset);
 }
 
 // The action-log "day" a moment belongs to, anchored to the session's own START time (e.g.
@@ -441,9 +453,15 @@ function currentNyDateKey(dayOffset = 0): string {
 // through. Before START is configured (sessionStartMinutes == null), falls back to the plain
 // NY calendar date. nowMinutes before sessionStartMinutes means we're still in the tail of the
 // session that started YESTERDAY (NY date), so it gets yesterday's date; at/after START, today's.
+export function tradingDayKeyAt(sessionStartMinutes: number | null, timestamp: number): string {
+  if (sessionStartMinutes == null) return nyDateKeyAt(timestamp);
+  return nyMinutesAt(timestamp) < sessionStartMinutes
+    ? nyDateKeyAt(timestamp, -1)
+    : nyDateKeyAt(timestamp);
+}
+
 function currentTradingDayKey(sessionStartMinutes: number | null): string {
-  if (sessionStartMinutes == null) return currentNyDateKey();
-  return currentMinutesLocal() < sessionStartMinutes ? currentNyDateKey(-1) : currentNyDateKey();
+  return tradingDayKeyAt(sessionStartMinutes, Date.now());
 }
 
 // Temporary diagnostic for the "START=21:00 doesn't dispatch" investigation — logs at most
@@ -527,18 +545,19 @@ function hasStrategyEntryCutoff(_signalClass: string | undefined): boolean {
 }
 
 // Floor for new entries, mirrors Scanner's TapeArbClasses explicit-start override — same
-// user-configured "START" field for every class. PRE wraps past midnight (21:00 -> 09:30
-// next day), so a single "nowMinutes < X" scalar can't express that wrap-around; it's handled
-// separately via isWithinPreSessionLive at the gate call sites instead of a floor here.
+// user-configured "START" field for every class, PRE included.
+//
+// PRE used to be excluded here (returning null) and gated instead by its own hard 21:00-09:30
+// window. That contradicted the design the backend already states outright in TapeArbClasses:
+// class names "carry no built-in time restriction ... they only drive rating bands ... actual
+// start/stop control is entirely via the caller's own explicit start/cutoff". PRE's own
+// From/To on the backend is the cross-midnight range of tape DATA it loads, not a trading gate.
+// Keeping it as a gate here made PRE silently ignore any START outside 21:00-09:30 (the value
+// isn't even representable on PRE's relative axis, so it fell back to 21:00 without a word).
+// signalClass is now purely a ratings selector, exactly like every other class.
 function getStrategySessionStartMinutes(signalClass: string | undefined, startTime: string | undefined): number | null {
-  const normalized = (signalClass ?? "").trim().toLowerCase();
-  if (normalized === "pre") return null;
   if (startTime == null) return null;
   return parseTimeToMinutes(startTime, 0);
-}
-
-function isPreSignalClass(signalClass: string | undefined): boolean {
-  return (signalClass ?? "").trim().toLowerCase() === "pre";
 }
 
 // Maps a wall-clock minute-of-day onto PRE's own axis (mirrors Scanner's
@@ -551,35 +570,24 @@ export function toPreRelativeMinutes(clockMinutes: number): number | null {
   return null;
 }
 
-// PRE session window (mirrors Scanner's TapeArbClasses PreFrom/PreTo): 21:00 -> 09:30 next day,
-// but the START edge is user-configurable (the "START" field next to CUTOFF) — typing e.g.
-// 00:00 skips the whole 21:00-23:59 evening portion and only goes live at midnight.
-function isWithinPreSessionLive(nowMinutes: number, preStartTime: string | undefined): boolean {
-  const configuredClock = parseTimeToMinutes(preStartTime, PRE_SESSION_START_MINUTES);
-  const startRel = toPreRelativeMinutes(configuredClock) ?? -(1440 - PRE_SESSION_START_MINUTES);
-  const nowRel = toPreRelativeMinutes(nowMinutes);
-  if (nowRel == null) return false;
-  return nowRel >= startRel && nowRel <= PRE_SESSION_END_MINUTES;
-}
-
-// For a same-day window (start <= cutoff, e.g. ARK's START=04:00/CUTOFF=09:00), "past cutoff"
+// For a same-day window (start <= cutoff, e.g. START=04:00/CUTOFF=09:00), "past cutoff"
 // is a plain nowMinutes>=cutoff comparison — true for the rest of the day too, which is
 // harmless since there's no later same-day start to protect. For a WRAPPING window (start >
-// cutoff, e.g. START=23:00/CUTOFF=09:00 next day — including PRE, whose start is user-
-// configurable via preStartTime but effectively always wraps), that same plain comparison
-// would go permanently true the instant nowMinutes reaches cutoff and stay true through the
-// evening's own start too, immediately force-closing/blocking a session that just began —
-// so for a wrapping window, "past cutoff" only applies to the tail/morning portion (before
-// the next start), never the evening portion right after start.
+// cutoff, e.g. START=23:00/CUTOFF=09:00 next day), that same plain comparison would go
+// permanently true the instant nowMinutes reaches cutoff and stay true through the evening's
+// own start too, immediately force-closing/blocking a session that just began — so for a
+// wrapping window, "past cutoff" only applies to the tail/morning portion (before the next
+// start), never the evening portion right after start.
 // wrapStartMinutes: the session's own configured START, used only to detect wraparound
 // (wrapStartMinutes > cutoffMinutes) — pass null/omit for a window known to never wrap.
+//
+// PRE no longer gets a branch of its own here: it wraps exactly like any other START>CUTOFF
+// window, so the generic wrap logic already covers it. See getStrategySessionStartMinutes.
 function isPastSessionCutoff(
   nowMinutes: number,
   cutoffMinutes: number,
-  isPreSession: boolean,
   wrapStartMinutes: number | null = null
 ): boolean {
-  if (isPreSession) return nowMinutes <= PRE_SESSION_END_MINUTES && nowMinutes >= cutoffMinutes;
   if (wrapStartMinutes != null && wrapStartMinutes > cutoffMinutes) {
     return nowMinutes < wrapStartMinutes && nowMinutes >= cutoffMinutes;
   }
@@ -635,9 +643,14 @@ function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
     .filter(Boolean) as ArbitrageSignal[];
 }
 
-function streamActionLogStorageKey(signalClass: string | undefined): string {
+// Keyed by INSTANCE first, then signal class. Keying by class alone (the old behaviour) meant two
+// strategy instances configured for the same class — the normal case when scaling out, e.g. two
+// "global" strategies with different thresholds — shared one action log, so each one restored the
+// other's positions on load and treated them as its own to add to and close.
+function streamActionLogStorageKey(instanceId: string, signalClass: string | undefined): string {
   const suffix = (signalClass ?? "global").trim().toLowerCase() || "global";
-  return `stream.arbitrage.action-log.${suffix}`;
+  const scope = (instanceId ?? "").trim() || "stream.arbitrage";
+  return `${scope}.action-log.${suffix}`;
 }
 
 function localDayKey(timestamp = Date.now()): string {
@@ -939,7 +952,7 @@ function mergeStreamPositionsWithActionLog(
       // concept of "ticks below end threshold" — only confirmed ENTRY/ADD/CLOSE events). Without
       // preferring existing here, this counter would reset to 0 on every merge (i.e. every poll
       // tick), capping it at 0-1 forever and permanently disabling active-mode normalize-exit's
-      // exitConfirmTicks confirmation window.
+      // MINHOLD-based exit confirmation window.
       belowThresholdTicks: existing.belowThresholdTicks ?? row.belowThresholdTicks,
       belowThresholdSinceMinuteIdx: existing.belowThresholdSinceMinuteIdx ?? row.belowThresholdSinceMinuteIdx ?? null,
       updatedAt: Math.max(existing.updatedAt, row.updatedAt),
@@ -1004,7 +1017,6 @@ function syncStreamSignalLatches(
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   sessionStartMinutes: number | null = null,
-  isPreSession = false,
   primeImmediately = false,
   latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
   primedTickers?: ReadonlySet<string>,
@@ -1021,28 +1033,17 @@ function syncStreamSignalLatches(
   const minHoldMs = minHoldMinutes * 60_000;
   const nowMinuteIdx = Math.floor(now / 60_000);
   const nowMinutes = currentMinutesLocal();
-  const printStartMinutes = parseTimeToMinutes(automationConfig.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) {
-    logStreamGateBlock("latches:pastPrintStart", { nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes });
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
+    logStreamGateBlock("latches:pastCutoff", { nowMinutes, startCutoffMinutes, sessionStartMinutes });
     return [];
   }
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) {
-    logStreamGateBlock("latches:pastCutoff", { nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes });
-    return [];
-  }
-  // Session hasn't started yet (e.g. ARK before 04:00) — automation can be toggled on early,
-  // it just waits here instead of creating any latches. Wrap-aware: if START (e.g. 23:00) is
-  // later than CUTOFF (e.g. 09:00 next day), a small nowMinutes after midnight still counts
+  // Session hasn't started yet (e.g. START=04:00, now 03:00) — automation can be toggled on
+  // early, it just waits here instead of creating any latches. Wrap-aware: if START (e.g. 23:00)
+  // is later than CUTOFF (e.g. 09:00 next day), a small nowMinutes after midnight still counts
   // as "started" (continuing last evening's session), not "before start".
   if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
     logStreamGateBlock("latches:beforeStart", { nowMinutes, sessionStartMinutes, startCutoffMinutes });
-    return [];
-  }
-  // PRE wraps past midnight (21:00 -> 09:30 next day) — can't be expressed as a single scalar
-  // floor, so it's gated separately here via the wrap-aware helper.
-  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig.preStartTime)) {
-    logStreamGateBlock("latches:preNotLive", { nowMinutes, preStartTime: automationConfig.preStartTime });
     return [];
   }
 
@@ -1275,7 +1276,6 @@ export function syncStreamPositions(
   automationConfig?: StreamAutomationConfig,
   entryCutoffEnabled = true,
   sessionStartMinutes: number | null = null,
-  isPreSession = false,
   loggedOpenTickers: ReadonlySet<string> = new Set(),
   dispatchingEntryTickers: ReadonlySet<string> = new Set(),
   frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
@@ -1378,18 +1378,14 @@ export function syncStreamPositions(
       const exitAbs = exitSigned == null ? signalAbs(raw) : Math.abs(exitSigned);
       const belowEndThreshold = exitAbs != null && exitAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
-      // CONF=0 means "close the instant it drops below end threshold" on Scanner (an explicit
-      // early-exit special case, no confirmation wait at all). Floor at 1 here would force at
-      // least one minute boundary of confirmation even at CONF=0 — floor at 0 instead so
-      // belowThresholdTicks (which starts at 0 on first detection) already satisfies `>= 0`
-      // immediately, matching Scanner's instant close.
-      const exitConfirmTicks = Math.max(0, automationConfig.exitConfirmTicks ?? 3);
+      // How long the signal must stay normalized below the threshold is MINHOLD — the very same
+      // number, and the very same rule, that gates entry. There is no separate CONF any more:
+      // one knob describes "how long a condition must hold to be believed", in both directions.
+      //
       // Count in whole minute boundaries crossed, not poll ticks — mirrors Scanner's
       // ExitConfirmCandles (pendingEndHoldCount only bumps once per new tape minute, reset
-      // immediately on any candle back above EndAbs). The same shared "CONF" UI number feeds
-      // both exitConfirmTicks here and exitConfirmCandles on the Scanner request; without
-      // minute-boundary counting, Stream would confirm in ~N poll intervals (a few seconds)
-      // while Scanner requires N full minutes for the identical configured value.
+      // immediately on any candle back above EndAbs). Without minute-boundary counting, Stream
+      // would confirm in ~N poll intervals (a few seconds) while Scanner requires N full minutes.
       let belowThresholdSinceMinuteIdx = existing.belowThresholdSinceMinuteIdx ?? null;
       let belowThresholdTicks: number;
       if (belowEndThreshold) {
@@ -1403,7 +1399,19 @@ export function syncStreamPositions(
         belowThresholdSinceMinuteIdx = null;
         belowThresholdTicks = 0;
       }
-      const shouldNormalizeExit = activeExitMode && belowThresholdTicks >= exitConfirmTicks;
+      // Reuses hasCompletedStreamHoldWindow — literally the same helper the entry path uses — so
+      // "held long enough" cannot drift apart between entry and exit. MINHOLD=0 therefore means
+      // "must survive to the close of the minute it first dropped in", exactly as MINHOLD=0 on
+      // entry means "must survive to the close of the minute it first qualified in".
+      //
+      // belowEndThreshold stays REQUIRED and is not implied by the hold window: while the signal
+      // is healthy the else-branch above resets belowThresholdSinceMinuteIdx to null, and a null
+      // anchor must never be read as "confirmed long ago".
+      const shouldNormalizeExit =
+        activeExitMode &&
+        belowEndThreshold &&
+        belowThresholdSinceMinuteIdx != null &&
+        hasCompletedStreamHoldWindow(belowThresholdSinceMinuteIdx * 60_000, nowMinuteIdx, minHoldMinutes);
 
       let status: StreamPosition["status"] = existing.status;
       let reason = existing.reason;
@@ -1472,7 +1480,7 @@ export function syncStreamPositions(
         // entries don't fire at deviations far outside the configured startAbsMax cap.
         const entryIsHold = decision?.status === "HOLD";
         const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
-        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes);
+        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes);
         if (inPrintWindow || entryIsHold || cutoffReached || (!entryStillReady && !withinGrace)) {
           // If a real-mode dispatch is in-flight for this ticker (between
           // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
@@ -1566,7 +1574,7 @@ export function syncStreamPositions(
             entryDispatchedAt,
             ageMs: entryDispatchedAt != null ? now - entryDispatchedAt : null,
             belowThresholdTicks,
-            exitConfirmTicks,
+            minHoldMinutes,
           });
         }
       } else {
@@ -1575,17 +1583,23 @@ export function syncStreamPositions(
           ? "holding | awaiting live deviation"
           : belowEndThreshold
             ? activeExitMode
-              ? `below end threshold | confirming exit (${belowThresholdTicks}/${exitConfirmTicks})`
+              ? `below end threshold | confirming exit (${belowThresholdTicks}/${minHoldMinutes + 1} min)`
               : "passive mode | holding below end threshold"
             : atOrAboveEndThreshold
               ? "holding above end threshold"
               : "holding";
 
+        // Scaling into a position is "taking position" just as much as a fresh entry, so it obeys
+        // the SAME window: nothing is added after CUTOFF, and nothing is added before the next
+        // START. The beforeStart half matters for a same-day window (e.g. START=04:00,
+        // CUTOFF=09:00): there "past cutoff" is false again in the small hours, so without this a
+        // position carried over from a previous session could keep scaling at 02:00.
         const addGateOk =
           entryDispatchedAt != null &&
           atOrAboveEndThreshold &&
           !inPrintWindow &&
-          !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) &&
+          !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) &&
+          !(entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) &&
           automationConfig.scaleMode === "scale_in" &&
           entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0);
         if (!addGateOk && entryDispatchedAt != null) {
@@ -1596,10 +1610,9 @@ export function syncStreamPositions(
             currentAbs,
             endThreshold,
             inPrintWindow,
-            cutoffBlocking: entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes),
+            cutoffBlocking: entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes),
             nowMinutes,
             startCutoffMinutes,
-            isPreSession,
             sessionStartMinutes,
             scaleMode: automationConfig.scaleMode,
             entryCount,
@@ -1742,22 +1755,14 @@ export function syncStreamPositions(
     ).length;
     for (const latch of latches) {
       if (seen.has(latch.ticker)) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) {
-        logStreamGateBlock("positions:pastPrintStart", { ticker: latch.ticker, nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes });
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
+        logStreamGateBlock("positions:pastCutoff", { ticker: latch.ticker, nowMinutes, startCutoffMinutes, sessionStartMinutes });
         continue;
       }
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) {
-        logStreamGateBlock("positions:pastCutoff", { ticker: latch.ticker, nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes });
-        continue;
-      }
-      // Session hasn't started yet (e.g. ARK before 04:00) — same wait-then-work behavior as
-      // the latch gate above.
+      // Session hasn't started yet (e.g. START=04:00, now 03:00) — same wait-then-work behavior
+      // as the latch gate above.
       if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
         logStreamGateBlock("positions:beforeStart", { ticker: latch.ticker, nowMinutes, sessionStartMinutes, startCutoffMinutes });
-        continue;
-      }
-      if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) {
-        logStreamGateBlock("positions:preNotLive", { ticker: latch.ticker, nowMinutes, preStartTime: automationConfig?.preStartTime });
         continue;
       }
       if (openCount >= maxOpenAllowed) {
@@ -1925,7 +1930,12 @@ export function buildStreamOrderIntents(
   positions: StreamPosition[],
   autoEnabled: boolean,
   automationConfig?: StreamAutomationConfig,
-  entryCutoffEnabled = false
+  entryCutoffEnabled = false,
+  // Namespaces every generated intent id. The bridge's queue de-duplicates by intentId, so
+  // without this two strategies entering the same ticker at the same minute boundary would
+  // produce byte-identical ids and the second strategy's order would be silently swallowed as
+  // a duplicate of the first — looking, from the UI, exactly like a successful send.
+  strategyId = ""
 ): StreamOrderIntent[] {
   if (!autoEnabled) return [];
 
@@ -1943,7 +1953,7 @@ export function buildStreamOrderIntents(
     for (const position of positions) {
       if (!position.pendingIntent) continue;
       intents.push({
-        id: intentId([position.ticker, "strategy", position.openedAt, position.pendingIntent, position.entryCount, nowMinutes >= printStartMinutes ? "print" : "live"]),
+        id: intentId([strategyId, position.ticker, "strategy", position.openedAt, position.pendingIntent, position.entryCount, "live"]),
         ticker: position.ticker,
         benchmark: position.benchmark,
         side: position.side,
@@ -2059,19 +2069,15 @@ function buildFallbackPendingEntryPositions(
   automationConfig: StreamAutomationConfig | undefined,
   entryCutoffEnabled: boolean,
   sessionStartMinutes: number | null,
-  isPreSession = false,
   frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
 ): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
 
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
-  const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, printStartMinutes, isPreSession, sessionStartMinutes)) return existingPositions;
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, isPreSession, sessionStartMinutes)) return existingPositions;
+  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) return existingPositions;
   if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return existingPositions;
-  if (entryCutoffEnabled && isPreSession && !isWithinPreSessionLive(nowMinutes, automationConfig?.preStartTime)) return existingPositions;
 
   // Respect the same entryCutoffEnabled guard used everywhere else:
   // global band (entryCutoffEnabled=false) has no position cap.
@@ -2131,6 +2137,12 @@ function buildFallbackPendingEntryPositions(
 }
 
 type UseStreamEngineArgs = {
+  /**
+   * Identity of this strategy instance. Several instances run in parallel over the same live
+   * feed, so every piece of state the engine owns — stores, localStorage keys, order intent ids,
+   * bridge ticker leases — is namespaced by this. Omit only in single-instance legacy usage.
+   */
+  instance?: StreamInstance;
   enabled: boolean;
   ocrEnabled?: boolean;
   trackedSignalsEnabled?: boolean;
@@ -2189,6 +2201,9 @@ const STREAM_AUTOMATION_TICK_MS = 1000;
 // the boundary won't have an aboveSinceRef timestamp old enough and simply won't qualify that
 // minute — dispatch itself still fires exactly at the boundary, using the frozen boundary value.
 const ENTRY_HOLD_BEFORE_BOUNDARY_MS = 10_000;
+// Keeps this strategy's registration (and therefore its ticker leases) alive on the bridge. Must
+// stay well under the arbiter's StrategyTtlSeconds (90s) so a slow tab is never mistaken for dead.
+const STREAM_STRATEGY_HEARTBEAT_MS = 15_000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -2245,6 +2260,7 @@ const tradingAppBridgeUrl = (path: string) => {
 };
 
 export function useStreamEngine({
+  instance,
   enabled,
   ocrEnabled = false,
   trackedSignalsEnabled = true,
@@ -2291,8 +2307,28 @@ export function useStreamEngine({
   const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
   const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
   const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass, automationConfig?.preStartTime);
-  const strategyIsPreSession = isPreSignalClass(signalClass);
-  const actionLogStorageKey = streamActionLogStorageKey(signalClass);
+
+  // --- instance scoping ----------------------------------------------------
+  // Falls back to the historical single-instance identity so existing call sites that do not
+  // pass an instance keep their current storage keys and stores.
+  const contextInstance = useStreamInstance();
+  const resolvedInstance = instance ?? contextInstance;
+  const instanceId = resolvedInstance.instanceId;
+  const strategyId = resolvedInstance.strategyId;
+  const strategyPriority = resolvedInstance.priority;
+  const stores = getStreamStores(instanceId);
+  const {
+    actionLog: streamActionLogStore,
+    decision: streamDecisionStore,
+    orderIntent: streamOrderIntentStore,
+    position: streamPositionStore,
+    signal: streamSignalStore,
+    updatedAt: streamUpdatedAtStore,
+    log: streamLogStore,
+    filterPassLog: streamFilterPassLogStore,
+  } = stores;
+
+  const actionLogStorageKey = streamActionLogStorageKey(instanceId, signalClass);
   const [currentDayKey, setCurrentDayKey] = useState<string>(() => currentTradingDayKey(strategySessionStartMinutes));
   useEffect(() => {
     // Re-check day key every minute so the log resets at the session's own START (e.g. 21:00)
@@ -2303,6 +2339,14 @@ export function useStreamEngine({
     }, 60_000);
     return () => clearInterval(timer);
   }, [strategySessionStartMinutes]);
+  // The extended (structured) log used to key its entries by CALENDAR day, so at 00:00 everything
+  // from the 21:00-23:59 stretch of an overnight session stopped matching "today" — and since the
+  // store rewrites storage right after filtering, that half of the session was deleted, not just
+  // hidden. Anchor it to the same START-based trading day the action log already uses.
+  useEffect(() => {
+    streamLogStore.setDayKeyResolver((timestamp) => tradingDayKeyAt(strategySessionStartMinutes, timestamp));
+  }, [streamLogStore, strategySessionStartMinutes]);
+
   const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>(() => readStreamActionLog(actionLogStorageKey));
   const [streamPositions, setStreamPositions] = useState<StreamPosition[]>(() => buildStreamPositionsFromActionLog(readStreamActionLog(actionLogStorageKey), currentDayKey));
   const [streamOrderIntents, setStreamOrderIntents] = useState<StreamOrderIntent[]>([]);
@@ -2641,106 +2685,32 @@ export function useStreamEngine({
     }, 180);
   }, [enabled]);
 
-  const applyPrimaryStreamPayload = useCallback((payload: any) => {
-    const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
-    const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-    primaryStreamSignalsRef.current = normalized;
-    primaryStreamLastMessageAtRef.current = Date.now();
-    scheduleLocalRefresh();
-  }, [scheduleLocalRefresh]);
-
-  const applyStreamDiffToRef = useCallback((
-    targetRef: { current: ArbitrageSignal[] },
-    lastMessageAtRef: { current: number },
-    payload: any
-  ) => {
-    const added = Array.isArray(payload?.added) ? payload.added : [];
-    const updated = Array.isArray(payload?.updated) ? payload.updated : [];
-    const removed = Array.isArray(payload?.removed) ? payload.removed : [];
-
-    const normalizedAdded = added.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-    const normalizedUpdated = updated.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-    const removedTickers = new Set<string>(
-      removed
-        .map((ticker: any) => String(ticker ?? "").trim().toUpperCase())
-        .filter((ticker): ticker is string => ticker.length > 0)
-    );
-
-    const nextMap = new Map(
-      targetRef.current.map((row) => [row.ticker, row] as const)
-    );
-
-    for (const ticker of removedTickers) {
-      nextMap.delete(ticker);
-    }
-
-    for (const row of normalizedAdded) {
-      nextMap.set(row.ticker, row);
-    }
-
-    for (const row of normalizedUpdated) {
-      nextMap.set(row.ticker, row);
-    }
-
-    targetRef.current = Array.from(nextMap.values());
-    lastMessageAtRef.current = Date.now();
-    scheduleLocalRefresh();
-  }, [scheduleLocalRefresh]);
-
-  const applyTrackedStreamPayload = useCallback((payload: any) => {
-    const rawItems: any[] = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
-    const normalized = rawItems.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
-    trackedStreamSignalsRef.current = normalized;
-    trackedStreamLastMessageAtRef.current = Date.now();
-    scheduleLocalRefresh();
-  }, [scheduleLocalRefresh]);
-
+  // Subscribes through the shared hub instead of owning an EventSource: several strategy
+  // instances in this tab usually resolve to the SAME stream URL, and each extra connection would
+  // re-download and re-parse an identical byte stream every tick. The hub keeps one connection per
+  // distinct URL and fans the parsed array out. Snapshot/diff merging now happens inside the hub,
+  // so this effect only mirrors the result into the refs the refresh cycle already reads.
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
 
-    const source = new EventSource(primarySignalsStreamUrl);
-    const handlePayload = (event: MessageEvent<string>) => {
-      try {
-        applyPrimaryStreamPayload(JSON.parse(String(event.data)));
-      } catch {
-        // ignore malformed stream payloads and keep previous snapshot
-      }
-    };
-    const handleDiff = (event: MessageEvent<string>) => {
-      try {
-        applyStreamDiffToRef(primaryStreamSignalsRef, primaryStreamLastMessageAtRef, JSON.parse(String(event.data)));
-      } catch {
-        // ignore malformed stream payloads and keep previous snapshot
-      }
-    };
-    // No built-in "reconnected/resynced" event from EventSource — log so a dead backend (SSE
-    // silently frozen while automation keeps running on stale sigma) is visible in the console,
-    // not just inferred after the fact from a missing add.
-    source.onerror = () => {
+    return subscribeToStreamSse(primarySignalsStreamUrl, (state) => {
       const wasConnected = primaryStreamConnectedRef.current;
-      primaryStreamConnectedRef.current = false;
-      if (wasConnected) {
+      primaryStreamConnectedRef.current = state.connected;
+      if (wasConnected && !state.connected) {
         logStreamGateBlock("sse:primaryStreamDisconnected", {
-          readyState: source.readyState,
-          lastMessageAgeMs: primaryStreamLastMessageAtRef.current ? Date.now() - primaryStreamLastMessageAtRef.current : null,
+          url: primarySignalsStreamUrl,
+          lastMessageAgeMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
+        });
+      } else if (!wasConnected && state.connected) {
+        logStreamGateBlock("sse:primaryStreamReconnected", {
+          downForMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
         });
       }
-    };
-    source.onopen = () => {
-      if (!primaryStreamConnectedRef.current) {
-        logStreamGateBlock("sse:primaryStreamReconnected", { downForMs: primaryStreamLastMessageAtRef.current ? Date.now() - primaryStreamLastMessageAtRef.current : null });
-      }
-      primaryStreamConnectedRef.current = true;
-    };
-
-    source.onmessage = handlePayload;
-    source.addEventListener("snapshot", handlePayload as EventListener);
-    source.addEventListener("diff", handleDiff as EventListener);
-
-    return () => {
-      source.close();
-    };
-  }, [applyPrimaryStreamPayload, applyStreamDiffToRef, enabled, primarySignalsStreamUrl]);
+      primaryStreamSignalsRef.current = state.signals;
+      primaryStreamLastMessageAtRef.current = state.lastMessageAt;
+      scheduleLocalRefresh();
+    });
+  }, [enabled, primarySignalsStreamUrl, scheduleLocalRefresh]);
 
   useEffect(() => {
     if (!enabled || !trackedSignalsStreamUrl || typeof window === "undefined") {
@@ -2751,46 +2721,24 @@ export function useStreamEngine({
       return;
     }
 
-    const source = new EventSource(trackedSignalsStreamUrl);
-    const handlePayload = (event: MessageEvent<string>) => {
-      try {
-        applyTrackedStreamPayload(JSON.parse(String(event.data)));
-      } catch {
-        // ignore malformed stream payloads and keep previous snapshot
-      }
-    };
-    const handleDiff = (event: MessageEvent<string>) => {
-      try {
-        applyStreamDiffToRef(trackedStreamSignalsRef, trackedStreamLastMessageAtRef, JSON.parse(String(event.data)));
-      } catch {
-        // ignore malformed stream payloads and keep previous snapshot
-      }
-    };
-    source.onerror = () => {
+    return subscribeToStreamSse(trackedSignalsStreamUrl, (state) => {
       const wasConnected = trackedStreamConnectedRef.current;
-      trackedStreamConnectedRef.current = false;
-      if (wasConnected) {
+      trackedStreamConnectedRef.current = state.connected;
+      if (wasConnected && !state.connected) {
         logStreamGateBlock("sse:trackedStreamDisconnected", {
-          readyState: source.readyState,
-          lastMessageAgeMs: trackedStreamLastMessageAtRef.current ? Date.now() - trackedStreamLastMessageAtRef.current : null,
+          url: trackedSignalsStreamUrl,
+          lastMessageAgeMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
+        });
+      } else if (!wasConnected && state.connected) {
+        logStreamGateBlock("sse:trackedStreamReconnected", {
+          downForMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
         });
       }
-    };
-    source.onopen = () => {
-      if (!trackedStreamConnectedRef.current) {
-        logStreamGateBlock("sse:trackedStreamReconnected", { downForMs: trackedStreamLastMessageAtRef.current ? Date.now() - trackedStreamLastMessageAtRef.current : null });
-      }
-      trackedStreamConnectedRef.current = true;
-    };
-
-    source.onmessage = handlePayload;
-    source.addEventListener("snapshot", handlePayload as EventListener);
-    source.addEventListener("diff", handleDiff as EventListener);
-
-    return () => {
-      source.close();
-    };
-  }, [applyStreamDiffToRef, applyTrackedStreamPayload, enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
+      trackedStreamSignalsRef.current = state.signals;
+      trackedStreamLastMessageAtRef.current = state.lastMessageAt;
+      scheduleLocalRefresh();
+    });
+  }, [enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
 
   useEffect(() => {
     setStreamPositions((prev) => {
@@ -3005,11 +2953,16 @@ export function useStreamEngine({
     // Without this: after cooldown expiry (15s) the dispatch loop sees no action-log entry
     // and no dispatchedIntentId for the ticker → fires a second ENTRY order.
     const now = Date.now();
-    tickerSet.forEach((ticker) => dismissedEntryTickersRef.current.set(ticker, now));
+    tickerSet.forEach((ticker) => {
+      dismissedEntryTickersRef.current.set(ticker, now);
+      // Dismissing means this strategy no longer holds the ticker — release it so a competing
+      // strategy is not blocked by a lease nothing backs any more.
+      void releaseStreamTicker({ strategyId, ticker, reason: "dismissed by user" });
+    });
     queueMicrotask(() => {
       void refreshRef.current?.({ refreshBridge: false }).catch(() => {});
     });
-  }, []);
+  }, [strategyId]);
 
   const submitManualStreamOrders = useCallback(async (tickersText: string, action: StreamManualOrderAction) => {
     const tickers = Array.from(new Set(
@@ -3363,7 +3316,6 @@ export function useStreamEngine({
       automationConfig,
       entryCutoffEnabled,
       strategySessionStartMinutes,
-      strategyIsPreSession,
       wantsPrime,
       latchQualifiedSinceHistoryRef.current,
       wantsPrime ? primedFromScannerRef.current : undefined,
@@ -3421,7 +3373,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, strategyIsPreSession, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3440,7 +3392,7 @@ export function useStreamEngine({
       hasCompletedStreamHoldWindow(l.qualifiedSince, now2MinuteIdx, minHoldMinutesForDisplay)
     );
     let nextPositions = nextPositionsBase;
-    let intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+    let intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
 
     if (
       autoEnabledNow &&
@@ -3455,10 +3407,9 @@ export function useStreamEngine({
         automationConfig,
         entryCutoffEnabled,
         strategySessionStartMinutes,
-        strategyIsPreSession,
         minuteSnapshotRef.current?.lastSignedMap,
       );
-      intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled);
+      intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
     }
 
     const qualified = qualifiedLatches.length;
@@ -3646,14 +3597,26 @@ export function useStreamEngine({
     };
   }, [enabled]);
 
+  // Marks this instance as a live consumer of the SHARED bridge stores (execution snapshot, OCR
+  // book/main window). Those reflect global TradingApp state, so they are torn down only when the
+  // last instance lets go — see streamSharedStores.ts.
+  useEffect(() => {
+    if (!enabled) return;
+    acquireSharedStreamStores(instanceId);
+    return () => {
+      releaseSharedStreamStores(instanceId);
+    };
+  }, [enabled, instanceId]);
+
   useEffect(() => {
     if (enabled) return;
     streamExecutionSnapshotRef.current = null;
     executionSnapshotSignatureRef.current = "";
     lastStatusRefreshAtRef.current = 0;
     pendingActionLogEntriesRef.current.clear();
-    streamExecutionStore.clear();
-    resetStreamOcrStores();
+    // Only this instance's own stores are cleared here. The shared execution/OCR stores are
+    // released via the refcount effect above — clearing them directly would blank the execution
+    // snapshot that OTHER running strategies are trading against.
     streamActionLogStore.clear();
     streamDecisionStore.clear();
     streamOrderIntentStore.clear();
@@ -3661,7 +3624,53 @@ export function useStreamEngine({
     streamSignalStore.clear();
     streamUpdatedAtStore.clear();
     streamFilterPassLogStore.clear();
-  }, [enabled]);
+  }, [enabled, streamActionLogStore, streamDecisionStore, streamFilterPassLogStore, streamOrderIntentStore, streamPositionStore, streamSignalStore, streamUpdatedAtStore]);
+
+  // Registers this strategy with the bridge arbiter and keeps the registration alive. The arbiter
+  // frees a strategy's ticker leases once it stops heartbeating, so a closed/crashed tab cannot
+  // block a symbol for the other strategies. Re-registers (rather than only heartbeating) when
+  // the bridge reports it does not know us — the normal path after a bridge restart.
+  // Kept in a ref so the dispatch loop can re-register on demand when the arbiter reports it no
+  // longer knows this strategy (see acquireStreamTicker's ensureRegistered).
+  const registerStrategyRef = useRef<() => Promise<boolean>>(async () => false);
+  registerStrategyRef.current = async () => registerStreamStrategy({
+    strategyId,
+    label: resolvedInstance.label,
+    priority: strategyPriority,
+    signalClass,
+    betaMode: automationConfig?.betaMode === true,
+  });
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+
+    const register = async () => {
+      await registerStrategyRef.current();
+    };
+
+    void register();
+    // Worker-backed too: a throttled heartbeat can slip past the arbiter's 90s TTL, which frees
+    // this strategy's ticker leases and makes its next claim come back "not registered".
+    const ticker = startStreamTicker({
+      intervalMs: STREAM_STRATEGY_HEARTBEAT_MS,
+      onTick: () => {
+        void (async () => {
+          const result = await heartbeatStreamStrategy(strategyId);
+          if (cancelled) return;
+          if (result && result.registered === false) await register();
+        })();
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      ticker.stop();
+      // Hand the tickers back immediately instead of waiting out the arbiter's TTL — otherwise a
+      // strategy that is simply switched off keeps its symbols locked for another 90 seconds.
+      void releaseAllStreamTickers(strategyId);
+    };
+  }, [automationConfig?.betaMode, enabled, resolvedInstance.label, signalClass, strategyId, strategyPriority]);
 
   useEffect(() => {
     if (!enabled || !ocrEnabled) return;
@@ -3670,8 +3679,10 @@ export function useStreamEngine({
 
   useEffect(() => {
     if (!enabled || ocrEnabled) return;
-    resetStreamOcrStores();
-  }, [enabled, ocrEnabled]);
+    // OCR snapshots are shared: only reset them if no other instance is still using them,
+    // otherwise turning OCR off in one strategy blanks the book another one is displaying.
+    if (!hasOtherSharedStreamUsers(instanceId)) resetStreamOcrStores();
+  }, [enabled, instanceId, ocrEnabled]);
 
   useEffect(() => {
     streamPositionStore.applySnapshot(streamPositions);
@@ -3773,7 +3784,7 @@ export function useStreamEngine({
     const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
     const cutoffDue =
       entryCutoffEnabled &&
-      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession, strategySessionStartMinutes) &&
+      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes) &&
       cutoffHotkeySentKeyRef.current !== cutoffKey;
 
     // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
@@ -3800,11 +3811,15 @@ export function useStreamEngine({
       dispatchLoopActiveRef.current = true;
       const sentDispatchKeys = new Set<string>();
 
-      // Entry cutoff pair: at the moment startCutoffTime is reached, fire Ctrl+Q (stop new
-      // entries) then, 1s later, Ctrl+O (print-close everything open) — exactly once per
-      // cutoff crossing. This runs before the separate printStartTime-driven CLOSE_ALL_PRINT
-      // dispatch below, so if both times coincide Ctrl+Q still always reaches TradingApp first.
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategyIsPreSession, strategySessionStartMinutes)) {
+      // Session-end pair: at the moment startCutoffTime is reached, fire Ctrl+Q then, 1s later,
+      // Ctrl+O — exactly once per cutoff crossing.
+      //
+      // Ctrl+Q is a PREPARATORY step for the Ctrl+O close, not a "stop new entries" switch, and
+      // it does not latch TradingApp into any state. That matters: nothing here has to be undone
+      // at the next START, and the pair leaves no residue that could block the following
+      // session. (An earlier version of this comment claimed Ctrl+Q stops new entries — it does
+      // not; entries are stopped purely by the START/CUTOFF gates in this engine.)
+      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes)) {
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
@@ -3842,8 +3857,9 @@ export function useStreamEngine({
             }
             console.log(`[CUTOFF] Ctrl+Q sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
 
-            // Ctrl+O follows Ctrl+Q by exactly 1s, same cutoff moment: stop new entries (Ctrl+Q)
-            // then immediately print-close everything open (Ctrl+O), as one sequential pair.
+            // Ctrl+O follows Ctrl+Q by exactly 1s, same cutoff moment: Ctrl+Q prepares the close,
+            // Ctrl+O then print-closes everything open — one sequential pair, and the 1s gap is
+            // what gives TradingApp time to act on the first before the second lands.
             await new Promise((resolve) => setTimeout(resolve, 1000));
             const responseO = await fetch(tradingAppBridgeUrl("/queue"), {
               method: "POST",
@@ -3863,6 +3879,11 @@ export function useStreamEngine({
               throw new Error(jsonO?.error || `Failed to queue cutoff Ctrl+O (${responseO.status})`);
             }
             console.log(`[CUTOFF] Ctrl+O sent 1s after Ctrl+Q at ${automationConfig?.startCutoffTime ?? "09:20"}`);
+
+            // Ctrl+O closes everything this strategy had open, so none of its tickers are held
+            // any more. Releasing them here (instead of waiting out the arbiter TTL) lets a
+            // later-session strategy pick them up immediately.
+            void releaseAllStreamTickers(strategyId);
 
             // Ctrl+O is one global hotkey — TradingApp closes every open position at once, not
             // just cutoffTicker. Mirror that in STREAM's own action log/state (same bookkeeping
@@ -3940,7 +3961,36 @@ export function useStreamEngine({
           if (Date.now() - dismissedAt < DISMISS_ENTRY_BLOCK_MS) continue;
         }
 
-        const correspondingDecision = getStreamDecisionRow(intent.ticker);
+        // Re-check the trading window HERE, immediately before sending. Every other gate runs
+        // when the intent is BUILT, but this loop is async and long-lived: it awaits a lease
+        // handshake plus up to three queue retries per intent, so a batch that began just before
+        // CUTOFF can still be mid-flight minutes later. Without this re-check those queued
+        // entries/adds would keep landing after CUTOFF — position-taking past the window the
+        // user configured. Recomputed per intent (not once per batch) because the crossing can
+        // happen between two intents of the same batch. Exits are deliberately exempt: refusing
+        // to close a live position is strictly more dangerous than closing one late.
+        if (isEntryIntent && !intent.id.startsWith("manual|")) {
+          const nowMinutesAtDispatch = currentMinutesLocal();
+          const pastCutoffNow = entryCutoffEnabled &&
+            isPastSessionCutoff(nowMinutesAtDispatch, startCutoffMinutesNow, strategySessionStartMinutes);
+          const beforeStartNow = entryCutoffEnabled &&
+            strategySessionStartMinutes != null &&
+            isBeforeSessionStart(nowMinutesAtDispatch, strategySessionStartMinutes, startCutoffMinutesNow);
+          if (pastCutoffNow || beforeStartNow) {
+            logStreamGateBlock("dispatch:outsideWindow", {
+              ticker: intent.ticker,
+              sequence: intent.sequence,
+              nowMinutes: nowMinutesAtDispatch,
+              startCutoffMinutes: startCutoffMinutesNow,
+              sessionStartMinutes: strategySessionStartMinutes,
+              pastCutoffNow,
+              beforeStartNow,
+            });
+            continue;
+          }
+        }
+
+        const correspondingDecision = streamDecisionStore.getRow(intent.ticker);
         const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
         const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
 
@@ -4042,6 +4092,35 @@ export function useStreamEngine({
               }
             }
           }
+          // Cross-strategy arbitration. Several strategy instances (separate tabs) evaluate the
+          // same feed and reach this point at the same minute boundary; only one of them may
+          // actually send for a given ticker, or the position doubles on that symbol. The bridge
+          // decides by strategy priority — see StreamStrategyRegistry.cs. Applied to ENTRY/ADD
+          // only: an EXIT must never be blocked, since refusing to close a live position is
+          // strictly more dangerous than closing one twice.
+          if (isEntryIntent && !intent.id.startsWith("manual|")) {
+            const lease = await acquireStreamTicker({
+              strategyId,
+              ticker: intent.ticker,
+              side: intent.side,
+              intentId: intent.id,
+              ensureRegistered: () => registerStrategyRef.current(),
+            });
+            if (!lease.granted) {
+              console.log(`[LEASE DENIED] ${intent.ticker} ${intent.intent} — ${lease.reason}`);
+              logStreamGateBlock("dispatch:leaseDenied", {
+                ticker: intent.ticker,
+                strategyId,
+                priority: strategyPriority,
+                reason: lease.reason,
+                sequence: intent.sequence,
+              });
+              // Deliberately NOT marked as dispatched: if the winner's entry never materialises
+              // and the ticker frees up while the signal is still valid, the next tick may retry.
+              continue;
+            }
+          }
+
           const pos3 = correspondingPosition;
           const curSig3 = correspondingDecision?.signal;
           const dilution3 = automationConfig?.dilutionStep ?? 0.3;
@@ -4300,6 +4379,8 @@ export function useStreamEngine({
               filtersOk: _filterParts.join(" | ") || undefined,
             }]);
           } else if (isExitIntent && correspondingPosition) {
+            // Position is being closed — hand the ticker back so another strategy can take it.
+            void releaseStreamTicker({ strategyId, ticker: intent.ticker, reason: "position closed" });
             _dispatchActionLog([{
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
@@ -4445,14 +4526,35 @@ export function useStreamEngine({
     const strategyAutoRunning = streamAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
     if (!strategyAutoRunning) return;
 
-    const timer = window.setInterval(() => {
-      void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
-        onErrorRef.current?.(error?.message ?? String(error));
-      });
-    }, STREAM_AUTOMATION_TICK_MS);
+    // Worker-backed so the tick keeps its real 1s cadence while the tab sits in the background —
+    // see streamTicker.ts for why a plain setInterval cannot carry this engine.
+    const ticker = startStreamTicker({
+      intervalMs: STREAM_AUTOMATION_TICK_MS,
+      onTick: () => {
+        void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
+          onErrorRef.current?.(error?.message ?? String(error));
+        });
+      },
+      // A gap this large means the engine was not polling: the machine slept, or the browser
+      // throttled us anyway. The minute-level state (streaks, minute accumulator) is unreliable
+      // across such a gap, so make it loud instead of letting entries quietly not happen.
+      onMissedTicks: (gapMs) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[stream-ticker] missed ticks — engine was idle for ${(gapMs / 1000).toFixed(1)}s`, {
+          at: new Date().toISOString(),
+          visibility: typeof document !== "undefined" ? document.visibilityState : "unknown",
+          note: "entry streaks reset across this gap; new entries need a fresh qualification window",
+        });
+      },
+    });
+
+    if (!ticker.isWorkerBacked) {
+      // eslint-disable-next-line no-console
+      console.warn("[stream-ticker] worker unavailable — falling back to setInterval, which the browser WILL throttle in a background tab. Keep this tab visible.");
+    }
 
     return () => {
-      window.clearInterval(timer);
+      ticker.stop();
     };
   }, [automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
 

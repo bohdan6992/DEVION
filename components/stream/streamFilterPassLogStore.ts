@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { useStreamStores } from "./streamStoreRegistry";
 
 // Records every ticker the first time it appears as ENTRY_READY (passed all stream filters).
 // Accumulates in memory for the current session — download at end of day to compare with
@@ -65,7 +66,7 @@ function fmtMs(ts: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}.${String(d.getMilliseconds()).padStart(3, "0")}`;
 }
 
-class StreamFilterPassLogStore {
+export class StreamFilterPassLogStore {
   private entries: StreamFilterPassEntry[] = [];
   private loggedTickers = new Set<string>();
   private seq = 0;
@@ -123,14 +124,13 @@ class StreamFilterPassLogStore {
   };
 }
 
-export const streamFilterPassLogStore = new StreamFilterPassLogStore();
-
 // ---- React hook -----------------------------------------------------------
 
 export function useStreamFilterPassLogCount(): number {
+  const store = useStreamStores().filterPassLog;
   return useSyncExternalStore(
-    streamFilterPassLogStore.subscribe,
-    () => streamFilterPassLogStore.getCount(),
+    store.subscribe,
+    () => store.getCount(),
     () => 0
   );
 }

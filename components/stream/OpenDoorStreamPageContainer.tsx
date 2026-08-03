@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import OpenDoorScanner from "../scanner/OpenDoorScanner";
+import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import {
   deriveStreamExecutionDescriptor,
   type StreamAutomationConfig,
@@ -87,7 +88,6 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     printStartTime: "09:20",
     printCloseTime: "09:20",
     noSpreadExit: true,
-    exitConfirmTicks: 3,
     betaMode: false,
     startCutoffTime: "09:20",
     preStartTime: "21:00",
@@ -232,6 +232,11 @@ type OpenDoorStreamPageContainerProps = {
   navStreamHref?: string;
   navScannerHref?: string;
   navSonarHref?: string;
+  /** See StreamPageContainer — identity this instance's stores and bridge leases are keyed by. */
+  instanceId?: string;
+  /** Arbitration priority, HIGHER WINS. See StreamPageContainer. */
+  strategyPriority?: number;
+  strategyLabel?: string;
 };
 
 // Parallel counterpart to StreamPageContainer.tsx (which wraps ArbitrageScanner) — this wraps
@@ -239,7 +244,7 @@ type OpenDoorStreamPageContainerProps = {
 // toolbar, e.g. the 10m/30m exit-class buttons) while reusing the SAME underlying dispatch/
 // execution logic (streamEngine.ts, imported identically here). Do not merge this back into
 // StreamPageContainer.tsx — OpenDoor and Arbitrage must stay independently editable.
-export default function OpenDoorStreamPageContainer({
+function OpenDoorStreamPageContainerInner({
   lsKeyPrefix = DEFAULT_LS_PREFIX,
   headerTitle,
   navStreamHref,
@@ -250,6 +255,10 @@ export default function OpenDoorStreamPageContainer({
   const sessionLsKey = `${lsKeyPrefix}.session`;
   const ruleBandLsKey = `${lsKeyPrefix}.rule-band`;
   const automationLsKey = `${lsKeyPrefix}.automation`;
+  // Automation state on the bridge is per strategy. Without sending our own id every
+  // instance would read and write ONE shared flag, so starting this strategy would switch
+  // on every other one within a few seconds (this state is pulled on mount and on focus).
+  const { strategyId } = useStreamInstance();
 
   const [tab, setTab] = useState<StreamTabKey>(() => readInitialStreamTab(tabLsKey));
   const [session, setSession] = useState<StreamSession>(() => readInitialStreamSession(sessionLsKey));
@@ -312,7 +321,7 @@ export default function OpenDoorStreamPageContainer({
 
   const pullRemoteState = useCallback(async () => {
     try {
-      const response = await fetch(bridgeUrl("/api/stream/automation/state"), { cache: "no-store" });
+      const response = await fetch(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || json?.ok === false) return;
       const state = json?.state ?? {};
@@ -336,7 +345,7 @@ export default function OpenDoorStreamPageContainer({
     } catch {
       // keep local state if remote sync is unavailable
     }
-  }, [automationConfig.strategyModeEnabled, streamAutoEnabled]);
+  }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
 
   const sendHeartbeat = useCallback(async () => {
     try {
@@ -351,7 +360,7 @@ export default function OpenDoorStreamPageContainer({
     } catch {
       // heartbeat is best-effort
     }
-  }, [streamPageClientId]);
+  }, [streamPageClientId, strategyId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -453,5 +462,23 @@ export default function OpenDoorStreamPageContainer({
       onStreamShellStatsChange={handleStreamShellStatsChange}
       onSharedRatingRulesChange={handleSharedRatingRulesChange}
     />
+  );
+}
+
+// See StreamPageContainer for why the provider is a separate wrapper: it must sit above every
+// component that resolves instance-scoped stores.
+export default function OpenDoorStreamPageContainer(props: OpenDoorStreamPageContainerProps = {}) {
+  const lsKeyPrefix = props.lsKeyPrefix ?? DEFAULT_LS_PREFIX;
+  const instanceId = props.instanceId ?? lsKeyPrefix;
+  return (
+    <StreamInstanceProvider
+      instanceId={instanceId}
+      strategyId={instanceId}
+      label={props.strategyLabel ?? props.headerTitle ?? "OPEN DOOR STREAM"}
+      priority={props.strategyPriority ?? 0}
+      lsPrefix={lsKeyPrefix}
+    >
+      <OpenDoorStreamPageContainerInner {...props} />
+    </StreamInstanceProvider>
   );
 }

@@ -1,8 +1,9 @@
 ﻿"use client";
 
 import { useSyncExternalStore } from "react";
-import { getStreamDecisionRow, streamDecisionStore } from "./streamDecisionStore";
+import type { StreamDecisionStore } from "./streamDecisionStore";
 import type { StreamDecisionRow, StreamPosition } from "./streamEngine";
+import { useStreamStores } from "./streamStoreRegistry";
 
 export type StreamPositionMeta = {
   activeCount: number;
@@ -112,12 +113,15 @@ function countsAsOpen(position: StreamPosition): boolean {
   );
 }
 
-function buildActiveRows(positions: StreamPosition[]): StreamActiveDecisionRow[] {
+function buildActiveRows(
+  positions: StreamPosition[],
+  decisionStore: StreamDecisionStore
+): StreamActiveDecisionRow[] {
   const rows = new Map<string, StreamActiveDecisionRow>();
 
   for (const position of positions) {
     if (position.status === "CLOSED" || position.status === "PENDING_ENTRY") continue;
-    const decision = getStreamDecisionRow(position.ticker);
+    const decision = decisionStore.getRow(position.ticker);
     const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
     const spread = decision?.spread ?? position.spread;
     const netEdge = decision?.netEdge ?? (signal != null ? Math.max(0, Math.abs(signal) - Math.max(0, spread ?? 0)) : null);
@@ -145,16 +149,29 @@ function buildMeta(positions: StreamPosition[], activeRows: StreamActiveDecision
   };
 }
 
-class StreamPositionStore {
+export class StreamPositionStore {
   private rows: StreamPosition[] = [];
   private activeRows: StreamActiveDecisionRow[] = [];
   private meta: StreamPositionMeta = EMPTY_META;
   private listeners = new Set<() => void>();
+  private readonly decisionStore: StreamDecisionStore;
+  private readonly unsubscribeDecision: () => void;
 
-  constructor() {
-    streamDecisionStore.subscribeToVersion(() => {
+  // The decision store is injected rather than imported: with several strategy instances alive
+  // at once, this position store must derive its rows from ITS OWN instance's decisions. A
+  // module-level import would silently bind every instance to whichever one loaded first.
+  constructor(decisionStore: StreamDecisionStore) {
+    this.decisionStore = decisionStore;
+    this.unsubscribeDecision = decisionStore.subscribeToVersion(() => {
       this.recomputeDerived();
     });
+  }
+
+  // Instances are torn down when their tab/panel unmounts; without this the decision store keeps
+  // a live reference to a dead position store forever.
+  dispose(): void {
+    this.unsubscribeDecision();
+    this.listeners.clear();
   }
 
   getRows(): StreamPosition[] {
@@ -194,7 +211,7 @@ class StreamPositionStore {
   };
 
   private recomputeDerived(forceNotify = false): void {
-    const nextActiveRows = buildActiveRows(this.rows);
+    const nextActiveRows = buildActiveRows(this.rows, this.decisionStore);
     const nextMeta = buildMeta(this.rows, nextActiveRows);
     const activeChanged = !sameActiveRowArray(this.activeRows, nextActiveRows);
     const metaChanged = !sameMeta(this.meta, nextMeta);
@@ -205,28 +222,29 @@ class StreamPositionStore {
   }
 }
 
-export const streamPositionStore = new StreamPositionStore();
-
 export function useStreamPositionRows(): StreamPosition[] {
+  const store = useStreamStores().position;
   return useSyncExternalStore(
-    streamPositionStore.subscribe,
-    () => streamPositionStore.getRows(),
+    store.subscribe,
+    () => store.getRows(),
     () => []
   );
 }
 
 export function useStreamActiveDecisionRows(): StreamActiveDecisionRow[] {
+  const store = useStreamStores().position;
   return useSyncExternalStore(
-    streamPositionStore.subscribe,
-    () => streamPositionStore.getActiveRows(),
+    store.subscribe,
+    () => store.getActiveRows(),
     () => []
   );
 }
 
 export function useStreamPositionMeta(): StreamPositionMeta {
+  const store = useStreamStores().position;
   return useSyncExternalStore(
-    streamPositionStore.subscribe,
-    () => streamPositionStore.getMeta(),
+    store.subscribe,
+    () => store.getMeta(),
     () => EMPTY_META
   );
 }

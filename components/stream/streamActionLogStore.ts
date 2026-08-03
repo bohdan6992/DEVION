@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { StreamActionLogEntry } from "./streamEngine";
+import { useStreamStores } from "./streamStoreRegistry";
 
 function sameEntry(left: StreamActionLogEntry, right: StreamActionLogEntry): boolean {
   return (
@@ -25,7 +26,7 @@ function sameEntryArray(left: StreamActionLogEntry[], right: StreamActionLogEntr
   return true;
 }
 
-class StreamActionLogStore {
+export class StreamActionLogStore {
   private rows: StreamActionLogEntry[] = [];
   private listeners = new Set<() => void>();
 
@@ -54,12 +55,11 @@ class StreamActionLogStore {
   };
 }
 
-export const streamActionLogStore = new StreamActionLogStore();
-
 export function useStreamActionLogRows(): StreamActionLogEntry[] {
+  const store = useStreamStores().actionLog;
   return useSyncExternalStore(
-    streamActionLogStore.subscribe,
-    () => streamActionLogStore.getRows(),
+    store.subscribe,
+    () => store.getRows(),
     () => []
   );
 }

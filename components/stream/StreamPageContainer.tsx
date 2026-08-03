@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
 import ArbitrageScanner from "../scanner/ArbitrageScanner";
+import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import {
   deriveStreamExecutionDescriptor,
   type StreamAutomationConfig,
@@ -87,7 +88,6 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     printStartTime: "09:20",
     printCloseTime: "09:20",
     noSpreadExit: true,
-    exitConfirmTicks: 3,
     betaMode: false,
     startCutoffTime: "09:20",
     preStartTime: "21:00",
@@ -232,9 +232,22 @@ type StreamPageContainerProps = {
   navStreamHref?: string;
   navScannerHref?: string;
   navSonarHref?: string;
+  /**
+   * Identity of this strategy instance. Defaults to lsKeyPrefix so an unconfigured mount keeps
+   * its historical storage namespace. Give each parallel strategy a DISTINCT id — everything
+   * the engine owns (stores, action log, bridge ticker leases) is keyed by it.
+   */
+  instanceId?: string;
+  /**
+   * Arbitration priority — HIGHER WINS. When two strategies want the same ticker at the same
+   * minute boundary, the bridge grants it to the higher number and the other one skips that
+   * entry. Leave distinct across strategies, or the tie falls back to whoever claimed first.
+   */
+  strategyPriority?: number;
+  strategyLabel?: string;
 };
 
-export default function StreamPageContainer({
+function StreamPageContainerInner({
   lsKeyPrefix = DEFAULT_LS_PREFIX,
   headerTitle,
   navStreamHref,
@@ -245,6 +258,10 @@ export default function StreamPageContainer({
   const sessionLsKey = `${lsKeyPrefix}.session`;
   const ruleBandLsKey = `${lsKeyPrefix}.rule-band`;
   const automationLsKey = `${lsKeyPrefix}.automation`;
+  // Automation state on the bridge is per strategy. Without sending our own id every
+  // instance would read and write ONE shared flag, so starting this strategy would switch
+  // on every other one within a few seconds (this state is pulled on mount and on focus).
+  const { strategyId } = useStreamInstance();
 
   const [tab, setTab] = useState<StreamTabKey>(() => readInitialStreamTab(tabLsKey));
   const [session, setSession] = useState<StreamSession>(() => readInitialStreamSession(sessionLsKey));
@@ -307,7 +324,7 @@ export default function StreamPageContainer({
 
   const pullRemoteState = useCallback(async () => {
     try {
-      const response = await fetch(bridgeUrl("/api/stream/automation/state"), { cache: "no-store" });
+      const response = await fetch(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || json?.ok === false) return;
       const state = json?.state ?? {};
@@ -349,7 +366,7 @@ export default function StreamPageContainer({
     } catch {
       // keep local state if remote sync is unavailable
     }
-  }, [automationConfig.strategyModeEnabled, streamAutoEnabled]);
+  }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
 
   const sendHeartbeat = useCallback(async () => {
     try {
@@ -359,12 +376,13 @@ export default function StreamPageContainer({
         body: JSON.stringify({
           clientId: streamPageClientId,
           source: "stream-page",
+          strategyId,
         }),
       });
     } catch {
       // heartbeat is best-effort
     }
-  }, [streamPageClientId]);
+  }, [streamPageClientId, strategyId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -466,5 +484,25 @@ export default function StreamPageContainer({
       onStreamShellStatsChange={handleStreamShellStatsChange}
       onSharedRatingRulesChange={handleSharedRatingRulesChange}
     />
+  );
+}
+
+// The provider must sit ABOVE the component that reads instance-scoped stores, so it is a
+// separate wrapper rather than something rendered inside StreamPageContainerInner. Everything
+// below it (scanner, view, engine) resolves its stores and bridge identity from this context —
+// which is what lets several of these run side by side without sharing state.
+export default function StreamPageContainer(props: StreamPageContainerProps = {}) {
+  const lsKeyPrefix = props.lsKeyPrefix ?? DEFAULT_LS_PREFIX;
+  const instanceId = props.instanceId ?? lsKeyPrefix;
+  return (
+    <StreamInstanceProvider
+      instanceId={instanceId}
+      strategyId={instanceId}
+      label={props.strategyLabel ?? props.headerTitle ?? "ARBITRAGE STREAM"}
+      priority={props.strategyPriority ?? 0}
+      lsPrefix={lsKeyPrefix}
+    >
+      <StreamPageContainerInner {...props} />
+    </StreamInstanceProvider>
   );
 }

@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useSyncExternalStore } from "react";
+import { useStreamStores } from "./streamStoreRegistry";
 import type { StreamOrderIntent } from "./streamEngine";
 
 export type StreamOrderIntentMeta = {
@@ -34,7 +35,7 @@ function sameIntentArray(left: StreamOrderIntent[], right: StreamOrderIntent[]):
   return true;
 }
 
-class StreamOrderIntentStore {
+export class StreamOrderIntentStore {
   private rows: StreamOrderIntent[] = [];
   private meta: StreamOrderIntentMeta = EMPTY_META;
   private listeners = new Set<() => void>();
@@ -75,20 +76,20 @@ class StreamOrderIntentStore {
   };
 }
 
-export const streamOrderIntentStore = new StreamOrderIntentStore();
-
 export function useStreamOrderIntentRows(): StreamOrderIntent[] {
+  const store = useStreamStores().orderIntent;
   return useSyncExternalStore(
-    streamOrderIntentStore.subscribe,
-    () => streamOrderIntentStore.getRows(),
+    store.subscribe,
+    () => store.getRows(),
     () => []
   );
 }
 
 export function useStreamOrderIntentMeta(): StreamOrderIntentMeta {
+  const store = useStreamStores().orderIntent;
   return useSyncExternalStore(
-    streamOrderIntentStore.subscribe,
-    () => streamOrderIntentStore.getMeta(),
+    store.subscribe,
+    () => store.getMeta(),
     () => EMPTY_META
   );
 }

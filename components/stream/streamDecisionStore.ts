@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useSyncExternalStore } from "react";
+import { useStreamStores } from "./streamStoreRegistry";
 
 export type StreamDecisionStoreRow = {
   ticker: string;
@@ -40,7 +41,7 @@ function sameDecisionRow(a: StreamDecisionStoreRow | undefined, b: StreamDecisio
   );
 }
 
-class StreamDecisionStore {
+export class StreamDecisionStore {
   private rows = new Map<string, StreamDecisionStoreRow>();
   private ids: string[] = [];
   private version = 0;
@@ -148,32 +149,29 @@ class StreamDecisionStore {
   }
 }
 
-export const streamDecisionStore = new StreamDecisionStore();
-
-export function getStreamDecisionRow(id: string): StreamDecisionStoreRow | null {
-  return streamDecisionStore.getRow(id);
-}
-
 export function useStreamDecisionIds(): string[] {
+  const store = useStreamStores().decision;
   return useSyncExternalStore(
-    streamDecisionStore.subscribeToIds,
-    () => streamDecisionStore.getIds(),
+    store.subscribeToIds,
+    () => store.getIds(),
     () => []
   );
 }
 
 export function useStreamDecisionVersion(): number {
+  const store = useStreamStores().decision;
   return useSyncExternalStore(
-    streamDecisionStore.subscribeToVersion,
-    () => streamDecisionStore.getVersion(),
+    store.subscribeToVersion,
+    () => store.getVersion(),
     () => 0
   );
 }
 
 export function useStreamDecisionRow(id: string): StreamDecisionStoreRow | null {
+  const store = useStreamStores().decision;
   return useSyncExternalStore(
-    (listener) => streamDecisionStore.subscribeToRow(id, listener),
-    () => streamDecisionStore.getRow(id),
+    (listener) => store.subscribeToRow(id, listener),
+    () => store.getRow(id),
     () => null
   );
 }

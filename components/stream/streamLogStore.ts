@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useSyncExternalStore } from "react";
+import { useStreamStores } from "./streamStoreRegistry";
 
 // ---- types ----------------------------------------------------------------
 
@@ -82,7 +83,24 @@ export type StreamLogEntry = {
 };
 
 const MAX_ENTRIES = 5000;
-const STORAGE_KEY = "stream.simulation-log.v1";
+// Base key only — each strategy instance appends its own namespace (see StreamLogStore's
+// constructor). Two instances sharing one key would merge their simulation logs and, worse,
+// overwrite each other's on every debounced save.
+const STORAGE_KEY_BASE = "stream.simulation-log.v1";
+
+/**
+ * Which "day" a log entry belongs to.
+ *
+ * The default is the plain calendar day, which is WRONG for an overnight session: with START at
+ * 21:00 the trading day runs 21:00 -> next morning, but a calendar-day key rolls over at
+ * midnight, so at 00:00 everything logged during the 21:00-23:59 stretch stopped matching "today"
+ * — and because the store rewrites storage right after filtering, that half of the session was
+ * not just hidden but permanently deleted.
+ *
+ * The engine replaces this with a resolver anchored to the session's own START (see
+ * setDayKeyResolver), so the log keeps the whole overnight run as one day.
+ */
+type StreamLogDayKeyResolver = (timestamp: number) => string;
 
 function localDayKey(timestamp = Date.now()): string {
   const date = new Date(timestamp);
@@ -92,31 +110,31 @@ function localDayKey(timestamp = Date.now()): string {
   return `${year}-${month}-${day}`;
 }
 
-function isSameLocalDay(timestamp: number, dayKey = localDayKey()): boolean {
-  return localDayKey(timestamp) === dayKey;
+function filterEntriesToDay(
+  entries: StreamLogEntry[],
+  resolver: StreamLogDayKeyResolver,
+  dayKey: string
+): StreamLogEntry[] {
+  return entries.filter((entry) => Number.isFinite(entry.ts) && resolver(entry.ts) === dayKey);
 }
 
-function filterEntriesToCurrentDay(entries: StreamLogEntry[], dayKey = localDayKey()): StreamLogEntry[] {
-  return entries.filter((entry) => Number.isFinite(entry.ts) && isSameLocalDay(entry.ts, dayKey));
-}
-
-function loadFromStorage(): StreamLogEntry[] {
+function loadFromStorage(storageKey: string): StreamLogEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return filterEntriesToCurrentDay(parsed as StreamLogEntry[]);
+    return parsed as StreamLogEntry[];
   } catch {
     return [];
   }
 }
 
-function saveToStorage(entries: StreamLogEntry[]): void {
+function saveToStorage(storageKey: string, entries: StreamLogEntry[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(storageKey, JSON.stringify(entries));
   } catch {
     // quota exceeded — ignore
   }
@@ -124,25 +142,50 @@ function saveToStorage(entries: StreamLogEntry[]): void {
 
 // ---- store ----------------------------------------------------------------
 
-class StreamLogStore {
+export class StreamLogStore {
   private entries: StreamLogEntry[] | null = null;
   private seq = 0;
   private listeners = new Set<() => void>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private notifyPending = false;
+  private readonly storageKey: string;
+  private dayKeyResolver: StreamLogDayKeyResolver = localDayKey;
+
+  constructor(namespace?: string) {
+    this.storageKey = namespace ? `${STORAGE_KEY_BASE}.${namespace}` : STORAGE_KEY_BASE;
+  }
+
+  /**
+   * Anchors the log's "day" to the session's own START instead of calendar midnight. Called by
+   * the engine once the configured START is known; re-applying it re-evaluates what is currently
+   * in memory, so an entry logged before the resolver arrived is not stranded under the old key.
+   */
+  setDayKeyResolver(resolver: StreamLogDayKeyResolver): void {
+    if (this.dayKeyResolver === resolver) return;
+    this.dayKeyResolver = resolver;
+    if (this.entries !== null) {
+      this.entries = filterEntriesToDay(this.entries, resolver, resolver(Date.now()));
+      this.scheduleSave();
+      this.scheduleNotify();
+    }
+  }
 
   private ensureLoaded(): StreamLogEntry[] {
+    const dayKey = this.dayKeyResolver(Date.now());
     if (this.entries === null) {
-      this.entries = loadFromStorage();
+      // Filter AFTER loading rather than inside loadFromStorage: the resolver may not be set yet
+      // on the very first read, and pruning storage against the wrong (calendar) day is exactly
+      // how the pre-midnight half of an overnight session used to get deleted.
+      this.entries = filterEntriesToDay(loadFromStorage(this.storageKey), this.dayKeyResolver, dayKey);
       this.seq = this.entries.reduce((max, e) => Math.max(max, e.seq), 0);
-      saveToStorage(this.entries);
+      saveToStorage(this.storageKey, this.entries);
       return this.entries;
     }
-    const filtered = filterEntriesToCurrentDay(this.entries);
+    const filtered = filterEntriesToDay(this.entries, this.dayKeyResolver, dayKey);
     if (filtered.length !== this.entries.length) {
       this.entries = filtered;
       this.seq = this.entries.reduce((max, e) => Math.max(max, e.seq), 0);
-      saveToStorage(this.entries);
+      saveToStorage(this.storageKey, this.entries);
     }
     return this.entries;
   }
@@ -154,7 +197,7 @@ class StreamLogStore {
     if (this.saveTimer !== null) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      saveToStorage(this.entries ?? []);
+      saveToStorage(this.storageKey, this.entries ?? []);
     }, 3000);
   }
 
@@ -171,7 +214,7 @@ class StreamLogStore {
 
   push(entry: Omit<StreamLogEntry, "seq">): void {
     const entries = this.ensureLoaded();
-    const currentDayEntries = filterEntriesToCurrentDay(entries, localDayKey(entry.ts));
+    const currentDayEntries = filterEntriesToDay(entries, this.dayKeyResolver, this.dayKeyResolver(entry.ts));
     if (currentDayEntries.length !== entries.length) {
       this.entries = currentDayEntries;
     }
@@ -194,7 +237,7 @@ class StreamLogStore {
     this.entries = [];
     this.seq = 0;
     if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
-    saveToStorage([]);
+    saveToStorage(this.storageKey, []);
     this.listeners.forEach((l) => l());
   }
 
@@ -204,14 +247,13 @@ class StreamLogStore {
   };
 }
 
-export const streamLogStore = new StreamLogStore();
-
 // ---- hooks ----------------------------------------------------------------
 
 export function useStreamLogEntries(): StreamLogEntry[] {
+  const store = useStreamStores().log;
   return useSyncExternalStore(
-    streamLogStore.subscribe,
-    () => streamLogStore.getEntries(),
+    store.subscribe,
+    () => store.getEntries(),
     () => []
   );
 }
