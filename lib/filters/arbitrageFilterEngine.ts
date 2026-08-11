@@ -200,34 +200,52 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
     }
 
     // exclude flags
+    // These mirror the tape (TapeWriter + PaperFilters), so the scanner and the live views judge
+    // the same ticker the same way. Two rules run through all of them:
+    //   * a flag that is ABSENT does not pass a filter that is switched on — `!!undefined` used to
+    //     read "unknown" as "definitely not", which is how a row the scanner dropped stayed
+    //     visible here;
+    //   * values are parsed with readRowBool rather than JS truthiness, so the string "NO" is
+    //     false instead of true.
+    // News is the deliberate exception: the tape writes it only when there IS news, so a missing
+    // count really means "none" (PaperFilters.ExcludeFlagAbsentMeansNo).
     if (exclude.dividend) {
-      const hasDiv = !!(r.HasDividend ?? r.hasDividend ?? r.Dividend ?? r.dividend);
-      if (hasDiv) return false;
+      // Parsed, not truthy: a raw "0" or "-" used to read as TRUE here and false on the server.
+      if (readRowBool(r.HasDividend ?? r.hasDividend ?? r.Dividend ?? r.dividend) === true) return false;
     }
     if (exclude.news) {
-      const cnt = Number(getField(r, "LstClsNewsCnt") ?? getField(r, "newsCount") ?? getField(r, "NewsCount") ?? getField(r, "news") ?? getField(r, "News") ?? 0);
-      if (cnt > 0) return false;
+      // NewsCnt first, then LstClsNewsCnt — the order TapeWriter derives HasNews from.
+      const cnt = Number(
+        getField(r, "NewsCnt") ?? getField(r, "newsCnt") ??
+        getField(r, "LstClsNewsCnt") ?? getField(r, "newsCount") ??
+        getField(r, "NewsCount") ?? getField(r, "news") ?? getField(r, "News") ?? 0
+      );
+      if (isFinite(cnt) && cnt > 0) return false;
     }
     if (exclude.ptp) {
-      const isPtp = !!(r.isPtp ?? r.IsPTP ?? r.isPTP);
-      if (isPtp) return false;
+      if (readRowBool(r.isPtp ?? r.IsPTP ?? r.isPTP) !== false) return false;
     }
     if (exclude.ssr) {
-      const isSsr = !!(r.isSsr ?? r.IsSSR ?? r.isSSR);
-      if (isSsr) return false;
+      if (readRowBool(r.isSsr ?? r.IsSSR ?? r.isSSR) !== false) return false;
     }
     if (exclude.report) {
       const hasRep = readTodayReportBool(r);
       if (hasRep) return false;
     }
     if (exclude.etf) {
-      const isEtf = !!(r.isEtf ?? r.IsETF ?? r.isETF ?? r.etf ?? r.ETF ?? r.IsEtf);
+      // EquityType has no counterpart in the tape; it can only exclude MORE, never let an ETF
+      // through that the scanner would have dropped, so it stays.
       const eqt = String(getField(r, "EquityType") ?? getField(r, "equityType") ?? "").toLowerCase();
-      if (isEtf || (eqt && eqt.includes("etf"))) return false;
+      if (eqt && eqt.includes("etf")) return false;
+      if (readRowBool(r.isEtf ?? r.IsETF ?? r.isETF ?? r.etf ?? r.ETF ?? r.IsEtf) !== false) return false;
     }
     if (exclude.crap) {
-      const lastClose = Number(getField(r, "LstCls") ?? getField(r, "LastClose") ?? getField(r, "lastClose") ?? NaN);
-      if (isFinite(lastClose) && lastClose < 5) return false;
+      // YCls, not LstCls: TapeWriter switched to yesterday's close because the running LstCls is
+      // null pre-market, which silently disabled this filter there. Unknown now rejects, so the
+      // rule holds before a close exists.
+      const yCls = Number(getField(r, "YCls") ?? getField(r, "yCls") ?? getField(r, "YClose") ?? NaN);
+      const isCrap = isFinite(yCls) ? yCls < 5 : null;
+      if (isCrap !== false) return false;
     }
 
     // report tri-state

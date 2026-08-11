@@ -12,7 +12,8 @@ const CommonStyles = () => (
     @keyframes terminal-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
     @keyframes spectr-slide { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
     @keyframes swift-flow { 0% { transform: translateX(-10px); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateX(10px); opacity: 0; } }
-    
+    @keyframes caesar-crest { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(0.93); } }
+
     .anim-sonar { animation: sonar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; transform-origin: center; }
     .anim-pnl { stroke-dasharray: 100; animation: scanner-pnl 3s linear infinite; }
     .anim-scope { animation: scope-point 2s ease-in-out infinite; transform-origin: center; }
@@ -20,6 +21,7 @@ const CommonStyles = () => (
     .anim-spectr-1 { animation: spectr-slide 4s ease-in-out infinite; }
     .anim-spectr-2 { animation: spectr-slide 4s ease-in-out infinite 0.5s; }
     .anim-swift { animation: swift-flow 1.5s linear infinite; }
+    .anim-caesar-crest { animation: caesar-crest 3.5s ease-in-out infinite; transform-origin: center; }
   `}</style>
 );
 
@@ -112,6 +114,38 @@ export function IconSwift({ glow = false, ...p }: Props) {
       </g>
       <path d="M5 14h14" strokeOpacity="0.1" strokeWidth="1" strokeDasharray="4 2" />
       {glow && <Glow><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></Glow>}
+    </svg>
+  );
+}
+
+// 7. CAESAR - Розклад торгового дня (Шолом центуріона)
+export function IconCaesar({ glow = false, ...p }: Props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}>
+      <CommonStyles />
+      {/* Поперечний гребінь (crista transversa) — спирається на обід шолома */}
+      <path
+        d="M5.1 12.4C5.1 4.4 8.2 1.8 12 1.8s6.9 2.6 6.9 10.6"
+        strokeLinecap="round"
+        className="anim-caesar-crest"
+      />
+      {/* Купол + нащічники */}
+      <path
+        d="M5.8 12.6a6.2 6.2 0 0 1 12.4 0v3.7c0 2.9-2.6 4.8-6.2 5.8-3.6-1-6.2-2.9-6.2-5.8z"
+        fill="currentColor"
+        fillOpacity="0.08"
+        strokeLinejoin="round"
+      />
+      {/* Обід */}
+      <path d="M5.8 12.6h12.4" strokeLinecap="round" />
+      {/* Носова пластина та прорізи для очей */}
+      <path d="M12 12.9v7.3" strokeOpacity="0.5" />
+      <path d="M8.4 15.4h2M14 15.4h2" strokeOpacity="0.45" strokeLinecap="round" />
+      {glow && (
+        <Glow>
+          <path d="M5.8 12.6a6.2 6.2 0 0 1 12.4 0v3.7c0 2.9-2.6 4.8-6.2 5.8-3.6-1-6.2-2.9-6.2-5.8z" />
+        </Glow>
+      )}
     </svg>
   );
 }

@@ -6,6 +6,7 @@ import Link from "next/link";
 import clsx from "clsx";
 
 
+import { matchOpenDoorGate, readOpenDoorGateValues } from "@/lib/opendoor/gate";
 import { useUi } from "@/components/UiProvider";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import PresetPicker from "@/components/presets/PresetPicker";
@@ -175,12 +176,6 @@ const clampInt = (v: any, min: number) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.trunc(n));
-};
-
-const clampFloat = (v: any, min: number) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, n);
 };
 
 const fmtNum = (v: number | null | undefined, digits = 2) =>
@@ -570,37 +565,13 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
   return getRenderableDirection(s) === "down" ? "Short" : "Long";
 }
 
-const getSignalMetricAbs = (
-  s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off"
-): number | null => {
-  if (zapMode === "off") return null;
-  const dir = s.direction;
-  if (dir !== "down" && dir !== "up") return null;
-  const raw =
-    zapMode === "zap"
-      ? dir === "down"
-        ? toNum(s.zapS)
-        : toNum(s.zapL)
-      : dir === "down"
-        ? toNum(s.zapSsigma)
-        : toNum(s.zapLsigma);
-  return raw == null ? null : Math.abs(raw);
-};
+// getSignalMetricAbs / getSignalDeltaThreshold / isSignalGoldActive lived here. They read
+// zapS/zapL/zapSsigma/zapLsigma — Arbitrage's start-deviation metric — and existed only to serve
+// the ZAP filter block and the gold-ticker strip, both removed from OpenDoor Sonar. OpenDoor's
+// deviation gate is DEV against its own bins (matchOpenDoor); nothing here consumed these.
+// ArbitrageSonar keeps its own copies, untouched.
 
 const SONAR_ACTIVE_PRESET_ID_LS_KEY = "opendoor.sonar.shared-preset.active-id";
-
-const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
-  const best = getBestParams(s);
-  const printMedian = safeObj(best?.dev_print_last5_median ?? best?.DevPrintLast5Median);
-  if (s.direction === "down") {
-    return toNum(best?.printMedianPos ?? best?.PrintMedianPos) ?? toNum(printMedian?.pos ?? printMedian?.Pos);
-  }
-  if (s.direction === "up") {
-    return toNum(best?.printMedianNeg ?? best?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
-  }
-  return null;
-};
 
 const parseTodayReportFlag = (value: any): boolean | null => {
   const byDate = parseReportDateAffectsTodaySession(value);
@@ -609,15 +580,6 @@ const parseTodayReportFlag = (value: any): boolean | null => {
 };
 
 const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySession(s);
-
-const isSignalGoldActive = (
-  s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off",
-  zapGoldAbs: number
-): boolean => {
-  const absM = getSignalMetricAbs(s, zapMode);
-  return zapMode !== "off" && isActiveByPositionBp(s) && absM != null && absM <= Math.max(0, Number(zapGoldAbs ?? 0));
-};
 
 /* =========================
    Beta parsing
@@ -2010,11 +1972,6 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  zapMode: "zap" | "sigma" | "delta" | "off";
-  zapShowAbs: number;    // NEW
-  zapSilverAbs: number;  // NEW
-  zapGoldAbs: number;    // NEW (only ACTIVE)
-
   pinColor?: PinColor | null;
   [k: string]: any;
 }
@@ -2027,53 +1984,21 @@ const SignalCard: React.FC<SignalCardProps> = ({
   flashClass,
   compact = false,
 
-  zapMode,
-  zapShowAbs,
-  zapSilverAbs,
-  zapGoldAbs,
-
   pinColor = null,
 }) => {
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
 
-  // ACTIVE position by PositionBp != 0
-  const posActive = isActiveByPositionBp(s);
-
-  const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
-  const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
-
-  const metric =
-    zapMode === "zap" ? z :
-    zapMode === "sigma" || zapMode === "delta" ? zs :
-    null;
-
-  const absM = metric == null ? null : Math.abs(metric);
-
-  const isGold = isSignalGoldActive(s, zapMode, zapGoldAbs);
-
-  const isSilver =
-    zapMode !== "off" &&
-    absM != null &&
-    absM >= Math.max(0, Number(zapSilverAbs ?? 0));
-
-  const deltaBase = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
-  const minShowAbs = zapMode === "delta"
-    ? deltaBase + Math.max(0.05, Number(zapShowAbs ?? 0))
-    : Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
-
-  const isBelowShow =
-    !posActive &&
-    zapMode !== "off" &&
-    absM != null &&
-    absM < minShowAbs;
+  // Gold/silver tinting and the below-threshold dimming used to be computed here from the ZAP
+  // deviation metric. Both are gone with the ZAP block: a card is now plain, or highlighted
+  // because it is the selected ticker. Nothing about OpenDoor's own rule was ever shown this way.
 
   const mintTextClass = "text-[#6ee7b7]";
-  const goldClasses =
-    "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
 
-  const silverClasses =
-    "bg-zinc-200/5 border-zinc-200/30 shadow-[0_0_18px_-10px_rgba(255,255,255,0.18)]";
+  // Still SHOWN on the card body below (the % and σ readouts), just no longer used to decide
+  // whether the card is tinted or dimmed.
+  const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
+  const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
   const activeClasses = isShort
     ? "bg-rose-950/28 border-rose-900/45 shadow-[0_0_12px_-6px_rgba(244,63,94,0.18)]"
@@ -2081,20 +2006,14 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
-  const baseClass =
-    isGold ? goldClasses :
-    isSilver ? silverClasses :
-    isActive ? activeClasses :
-    inactiveClasses;
-
-  const muted = isBelowShow ? "opacity-60" : "opacity-100";
+  const baseClass = isActive ? activeClasses : inactiveClasses;
 
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
-  const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : mintTextClass;
+  const pxColor = isShort ? "text-rose-400" : mintTextClass;
 
   const tickerColor = isActive
-    ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass
+    ? isShort ? "text-rose-300" : mintTextClass
     : "text-zinc-300 group-hover:text-zinc-100";
 
   const pinClass =
@@ -2110,7 +2029,6 @@ const SignalCard: React.FC<SignalCardProps> = ({
         "group relative w-full text-left transition-all duration-200 border flex flex-col justify-between",
         compact ? "p-2 rounded-lg gap-1" : "p-3 rounded-xl gap-1.5",
         baseClass,
-        muted,
         flashClass(s.ticker, side),
       ].join(" ")}
     >
@@ -2929,61 +2847,27 @@ export default function OpenDoorSonar() {
   // parameters (AND across enabled ones) and the selected exit class (10m/30m). UP uses the
   // Ask-side live fields (buy-in perspective), DOWN uses Bid-side — same L=Ask/S=Bid convention
   // established for zapLsigma/zapSsigma elsewhere in this codebase.
+  // The rule itself lives in lib/opendoor/gate.ts so Sonar and the stream engine cannot drift —
+  // the stream is what actually trades on this verdict, so a display/decision mismatch here would
+  // be invisible until it cost money.
   const matchOpenDoor = useCallback((s: ArbitrageSignal): { up: boolean; down: boolean } => {
-    const row = openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()];
-    if (!row) return { up: false, down: false };
-    const c = openDoorExitClass;
-
-    const stackAsk = toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct);
-    const stackBid = toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct);
-    // Bench delta-% arrives as top-level bidBench/askBench (SignalItemDto.BidBench/AskBench,
-    // camelCased by ASP.NET Core JSON serialization) — NOT a "BenchBidLstClsΔ%"-style key.
-    const benchAsk = toNum(s.askBench);
-    const benchBid = toNum(s.bidBench);
-    const devUp = toNum(s.zapLsigma);
-    const devDown = toNum(s.zapSsigma);
-
-    // ADVANCED always checks all 3 parameters (per-parameter toggles are hidden/ignored while
-    // it's on) and reads the "adv_"-prefixed columns (hourly-pooled bins) instead of the
-    // standard 09:20-only ones.
-    const prefix = openDoorAdvancedMode ? "adv_" : "";
-
-    const checkDir = (dir: "up" | "down"): boolean => {
-      const enabled: Array<{ param: string; value: number | null }> = [];
-      if (openDoorAdvancedMode || openDoorUseStack) enabled.push({ param: "stack", value: dir === "up" ? stackAsk : stackBid });
-      if (openDoorAdvancedMode || openDoorUseBench) enabled.push({ param: "bench", value: dir === "up" ? benchAsk : benchBid });
-      if (openDoorAdvancedMode || openDoorUseDevSig) enabled.push({ param: "devsig", value: dir === "up" ? devUp : devDown });
-      if (enabled.length === 0) return false;
-
-      const minRateGate = dir === "up" ? openDoorUpMinRate : openDoorDownMinRate;
-      const minTotalGate = dir === "up" ? openDoorUpMinTotal : openDoorDownMinTotal;
-      const minMoveGate = dir === "up" ? openDoorUpMinMove : openDoorDownMinMove;
-
-      // summary.csv columns use Arbitrage's long/short vocabulary, not up/down.
-      const colDir = dir === "up" ? "long" : "short";
-
-      return enabled.every(({ param, value }) => {
-        if (value == null || !Number.isFinite(value)) return false;
-        const lo = toNum(row[`${prefix}${param}_${c}_best_${colDir}_lo`]);
-        const hi = toNum(row[`${prefix}${param}_${c}_best_${colDir}_hi`]);
-        const rate = toNum(row[`${prefix}${param}_${c}_best_${colDir}_rate`]);
-        const total = toNum(row[`${prefix}${param}_${c}_best_${colDir}_total`]);
-        const avgMove = toNum(row[`${prefix}${param}_${c}_best_${colDir}_avg_move`]);
-        if (lo == null || hi == null || rate == null || total == null) return false;
-        // Bins are signed FLOOR bins (bin label "0.0" step=1.0 covers [0.0,1.0), not the single
-        // point 0.0). lo/hi are the first/last MERGED bin's own floor labels, so the bin's TRUE
-        // covered range is [lo, hi+step) — an unmerged single bin has lo===hi, and checking
-        // value<=hi (no +step) would reject nearly every real value except an exact match.
-        const step = param === "devsig" ? 0.3 : 1.0;
-        if (value < lo || value >= hi + step) return false;
-        if (rate < minRateGate) return false;
-        if (total < minTotalGate) return false;
-        if (avgMove != null && Math.abs(avgMove) < minMoveGate) return false;
-        return true;
-      });
-    };
-
-    return { up: checkDir("up"), down: checkDir("down") };
+    return matchOpenDoorGate(
+      openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()],
+      readOpenDoorGateValues(s),
+      {
+        exitClass: openDoorExitClass,
+        advancedMode: openDoorAdvancedMode,
+        useStack: openDoorUseStack,
+        useBench: openDoorUseBench,
+        useDevSig: openDoorUseDevSig,
+        upMinRate: openDoorUpMinRate,
+        upMinTotal: openDoorUpMinTotal,
+        upMinMove: openDoorUpMinMove,
+        downMinRate: openDoorDownMinRate,
+        downMinTotal: openDoorDownMinTotal,
+        downMinMove: openDoorDownMinMove,
+      }
+    );
   }, [
     openDoorBestByTicker, openDoorExitClass, openDoorAdvancedMode,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
@@ -3107,17 +2991,10 @@ export default function OpenDoorSonar() {
 
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "off">("zap");
-
-  // 3 inputs:
-  // 1) filter/display threshold (single, depends on zapMode)
-  const [zapShowAbs, setZapShowAbs] = useState<number>(0.3);
-
-  // 2) silver: too high highlight (active + inactive)
-  const [zapSilverAbs, setZapSilverAbs] = useState<number>(2.0);
-
-  // 3) gold: normalization highlight (ONLY active)
-  const [zapGoldAbs, setZapGoldAbs] = useState<number>(0.3);
+  // No zapMode / zapShowAbs / zapSilverAbs / zapGoldAbs state here any more — see the removed ZAP
+  // block. The shared SonarExactFilterSnapshot still declares those fields (Arbitrage fills them),
+  // so this page pins them to their inert "off" values where the shape demands them rather than
+  // changing a type Arbitrage also uses.
 
 
   const [adv90Min, setAdv90Min] = useState("");
@@ -3534,7 +3411,7 @@ export default function OpenDoorSonar() {
   };
 
   /* =========================
-     UI State (cls/type/mode/listMode/bpCls/zapMode)
+     UI State (cls/type/mode/listMode/bpCls)
   ========================= */
   // --- Persistence (load before first paint; avoid overwriting stored state with defaults) ---
   const uiHydratedRef = useRef(false);
@@ -3554,14 +3431,12 @@ export default function OpenDoorSonar() {
         if (typeof s?.listMode === "string") setListMode(s.listMode);
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
-        // zap/sort
-        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "off") setZapMode(s.zapMode);
+        // sort. The zap* keys written by older builds are deliberately NOT restored: there is no
+        // control left to show or clear them, and a stale "sigma"/threshold would otherwise keep
+        // gating this page invisibly.
         if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
         if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
         if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
-        if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
-        if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
-        if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
         if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
@@ -3741,7 +3616,7 @@ export default function OpenDoorSonar() {
           cls, type, mode, listMode, bpCls,
 
           // zap/sort
-          zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+          activeMode, sortKey, sortDir,
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
@@ -3802,7 +3677,7 @@ export default function OpenDoorSonar() {
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+    activeMode, sortKey, sortDir,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
@@ -4261,10 +4136,13 @@ export default function OpenDoorSonar() {
       sigmaMin,
       sigmaMax,
 
-      zapMode,
-      zapShowAbs,
-      zapSilverAbs,
-      zapGoldAbs,
+      // Inert. The shape is shared with Arbitrage, which does gate on these; OpenDoor's own
+      // applyExactSonarClientFilters already ignored them, and there is no control left to set
+      // them. "off" makes that explicit instead of leaving a live-looking threshold in the object.
+      zapMode: "off" as const,
+      zapShowAbs: 0,
+      zapSilverAbs: 0,
+      zapGoldAbs: 0,
 
       topMode,
       topSigmaOn,
@@ -4282,7 +4160,6 @@ export default function OpenDoorSonar() {
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
-    zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
     topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
@@ -4372,8 +4249,12 @@ export default function OpenDoorSonar() {
     mode: snapshot.mode,
     ratingMode: snapshot.ratingMode,
     zapMode: snapshot.zapMode,
-    minRate: snapshot.minRate,
-    minTotal: snapshot.minTotal,
+    // OpenDoor evaluates CLEAN data. Sending snapshot.minRate/minTotal (Arbitrage's rating floor,
+    // defaulting to 0.3/1) made the SERVER pre-thin the feed by a rule OpenDoor does not use —
+    // the same leftover this file's own applyExactSonarClientFilters already refuses to apply on
+    // the client. The only rating allowed to reject a ticker is OpenDoor's per-bin table.
+    minRate: 0,
+    minTotal: 0,
     tickers: snapshot.tickersFilterNorm || undefined,
     minCorr: toNum(snapshot.corrMin),
     maxCorr: toNum(snapshot.corrMax),
@@ -4825,7 +4706,6 @@ export default function OpenDoorSonar() {
     if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
-    if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
     return hints.slice(0, 8);
   }, [
     activeMode,
@@ -4861,8 +4741,6 @@ export default function OpenDoorSonar() {
     tickersFilterNorm,
     volNFfromLstClsMax,
     volNFfromLstClsMin,
-    zapMode,
-    zapShowAbs,
   ]);
   const resetSonarUiState = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -4917,36 +4795,10 @@ export default function OpenDoorSonar() {
   const activeInIgnoreList = activeTickerNorm ? ignoreSet.has(activeTickerNorm) : false;
   const activeInApplyList = activeTickerNorm ? applySet.has(activeTickerNorm) : false;
   const activePinColor = activeTickerNorm ? pinMap[activeTickerNorm] ?? null : null;
-  const activeGoldTickers = useMemo(() => {
-    if (zapMode === "off") return [];
-    const byKey = new Map<string, { ticker: string; direction: "up" | "down"; benchmark: string; metricAbs: number | null }>();
-    for (const s of allItems ?? []) {
-      if (!isSignalGoldActive(s, zapMode, zapGoldAbs)) continue;
-      const dir = s.direction;
-      if (dir !== "up" && dir !== "down") continue;
-      const tk = normalizeTicker(s.ticker);
-      if (!tk) continue;
-      const metricAbs = getSignalMetricAbs(s, zapMode);
-      if (metricAbs == null || metricAbs > Math.max(0, Number(zapGoldAbs ?? 0))) continue;
-      const key = `${tk}|${dir}`;
-      const nextEntry = {
-        ticker: tk,
-        direction: dir,
-        benchmark: String(s.benchmark ?? "UNKNOWN").toUpperCase(),
-        metricAbs,
-      };
-      const prev = byKey.get(key);
-      if (!prev || (nextEntry.metricAbs ?? Number.POSITIVE_INFINITY) < (prev.metricAbs ?? Number.POSITIVE_INFINITY)) {
-        byKey.set(key, nextEntry);
-      }
-    }
-    return Array.from(byKey.values()).sort((a, b) => {
-      const ma = a.metricAbs ?? Number.POSITIVE_INFINITY;
-      const mb = b.metricAbs ?? Number.POSITIVE_INFINITY;
-      if (ma !== mb) return ma - mb;
-      return a.ticker.localeCompare(b.ticker);
-    });
-  }, [allItems, zapMode, zapGoldAbs]);
+  // activeGoldTickers (the amber "deviation has normalised, consider closing" strip) is gone with
+  // the ZAP block that fed it. It was an Arbitrage idea end to end: an open position whose start
+  // deviation converged. OpenDoor exits on the clock — 09:40 or 10:00 by exit class — so no
+  // deviation reading has anything to say about when to close one.
 
   const bestRating = toNum(bestObj?.rating);
   const bestTotalHard = toNum(bestObj?.hard);
@@ -5992,161 +5844,13 @@ export default function OpenDoorSonar() {
           </div>
 
 
-          {/* ZAP FILTERS */}
-          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-violet-500/20 bg-violet-500/[0.06]`}>
-            {/* mode toggles */}
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "zap" ? "off" : "zap"))}
-              className={[
-                SONAR_FILTER_INNER_PILL,
-                zapMode === "zap"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-            >
-              % ZAP
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "sigma" ? "off" : "sigma"))}
-              className={[
-                `${SONAR_FILTER_INNER_PILL} gap-1`,
-                zapMode === "sigma"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-            >
-              <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "delta" ? "off" : "delta"))}
-              className={[
-                `${SONAR_FILTER_INNER_PILL} gap-1`,
-                zapMode === "delta"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-              title="Use sigma threshold above direction-specific median print plus the first input delta"
-            >
-              <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
-            </button>
-
-            {/* 1) show/filter threshold (single) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "zap" ? 0.1 : 0.05}
-                min={zapMode === "zap" ? 0.3 : 0.05}
-                value={zapShowAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => {
-                  const v = clampFloat(e.target.value, zapMode === "zap" ? 0.3 : 0.05);
-                  setZapShowAbs(v);
-                }}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title={zapMode === "delta" ? "Additional delta above direction-specific median print" : "Threshold for filtering (ZAP or SIGZAP depending on mode)"}
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v + (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase zap threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v - (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease zap threshold"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-
-            {/* 2) SILVER (too high) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "sigma" ? 0.1 : 0.5}
-                min={0}
-                value={zapSilverAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title="SILVER highlight when |metric| >= this (active+inactive)"
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase silver threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease silver threshold"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-
-            {/* 3) GOLD (only active normalization) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "sigma" ? 0.05 : 0.1}
-                min={0}
-                value={zapGoldAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title="GOLD highlight when |metric| <= this (ONLY active positions)"
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase gold threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease gold threshold"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-
-          </div>
+          {/* The ZAP deviation filter (% ZAP / σ ZAP / Δ ZAP + show/silver/gold thresholds) used to
+              sit here. Removed: it is Arbitrage's start-deviation gate, and OpenDoor's deviation
+              gate is DEV against its own bins. applyExactSonarClientFilters already ignored these
+              thresholds for OpenDoor, so the block never changed WHICH tickers matched — but it
+              still dimmed cards below its threshold and gold/silver-tinted them, i.e. an Arbitrage
+              statistic quietly styling an OpenDoor list. The metric it read was zapS/zapL (%) or
+              zapSsigma/zapLsigma (σ); ArbitrageSonar still has all of it. */}
 
         </div>
 
@@ -6678,42 +6382,6 @@ export default function OpenDoorSonar() {
           </div>
         )}
 
-        {activePanelVisible && (
-          <div
-            className={[
-              "rounded-2xl bg-black/40 px-4 py-3",
-              activeGoldTickers.length > 0
-                ? "border border-amber-500/20 bg-amber-500/[0.03]"
-                : "accent-panel-soft",
-            ].join(" ")}
-          >
-            {activeGoldTickers.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {activeGoldTickers.map((entry) => {
-                  const isCurrent = activeTickerNorm === entry.ticker;
-                  return (
-                    <button
-                      key={`${entry.ticker}|${entry.direction}`}
-                      type="button"
-                      onClick={() => setActiveTicker(entry.ticker)}
-                    className={[
-                      "group inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-left font-mono transition-all duration-200",
-                      "border-amber-500/35 bg-amber-500/12 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.16)]",
-                      "animate-pulse hover:bg-white/[0.08]",
-                      isCurrent ? "ring-1 ring-white/30" : "",
-                    ].join(" ")}
-                      title="Set as active ticker"
-                    >
-                      <span className="text-[12px] font-semibold tracking-[0.08em]">{entry.ticker}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="h-5" />
-            )}
-          </div>
-        )}
 
         {/* ========================= MESSAGES & GRID ========================= */}
         {error && (
@@ -6937,10 +6605,6 @@ export default function OpenDoorSonar() {
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
-                                  zapMode={zapMode}
-                                  zapShowAbs={zapShowAbs}
-                                  zapSilverAbs={zapSilverAbs}
-                                  zapGoldAbs={zapGoldAbs}
                                   pinColor={pinMap[s.ticker] ?? null}
                                 />
                               ))}
@@ -6959,10 +6623,6 @@ export default function OpenDoorSonar() {
                                   onClick={onTickerClick}
                                   activeTicker={activeTicker}
                                   flashClass={flashClass}
-                                  zapMode={zapMode}
-                                  zapShowAbs={zapShowAbs}
-                                  zapSilverAbs={zapSilverAbs}
-                                  zapGoldAbs={zapGoldAbs}
                                   pinColor={pinMap[s.ticker] ?? null}
                                 />
                               ))}

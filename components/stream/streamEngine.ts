@@ -269,8 +269,21 @@ export type StreamAutomationConfig = {
   printCloseTime: string;
   noSpreadExit: boolean;
   betaMode: boolean;
-  /** Time-of-day (HH:MM, local) after which auto-dispatch of new ENTRY orders stops. */
+  /**
+   * Time-of-day (HH:MM, NY) at which the session-end hotkey fires — Arbitrage's Ctrl+Q -> Ctrl+O
+   * pair, or OpenDoor's Ctrl+E. This is the CLOSE moment.
+   */
   startCutoffTime: string;
+  /**
+   * Time-of-day (HH:MM, NY) after which NEW entries stop being taken, when that has to happen
+   * BEFORE the close.
+   *
+   * OpenDoor needs the two separated: entries fire around 09:20 and the queue needs a few minutes
+   * to flush, so dispatch runs until ~09:25 and everything is closed later at CUTOFF (e.g. 10:00).
+   * Left undefined, entries stop at startCutoffTime — the original single-time behaviour, which is
+   * what Arbitrage still uses.
+   */
+  entryStopTime?: string;
   /**
    * PRE session only: time-of-day (HH:MM, local) within the 21:00-09:30 window at which
    * position-taking actually begins. Defaults to 21:00 (the window's own start); e.g. "00:00"
@@ -1033,9 +1046,11 @@ function syncStreamSignalLatches(
   const minHoldMs = minHoldMinutes * 60_000;
   const nowMinuteIdx = Math.floor(now / 60_000);
   const nowMinutes = currentMinutesLocal();
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  // Entries end at entryStopTime when it is set, otherwise at CUTOFF. The CLOSE hotkey always
+  // uses startCutoffTime — see StreamAutomationConfig.entryStopTime.
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig.entryStopTime ?? automationConfig.startCutoffTime, 9 * 60 + 20);
   if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
-    logStreamGateBlock("latches:pastCutoff", { nowMinutes, startCutoffMinutes, sessionStartMinutes });
+    logStreamGateBlock("latches:pastEntryStop", { nowMinutes, entryStopMinutes: startCutoffMinutes, sessionStartMinutes });
     return [];
   }
   // Session hasn't started yet (e.g. START=04:00, now 03:00) — automation can be toggled on
@@ -1289,7 +1304,8 @@ export function syncStreamPositions(
   const nowMinuteIdx = Math.floor(now / 60_000);
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   // After this time, no new ENTRY orders are auto-dispatched (existing positions are unaffected).
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+  // entryStopTime when set, else CUTOFF — see StreamAutomationConfig.entryStopTime.
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
   const endThreshold = Math.max(0, automationConfig?.endSignalThreshold ?? 0);
   const minHoldMinutes = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
   const minHoldMs = minHoldMinutes * 60_000;
@@ -2075,7 +2091,7 @@ function buildFallbackPendingEntryPositions(
 
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
   if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) return existingPositions;
   if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return existingPositions;
 
@@ -2136,7 +2152,53 @@ function buildFallbackPendingEntryPositions(
   return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
+/**
+ * A strategy-specific entry gate, evaluated per signal after the shared filters.
+ *
+ * Exists because rating taxonomies are not shared: Arbitrage gates on session bands with a flat
+ * rate/total floor, OpenDoor on per-bin, per-direction rules at a chosen exit horizon. A strategy
+ * that supplies a gate has Arbitrage's session-rating filter skipped for it — see skipRatingFilter.
+ *
+ * Returns the verdict for BOTH directions; the engine keeps the signal only if the direction it
+ * actually carries was approved.
+ */
+export type StreamSignalGate = (signal: ArbitrageSignal) => { up: boolean; down: boolean };
+
+/**
+ * Overrides for the live signals request, so a strategy can ask the server for exactly the same
+ * universe its Sonar asks for.
+ *
+ * This matters more than it looks: `cls` selects which rating class the server computes `best`
+ * from, and `minRate`/`minTotal` are a SERVER-SIDE pre-filter. Two tabs sending different values
+ * receive different sets of tickers before any client filter or gate runs — which is why the
+ * OpenDoor stream and OpenDoor Sonar could disagree even after both were made to share the same
+ * gate function.
+ */
+export type StreamSignalsRequestOverride = {
+  cls?: string;
+  minRate?: number;
+  minTotal?: number;
+  /**
+   * Skip the server-side sigma floor entirely. Sonar never sends `startAbs`; a strategy whose
+   * entry rule is not a sigma threshold (OpenDoor gates on per-bin rules) must not have its
+   * universe silently narrowed by one.
+   */
+  omitStartAbs?: boolean;
+};
+
 type UseStreamEngineArgs = {
+  /** Optional strategy-specific entry gate. See StreamSignalGate. */
+  signalGate?: StreamSignalGate;
+  /**
+   * What to send when CUTOFF is reached.
+   *
+   * - "print-close-pair" (default): Arbitrage's Ctrl+Q -> 1s -> Ctrl+O.
+   * - "exit-all": OpenDoor's single Ctrl+E. The operator sets the moment via CUTOFF; it is not
+   *   derived from the exit-class rating, which only ever decides entries.
+   */
+  cutoffAction?: "print-close-pair" | "exit-all";
+  /** Align the signals request with this strategy's Sonar. See StreamSignalsRequestOverride. */
+  signalsRequest?: StreamSignalsRequestOverride;
   /**
    * Identity of this strategy instance. Several instances run in parallel over the same live
    * feed, so every piece of state the engine owns — stores, localStorage keys, order intent ids,
@@ -2261,6 +2323,9 @@ const tradingAppBridgeUrl = (path: string) => {
 
 export function useStreamEngine({
   instance,
+  signalGate,
+  cutoffAction = "print-close-pair",
+  signalsRequest,
   enabled,
   ocrEnabled = false,
   trackedSignalsEnabled = true,
@@ -2329,6 +2394,7 @@ export function useStreamEngine({
   } = stores;
 
   const actionLogStorageKey = streamActionLogStorageKey(instanceId, signalClass);
+
   const [currentDayKey, setCurrentDayKey] = useState<string>(() => currentTradingDayKey(strategySessionStartMinutes));
   useEffect(() => {
     // Re-check day key every minute so the log resets at the session's own START (e.g. 21:00)
@@ -2558,18 +2624,20 @@ export function useStreamEngine({
   );
 
   const primarySignalsStreamUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: signalClass as any,
+    cls: (signalsRequest?.cls ?? signalClass) as any,
     type: (ratingType ?? "any") as any,
     mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
     ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
     zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-    minRate: ratingMinRate ?? ratingRule.minRate,
-    minTotal: ratingMinTotal ?? ratingRule.minTotal,
+    minRate: signalsRequest?.minRate ?? ratingMinRate ?? ratingRule.minRate,
+    minTotal: signalsRequest?.minTotal ?? ratingMinTotal ?? ratingRule.minTotal,
     // Active mode: lower server threshold to endAbs so decaying signals (sigma in [endAbs, startAbs)) are returned.
     // Passive mode: endAbs is not a sigma threshold (exit = gap reversal) — keep server threshold at startAbs.
-    startAbs: (closeMode !== "Passive" && endAbs != null && endAbs > 0 && endAbs < (startAbs ?? Infinity))
-      ? endAbs
-      : (startAbs ?? undefined),
+    startAbs: signalsRequest?.omitStartAbs
+      ? undefined
+      : (closeMode !== "Passive" && endAbs != null && endAbs > 0 && endAbs < (startAbs ?? Infinity))
+        ? endAbs
+        : (startAbs ?? undefined),
     tickers: tickersCsv || undefined,
     minCorr: minCorr ?? undefined,
     maxCorr: maxCorr ?? undefined,
@@ -2594,6 +2662,7 @@ export function useStreamEngine({
     ratingRule.minTotal,
     ratingType,
     signalClass,
+    signalsRequest,
     startAbs,
     endAbs,
     closeMode,
@@ -2606,7 +2675,7 @@ export function useStreamEngine({
     const activeTrackedTickers = Array.from(openLoggedTickers);
     if (!activeTrackedTickers.length) return null;
     return buildSignalsStreamUrl({
-      cls: signalClass as any,
+      cls: (signalsRequest?.cls ?? signalClass) as any,
       type: (ratingType ?? "any") as any,
       mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
       ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
@@ -2629,6 +2698,7 @@ export function useStreamEngine({
     openLoggedTickers,
     ratingType,
     signalClass,
+    signalsRequest,
     trackedSignalsEnabled,
   ]);
 
@@ -3066,7 +3136,11 @@ export function useStreamEngine({
       : ratingModeRaw;
     const effectiveMinRate = ratingMinRate ?? ratingRule.minRate;
     const effectiveMinTotal = ratingMinTotal ?? ratingRule.minTotal;
-    const skipRatingFilter = exactSonarFilterSnapshot && (ratingModeUpper === "BIN" || ratingModeUpper === "BINS");
+    // A strategy-specific gate (OpenDoor's per-bin rule) IS that strategy's rating decision, so
+    // Arbitrage's session-rating filter must not also run — the two taxonomies describe different
+    // things and stacking them either double-cuts or passes everything.
+    const skipRatingFilter = signalGate != null
+      || (exactSonarFilterSnapshot && (ratingModeUpper === "BIN" || ratingModeUpper === "BINS"));
     const ratingFiltered = skipRatingFilter ? filtered : filtered.filter(row => {
       const rowSide = row.direction === "down" ? "Short" : "Long";
       const rawSigma = rowSide === "Short"
@@ -3084,9 +3158,26 @@ export function useStreamEngine({
       });
     });
 
+    // Strategy-specific gate (OpenDoor's per-bin rule). Applied AFTER the shared bounds/exclude
+    // filters — those are correct for every strategy — and INSTEAD of Arbitrage's session rating.
+    // A signal is kept only if the direction it carries was the one approved, so a row gated for
+    // Long can never be traded as a Short.
+    const gated: ArbitrageSignal[] = signalGate == null ? ratingFiltered : ratingFiltered.flatMap((row): ArbitrageSignal[] => {
+      const verdict = signalGate(row);
+      if (!verdict.up && !verdict.down) return [];
+      const ownSide = (row.direction ?? "").toLowerCase() === "down" ? "down" : "up";
+      if (verdict[ownSide]) return [row];
+      // The row's own direction failed but the opposite side passed. Sonar lists a ticker under
+      // whichever side its GATE approves, independent of the direction the row happens to carry —
+      // so filtering on the row's direction silently dropped every candidate whose gate verdict
+      // pointed the other way (which is why the stream showed zero LONGs). Re-point the row at
+      // the side that actually passed; the engine derives Long/Short from `direction` downstream.
+      return [{ ...row, direction: (verdict.down ? "down" : "up") } as ArbitrageSignal];
+    });
+
     const bookSnapshot = streamBookStore.getState().snapshot;
     const decisions = computeStreamDecisionRows(
-      ratingFiltered,
+      gated,
       maxSpreadValue,
       automationConfig,
       bookSnapshot,
@@ -3781,6 +3872,8 @@ export function useStreamEngine({
 
     const nowMinutes = currentMinutesLocal();
     const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
+    // Entry dispatch stops at entryStopTime; the close hotkey still fires at startCutoffMinutesNow.
+    const entryStopMinutesNow = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
     const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
     const cutoffDue =
       entryCutoffEnabled &&
@@ -3834,6 +3927,60 @@ export function useStreamEngine({
               positionsSnapshot.find((p) => p.status !== "CLOSED" && p.status !== "PENDING_ENTRY")?.ticker ??
               positionsSnapshot[0]?.ticker ??
               "SPY";
+            // OpenDoor ends its session with ONE hotkey (Ctrl+E) rather than the Ctrl+Q -> Ctrl+O
+            // pair. Same trigger — the operator's CUTOFF time — but a different key and no second
+            // leg, so the pair's 1s wait and its print-close bookkeeping are skipped entirely.
+            if (cutoffAction === "exit-all") {
+              const responseE = await fetch(tradingAppBridgeUrl("/queue"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  intentId: `cutoff-exit-all|${cutoffKey}`,
+                  ticker: cutoffTicker,
+                  // Dedicated intent type, not an override: the live PythonScript transport picks
+                  // its --action from intent.Type alone and ignores hotkeyOverride.
+                  type: "CutoffExitAll",
+                  note: `cutoff exit-all at ${automationConfig?.startCutoffTime ?? "09:20"}`,
+                  source: "stream-auto",
+                  signalClass: signalClass ?? null,
+                }),
+              });
+              const jsonE = await responseE.json().catch(() => ({}));
+              if (!responseE.ok || jsonE?.ok === false) {
+                throw new Error(jsonE?.error || `Failed to queue cutoff exit-all (${responseE.status})`);
+              }
+              console.log(`[CUTOFF] Ctrl+E sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
+              void releaseAllStreamTickers(strategyId);
+
+              // Ctrl+E closes everything this strategy had open, so mirror that in the action log
+              // exactly as the Ctrl+O path does — otherwise positions stay "open" here forever.
+              if (openLoggedPositions.length > 0) {
+                const dispatchAtE = Date.now();
+                const closeEntriesE: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
+                  id: `${row.ticker}|CLOSE|${dispatchAtE}`,
+                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
+                  ticker: row.ticker,
+                  benchmark: row.benchmark,
+                  side: row.side,
+                  kind: "CLOSE" as const,
+                  deviation: row.lastSignal ?? row.entrySignal,
+                  at: dispatchAtE,
+                  intent: "CLOSE_ALL_PRINT" as const,
+                  reason: `cutoff exit-all at ${automationConfig?.startCutoffTime ?? "09:20"}`,
+                }));
+                if (automationConfig?.betaMode === true) {
+                  appendStreamActionLogEntries(closeEntriesE);
+                } else {
+                  queuePendingActionLogEntries(`cutoff-exit-all|${cutoffKey}`, closeEntriesE);
+                }
+              }
+              // Returns before the Ctrl+Q/Ctrl+O pair below. Any intents still queued this tick
+              // are picked up on the next one (the cutoff block is skipped from then on, since
+              // cutoffHotkeySentKeyRef is now set) — a one-tick delay, and Ctrl+E has already
+              // closed what those exits would have targeted.
+              return;
+            }
+
             const response = await fetch(tradingAppBridgeUrl("/queue"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -3972,10 +4119,10 @@ export function useStreamEngine({
         if (isEntryIntent && !intent.id.startsWith("manual|")) {
           const nowMinutesAtDispatch = currentMinutesLocal();
           const pastCutoffNow = entryCutoffEnabled &&
-            isPastSessionCutoff(nowMinutesAtDispatch, startCutoffMinutesNow, strategySessionStartMinutes);
+            isPastSessionCutoff(nowMinutesAtDispatch, entryStopMinutesNow, strategySessionStartMinutes);
           const beforeStartNow = entryCutoffEnabled &&
             strategySessionStartMinutes != null &&
-            isBeforeSessionStart(nowMinutesAtDispatch, strategySessionStartMinutes, startCutoffMinutesNow);
+            isBeforeSessionStart(nowMinutesAtDispatch, strategySessionStartMinutes, entryStopMinutesNow);
           if (pastCutoffNow || beforeStartNow) {
             logStreamGateBlock("dispatch:outsideWindow", {
               ticker: intent.ticker,

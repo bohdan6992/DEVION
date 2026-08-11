@@ -16,7 +16,7 @@ import {
   rectSortingStrategy, useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { IconSonar, IconScanner, IconScope, IconSwagger, IconSpectr, IconSwift } from "@/components/nav/AppIcons";
+import { IconSonar, IconScanner, IconScope, IconSwagger, IconSpectr, IconSwift, IconCaesar } from "@/components/nav/AppIcons";
 
 const QuarterCalendar = dynamic(() => import("@/components/mainPage/QuarterCalendar"), { ssr: false });
 const MarketPulse    = dynamic(() => import("@/components/mainPage/MarketPulse"),     { ssr: false });
@@ -917,6 +917,7 @@ const NAV_ITEMS = [
   { href: "http://localhost:5197/swagger", label: "Swagger", color: "#fbbf24", Icon: IconSwagger, external: true },
   { href: "/tape",     label: "Spectr",  color: "#a78bfa", Icon: IconSpectr,  external: false },
   { href: "/sifter",   label: "Swift",   color: "#fb7185", Icon: IconSwift,   external: false },
+  { href: "/caesar",   label: "Caesar",  color: "#f97316", Icon: IconCaesar,  external: false },
 ];
 
 function QuickNavButtons({ accent }: { accent: ThemeAccent }) {

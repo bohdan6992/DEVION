@@ -4,9 +4,14 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { todayNyYmd } from "../../lib/time";
+import { useScannerFilters } from "../../lib/scanner/useScannerFilters";
+import { usePersistedFilters } from "../../lib/scanner/usePersistedFilters";
+import { useFilterRestore } from "../../lib/scanner/useFilterRestore";
+import { useEpisodesSearchCache } from "../../lib/scanner/useEpisodesSearchCache";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
 import { getArbitrageList, getOpendoorList } from "../../lib/trapClient";
+import { pushOpenDoorLiveParams, toOpenDoorLiveFilters } from "../../lib/opendoor/liveParamsClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
@@ -22,7077 +27,68 @@ import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
+import { matchOpenDoorGate, readOpenDoorGateValues } from "@/lib/opendoor/gate";
+
+// OpenDoor evaluates CLEAN data: no Arbitrage rating floor anywhere in the path. The only rating
+// that may reject a ticker is OpenDoor's own per-bin table from its summary.csv (lib/opendoor/gate).
+// cls still selects which class the server attaches `best` values from, but with a zero floor it
+// cannot reject anything — it only labels.
+const OPEN_DOOR_CLS = "global";
+const OPEN_DOOR_NO_ARB_RATE = 0;
+const OPEN_DOOR_NO_ARB_TOTAL = 0;
 import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
 import { rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 
-// =========================
-// API base (Tape/Scope style)
-// =========================
-function apiUrl(pathAndQuery: string) {
-  if (!pathAndQuery.startsWith("/")) pathAndQuery = `/${pathAndQuery}`;
-  return bridgeUrl(pathAndQuery);
-}
-
-// =========================
-// TYPES (Paper Arbitrage)
-// =========================
-type PrimaryPanelKey = "stream" | "scanner";
-type TabKey = "active" | "episodes" | "analytics";
-type DateMode = "day" | "last" | "range";
-type PaperListMode = "off" | "ignore" | "apply" | "pin";
-type ZapMode = "off" | "zap" | "sigma" | "delta";
-type SortDir = "asc" | "desc";
-type EpisodeSortKey =
-  | "ticker"
-  | "bench"
-  | "side"
-  | "startTime"
-  | "peakTime"
-  | "endTime"
-  | "startAbs"
-  | "peakAbs"
-  | "endAbs"
-  | "total"
-  | "raw"
-  | "benchPnl"
-  | "hedged"
-  | "closeMode"
-  | "minHold";
-
-type PaperArbMetric = "SigmaZap" | "ZapPct";
-type PaperArbSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
-type PaperArbCloseMode = "Active" | "Passive";
-type PaperArbPnlMode = "RawOnly" | "Hedged";
-type PaperArbPriceMode = "LastPrint" | "BidAsk";
-type PaperArbSizingMode = "Tier" | "Notional";
-type PaperArbDilutionMode = "Undiluted" | "Diluted";
-
-// rating (best_params gates)
-type PaperArbRatingBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL";
-type PaperArbRatingType = "any" | "hard" | "soft";
-type PaperArbRatingMode = "SESSION" | "BIN" | "BINS";
-type TriMode = "off" | "include" | "exclude";
-type PaperArbRatingRule = {
-  band: PaperArbRatingBand;
-  minRate: number;
-  minTotal: number;
-};
-
-const PAPER_ARB_RATING_BANDS: PaperArbRatingBand[] = ["BLUE", "ARK", "PRE", "OPEN", "INTRA", "PRINT", "POST", "GLOBAL"];
-
-function normalizePaperArbRatingRules(
-  rules: Array<{ band: PaperArbRatingBand; minRate: number; minTotal: number }>
-): PaperArbRatingRule[] {
-  const byBand = new Map<PaperArbRatingBand, PaperArbRatingRule>();
-  for (const band of PAPER_ARB_RATING_BANDS) {
-    byBand.set(band, { band, minRate: 0, minTotal: 0 });
-  }
-  for (const rule of rules) {
-    if (!PAPER_ARB_RATING_BANDS.includes(rule.band)) continue;
-    byBand.set(rule.band, {
-      band: rule.band,
-      minRate: Number(rule.minRate) || 0,
-      minTotal: Number(rule.minTotal) || 0,
-    });
-  }
-  return PAPER_ARB_RATING_BANDS.map((band) => byBand.get(band)!);
-}
-
-type ScannerAccent = {
-  selection: string;
-  dot: string;
-  activeButton: string;
-  activeText: string;
-  activeBorder: string;
-  activeSoft: string;
-  buttonBorder: string;
-  outlineButton: string;
-};
-
-function getScannerAccent(theme?: string | null): ScannerAccent {
-  switch (theme) {
-    case "light":
-      return {
-        selection: "selection:bg-violet-400/30",
-        dot: "bg-violet-600",
-        activeButton: "border border-violet-400/55 text-violet-900 shadow-[0_0_12px_rgba(139,92,246,0.12)] bg-violet-200/55",
-        activeText: "text-violet-900",
-        activeBorder: "border-violet-400/28 bg-violet-200/30",
-        activeSoft: "bg-violet-200/55 text-violet-900 border-violet-400/30 shadow-[0_0_10px_-3px_rgba(139,92,246,0.12)]",
-        buttonBorder: "border-violet-400/30",
-        outlineButton: "border-violet-300/55 text-violet-900 hover:bg-violet-200/40 shadow-[0_0_10px_rgba(139,92,246,0.06)]",
-      };
-    case "sparkle":
-      return {
-        selection: "selection:bg-yellow-200/35",
-        dot: "bg-yellow-200",
-        activeButton: "border border-yellow-200/70 text-yellow-200 shadow-[0_0_12px_rgba(254,240,138,0.18)] bg-yellow-200/8",
-        activeText: "text-yellow-200",
-        activeBorder: "border-yellow-200/28 bg-yellow-200/[0.05]",
-        activeSoft: "bg-yellow-200/10 text-yellow-200 border-yellow-200/25 shadow-[0_0_10px_-3px_rgba(254,240,138,0.16)]",
-        buttonBorder: "border-yellow-200/18",
-        outlineButton: "border-yellow-200/35 text-yellow-200 hover:bg-yellow-200/10 shadow-[0_0_10px_rgba(254,240,138,0.08)]",
-      };
-    case "inferno":
-      return {
-        selection: "selection:bg-orange-300/35",
-        dot: "bg-orange-300",
-        activeButton: "border border-orange-300/80 text-orange-100 shadow-[0_0_16px_rgba(249,115,22,0.26)] bg-red-500/12",
-        activeText: "text-orange-100",
-        activeBorder: "border-orange-300/35 bg-red-500/[0.08]",
-        activeSoft: "bg-red-500/14 text-orange-100 border-orange-300/35 shadow-[0_0_14px_-3px_rgba(249,115,22,0.22)]",
-        buttonBorder: "border-orange-300/26",
-        outlineButton: "border-orange-300/55 text-orange-100 hover:bg-red-500/14 shadow-[0_0_14px_rgba(249,115,22,0.14)]",
-      };
-    case "asher":
-    case "rain":
-      return {
-        selection: "selection:bg-yellow-600/25",
-        dot: "bg-[#c2b465]",
-        activeButton: "border border-[#c2b465]/45 text-[#c2b465] shadow-[0_0_10px_rgba(194,180,101,0.18)] bg-[#c2b465]/10",
-        activeText: "text-[#c2b465]",
-        activeBorder: "border-[#c2b465]/25 bg-[#c2b465]/[0.05]",
-        activeSoft: "bg-[#c2b465]/10 text-[#c2b465] border-[#c2b465]/20 shadow-[0_0_10px_-3px_rgba(194,180,101,0.16)]",
-        buttonBorder: "border-[#c2b465]/18",
-        outlineButton: "border-[#c2b465]/30 text-[#c2b465] hover:bg-[#c2b465]/10 shadow-[0_0_10px_rgba(194,180,101,0.10)]",
-      };
-    case "neon":
-      return {
-        selection: "selection:bg-fuchsia-500/30",
-        dot: "bg-fuchsia-500",
-        activeButton: "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.3)] bg-fuchsia-500/10",
-        activeText: "text-fuchsia-300",
-        activeBorder: "border-fuchsia-500/30 bg-fuchsia-500/[0.05]",
-        activeSoft: "bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/20 shadow-[0_0_10px_-3px_rgba(217,70,239,0.2)]",
-        buttonBorder: "border-fuchsia-500/20",
-        outlineButton: "border-fuchsia-500/50 text-fuchsia-400 hover:bg-fuchsia-500/10 shadow-[0_0_10px_rgba(217,70,239,0.1)]",
-      };
-    case "space":
-      return {
-        selection: "selection:bg-sky-500/30",
-        dot: "bg-sky-400",
-        activeButton: "border border-sky-400 text-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.3)] bg-sky-400/10",
-        activeText: "text-sky-200",
-        activeBorder: "border-sky-400/30 bg-sky-400/[0.05]",
-        activeSoft: "bg-sky-400/10 text-sky-200 border-sky-400/20 shadow-[0_0_10px_-3px_rgba(56,189,248,0.2)]",
-        buttonBorder: "border-sky-400/20",
-        outlineButton: "border-sky-400/50 text-sky-300 hover:bg-sky-400/10 shadow-[0_0_10px_rgba(56,189,248,0.1)]",
-      };
-    case "magma":
-      return {
-        selection: "selection:bg-rose-500/30",
-        dot: "bg-rose-400",
-        activeButton: "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.32)] bg-rose-500/10",
-        activeText: "text-rose-200",
-        activeBorder: "border-rose-400/30 bg-rose-500/[0.06]",
-        activeSoft: "bg-rose-500/10 text-rose-200 border-rose-400/25 shadow-[0_0_10px_-3px_rgba(255,82,72,0.22)]",
-        buttonBorder: "border-rose-400/22",
-        outlineButton: "border-rose-400/50 text-rose-200 hover:bg-rose-500/10 shadow-[0_0_12px_rgba(255,82,72,0.12)]",
-      };
-    case "mercury":
-      return {
-        selection: "selection:bg-slate-200/25",
-        dot: "bg-slate-200",
-        activeButton: "border border-slate-200/65 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.28)] bg-slate-200/12",
-        activeText: "text-slate-100",
-        activeBorder: "border-slate-200/30 bg-slate-200/[0.06]",
-        activeSoft: "bg-slate-200/12 text-slate-100 border-slate-200/24 shadow-[0_0_10px_-3px_rgba(212,216,228,0.22)]",
-        buttonBorder: "border-slate-200/22",
-        outlineButton: "border-slate-200/50 text-slate-100 hover:bg-slate-200/12 shadow-[0_0_10px_rgba(212,216,228,0.12)]",
-      };
-    case "oceanic":
-      return {
-        selection: "accent-selection",
-        dot: "accent-dot",
-        activeButton: "accent-soft",
-        activeText: "accent-text",
-        activeBorder: "accent-panel-soft",
-        activeSoft: "accent-soft",
-        buttonBorder: "border-cyan-500/20",
-        outlineButton: "accent-outline",
-      };
-    case "khaki":
-      return {
-        selection: "accent-selection",
-        dot: "accent-dot",
-        activeButton: "accent-soft",
-        activeText: "accent-text",
-        activeBorder: "accent-panel-soft",
-        activeSoft: "accent-soft",
-        buttonBorder: "border-[#8a9a52]/20",
-        outlineButton: "accent-outline",
-      };
-    case "zebra":
-      return {
-        selection: "selection:bg-zinc-900/20",
-        dot: "bg-zinc-900",
-        activeButton: "border border-zinc-900/30 text-zinc-900 bg-zinc-900/8 shadow-none",
-        activeText: "text-zinc-900",
-        activeBorder: "border-zinc-900/15 bg-zinc-900/[0.04]",
-        activeSoft: "bg-zinc-900/8 text-zinc-900 border-zinc-900/20 shadow-none",
-        buttonBorder: "border-zinc-900/18",
-        outlineButton: "border-zinc-900/30 text-zinc-900 hover:bg-zinc-900/8 shadow-none",
-      };
-    case "flamingo":
-      return {
-        selection: "accent-selection",
-        dot: "accent-dot",
-        activeButton: "accent-soft",
-        activeText: "accent-text",
-        activeBorder: "accent-panel-soft",
-        activeSoft: "accent-soft",
-        buttonBorder: "border-rose-400/22",
-        outlineButton: "accent-outline",
-      };
-    case "money":
-      return {
-        selection: "accent-selection",
-        dot: "accent-dot",
-        activeButton: "accent-soft",
-        activeText: "accent-text",
-        activeBorder: "accent-panel-soft",
-        activeSoft: "accent-soft",
-        buttonBorder: "border-yellow-500/22",
-        outlineButton: "accent-outline",
-      };
-    case "matrix":
-      return {
-        selection: "accent-selection",
-        dot: "accent-dot",
-        activeButton: "accent-soft",
-        activeText: "accent-text",
-        activeBorder: "accent-panel-soft",
-        activeSoft: "accent-soft",
-        buttonBorder: "border-[#34a863]/22",
-        outlineButton: "accent-outline",
-      };
-    default:
-      return {
-        selection: "selection:bg-zinc-200/24",
-        dot: "bg-zinc-300",
-        activeButton: "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10",
-        activeText: "text-zinc-200",
-        activeBorder: "border-zinc-300/30 bg-zinc-200/[0.05]",
-        activeSoft: "bg-zinc-200/10 text-zinc-200 border-zinc-300/20 shadow-[0_0_10px_-3px_rgba(212,212,216,0.12)]",
-        buttonBorder: "border-zinc-300/20",
-        outlineButton: "border-zinc-300/50 text-zinc-200 hover:bg-zinc-200/10 shadow-[0_0_10px_rgba(212,212,216,0.08)]",
-      };
-  }
-}
-
-function getScannerHeaderButtonActiveClass(theme?: string | null): string {
-  if (theme === "sparkle") return "border border-yellow-200/70 text-yellow-200 shadow-[0_0_10px_rgba(254,240,138,0.2)] bg-yellow-200/10";
-  if (theme === "inferno") return "border border-orange-300/80 text-orange-100 shadow-[0_0_14px_rgba(249,115,22,0.26)] bg-red-500/14";
-  if (theme === "asher") return "border border-zinc-300/45 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.12)] bg-zinc-200/10";
-  if (theme === "rain") return "border border-[#c2b465]/45 text-[#c2b465] shadow-[0_0_10px_rgba(194,180,101,0.18)] bg-[#c2b465]/10";
-  if (theme === "light") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
-  if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
-  if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
-  if (theme === "magma") return "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.28)] bg-rose-500/10";
-  if (theme === "mercury") return "border border-slate-200/55 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.24)] bg-slate-200/12";
-  if (theme === "oceanic") return "accent-soft";
-  return "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10";
-}
-
-type TapeArbSide = "Long" | "Short" | number | string;
-
-// Active snapshots are "Start/Peak/Last" with MinuteIdx + Metric + MetricAbs + (LastPrint fields)
-type PaperArbSnap = {
-  minuteIdx: number;
-  metric?: number | null;
-  metricAbs?: number | null;
-
-  // Quote-space fields used by arbitrage math
-  bidPct?: number | null;
-  askPct?: number | null;
-  benchBidPct?: number | null;
-  benchAskPct?: number | null;
-
-  // LastPrint fields kept for fallback/debug
-  lstPrcLstClsPct?: number | null;
-  benchLstPrcLstClsPct?: number | null;
-};
-
-type PaperArbActiveRow = {
-  ticker: string;
-  benchTicker: string;
-  side: TapeArbSide;
-
-  start: PaperArbSnap;
-  peak: PaperArbSnap;
-  last: PaperArbSnap;
-
-  rating?: number | null;
-  ratingTotal?: number | null;
-
-  // config echoed back (optional but we show if present)
-  closeMode?: PaperArbCloseMode;
-  minHoldCandles?: number;
-  tierBp?: number | null;
-  beta?: number | null;
-  positionNotionalUsd?: number | null;
-  entryCount?: number | null;
-  entrySnaps?: PaperArbSnap[] | null;
-  rawPnlUsd?: number | null;
-  benchPnlUsd?: number | null;
-  hedgedPnlUsd?: number | null;
-  totalPnlUsd?: number | null;
-  lstPrcL?: number | null;
-  lstCls?: number | null;
-  yCls?: number | null;
-  gapPct?: number | null;
-  benchGapPct?: number | null;
-  startClass?: string | null;
-  printMedianPos?: number | null;
-  printMedianNeg?: number | null;
-};
-
-type PaperArbClosedDto = {
-  episodeId?: string | null;
-  ticker: string;
-  benchTicker: string;
-  side: TapeArbSide;
-  dateNy?: string | null;
-  date?: string | null;
-  day?: string | null;
-  tradeDate?: string | null;
-  tradeDateNy?: string | null;
-  sessionDate?: string | null;
-  sessionDateNy?: string | null;
-  startTsNy?: string | null;
-  peakTsNy?: string | null;
-  endTsNy?: string | null;
-
-  startMinuteIdx: number;
-  peakMinuteIdx: number;
-  endMinuteIdx: number;
-
-  startMetric?: number | null;
-  startMetricAbs?: number | null;
-  peakMetric?: number | null;
-  peakMetricAbs?: number | null;
-  endMetric?: number | null;
-  endMetricAbs?: number | null;
-
-  closeMode?: PaperArbCloseMode;
-  minHoldCandles?: number;
-
-  rawPnlUsd?: number | null;
-  benchPnlUsd?: number | null;
-  hedgedPnlUsd?: number | null;
-  totalPnlUsd?: number | null; // depends on pnlMode on server, but server returns it already
-  rating?: number | null;
-  ratingTotal?: number | null;
-  corr?: number | null;
-  beta?: number | null;
-  sigma?: number | null;
-  tierBp?: number | null;
-  positionNotionalUsd?: number | null;
-  entryCount?: number | null;
-  entryMinuteIdxs?: number[] | null;
-  entryMetrics?: Array<number | null> | null;
-  entryMetricAbs?: Array<number | null> | null;
-  best_params?: any;
-
-  adv20?: number | null;
-  adv20NF?: number | null;
-  adv90?: number | null;
-  adv90NF?: number | null;
-  avPreMhv?: number | null;
-  roundLot?: number | null;
-  vwap?: number | null;
-  spread?: number | null;
-  spreadBidPct?: number | null;
-  lstPrcL?: number | null;
-  lstCls?: number | null;
-  yCls?: number | null;
-  tCls?: number | null;
-  clsToClsPct?: number | null;
-  gapPct?: number | null;
-  lo?: number | null;
-  newsCnt?: number | null;
-  marketCapM?: number | null;
-  preMktVolNF?: number | null;
-  volNFfromLstCls?: number | null;
-  avPostMhVol90NF?: number | null;
-  avPreMhVol90NF?: number | null;
-  avPreMhValue20NF?: number | null;
-  avPreMhValue90NF?: number | null;
-  avgDailyValue20?: number | null;
-  avgDailyValue90?: number | null;
-  volatility20?: number | null;
-  volatility90?: number | null;
-  preMhMDV20NF?: number | null;
-  preMhMDV90NF?: number | null;
-  volRel?: number | null;
-  preMhBidLstPrcPct?: number | null;
-  preMhLoLstPrcPct?: number | null;
-  preMhHiLstClsPct?: number | null;
-  preMhLoLstClsPct?: number | null;
-  lstPrcLstClsPct?: number | null;
-  peakLstPrcLstClsPct?: number | null;
-  endLstPrcLstClsPct?: number | null;
-  startBenchLstPrcLstClsPct?: number | null;
-  peakBenchLstPrcLstClsPct?: number | null;
-  endBenchLstPrcLstClsPct?: number | null;
-  startBidPct?: number | null;
-  startAskPct?: number | null;
-  peakBidPct?: number | null;
-  peakAskPct?: number | null;
-  endBidPct?: number | null;
-  endAskPct?: number | null;
-  imbExch925?: number | null;
-  imbExch1555?: number | null;
-  printMedianPos?: number | null;
-  printMedianNeg?: number | null;
-  country?: string | null;
-  exchange?: string | null;
-  sectorL3?: string | null;
-  sectorL4?: string | null;
-  sectorL5?: string | null;
-};
-
-type ScannerLogContext = {
-  session: string;
-  ruleBand: string;
-  metric: string;
-  closeMode: string;
-  priceMode: string;
-  pnlMode: string;
-  scopeMode: string;
-  topN: number;
-  offset: number;
-  startAbs: number;
-  startAbsMax: string;
-  endAbs: number;
-  minHoldCandles: number;
-  startCutoffMinuteIdx: number | null;
-  preStartMinuteIdx: number | null;
-  dilutionMode: string;
-  dilutionStep: number;
-  maxAdds: number;
-  zapMode: string;
-};
-
-// Big request: Analytics + EpisodesSearch
-type PaperArbAnalyticsRequest = {
-  dateFrom: string;
-  dateTo: string;
-
-  metric?: PaperArbMetric;
-  startAbs?: number;
-  usePrintMedianDelta?: boolean;
-  startAbsMax?: number | null;
-  endAbs?: number;
-  session?: PaperArbSession;
-  closeMode?: PaperArbCloseMode;
-  minHoldCandles?: number;
-  startCutoffMinuteIdx?: number | null;
-  preStartMinuteIdx?: number | null;
-  priceMode?: PaperArbPriceMode;
-  pnlMode?: PaperArbPnlMode;
-  sizingMode?: PaperArbSizingMode;
-  sizeValue?: number | null;
-  dilutionMode?: PaperArbDilutionMode;
-  dilutionStep?: number | null;
-  maxAdds?: number | null;
-  addDelayMinutes?: number | null;
-  exitConfirmCandles?: number | null;
-
-  // rating rules
-  ratingType?: PaperArbRatingType | string | null;
-  ratingRules?: PaperArbRatingRule[] | null;
-  ratingFilters?: any[] | null; // legacy/compat
-
-  // lists
-  tickers?: string[] | null;
-  benchTickers?: string[] | null;
-  side?: "Long" | "Short" | null;
-
-  exchanges?: string[] | null;
-  countries?: string[] | null;
-  sectorsL3?: string[] | null;
-  excludeExchanges?: string[] | null;
-  excludeCountries?: string[] | null;
-  excludeSectorsL3?: string[] | null;
-
-  // ranges
-  minTierBp?: number | null;
-  maxTierBp?: number | null;
-
-  minCorr?: number | null;
-  maxCorr?: number | null;
-  minBeta?: number | null;
-  maxBeta?: number | null;
-  minSigma?: number | null;
-  maxSigma?: number | null;
-
-  minMarketCapM?: number | null;
-  maxMarketCapM?: number | null;
-
-  minRoundLot?: number | null;
-  maxRoundLot?: number | null;
-
-  minAdv20?: number | null;
-  maxAdv20?: number | null;
-  minAdv20NF?: number | null;
-  maxAdv20NF?: number | null;
-
-  minAdv90?: number | null;
-  maxAdv90?: number | null;
-  minAdv90NF?: number | null;
-  maxAdv90NF?: number | null;
-
-  minPreMktVol?: number | null;
-  maxPreMktVol?: number | null;
-  minPreMktVolNF?: number | null;
-  maxPreMktVolNF?: number | null;
-
-  minSpread?: number | null;
-  maxSpread?: number | null;
-  minSpreadBps?: number | null;
-  maxSpreadBps?: number | null;
-
-  minGap?: number | null;
-  maxGap?: number | null;
-  minGapPct?: number | null;
-  maxGapPct?: number | null;
-
-  minClsToClsPct?: number | null;
-  maxClsToClsPct?: number | null;
-
-  minVWAP?: number | null;
-  maxVWAP?: number | null;
-
-  minLo?: number | null;
-  maxLo?: number | null;
-
-  // news/flags
-  requireHasNews?: boolean | null;
-  excludeHasNews?: boolean | null;
-  requireHasReport?: boolean | null;
-  excludeHasReport?: boolean | null;
-  minNewsCnt?: number | null;
-  maxNewsCnt?: number | null;
-
-  requireIsPTP?: boolean | null;
-  requireIsSSR?: boolean | null;
-  requireIsETF?: boolean | null;
-  requireIsCrap?: boolean | null;
-
-  excludeDividend?: boolean | null;
-  excludePTP?: boolean | null;
-  excludeSSR?: boolean | null;
-  excludeETF?: boolean | null;
-  excludeCrap?: boolean | null;
-  includeUSA?: boolean | null;
-  includeChina?: boolean | null;
-
-  // medians
-  minMdnPreMhVol90?: number | null;
-  maxMdnPreMhVol90?: number | null;
-
-  minPreMhMDV90NF?: number | null;
-  maxPreMhMDV90NF?: number | null;
-
-  minPreMhMDV20NF?: number | null;
-  maxPreMhMDV20NF?: number | null;
-
-  minMdnPostMhVol90NF?: number | null;
-  maxMdnPostMhVol90NF?: number | null;
-  minAvPostMhVol90NF?: number | null;
-  maxAvPostMhVol90NF?: number | null;
-  minAvPreMhVol90NF?: number | null;
-  maxAvPreMhVol90NF?: number | null;
-  minAvPreMhValue20NF?: number | null;
-  maxAvPreMhValue20NF?: number | null;
-  minAvPreMhValue90NF?: number | null;
-  maxAvPreMhValue90NF?: number | null;
-  minAvgDailyValue20?: number | null;
-  maxAvgDailyValue20?: number | null;
-  minAvgDailyValue90?: number | null;
-  maxAvgDailyValue90?: number | null;
-  minVolatility20?: number | null;
-  maxVolatility20?: number | null;
-  minVolatility90?: number | null;
-  maxVolatility90?: number | null;
-  minVolRel?: number | null;
-  maxVolRel?: number | null;
-  minPreMhBidLstPrcPct?: number | null;
-  maxPreMhBidLstPrcPct?: number | null;
-  minPreMhLoLstPrcPct?: number | null;
-  maxPreMhLoLstPrcPct?: number | null;
-  minPreMhHiLstClsPct?: number | null;
-  maxPreMhHiLstClsPct?: number | null;
-  minPreMhLoLstClsPct?: number | null;
-  maxPreMhLoLstClsPct?: number | null;
-  minLstPrcLstClsPct?: number | null;
-  maxLstPrcLstClsPct?: number | null;
-  minImbExch925?: number | null;
-  maxImbExch925?: number | null;
-  minImbExch1555?: number | null;
-  maxImbExch1555?: number | null;
-
-  // extra shared filters (compatible if server ignores unknown keys)
-  minAvPreMhv?: number | null;
-  maxAvPreMhv?: number | null;
-  minLstPrcL?: number | null;
-  maxLstPrcL?: number | null;
-  minLstCls?: number | null;
-  maxLstCls?: number | null;
-  minYCls?: number | null;
-  maxYCls?: number | null;
-  minTCls?: number | null;
-  maxTCls?: number | null;
-  minLstClsNewsCnt?: number | null;
-  maxLstClsNewsCnt?: number | null;
-  minPreMhVolNF?: number | null;
-  maxPreMhVolNF?: number | null;
-  minVolNFfromLstCls?: number | null;
-  maxVolNFfromLstCls?: number | null;
-
-  // imbalance
-  imbExchs?: string[] | null;
-  minImbARCA?: number | null;
-  maxImbARCA?: number | null;
-  minImbExchValue?: number | null;
-  maxImbExchValue?: number | null;
-
-  // analytics-only output knobs
-  includeEquityCurve?: boolean;
-  equityCurveMode?: "Daily" | "Trade";
-  optimizerBucketCount?: number | null;
-  optimizerGroups?: string[] | null;
-  optimizerParameterKeys?: string[] | null;
-
-  topN?: number;
-
-  // priceMode intentionally omitted (server forces LastPrint)
-};
-
-type PaperArbEquityPointDto = {
-  key: string; // "YYYY-MM-DD" or "YYYY-MM-DD minuteIdx"
-  equity: number;
-  pnl: number;
-};
-
-type PaperArbTickerStatsDto = {
-  ticker: string;
-  trades: number;
-  winRate?: number | null;
-  totalPnlUsd?: number | null;
-  profitFactor?: number | null;
-  avgPnlUsd?: number | null;
-  avgWinUsd?: number | null;
-  avgLossUsd?: number | null;
-
-  wins?: number | null;
-  losses?: number | null;
-};
-
-type PaperArbAnalyticsResponse = {
-  trades?: number | null;
-  totalPnlUsd?: number | null;
-  winRate?: number | null;
-  profitFactor?: number | null;
-  avgPnlUsd?: number | null;
-  avgWinUsd?: number | null;
-  avgLossUsd?: number | null;
-  maxWinUsd?: number | null;
-  maxLossUsd?: number | null;
-  expectancyUsd?: number | null;
-  maxDrawdownUsd?: number | null;
-
-  equityCurve?: PaperArbEquityPointDto[] | null;
-  topTickers?: PaperArbTickerStatsDto[] | null;
-};
-
-type PaperArbOptimizerRangeBucketDto = {
-  bucketId: string;
-  label: string;
-  fromValue?: number | null;
-  toValue?: number | null;
-  trades: number;
-  wins: number;
-  losses: number;
-  totalPnlUsd: number;
-  avgPnlUsd: number;
-  winRate: number;
-  score: number;
-  coveragePct: number;
-};
-
-type PaperArbOptimizerParameterDto = {
-  key: string;
-  group: string;
-  label: string;
-  observedMin?: number | null;
-  observedMax?: number | null;
-  valueCount: number;
-  baseTrades: number;
-  baseWins: number;
-  baseLosses: number;
-  baseTotalPnlUsd: number;
-  baseAvgPnlUsd: number;
-  baseWinRate: number;
-  buckets: PaperArbOptimizerRangeBucketDto[];
-  lowerTailBuckets: PaperArbOptimizerRangeBucketDto[];
-  upperTailBuckets: PaperArbOptimizerRangeBucketDto[];
-};
-
-type PaperArbOptimizerRangesResponse = {
-  dateFrom: string;
-  dateTo: string;
-  metric: string;
-  session: string;
-  closeMode: string;
-  pnlMode: string;
-  bucketCount: number;
-  parametersAnalyzed: number;
-  parameters: PaperArbOptimizerParameterDto[];
-};
-
-type EpisodeScanResult = {
-  startAbs: number;
-  endAbs: number;
-  trades: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-  totalPnlUsd: number;
-  avgPnlUsd: number;
-};
-
-type OptimizerScenario = {
-  id: string;
-  parameter: string;
-  variant: string;
-  summary: string;
-  apply: (req: PaperArbAnalyticsRequest) => void;
-};
-
-type OptimizerResultRow = {
-  id: string;
-  parameter: string;
-  variant: string;
-  summary: string;
-  trades: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-  totalPnlUsd: number;
-  avgPnlUsd: number;
-  score: number;
-};
-
-type ScopeBatchScenarioRequest = {
-  id: string;
-  parameter: string;
-  variant: string;
-  summary: string;
-  request: PaperArbAnalyticsRequest;
-};
-
-type ScopeBatchResponse = {
-  rows?: OptimizerResultRow[] | null;
-  comboRows?: OptimizerResultRow[] | null;
-};
-
-type OptimizerImpactRow = {
-  id: string;
-  parameter: string;
-  variant: string;
-  summary: string;
-  impactLevel: "STRONG" | "MEDIUM" | "LIGHT";
-  impactPct: number;
-  deltaScore: number;
-  deltaPnlUsd: number;
-  trades: number;
-  totalPnlUsd: number;
-  avgPnlUsd: number;
-  winRate: number;
-};
-
-type OptimizerRangeRankMetric = "avgPnlUsd" | "totalPnlUsd" | "winRate" | "score" | "tailDamage";
-type OptimizerRangeGroupKey = "RATING GATES" | "ZAP THRESHOLDS" | "TAPE FILTERS";
-type OptimizerRangeGroupStatus = { loading: boolean; error: string | null; partial: boolean };
-type ScopeParameterDefinition = {
-  key: string;
-  label: string;
-  group: OptimizerRangeGroupKey;
-  scenarioParameter?: string | null;
-  optimizerApiKey?: string | null;
-  // categorical = client-side grouping (sector/bench), no API range call
-  kind?: "numeric" | "categorical";
-};
-
-type ScopeResearchChartType =
-  | "simple_box"
-  | "beauty_violin"
-  | "results_by_bins"
-  | "results_more_less_parameter"
-  | "distribution"
-  | "scatter_by_date"
-  | "cumsum_chart"
-  | "trade_performance";
-type ScopeResearchThresholdMode = "less_than" | "more_than";
-type ScopeResearchValueFormat = "number" | "currency" | "clock" | "minutes" | "percent";
-type ScopeResearchParameterKey =
-  | "startMinuteIdx"
-  | "peakMinuteIdx"
-  | "endMinuteIdx"
-  | "timeToPeak"
-  | "timeToClose"
-  | "startMetricAbs"
-  | "peakMetricAbs"
-  | "endMetricAbs"
-  | "reversionAbs"
-  | "reversionPct"
-  | "minHoldCandles"
-  | "rating"
-  | "ratingTotal"
-  | "corr"
-  | "beta"
-  | "sigma"
-  | "adv20"
-  | "adv20NF"
-  | "adv90"
-  | "adv90NF"
-  | "avPreMhv"
-  | "roundLot"
-  | "vwap"
-  | "spread"
-  | "lstPrcL"
-  | "lstCls"
-  | "yCls"
-  | "tCls"
-  | "clsToClsPct"
-  | "lo"
-  | "newsCnt"
-  | "marketCapM"
-  | "preMktVolNF"
-  | "avPostMhVol90NF"
-  | "avPreMhVol90NF"
-  | "avPreMhValue20NF"
-  | "avPreMhValue90NF"
-  | "avgDailyValue20"
-  | "avgDailyValue90"
-  | "volatility20"
-  | "volatility90"
-  | "preMhMDV20NF"
-  | "preMhMDV90NF"
-  | "volRel"
-  | "preMhBidLstPrcPct"
-  | "preMhLoLstPrcPct"
-  | "preMhHiLstClsPct"
-  | "preMhLoLstClsPct"
-  | "lstPrcLstClsPct"
-  | "volNFfromLstCls"
-  | "imbExch925"
-  | "imbExch1555";
-type ScopeResearchResultKey =
-  | "avgPnlUsd"
-  | "totalPnlUsd"
-  | "winRate"
-  | "score"
-  | "rawPnlUsd"
-  | "benchPnlUsd"
-  | "hedgedPnlUsd"
-  | "peakMetricAbs"
-  | "endMetricAbs";
-type ScopeResearchOption<T extends string> = {
-  value: T;
-  label: string;
-  format: ScopeResearchValueFormat;
-};
-type GlassSelectOption = { value: string; label: string; disabled?: boolean };
-type GlassSelectGroup = { label: string; options: GlassSelectOption[] };
-type ScopeResearchExtraFilterSelection = {
-  id: string;
-  parameterKey: ScopeResearchParameterKey;
-  from: number | null;
-  to: number | null;
-};
-type ScopeResearchExtraFilterDraft = {
-  id: string;
-  parameterKey: ScopeResearchParameterKey;
-  from: string;
-  to: string;
-};
-type ScopeResearchParallelFilterSelection = ScopeResearchExtraFilterSelection;
-type ScopeResearchParallelFilterDraft = ScopeResearchExtraFilterDraft;
-type ScopeResearchSelection = {
-  chartType: ScopeResearchChartType;
-  parameterKey: ScopeResearchParameterKey;
-  resultKey: ScopeResearchResultKey;
-  bucketCount: number;
-  minSamples: number;
-  thresholdMode: ScopeResearchThresholdMode;
-  domainFrom: number | null;
-  domainTo: number | null;
-  extraFilters: ScopeResearchExtraFilterSelection[];
-  parallelFilters: ScopeResearchParallelFilterSelection[];
-};
-type ScopeResearchDraft = Omit<ScopeResearchSelection, "domainFrom" | "domainTo"> & {
-  domainFrom: string;
-  domainTo: string;
-  extraFilters: ScopeResearchExtraFilterDraft[];
-  parallelFilters: ScopeResearchParallelFilterDraft[];
-};
-type ScopePanelKey = "left" | "right";
-type ScopeResearchStats = {
-  count: number;
-  total: number;
-  avg: number;
-  median: number;
-  winRate: number;
-  score: number;
-  q1: number;
-  q3: number;
-  lowerFence: number;
-  upperFence: number;
-  min: number;
-  max: number;
-};
-type ScopeResearchBinRow = ScopeResearchStats & {
-  label: string;
-  from: number;
-  to: number;
-  values: number[];
-};
-type ScopeResearchThresholdRow = ScopeResearchStats & {
-  label: string;
-  threshold: number;
-};
-type ScopeResearchPoint = {
-  row: PaperArbClosedDto;
-  parameter: number;
-  result: number;
-  dateKey: string;
-  sortKey: number;
-};
-type ScopeResearchComputed = {
-  selection: ScopeResearchSelection;
-  parameter: ScopeResearchOption<ScopeResearchParameterKey>;
-  result: ScopeResearchOption<ScopeResearchResultKey>;
-  sourceResult: ScopeResearchOption<ScopeResearchResultKey>;
-  sourceCount: number;
-  points: ScopeResearchPoint[];
-  bins: ScopeResearchBinRow[];
-  thresholds: ScopeResearchThresholdRow[];
-  bestBin: ScopeResearchBinRow | null;
-  bestThreshold: ScopeResearchThresholdRow | null;
-  bestBox: ScopeResearchBinRow | null;
-  parallelSeries: Array<{
-    id: string;
-    label: string;
-    rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
-  }>;
-  parallelPointSeries: Array<{
-    id: string;
-    label: string;
-    points: ScopeResearchPoint[];
-  }>;
-};
-
-type ScopeChartTooltipData = {
-  x: number;
-  y: number;
-  title: string;
-  lines: string[];
-  accent?: "emerald" | "amber" | "cyan" | "fuchsia";
-};
-
-// =========================
-// UTILS
-// =========================
-function isNum(x: any): x is number {
-  return typeof x === "number" && Number.isFinite(x);
-}
-function num(x: number | null | undefined, digits = 2): string {
-  if (x === null || x === undefined) return "-";
-  if (!Number.isFinite(x)) return "-";
-  return x.toFixed(digits);
-}
-function numSpaced(x: number | null | undefined, digits = 2): string {
-  if (x === null || x === undefined) return "-";
-  if (!Number.isFinite(x)) return "-";
-  const fixed = x.toFixed(digits);
-  const [intPart, fracPart] = fixed.split(".");
-  const sign = intPart.startsWith("-") ? "-" : "";
-  const absInt = sign ? intPart.slice(1) : intPart;
-  const grouped = absInt.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return fracPart != null ? `${sign}${grouped}.${fracPart}` : `${sign}${grouped}`;
-}
-function scannerTickerAmountUsd(
-  sizingMode: PaperArbSizingMode,
-  sizeValue: number,
-  tierBp: number | null | undefined,
-  entryCount: number | null | undefined,
-  dilutionMode: PaperArbDilutionMode
-): number | null {
-  const entries =
-    dilutionMode === "Diluted" && Number.isFinite(entryCount ?? NaN) && Number(entryCount) > 0
-      ? Math.max(1, Math.trunc(Number(entryCount)))
-      : 1;
-  if (sizingMode === "Notional") {
-    return Number.isFinite(sizeValue) && sizeValue > 0 ? sizeValue * entries : null;
-  }
-  if (!Number.isFinite(tierBp ?? NaN) || !Number.isFinite(sizeValue) || sizeValue <= 0) return null;
-  return Number(tierBp) * sizeValue * entries;
-}
-function scannerRealtimePnlUsd(args: {
-  side: TapeArbSide;
-  beta: number | null | undefined;
-  trancheAmountUsd: number | null | undefined;
-  entrySnaps: PaperArbSnap[] | null | undefined;
-  start: PaperArbSnap | null | undefined;
-  last: PaperArbSnap | null | undefined;
-  pnlMode: PaperArbPnlMode;
-  priceMode: PaperArbPriceMode;
-  closeMode?: PaperArbCloseMode;
-  gapPct?: number | null;
-  benchGapPct?: number | null;
-}): { rawPnlUsd: number | null; benchPnlUsd: number | null; hedgedPnlUsd: number | null; totalPnlUsd: number | null } {
-  const { side, beta, trancheAmountUsd, entrySnaps, start, last, pnlMode, priceMode, closeMode, gapPct, benchGapPct } = args;
-  const isPassive = closeMode === "Passive";
-  const null4 = { rawPnlUsd: null, benchPnlUsd: null, hedgedPnlUsd: null, totalPnlUsd: null };
-  if (!Number.isFinite(trancheAmountUsd ?? NaN) || Number(trancheAmountUsd) <= 0) return null4;
-  if (!last) return null4;
-
-  const normalizedSide = String(side).toLowerCase() === "short" ? "Short" : "Long";
-  const hedgeSide = normalizedSide === "Short" ? "Long" : "Short";
-
-  // Prefer per-tranche entrySnaps (server sends them); fall back to single start snap.
-  const snaps: PaperArbSnap[] = (entrySnaps && entrySnaps.length > 0) ? entrySnaps : (start ? [start] : []);
-  if (snaps.length === 0) return null4;
-
-  // Per-tranche P&L: each tranche invests equal USD, so per-tranche summation
-  // correctly captures the asymmetry of buying more shares at lower prices.
-  let rawSum = 0, rawAny = false;
-  let benchSum = 0, benchAny = false;
-
-  // Exit: Passive → GapPct/benchGapPct. BidAsk+Active → bid/ask. Print+Active → lstPrcLstClsPct.
-  const exitStockPct = isPassive
-    ? (gapPct ?? null)
-    : (priceMode === "BidAsk"
-      ? (normalizedSide === "Long" ? (last.bidPct ?? last.lstPrcLstClsPct) : (last.askPct ?? last.lstPrcLstClsPct))
-      : last.lstPrcLstClsPct);
-  const exitBenchPct = isPassive
-    ? (benchGapPct ?? null)
-    : (priceMode === "BidAsk"
-      ? (hedgeSide === "Long" ? (last.benchBidPct ?? last.benchLstPrcLstClsPct) : (last.benchAskPct ?? last.benchLstPrcLstClsPct))
-      : last.benchLstPrcLstClsPct);
-
-  for (const entry of snaps) {
-    // Entry: BidAsk → bid/ask (regardless of Passive/Active). Print → lstPrcLstClsPct.
-    const entryStockPct = priceMode === "BidAsk"
-      ? (normalizedSide === "Long" ? (entry.askPct ?? entry.lstPrcLstClsPct) : (entry.bidPct ?? entry.lstPrcLstClsPct))
-      : entry.lstPrcLstClsPct;
-    // BidAsk: delta formula (pct diff). Print: ratio.
-    const stockFrac = priceMode === "BidAsk"
-      ? scannerBidAskPctDelta(entryStockPct, exitStockPct, normalizedSide)
-      : scannerLastPriceReturnFrac(entryStockPct, exitStockPct, normalizedSide);
-    if (stockFrac != null) { rawSum += Number(trancheAmountUsd) * stockFrac; rawAny = true; }
-
-    if (pnlMode === "Hedged" && Number.isFinite(beta ?? NaN)) {
-      const entryBenchPct = priceMode === "BidAsk"
-        ? (hedgeSide === "Long" ? (entry.benchAskPct ?? entry.benchLstPrcLstClsPct) : (entry.benchBidPct ?? entry.benchLstPrcLstClsPct))
-        : entry.benchLstPrcLstClsPct;
-      const benchFrac = priceMode === "BidAsk"
-        ? scannerBidAskPctDelta(entryBenchPct, exitBenchPct, hedgeSide)
-        : scannerLastPriceReturnFrac(entryBenchPct, exitBenchPct, hedgeSide);
-      if (benchFrac != null) { benchSum += Number(trancheAmountUsd) * Number(beta) * benchFrac; benchAny = true; }
-    }
-  }
-
-  const rawPnlUsd = rawAny ? rawSum : null;
-  let benchPnlUsd: number | null = benchAny ? benchSum : null;
-  const hedgedPnlUsd =
-    pnlMode === "RawOnly"
-      ? rawPnlUsd
-      : rawPnlUsd != null || benchPnlUsd != null
-        ? (rawPnlUsd ?? 0) + (benchPnlUsd ?? 0)
-        : null;
-
-  return {
-    rawPnlUsd,
-    benchPnlUsd: pnlMode === "RawOnly" ? null : benchPnlUsd,
-    hedgedPnlUsd,
-    totalPnlUsd: pnlMode === "RawOnly" ? rawPnlUsd : hedgedPnlUsd,
-  };
-}
-function scannerLastPriceReturnFrac(
-  entryPct: number | null | undefined,
-  exitPct: number | null | undefined,
-  side: "Long" | "Short"
-): number | null {
-  if (!Number.isFinite(entryPct ?? NaN) || !Number.isFinite(exitPct ?? NaN)) return null;
-  const entryFactor = 1 + Number(entryPct) / 100;
-  const exitFactor = 1 + Number(exitPct) / 100;
-  if (entryFactor <= 0 || exitFactor <= 0) return null;
-  return side === "Long" ? exitFactor / entryFactor - 1 : entryFactor / exitFactor - 1;
-}
-// BidAsk mode: pct delta — consistent with ZAP units (bidPct − benchAskPct × beta).
-function scannerBidAskPctDelta(
-  entryPct: number | null | undefined,
-  exitPct: number | null | undefined,
-  side: "Long" | "Short"
-): number | null {
-  if (!Number.isFinite(entryPct ?? NaN) || !Number.isFinite(exitPct ?? NaN)) return null;
-  return side === "Long"
-    ? (Number(exitPct) - Number(entryPct)) / 100
-    : (Number(entryPct) - Number(exitPct)) / 100;
-}
-function intn(x: number | null | undefined): string {
-  if (x === null || x === undefined) return "-";
-  if (!Number.isFinite(x)) return "-";
-  return String(Math.trunc(x));
-}
-function numOrNull(x: any): number | null {
-  if (typeof x === "number" && Number.isFinite(x)) return x;
-  if (typeof x === "string") {
-    const n = Number(x.trim().replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-function minuteIdxToClockLabel(x: number | null | undefined): string {
-  if (x === null || x === undefined || !Number.isFinite(x)) return "-";
-  const idx = Math.trunc(x);
-  const totalMin = idx; // absolute NY minute-of-day, e.g. 570 => 09:30
-  const hh = Math.floor((((totalMin % 1440) + 1440) % 1440) / 60)
-    .toString()
-    .padStart(2, "0");
-  const mm = ((((totalMin % 1440) + 1440) % 1440) % 60).toString().padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-function downloadEpisodesCsv(
-  rows: PaperArbClosedDto[],
-  filename?: string,
-  priceMode: PaperArbPriceMode = "LastPrint",
-  context?: ScannerLogContext | null
-): void {
-  const HEADERS = [
-    "date","ticker","bench","side",
-    "startTime","peakTime","endTime",
-    "addTimes","addSigmas","addThresholds",
-    "event",
-    "decisionContext","gateContext","scaleContext","execContext",
-    "startSigma","peakSigma","endSigma",
-    "bidPct","askPct","benchBidPct",
-    "tickPct","benchPct",
-    "startSigmaAbs","peakSigmaAbs","endSigmaAbs",
-    "holdCandles","holdSec","entryCount","addsCount","dilutionStep","maxAdds","minHoldCandles","filtersOk","reason","closeMode",
-    "totalPnlUsd","rawPnlUsd","hedgedPnlUsd",
-    "positionNotionalUsd","tierBp","corr","beta","stockSigma",
-    "rating","ratingTotal",
-    "spread","vwap","lstCls","yCls",
-    "country","exchange","sectorL3",
-  ];
-  const cell = (v: unknown): string => {
-    if (v == null) return "";
-    const s = String(v);
-    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const f4 = (v: number | null | undefined): string => v == null ? "" : v.toFixed(4);
-  const f2 = (v: number | null | undefined): string => v == null ? "" : v.toFixed(2);
-  const lines: string[] = [HEADERS.join(",")];
-  for (const r of rows) {
-    const dateKey = r.dateNy ?? r.date ?? r.day ?? r.tradeDate ?? r.sessionDate ?? "";
-    const entryCount = Number.isFinite(r.entryCount ?? NaN) ? Math.max(1, Math.trunc(r.entryCount as number)) : 1;
-    const addsCount = Math.max(0, entryCount - 1);
-    const addMinuteIdxs = (r.entryMinuteIdxs ?? []).slice(1);
-    const addMetricsAbs = (r.entryMetricAbs ?? r.entryMetrics ?? []).slice(1);
-    const addTimes = addMinuteIdxs.map((idx) => minuteIdxToClockLabel(idx)).join(" | ");
-    const addSigmas = addMetricsAbs
-      .map((value) => value == null || !Number.isFinite(value) ? "-" : Number(value).toFixed(4))
-      .join(" | ");
-    const startSigmaAbs = r.startMetricAbs ?? 0;
-    const dilutionStep = context?.dilutionStep ?? 0;
-    const addThresholds = addMinuteIdxs.length > 0 && dilutionStep > 0
-      ? addMinuteIdxs.map((_, i) => (startSigmaAbs + (i + 1) * dilutionStep).toFixed(4)).join(" | ")
-      : "";
-    const isLong = r.side === "Long";
-    const entryPct = priceMode === "BidAsk"
-      ? (isLong ? (r.startAskPct ?? r.lstPrcLstClsPct) : (r.startBidPct ?? r.lstPrcLstClsPct))
-      : r.lstPrcLstClsPct;
-    const exitPct = priceMode === "BidAsk"
-      ? (isLong ? (r.endBidPct ?? r.endLstPrcLstClsPct) : (r.endAskPct ?? r.endLstPrcLstClsPct))
-      : r.endLstPrcLstClsPct;
-    const filtersOk = `entries=${entryCount} | adds=${addsCount} | spread=${num(r.spreadBidPct, 4)}`;
-    const decisionContext = context
-      ? [
-          `session=${context.session}`,
-          `band=${context.ruleBand}`,
-          `metric=${context.metric}`,
-          `close=${context.closeMode}`,
-          `price=${context.priceMode}`,
-          `pnl=${context.pnlMode}`,
-        ].join(" | ")
-      : "";
-    const gateContext = context
-      ? [
-          `start>=${context.startAbs.toFixed(2)}`,
-          `start<=${context.startAbsMax || "-"}`,
-          `end<=${context.endAbs.toFixed(2)}`,
-          `hold>=${context.minHoldCandles}m`,
-          `tick=${f4(entryPct) || "-"}`,
-          `bench=${f4(exitPct) || "-"}`,
-        ].join(" | ")
-      : "";
-    const addThresholdsList = addThresholds.length > 0 ? addThresholds : "-";
-    const scaleContext = context
-      ? [
-          `mode=${context.dilutionMode}`,
-          `entryσ=${f4(r.startMetric)}`,
-          `add@=${addThresholdsList}`,
-          `step=${context.dilutionStep.toFixed(3)}`,
-          `max=${context.maxAdds}`,
-          `entries=${entryCount}`,
-        ].join(" | ")
-      : "";
-    const execContext = context
-      ? [
-          `scope=${context.scopeMode}`,
-          `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
-          `offset=${context.offset}`,
-          `zap=${context.zapMode}`,
-        ].join(" | ")
-      : "";
-    lines.push([
-      cell(dateKey),
-      cell(r.ticker),
-      cell(r.benchTicker),
-      cell(r.side),
-      cell(minuteIdxToClockLabel(r.startMinuteIdx)),
-      cell(minuteIdxToClockLabel(r.peakMinuteIdx)),
-      cell(minuteIdxToClockLabel(r.endMinuteIdx)),
-      cell(addTimes),
-      cell(addSigmas),
-      cell(addThresholds),
-      "EPISODE",
-      cell(decisionContext),
-      cell(gateContext),
-      cell(scaleContext),
-      cell(execContext),
-      f4(r.startMetric),
-      f4(r.peakMetric),
-      f4(r.endMetric),
-      f4(r.startBidPct),
-      f4(r.startAskPct),
-      f4(r.startBenchLstPrcLstClsPct),
-      f4(entryPct),
-      f4(exitPct),
-      f4(r.startMetricAbs),
-      f4(r.peakMetricAbs),
-      f4(r.endMetricAbs),
-      r.endMinuteIdx != null && r.startMinuteIdx != null ? String(r.endMinuteIdx - r.startMinuteIdx) : "",
-      r.endMinuteIdx != null && r.startMinuteIdx != null ? String((r.endMinuteIdx - r.startMinuteIdx) * 60) : "",
-      entryCount,
-      addsCount,
-      context != null ? context.dilutionStep.toFixed(3) : "",
-      context != null ? String(context.maxAdds) : "",
-      r.minHoldCandles ?? "",
-      cell(filtersOk),
-      cell(r.closeMode ?? ""),   // reason
-      cell(r.closeMode ?? ""),   // closeMode (fixes column alignment — was missing)
-      f2(r.totalPnlUsd),
-      f2(r.rawPnlUsd),
-      f2(r.hedgedPnlUsd),
-      f2(r.positionNotionalUsd),
-      f4(r.tierBp),
-      f4(r.corr),
-      f4(r.beta),
-      f4(r.sigma),
-      f4(r.rating),
-      f4(r.ratingTotal),
-      f4(r.spreadBidPct),
-      f4(r.vwap),
-      f4(r.lstCls),
-      f4(r.yCls),
-      cell(r.country ?? ""),
-      cell(r.exchange ?? ""),
-      cell(r.sectorL3 ?? ""),
-    ].join(","));
-  }
-  const csv = lines.join("\n");
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename ?? `scanner-episodes-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function sessionTimeChartRange(session: PaperArbSession): { from: number; to: number } {
-  switch (session) {
-    case "BLUE":  return { from: 0, to: 239 };
-    case "PRE":   return { from: 0, to: 570 };
-    case "ARK":   return { from: 241, to: 570 };
-    case "OPEN":  return { from: 570, to: 600 };
-    case "INTRA": return { from: 600, to: 959 };
-    case "POST":  return { from: 960, to: 1199 };
-    default:      return { from: 0, to: 1199 };
-  }
-}
-function clampInt(x: any, def = 0) {
-  const v = Number(x);
-  if (!Number.isFinite(v)) return def;
-  return Math.trunc(v);
-}
-function clampNumber(x: any, def = 0) {
-  const v = Number(x);
-  return Number.isFinite(v) ? v : def;
-}
-function normalizeScannerSizeValue(mode: PaperArbSizingMode, value: number | null | undefined) {
-  const raw = Math.abs(clampNumber(value, mode === "Tier" ? 1 : 1000));
-  if (mode === "Tier") return Math.max(1, Math.round(raw));
-  return Math.max(1000, Math.round(raw / 1000) * 1000);
-}
-function stepScannerSizeValue(mode: PaperArbSizingMode, value: number, delta: number) {
-  if (mode === "Tier") return normalizeScannerSizeValue(mode, value + delta);
-  return normalizeScannerSizeValue(mode, value + (delta * 1000));
-}
-function formatScannerSizeValue(mode: PaperArbSizingMode, value: number) {
-  const normalized = normalizeScannerSizeValue(mode, value);
-  return mode === "Notional" ? String(Math.trunc(normalized)) : String(Math.trunc(normalized));
-}
-function normalizeDilutionStepValue(value: number | null | undefined) {
-  const raw = Math.abs(clampNumber(value, 0.3));
-  if (raw <= 0) return 0.3;
-  return Math.round(raw * 1000) / 1000;
-}
-function normalizeMaxAddsValue(value: number | null | undefined) {
-  const raw = Math.trunc(clampNumber(value, 3));
-  if (!Number.isFinite(raw)) return 3;
-  return Math.max(0, Math.min(9, raw));
-}
-function stepDilutionStepValue(value: number, delta: number) {
-  return normalizeDilutionStepValue(value + (delta * 0.1));
-}
-function formatDilutionStepValue(value: number) {
-  return normalizeDilutionStepValue(value).toFixed(1).replace(/\.0$/, "");
-}
-function splitList(s: string): string[] {
-  return (s ?? "")
-    .split(/[\s,;]+/g)
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
-function splitListUpper(s: string): string[] {
-  return splitList(s).map((x) => x.toUpperCase());
-}
-function normalizeTicker(raw: string): string | null {
-  const tk = (raw || "").trim().toUpperCase().replace(/"/g, "");
-  if (!tk) return null;
-  if (!/^[A-Z0-9.\-]+$/.test(tk)) return null;
-  return tk;
-}
-function parseTickersFromCsv(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (!lines.length) return [];
-
-  const detectDelim = (line: string) =>
-    (line.match(/;/g) || []).length > (line.match(/,/g) || []).length ? ";" : ",";
-
-  const delim = detectDelim(lines[0]);
-  const header = lines[0].split(delim).map((x) => x.trim().toLowerCase());
-  const tickerIdx = header.findIndex((h) => h === "ticker");
-  const start = tickerIdx !== -1 ? 1 : 0;
-
-  const out: string[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const parts = lines[i].split(delim).map((x) => x.trim());
-    const raw = tickerIdx !== -1 ? parts[tickerIdx] : parts[0];
-    const tk = normalizeTicker(raw || "");
-    if (tk) out.push(tk);
-  }
-  return Array.from(new Set(out));
-}
-function tickerKey(x: string | null | undefined): string {
-  return String(x ?? "").trim().toUpperCase();
-}
-function optNumOrNull(v: any): number | null {
-  if (v === "" || v === null || v === undefined) return null;
-  const normalized = typeof v === "string" ? v.trim().replace(",", ".") : v;
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : null;
-}
-function buildRangeValues(min: number, max: number, step: number): number[] {
-  const lo = Math.min(min, max);
-  const hi = Math.max(min, max);
-  const st = Math.max(0.0001, step);
-  const out: number[] = [];
-  for (let v = lo; v <= hi + st * 0.5; v += st) out.push(Number(v.toFixed(4)));
-  return Array.from(new Set(out));
-}
-
-function normalizeSide(
-  side: TapeArbSide
-): { label: "Long" | "Short" | string; isLong: boolean | null } {
-  if (side === 0) return { label: "Long", isLong: true };
-  if (side === 1) return { label: "Short", isLong: false };
-  const s = String(side ?? "").trim();
-  const low = s.toLowerCase();
-  if (low.includes("long")) return { label: "Long", isLong: true };
-  if (low.includes("short")) return { label: "Short", isLong: false };
-  return { label: s.length ? s : "-", isLong: null };
-}
-
-function getBestParams(row: any) {
-  return row?.best_params ?? row?.bestParams ?? row?.BestParams ?? row?.best_params_row ?? null;
-}
-
-function safeObj(value: any): Record<string, any> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-
-function ratingBandToBinClassKey(band: PaperArbRatingBand): string {
-  switch (band) {
-    case "BLUE":
-      return "blue";
-    case "ARK":
-    case "PRE":
-      return "ark";
-    case "OPEN":
-      return "open";
-    case "INTRA":
-      return "intra";
-    case "PRINT":
-      return "print";
-    case "POST":
-      return "post";
-    default:
-      return "global";
-  }
-}
-
-function binSignKeyForSide(side: TapeArbSide): "pos" | "neg" | null {
-  const normalized = normalizeSide(side);
-  if (normalized.isLong === true) return "neg";
-  if (normalized.isLong === false) return "pos";
-  return null;
-}
-
-function parseBinIntervals(value: any): Array<{ lo: number; hi: number; rate: number; total: number }> {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      const obj = safeObj(item);
-      const lo = optNumOrNull(obj?.lo ?? obj?.from ?? obj?.min ?? obj?.Min);
-      const hi = optNumOrNull(obj?.hi ?? obj?.to ?? obj?.max ?? obj?.Max);
-      const rate = optNumOrNull(obj?.rate ?? obj?.Rate ?? obj?.rating ?? obj?.Rating);
-      const total = optNumOrNull(obj?.total ?? obj?.Total ?? obj?.count ?? obj?.Count);
-      if (lo == null || hi == null || rate == null || total == null) return null;
-      return { lo: Math.min(lo, hi), hi: Math.max(lo, hi), rate, total };
-    })
-    .filter((item): item is { lo: number; hi: number; rate: number; total: number } => item != null);
-}
-
-function scannerBinRatingSnapshot(args: {
-  row: any;
-  session: PaperArbSession;
-  side: TapeArbSide;
-  sigmaAbs: number | null | undefined;
-}) {
-  const { row, session, side, sigmaAbs } = args;
-  const signKey = binSignKeyForSide(side);
-  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
-  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const binsRoot =
-    safeObj(root?.best_windows_any)?.stitched ??
-    safeObj(root?.BestWindowsAny)?.stitched ??
-    safeObj(root?.best_windows_any)?.Stitched ??
-    safeObj(root?.BestWindowsAny)?.Stitched ??
-    null;
-  const sigmaPeakBins =
-    safeObj(binsRoot)?.sigma_peak_bins ??
-    safeObj(binsRoot)?.SigmaPeakBins ??
-    null;
-  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
-  const intervals = parseBinIntervals(classBins?.[signKey]);
-  if (!intervals.length) return null;
-  const absSigma = Math.abs(sigmaAbs);
-  const match = intervals.find((interval) => absSigma >= interval.lo && absSigma <= interval.hi);
-  return match ?? null;
-}
-
-function passesBinRatingByBestParams(args: {
-  bestParams: any;
-  classKey: string;
-  signKey: "pos" | "neg" | null;
-  sigmaAbs: number | null | undefined;
-  minRate: number;
-  minTotal: number;
-}) {
-  const { bestParams, classKey, signKey, sigmaAbs, minRate, minTotal } = args;
-  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
-  const root = safeObj(bestParams);
-  const binsRoot =
-    safeObj(root?.best_windows_any)?.stitched ??
-    safeObj(root?.BestWindowsAny)?.stitched ??
-    safeObj(root?.best_windows_any)?.Stitched ??
-    safeObj(root?.BestWindowsAny)?.Stitched ??
-    null;
-  const sigmaPeakBins =
-    safeObj(binsRoot)?.sigma_peak_bins ??
-    safeObj(binsRoot)?.SigmaPeakBins ??
-    null;
-  const classBins = safeObj(safeObj(sigmaPeakBins)?.[classKey]);
-  const intervals = parseBinIntervals(classBins?.[signKey]);
-  if (!intervals.length) return false;
-
-  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
-  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
-  const absSigma = Math.abs(sigmaAbs);
-
-  return intervals.some((interval) =>
-    absSigma >= interval.lo &&
-    absSigma <= interval.hi &&
-    interval.rate >= effectiveMinRate &&
-    interval.total >= effectiveMinTotal
-  );
-}
-
-function scannerBinFilterEnabled(args: {
-  ratingMode: PaperArbRatingMode;
-  metric: PaperArbMetric;
-}) {
-  return args.ratingMode === "BIN" && args.metric === "SigmaZap";
-}
-
-function scannerSigBinSnapshot(args: {
-  row: any;
-  session: PaperArbSession;
-  side: TapeArbSide;
-  sigmaAbs: number | null | undefined;
-}): { rate: number; total: number } | null {
-  const { row, session, side, sigmaAbs } = args;
-  const signKey = binSignKeyForSide(side);
-  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return null;
-  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const bwAny = safeObj(root?.best_windows_any ?? root?.BestWindowsAny);
-  const stitched = safeObj(bwAny?.stitched ?? bwAny?.Stitched);
-  const allStats = safeObj(stitched?.sigma_bin_stats ?? stitched?.SigmaBinStats);
-  const clsStats = safeObj(allStats?.[classKey]);
-  const signStats = safeObj(clsStats?.[signKey]);
-  // compute bin key matching Python: floor(abs / step) * step formatted to 1 decimal
-  const sigBinParams = safeObj(bwAny?.sigma_bin_params ?? bwAny?.SigmaBinParams);
-  const step = Number(sigBinParams?.step ?? 0.5);
-  const min = Number(sigBinParams?.min ?? 0.5);
-  const max = Number(sigBinParams?.max ?? 10.0);
-  const v = Math.max(min, Math.min(max, Math.abs(sigmaAbs)));
-  const binKey = (Math.floor(v / step) * step).toFixed(1);
-  const entry = safeObj(signStats?.[binKey]);
-  if (!entry) return null;
-  const rate = optNumOrNull(entry.r ?? entry.rate ?? entry.Rate);
-  const total = optNumOrNull(entry.t ?? entry.total ?? entry.Total);
-  if (rate == null || total == null) return null;
-  return { rate, total };
-}
-
-function scannerTopWindowSnapshot(args: {
-  row: any;
-  session: PaperArbSession;
-  side: TapeArbSide;
-  sigmaAbs: number | null | undefined;
-}): { sigma: { lo: number; hi: number } | null; bench: { lo: number; hi: number } | null; time: { band: string } | null } | null {
-  const { row, session, side, sigmaAbs } = args;
-  const signKey = binSignKeyForSide(side);
-  if (!signKey) return null;
-  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const root = safeObj(getBestParams(row));
-  const tw = safeObj(safeObj(root?.top_windows ?? root?.TopWindows)?.[classKey]);
-  const entry = safeObj(tw?.[signKey]);
-  if (!entry) return null;
-  const sigmaTw = safeObj(entry.sigma);
-  const benchTw = safeObj(entry.bench);
-  const timeTw = safeObj(entry.time);
-  return {
-    sigma: sigmaTw && optNumOrNull(sigmaTw.lo) != null && optNumOrNull(sigmaTw.hi) != null
-      ? { lo: Number(sigmaTw.lo), hi: Number(sigmaTw.hi) }
-      : null,
-    bench: benchTw && optNumOrNull(benchTw.lo) != null && optNumOrNull(benchTw.hi) != null
-      ? { lo: Number(benchTw.lo), hi: Number(benchTw.hi) }
-      : null,
-    time: timeTw && typeof timeTw.band === "string" ? { band: timeTw.band } : null,
-  };
-}
-
-function scannerCurrentTimeBand(bandMinutes: number): string {
-  const now = new Date();
-  const etMs = now.getTime() - 4 * 60 * 60 * 1000;
-  const et = new Date(etMs);
-  const h = et.getUTCHours();
-  const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
-  const totalEnd = h * 60 + m + bandMinutes;
-  const eh = Math.floor(totalEnd / 60) % 24;
-  const em = totalEnd % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
-}
-
-function passesScannerBinRatingFilter(args: {
-  enabled: boolean;
-  row: any;
-  session: PaperArbSession;
-  side: TapeArbSide;
-  sigmaAbs: number | null | undefined;
-  minRate: number;
-  minTotal: number;
-}) {
-  const { enabled, row, session, side, sigmaAbs, minRate, minTotal } = args;
-  if (!enabled) return true;
-  const signKey = binSignKeyForSide(side);
-  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  return passesBinRatingByBestParams({
-    bestParams: getBestParams(row),
-    classKey,
-    signKey,
-    sigmaAbs,
-    minRate,
-    minTotal,
-  });
-}
-
-function passesDeltaZapGate(args: {
-  side: TapeArbSide;
-  metricAbs: number | null | undefined;
-  deltaAbs: number | null | undefined;
-  printMedianPos?: number | null;
-  printMedianNeg?: number | null;
-}) {
-  const { side, metricAbs, deltaAbs, printMedianPos, printMedianNeg } = args;
-  if (metricAbs == null || !Number.isFinite(metricAbs)) return false;
-  if (deltaAbs == null || !Number.isFinite(deltaAbs)) return false;
-  const sideInfo = normalizeSide(side);
-  const FALLBACK_PRINT_MEDIAN = 0.1;
-  if (sideInfo.isLong === true) {
-    const threshold = Math.abs(printMedianNeg ?? FALLBACK_PRINT_MEDIAN) + Math.max(0, deltaAbs);
-    return Math.abs(metricAbs) >= threshold;
-  }
-  if (sideInfo.isLong === false) {
-    const threshold = Math.abs(printMedianPos ?? FALLBACK_PRINT_MEDIAN) + Math.max(0, deltaAbs);
-    return Math.abs(metricAbs) >= threshold;
-  }
-  return false;
-}
-
-function toYmd(d: string) {
-  // minimal client guard; server validates too
-  return /^\d{4}-\d{2}-\d{2}$/.test(d);
-}
-
-type SharedRangeFilterKey =
-  | "corr"
-  | "beta"
-  | "sigma"
-  | "adv20"
-  | "adv20nf"
-  | "adv90"
-  | "adv90nf"
-  | "avpremhv"
-  | "roundlot"
-  | "vwap"
-  | "spread"
-  | "lstprcl"
-  | "lstcls"
-  | "ycls"
-  | "tcls"
-  | "clstocls"
-  | "lo"
-  | "lstclsnewscnt"
-  | "marketcapm"
-  | "premhvolnf"
-  | "volnffromlstcls"
-  | "avpostmhvol90nf"
-  | "avpremhvol90nf"
-  | "avpremhvalue20nf"
-  | "avpremhvalue90nf"
-  | "avgdailyvalue20"
-  | "avgdailyvalue90"
-  | "volatility20"
-  | "volatility90"
-  | "premhmdv20nf"
-  | "premhmdv90nf"
-  | "volrel"
-  | "premhbidlstprc"
-  | "premhlolstprc"
-  | "premhhilstcls"
-  | "premhlolstcls"
-  | "lstprclstcls"
-  | "imbexch925"
-  | "imbexch1555";
-
-type SharedRangeFilterMode = "on" | "off";
-
-const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, SharedRangeFilterMode> = {
-  corr: "on",
-  beta: "on",
-  sigma: "on",
-  adv20: "on",
-  adv20nf: "on",
-  adv90: "on",
-  adv90nf: "on",
-  avpremhv: "on",
-  roundlot: "on",
-  vwap: "on",
-  spread: "on",
-  lstprcl: "on",
-  lstcls: "on",
-  ycls: "on",
-  tcls: "on",
-  clstocls: "on",
-  lo: "on",
-  lstclsnewscnt: "on",
-  marketcapm: "on",
-  premhvolnf: "on",
-  volnffromlstcls: "on",
-  avpostmhvol90nf: "on",
-  avpremhvol90nf: "on",
-  avpremhvalue20nf: "on",
-  avpremhvalue90nf: "on",
-  avgdailyvalue20: "on",
-  avgdailyvalue90: "on",
-  volatility20: "on",
-  volatility90: "on",
-  premhmdv20nf: "on",
-  premhmdv90nf: "on",
-  volrel: "on",
-  premhbidlstprc: "on",
-  premhlolstprc: "on",
-  premhhilstcls: "on",
-  premhlolstcls: "on",
-  lstprclstcls: "on",
-  imbexch925: "on",
-  imbexch1555: "on",
-};
-
-const SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL: Array<ScopeResearchOption<ScopeResearchParameterKey>> = [
-  { value: "startMinuteIdx", label: "Start Time", format: "clock" },
-  { value: "peakMinuteIdx", label: "Peak Time", format: "clock" },
-  { value: "endMinuteIdx", label: "End Time", format: "clock" },
-  { value: "timeToPeak", label: "Time To Peak", format: "minutes" },
-  { value: "timeToClose", label: "Time To Close", format: "minutes" },
-  { value: "startMetricAbs", label: "Start Abs", format: "number" },
-  { value: "peakMetricAbs", label: "Peak Abs", format: "number" },
-  { value: "endMetricAbs", label: "End Abs", format: "number" },
-  { value: "reversionAbs", label: "Peak-End Abs", format: "number" },
-  { value: "reversionPct", label: "Reversion %", format: "percent" },
-  { value: "minHoldCandles", label: "Min Hold", format: "minutes" },
-  { value: "rating", label: "Rating", format: "number" },
-  { value: "ratingTotal", label: "Rating Total", format: "number" },
-  { value: "corr", label: "CORR", format: "number" },
-  { value: "beta", label: "BETA", format: "number" },
-  { value: "sigma", label: "SIGMA", format: "number" },
-  { value: "adv20", label: "ADV20", format: "number" },
-  { value: "adv20NF", label: "ADV20NF", format: "number" },
-  { value: "adv90", label: "ADV90", format: "number" },
-  { value: "adv90NF", label: "ADV90NF", format: "number" },
-  { value: "avPreMhv", label: "AvPreMhv", format: "number" },
-  { value: "roundLot", label: "RoundLot", format: "number" },
-  { value: "vwap", label: "VWAP", format: "number" },
-  { value: "spread", label: "SpreadBid%", format: "number" },
-  { value: "lstPrcL", label: "LstPrcL", format: "number" },
-  { value: "lstCls", label: "LstCls", format: "number" },
-  { value: "yCls", label: "YCls", format: "number" },
-  { value: "tCls", label: "TCls", format: "number" },
-  { value: "clsToClsPct", label: "ClsToCls%", format: "percent" },
-  { value: "lo", label: "Lo", format: "number" },
-  { value: "newsCnt", label: "LstClsNewsCnt", format: "number" },
-  { value: "marketCapM", label: "MarketCapM", format: "number" },
-  { value: "preMktVolNF", label: "PreMhVolNF", format: "number" },
-  { value: "volNFfromLstCls", label: "VolNFfromLstCls", format: "number" },
-  { value: "avPostMhVol90NF", label: "AvPostMhVol90NF", format: "number" },
-  { value: "avPreMhVol90NF", label: "AvPreMhVol90NF", format: "number" },
-  { value: "avPreMhValue20NF", label: "AvPreMhValue20NF", format: "number" },
-  { value: "avPreMhValue90NF", label: "AvPreMhValue90NF", format: "number" },
-  { value: "avgDailyValue20", label: "AvgDailyValue20", format: "number" },
-  { value: "avgDailyValue90", label: "AvgDailyValue90", format: "number" },
-  { value: "volatility20", label: "Volatility20", format: "percent" },
-  { value: "volatility90", label: "Volatility90", format: "percent" },
-  { value: "preMhMDV20NF", label: "PreMhMDV20NF", format: "number" },
-  { value: "preMhMDV90NF", label: "PreMhMDV90NF", format: "number" },
-  { value: "volRel", label: "VolRel", format: "number" },
-  { value: "preMhBidLstPrcPct", label: "PreMhBidLstPrc%", format: "percent" },
-  { value: "preMhLoLstPrcPct", label: "PreMhLoLstPrc%", format: "percent" },
-  { value: "preMhHiLstClsPct", label: "PreMhHiLstCls%", format: "percent" },
-  { value: "preMhLoLstClsPct", label: "PreMhLoLstCls%", format: "percent" },
-  { value: "lstPrcLstClsPct", label: "LstPrcLstCls%", format: "percent" },
-  { value: "imbExch925", label: "ImbExch925", format: "number" },
-  { value: "imbExch1555", label: "ImbExch1555", format: "number" },
-];
-
-// Arbitrage-only research axes. OpenDoor tracks no sigma metric and no peak — the mapper leaves
-// those slots null and MinHoldCandles is a constant 0 — so offering them would render empty charts
-// that look like a bug. The groups below filter off the trimmed list, so they shrink automatically.
-const OPEN_DOOR_UNSUPPORTED_SCOPE_PARAMS = new Set<ScopeResearchParameterKey>([
-  "startMetricAbs", "peakMetricAbs", "endMetricAbs",
-  "reversionAbs", "reversionPct",
-  "peakMinuteIdx", "timeToPeak",
-  "minHoldCandles",
-]);
-
-const SCOPE_RESEARCH_PARAMETER_OPTIONS: Array<ScopeResearchOption<ScopeResearchParameterKey>> =
-  SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL.filter((o) => !OPEN_DOOR_UNSUPPORTED_SCOPE_PARAMS.has(o.value));
-
-const SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = [
-  {
-    label: "OPTION FILTERS",
-    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
-      [
-        "startMinuteIdx",
-        "peakMinuteIdx",
-        "endMinuteIdx",
-        "timeToPeak",
-        "timeToClose",
-        "startMetricAbs",
-        "peakMetricAbs",
-        "endMetricAbs",
-        "reversionAbs",
-        "reversionPct",
-        "minHoldCandles",
-      ].includes(option.value)
-    ).map((option) => ({ value: option.value, label: option.label })),
+import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
+import { downloadEpisodesCsv } from "../../lib/scanner/csv";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
+import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
+import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import { OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
+import { SCANNER_CONTROL_SURFACE, SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
+import { CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
+import { defineScannerStrategy } from "../../lib/scanner/strategy";
+import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
+import ScannerHeader from "./shell/panels/ScannerHeader";
+import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
+import TickerListDrawers from "./shell/panels/TickerListDrawers";
+import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+// OpenDoor tracks no sigma metric and no peak (the mapper leaves those slots null and
+// MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
+// metrics are excluded rather than rendering empty charts that look like a bug.
+const STRATEGY = defineScannerStrategy({
+  id: "opendoor",
+  label: "OpenDoor",
+  apiBase: "/api/paper/opendoor",
+  lsKeyPrefix: "paper.opendoor",
+  nav: { stream: "/opendoor/stream", scanner: "/opendoor/scanner", sonar: "/opendoor/sonar" },
+  // One entry at 09:20 (±5min) and one exit at 09:40 ("10m") or 10:00 ("30m"), per
+  // TapeOpenDoorEngine. Nothing outside 09:00–10:00 is of any use to this strategy.
+  tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
+  // OpenDoor's own rating classes: the two exit horizons from ExitTargetMinByClass. They play
+  // exactly the role Arbitrage's session bands play — class x direction -> {rate, total} gated by
+  // minRate/minTotal — and are read from /api/opendoor/summary, not from sigma_peak_bins.
+  ratingClasses: {
+    dimension: "EXIT",
+    keys: ["10m", "30m"],
+    labels: { "10m": "10M", "30m": "30M" },
   },
-  {
-    label: "RATING FILTERS",
-    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
-      ["rating", "ratingTotal", "corr", "beta", "sigma"].includes(option.value)
-    ).map((option) => ({ value: option.value, label: option.label })),
-  },
-  {
-    label: "TAPE FILTERS",
-    options: SCOPE_RESEARCH_PARAMETER_OPTIONS.filter((option) =>
-      [
-        "adv20",
-        "adv20NF",
-        "adv90",
-        "adv90NF",
-        "avPreMhv",
-        "roundLot",
-        "vwap",
-        "spread",
-        "lstPrcL",
-        "lstCls",
-        "yCls",
-        "tCls",
-        "clsToClsPct",
-        "lo",
-        "newsCnt",
-        "marketCapM",
-        "preMktVolNF",
-        "volNFfromLstCls",
-        "avPostMhVol90NF",
-        "avPreMhVol90NF",
-        "avPreMhValue20NF",
-        "avPreMhValue90NF",
-        "avgDailyValue20",
-        "avgDailyValue90",
-        "volatility20",
-        "volatility90",
-        "preMhMDV20NF",
-        "preMhMDV90NF",
-        "volRel",
-        "preMhBidLstPrcPct",
-        "preMhLoLstPrcPct",
-        "preMhHiLstClsPct",
-        "preMhLoLstClsPct",
-        "lstPrcLstClsPct",
-        "imbExch925",
-        "imbExch1555",
-      ].includes(option.value)
-    ).map((option) => ({ value: option.value, label: option.label })),
-  },
-];
-
-const SCOPE_RESEARCH_RESULT_OPTIONS_ALL: Array<ScopeResearchOption<ScopeResearchResultKey>> = [
-  { value: "avgPnlUsd", label: "Avg/Trade", format: "number" },
-  { value: "totalPnlUsd", label: "TotalPnL", format: "currency" },
-  { value: "winRate", label: "WinRate", format: "percent" },
-  { value: "score", label: "Score", format: "number" },
-  { value: "rawPnlUsd", label: "Raw PnL", format: "currency" },
-  { value: "benchPnlUsd", label: "Bench PnL", format: "currency" },
-  { value: "hedgedPnlUsd", label: "Hedged PnL", format: "currency" },
-  { value: "peakMetricAbs", label: "Peak Abs", format: "number" },
-  { value: "endMetricAbs", label: "End Abs", format: "number" },
-];
-
-// No hedge leg and no sigma tracking in OpenDoor: these four are always null on the mapped rows.
-const OPEN_DOOR_UNSUPPORTED_SCOPE_RESULTS = new Set<ScopeResearchResultKey>([
-  "benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs",
-]);
-
-const SCOPE_RESEARCH_RESULT_OPTIONS: Array<ScopeResearchOption<ScopeResearchResultKey>> =
-  SCOPE_RESEARCH_RESULT_OPTIONS_ALL.filter((o) => !OPEN_DOOR_UNSUPPORTED_SCOPE_RESULTS.has(o.value));
-
-function scopeResearchResultOptionsForChart(chartType: ScopeResearchChartType): Array<ScopeResearchOption<ScopeResearchResultKey>> {
-  if (chartType === "results_by_bins" || chartType === "results_more_less_parameter") {
-    return SCOPE_RESEARCH_RESULT_OPTIONS;
-  }
-  return SCOPE_RESEARCH_RESULT_OPTIONS.filter(
-    (option) => option.value !== "avgPnlUsd" && option.value !== "winRate" && option.value !== "score"
-  );
-}
-
-function scopeResearchNormalizeResultKey(
-  chartType: ScopeResearchChartType,
-  resultKey: ScopeResearchResultKey
-): ScopeResearchResultKey {
-  const allowed = scopeResearchResultOptionsForChart(chartType);
-  return allowed.some((option) => option.value === resultKey) ? resultKey : "totalPnlUsd";
-}
-
-const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
-  "RATING GATES": "RATING FILTERS",
-  "ZAP THRESHOLDS": "ZAP FILTERS",
-  "TAPE FILTERS": "TAPE FILTERS",
-};
-
-const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
-  { key: "minrate", label: "MINRATE", group: "RATING GATES", scenarioParameter: "MINRATE" },
-  { key: "mintotal", label: "MINTOTAL", group: "RATING GATES", scenarioParameter: "MINTOTAL" },
-  { key: "corr", label: "CORR", group: "RATING GATES", scenarioParameter: "CORR", optimizerApiKey: "CORR" },
-  { key: "beta", label: "BETA", group: "RATING GATES", scenarioParameter: "BETA", optimizerApiKey: "BETA" },
-  { key: "sigma", label: "SIGMA", group: "RATING GATES", scenarioParameter: "SIGMA", optimizerApiKey: "SIGMA" },
-  { key: "sector", label: "SECTOR L3", group: "RATING GATES", kind: "categorical" },
-  { key: "sectorL4", label: "SECTOR L4", group: "RATING GATES", kind: "categorical" },
-  { key: "sectorL5", label: "SECTOR L5", group: "RATING GATES", kind: "categorical" },
-  { key: "bench", label: "BENCH", group: "RATING GATES", kind: "categorical" },
-  { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
-  { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
-  { key: "adv20", label: "ADV20", group: "TAPE FILTERS", scenarioParameter: "ADV20" },
-  { key: "adv20nf", label: "ADV20NF", group: "TAPE FILTERS", scenarioParameter: "ADV20NF" },
-  { key: "adv90", label: "ADV90", group: "TAPE FILTERS", scenarioParameter: "ADV90" },
-  { key: "adv90nf", label: "ADV90NF", group: "TAPE FILTERS", scenarioParameter: "ADV90NF" },
-  { key: "avpremhv", label: "AvPreMhv", group: "TAPE FILTERS", scenarioParameter: "AvPreMhv" },
-  { key: "roundlot", label: "RoundLot", group: "TAPE FILTERS", scenarioParameter: "RoundLot" },
-  { key: "vwap", label: "VWAP", group: "TAPE FILTERS", scenarioParameter: "VWAP" },
-  { key: "spread", label: "SpreadBid%", group: "TAPE FILTERS", scenarioParameter: "SpreadBidPct" },
-  { key: "lstprcl", label: "LstPrcL", group: "TAPE FILTERS", scenarioParameter: "LstPrcL" },
-  { key: "lstcls", label: "LstCls", group: "TAPE FILTERS", scenarioParameter: "LstCls" },
-  { key: "ycls", label: "YCls", group: "TAPE FILTERS", scenarioParameter: "YCls" },
-  { key: "tcls", label: "TCls", group: "TAPE FILTERS", scenarioParameter: "TCls" },
-  { key: "clstocls", label: "ClsToCls%", group: "TAPE FILTERS", scenarioParameter: "ClsToCls%" },
-  { key: "lo", label: "Lo", group: "TAPE FILTERS", scenarioParameter: "Lo" },
-  { key: "lstclsnewscnt", label: "LstClsNewsCnt", group: "TAPE FILTERS", scenarioParameter: "LstClsNewsCnt" },
-  { key: "marketcapm", label: "MarketCapM", group: "TAPE FILTERS", scenarioParameter: "MarketCapM" },
-  { key: "premhvolnf", label: "PreMhVolNF", group: "TAPE FILTERS", scenarioParameter: "PreMhVolNF" },
-  { key: "volnffromlstcls", label: "VolNFfromLstCls", group: "TAPE FILTERS", scenarioParameter: "VolNFfromLstCls" },
-  { key: "avpostmhvol90nf", label: "AvPostMhVol90NF", group: "TAPE FILTERS", scenarioParameter: "AvPostMhVol90NF" },
-  { key: "avpremhvol90nf", label: "AvPreMhVol90NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhVol90NF" },
-  { key: "avpremhvalue20nf", label: "AvPreMhValue20NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhValue20NF" },
-  { key: "avpremhvalue90nf", label: "AvPreMhValue90NF", group: "TAPE FILTERS", scenarioParameter: "AvPreMhValue90NF" },
-  { key: "avgdailyvalue20", label: "AvgDailyValue20", group: "TAPE FILTERS", scenarioParameter: "AvgDailyValue20" },
-  { key: "avgdailyvalue90", label: "AvgDailyValue90", group: "TAPE FILTERS", scenarioParameter: "AvgDailyValue90" },
-  { key: "volatility20", label: "Volatility20", group: "TAPE FILTERS", scenarioParameter: "Volatility20" },
-  { key: "volatility90", label: "Volatility90", group: "TAPE FILTERS", scenarioParameter: "Volatility90" },
-  { key: "premhmdv20nf", label: "PreMhMDV20NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV20NF" },
-  { key: "premhmdv90nf", label: "PreMhMDV90NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV90NF" },
-  { key: "volrel", label: "VolRel", group: "TAPE FILTERS", scenarioParameter: "VolRel" },
-  { key: "premhbidlstprc", label: "PreMhHiLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstPrc%" },
-  { key: "premhlolstprc", label: "PreMhLoLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhLoLstPrc%" },
-  { key: "premhhilstcls", label: "PreMhHiLstCls%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstCls%" },
-  { key: "premhlolstcls", label: "PreMhLoLstCls%", group: "TAPE FILTERS", scenarioParameter: "PreMhLoLstCls%" },
-  { key: "lstprclstcls", label: "LstPrcLstCls%", group: "TAPE FILTERS", scenarioParameter: "LstPrcLstCls%" },
-  { key: "imbexch925", label: "ImbExch9:25", group: "TAPE FILTERS", scenarioParameter: "ImbExch9:25" },
-  { key: "imbexch1555", label: "ImbExch15:55", group: "TAPE FILTERS", scenarioParameter: "ImbExch15:55" },
-];
-
-const SCOPE_PARAMETER_BY_KEY = new Map(SCOPE_PARAMETER_DEFINITIONS.map((item) => [item.key, item]));
-
-const SCOPE_PARAMETER_SELECT_GROUPS: GlassSelectGroup[] = (["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"] as OptimizerRangeGroupKey[]).map((group) => ({
-  label: OPTIMIZER_GROUP_DISPLAY_LABELS[group],
-  options: SCOPE_PARAMETER_DEFINITIONS
-    .filter((item) => item.group === group)
-    .map((item) => ({ value: item.key, label: item.label })),
-}));
-
-const DEFAULT_SCOPE_RESEARCH_DRAFTS: Record<ScopePanelKey, ScopeResearchDraft> = {
-  left: {
-    chartType: "results_by_bins",
-    parameterKey: "rating",
-    resultKey: "totalPnlUsd",
-    bucketCount: 8,
-    minSamples: 12,
-    thresholdMode: "more_than",
-    domainFrom: "",
-    domainTo: "",
-    extraFilters: [],
-    parallelFilters: [],
-  },
-  right: {
-    chartType: "scatter_by_date",
-    parameterKey: "spread",
-    resultKey: "totalPnlUsd",
-    bucketCount: 8,
-    minSamples: 12,
-    thresholdMode: "more_than",
-    domainFrom: "",
-    domainTo: "",
-    extraFilters: [],
-    parallelFilters: [],
-  },
-};
-
-function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string | null) {
-  const extractYmd = (value: string | null | undefined) => {
-    const raw = String(value ?? "").trim();
-    if (!raw) return null;
-    const head = raw.slice(0, 10);
-    if (toYmd(head)) return head;
-    const match = raw.match(/\b\d{4}-\d{2}-\d{2}\b/);
-    return match?.[0] && toYmd(match[0]) ? match[0] : null;
-  };
-
-  const tsCandidates = [row.startTsNy, row.peakTsNy, row.endTsNy, row.episodeId];
-  for (const candidate of tsCandidates) {
-    const ymd = extractYmd(candidate);
-    if (ymd) return ymd;
-  }
-
-  const candidates = [
-    row.dateNy,
-    row.date,
-    row.day,
-    row.tradeDateNy,
-    row.tradeDate,
-    row.sessionDateNy,
-    row.sessionDate,
-    fallbackDate ?? null,
-  ];
-
-  for (const candidate of candidates) {
-    const ymd = extractYmd(candidate);
-    if (ymd) return ymd;
-  }
-  return null;
-}
-
-function ratingBandFromSession(session: PaperArbSession): PaperArbRatingBand {
-  switch (session) {
-    case "BLUE":
-      return "BLUE";
-    case "ARK":
-      return "ARK";
-    case "PRE":
-      return "PRE";
-    case "OPEN":
-      return "OPEN";
-    case "INTRA":
-      return "INTRA";
-    case "POST":
-      return "POST";
-    case "NIGHT":
-    case "GLOB":
-    default:
-      return "GLOBAL";
-  }
-}
-
-function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeResearchParameterKey): number | null {
-  switch (key) {
-    case "startMinuteIdx":
-      return Number.isFinite(row.startMinuteIdx) ? row.startMinuteIdx : null;
-    case "peakMinuteIdx":
-      return Number.isFinite(row.peakMinuteIdx) ? row.peakMinuteIdx : null;
-    case "endMinuteIdx":
-      return Number.isFinite(row.endMinuteIdx) ? row.endMinuteIdx : null;
-    case "timeToPeak":
-      return Number.isFinite(row.startMinuteIdx) && Number.isFinite(row.peakMinuteIdx)
-        ? row.peakMinuteIdx - row.startMinuteIdx
-        : null;
-    case "timeToClose":
-      return Number.isFinite(row.startMinuteIdx) && Number.isFinite(row.endMinuteIdx)
-        ? row.endMinuteIdx - row.startMinuteIdx
-        : null;
-    case "startMetricAbs":
-      return row.startMetricAbs ?? null;
-    case "peakMetricAbs":
-      return row.peakMetricAbs ?? null;
-    case "endMetricAbs":
-      return row.endMetricAbs ?? null;
-    case "reversionAbs": {
-      const peak = row.peakMetricAbs ?? null;
-      const end = row.endMetricAbs ?? null;
-      return peak != null && end != null ? peak - end : null;
-    }
-    case "reversionPct": {
-      const peak = row.peakMetricAbs ?? null;
-      const end = row.endMetricAbs ?? null;
-      return peak != null && end != null && peak !== 0 ? (peak - end) / peak : null;
-    }
-    case "minHoldCandles":
-      return row.minHoldCandles ?? null;
-    case "rating":
-      return row.rating ?? null;
-    case "ratingTotal":
-      return row.ratingTotal ?? null;
-    case "corr":
-      return row.corr ?? null;
-    case "beta":
-      return row.beta ?? null;
-    case "sigma":
-      return row.sigma ?? null;
-    case "adv20":
-      return row.adv20 ?? null;
-    case "adv20NF":
-      return row.adv20NF ?? null;
-    case "adv90":
-      return row.adv90 ?? null;
-    case "adv90NF":
-      return row.adv90NF ?? null;
-    case "avPreMhv":
-      return row.avPreMhv ?? null;
-    case "roundLot":
-      return row.roundLot ?? null;
-    case "vwap":
-      return row.vwap ?? null;
-    case "spread":
-      return row.spreadBidPct ?? null;
-    case "lstPrcL":
-      return row.lstPrcL ?? null;
-    case "lstCls":
-      return row.lstCls ?? null;
-    case "yCls":
-      return row.yCls ?? null;
-    case "tCls":
-      return row.tCls ?? null;
-    case "clsToClsPct":
-      return row.clsToClsPct ?? null;
-    case "lo":
-      return row.lo ?? null;
-    case "newsCnt":
-      return row.newsCnt ?? null;
-    case "marketCapM":
-      return row.marketCapM ?? null;
-    case "preMktVolNF":
-      return row.preMktVolNF ?? null;
-    case "volNFfromLstCls":
-      return row.volNFfromLstCls ?? null;
-    case "avPostMhVol90NF":
-      return row.avPostMhVol90NF ?? null;
-    case "avPreMhVol90NF":
-      return row.avPreMhVol90NF ?? null;
-    case "avPreMhValue20NF":
-      return row.avPreMhValue20NF ?? null;
-    case "avPreMhValue90NF":
-      return row.avPreMhValue90NF ?? null;
-    case "avgDailyValue20":
-      return row.avgDailyValue20 ?? null;
-    case "avgDailyValue90":
-      return row.avgDailyValue90 ?? null;
-    case "volatility20":
-      return row.volatility20 ?? null;
-    case "volatility90":
-      return row.volatility90 ?? null;
-    case "preMhMDV20NF":
-      return row.preMhMDV20NF ?? null;
-    case "preMhMDV90NF":
-      return row.preMhMDV90NF ?? null;
-    case "volRel":
-      return row.volRel ?? null;
-    case "preMhBidLstPrcPct":
-      return row.preMhBidLstPrcPct ?? null;
-    case "preMhLoLstPrcPct":
-      return row.preMhLoLstPrcPct ?? null;
-    case "preMhHiLstClsPct":
-      return row.preMhHiLstClsPct ?? null;
-    case "preMhLoLstClsPct":
-      return row.preMhLoLstClsPct ?? null;
-    case "lstPrcLstClsPct":
-      return row.lstPrcLstClsPct ?? null;
-    case "imbExch925":
-      return row.imbExch925 ?? null;
-    case "imbExch1555":
-      return row.imbExch1555 ?? null;
-  }
-}
-
-function getOptimizerFallbackValue(
-  row: PaperArbClosedDto,
-  key: "corr" | "beta" | "sigma",
-  tickerMeta?: { corr?: number | null; beta?: number | null; sigma?: number | null } | null
-): number | null {
-  const anyRow = row as any;
-  const pick = (...values: any[]) => {
-    for (const value of values) {
-      const parsed = numOrNull(value);
-      if (parsed != null) return parsed;
-    }
-    return null;
-  };
-
-  if (key === "corr") {
-    return pick(
-      row.corr,
-      anyRow?.Corr,
-      anyRow?.cor,
-      anyRow?.Cor,
-      anyRow?.correlation,
-      anyRow?.Correlation,
-      anyRow?.best?.corr,
-      anyRow?.best?.Corr,
-      anyRow?.meta?.corr,
-      anyRow?.meta?.Corr,
-      anyRow?.static?.corr,
-      anyRow?.static?.Corr,
-      tickerMeta?.corr
-    );
-  }
-
-  if (key === "beta") {
-    return pick(
-      row.beta,
-      anyRow?.Beta,
-      anyRow?.best?.beta,
-      anyRow?.best?.Beta,
-      anyRow?.meta?.beta,
-      anyRow?.meta?.Beta,
-      anyRow?.static?.beta,
-      anyRow?.static?.Beta,
-      tickerMeta?.beta
-    );
-  }
-
-  return pick(
-    row.sigma,
-    anyRow?.sig,
-    anyRow?.Sig,
-    anyRow?.Sigma,
-    anyRow?.best?.sigma,
-    anyRow?.best?.Sigma,
-    anyRow?.meta?.sigma,
-    anyRow?.meta?.Sigma,
-    anyRow?.static?.sigma,
-    anyRow?.static?.Sigma,
-    tickerMeta?.sigma
-  );
-}
-
-function buildFallbackOptimizerParameter(
-  rows: PaperArbClosedDto[],
-  key: "corr" | "beta" | "sigma",
-  label: string,
-  group: OptimizerRangeGroupKey,
-  bucketCount: number,
-  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
-): PaperArbOptimizerParameterDto | null {
-  const source = rows
-    .map((row) => ({
-      row,
-      value: getOptimizerFallbackValue(
-        row,
-        key,
-        tickerMetaByTicker?.[String(row.ticker ?? "").trim().toUpperCase()] ?? null
-      ),
-    }))
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
-
-  if (!source.length) return null;
-
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
-
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
-  };
-
-  const buildBucket = (
-    bucketId: string,
-    bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
-    fromValue?: number | null,
-    toValue?: number | null
-  ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
-    return {
-      bucketId,
-      label: bucketLabel,
-      fromValue: fromValue ?? null,
-      toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
-    };
-  };
-
-  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
-  } else {
-    const step = span / safeBucketCount;
-    for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
-      buckets.push(
-        buildBucket(
-          `${key}-bucket-${index}`,
-          `${num(fromValue, 2)} .. ${num(toValue, 2)}`,
-          items,
-          fromValue,
-          toValue
-        )
-      );
-    }
-  }
-
-  const lowerTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-lt-${index}`,
-      `<= ${num(bucket.toValue, 2)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
-      observedMin,
-      bucket.toValue ?? observedMax
-    )
-  );
-  const upperTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, 2)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
-      bucket.fromValue ?? observedMin,
-      observedMax
-    )
-  );
-
-  const base = summarize(source);
-  return {
-    key,
-    group,
-    label,
-    observedMin,
-    observedMax,
-    valueCount: source.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
-}
-
-function buildFallbackBinRatingOptimizerParameter(
-  rows: PaperArbClosedDto[],
-  key: "minrate" | "mintotal",
-  label: string,
-  group: OptimizerRangeGroupKey,
-  bucketCount: number,
-  session: PaperArbSession
-): PaperArbOptimizerParameterDto | null {
-  const source = rows
-    .map((row) => {
-      const snapshot = scannerBinRatingSnapshot({
-        row,
-        session,
-        side: row.side,
-        sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
-      });
-      const value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
-      return { row, value };
-    })
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
-
-  if (!source.length) return null;
-
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
-
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
-  };
-
-  const buildBucket = (
-    bucketId: string,
-    bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
-    fromValue?: number | null,
-    toValue?: number | null
-  ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
-    return {
-      bucketId,
-      label: bucketLabel,
-      fromValue: fromValue ?? null,
-      toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
-    };
-  };
-
-  const valueDigits = key === "minrate" ? 2 : 0;
-  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${key}-bucket-0`, `${num(observedMin, valueDigits)} .. ${num(observedMax, valueDigits)}`, source, observedMin, observedMax));
-  } else {
-    const step = span / safeBucketCount;
-    for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
-      buckets.push(buildBucket(`${key}-bucket-${index}`, `${num(fromValue, valueDigits)} .. ${num(toValue, valueDigits)}`, items, fromValue, toValue));
-    }
-  }
-
-  const lowerTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-lt-${index}`,
-      `<= ${num(bucket.toValue, valueDigits)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
-      observedMin,
-      bucket.toValue ?? observedMax
-    )
-  );
-  const upperTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, valueDigits)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
-      bucket.fromValue ?? observedMin,
-      observedMax
-    )
-  );
-
-  const base = summarize(source);
-  return {
-    key,
-    group,
-    label,
-    observedMin,
-    observedMax,
-    valueCount: source.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
-}
-
-function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResearchParameterKey | null {
-  switch (key) {
-    case "corr":
-      return "corr";
-    case "beta":
-      return "beta";
-    case "sigma":
-      return "sigma";
-    case "startabs":
-      return "startMetricAbs";
-    case "endabs":
-      return "endMetricAbs";
-    // In OpenDoor rows these two carry the gating bin's own historical rate and sample count
-    // (GateRate/GateTotal via the mapper) — i.e. the statistic that actually selected the trade.
-    // They are the most informative axes here, so map them onto the row fields rather than leaving
-    // them unresolvable. For Arbitrage rows the same fields hold its session rating, so bucketing
-    // by them stays meaningful there too.
-    case "minrate":
-      return "rating";
-    case "mintotal":
-      return "ratingTotal";
-    case "adv20":
-      return "adv20";
-    case "adv20nf":
-      return "adv20NF";
-    case "adv90":
-      return "adv90";
-    case "adv90nf":
-      return "adv90NF";
-    case "avpremhv":
-      return "avPreMhv";
-    case "roundlot":
-      return "roundLot";
-    case "vwap":
-      return "vwap";
-    case "spread":
-      return "spread";
-    case "lstprcl":
-      return "lstPrcL";
-    case "lstcls":
-      return "lstCls";
-    case "ycls":
-      return "yCls";
-    case "tcls":
-      return "tCls";
-    case "clstocls":
-      return "clsToClsPct";
-    case "lo":
-      return "lo";
-    case "lstclsnewscnt":
-      return "newsCnt";
-    case "marketcapm":
-      return "marketCapM";
-    case "premhvolnf":
-      return "preMktVolNF";
-    case "volnffromlstcls":
-      return "volNFfromLstCls";
-    case "avpostmhvol90nf":
-      return "avPostMhVol90NF";
-    case "avpremhvol90nf":
-      return "avPreMhVol90NF";
-    case "avpremhvalue20nf":
-      return "avPreMhValue20NF";
-    case "avpremhvalue90nf":
-      return "avPreMhValue90NF";
-    case "avgdailyvalue20":
-      return "avgDailyValue20";
-    case "avgdailyvalue90":
-      return "avgDailyValue90";
-    case "volatility20":
-      return "volatility20";
-    case "volatility90":
-      return "volatility90";
-    case "premhmdv20nf":
-      return "preMhMDV20NF";
-    case "premhmdv90nf":
-      return "preMhMDV90NF";
-    case "volrel":
-      return "volRel";
-    case "premhbidlstprc":
-      return "preMhBidLstPrcPct";
-    case "premhlolstprc":
-      return "preMhLoLstPrcPct";
-    case "premhhilstcls":
-      return "preMhHiLstClsPct";
-    case "premhlolstcls":
-      return "preMhLoLstClsPct";
-    case "lstprclstcls":
-      return "lstPrcLstClsPct";
-    case "imbexch925":
-      return "imbExch925";
-    case "imbexch1555":
-      return "imbExch1555";
-    default:
-      return null;
-  }
-}
-
-function buildFallbackScopeOptimizerParameter(
-  rows: PaperArbClosedDto[],
-  definition: ScopeParameterDefinition,
-  bucketCount: number
-): PaperArbOptimizerParameterDto | null {
-  const parameterKey = optimizerKeyToScopeResearchParameterKey(definition.key);
-  if (!parameterKey) return null;
-
-  const source = rows
-    .map((row) => ({
-      row,
-      value: scopeResearchParameterValue(row, parameterKey),
-    }))
-    .filter((entry): entry is { row: PaperArbClosedDto; value: number } => typeof entry.value === "number" && Number.isFinite(entry.value));
-
-  if (!source.length) return null;
-
-  const values = source.map((entry) => entry.value);
-  const observedMin = Math.min(...values);
-  const observedMax = Math.max(...values);
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
-  const span = observedMax - observedMin;
-  const equalValues = span <= 0;
-
-  const summarize = (items: Array<{ row: PaperArbClosedDto; value: number }>) => {
-    const trades = items.length;
-    const pnls = items.map((entry) => entry.row.totalPnlUsd ?? 0);
-    const wins = pnls.filter((value) => value > 0).length;
-    const losses = pnls.filter((value) => value < 0).length;
-    const totalPnlUsd = pnls.reduce((sum, value) => sum + value, 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, score: avgPnlUsd };
-  };
-
-  const buildBucket = (
-    bucketId: string,
-    bucketLabel: string,
-    items: Array<{ row: PaperArbClosedDto; value: number }>,
-    fromValue?: number | null,
-    toValue?: number | null
-  ): PaperArbOptimizerRangeBucketDto => {
-    const summary = summarize(items);
-    return {
-      bucketId,
-      label: bucketLabel,
-      fromValue: fromValue ?? null,
-      toValue: toValue ?? null,
-      trades: summary.trades,
-      wins: summary.wins,
-      losses: summary.losses,
-      totalPnlUsd: summary.totalPnlUsd,
-      avgPnlUsd: summary.avgPnlUsd,
-      winRate: summary.winRate,
-      score: summary.score,
-      coveragePct: source.length > 0 ? summary.trades / source.length : 0,
-    };
-  };
-
-  const buckets: PaperArbOptimizerRangeBucketDto[] = [];
-  if (equalValues) {
-    buckets.push(buildBucket(`${definition.key}-bucket-0`, `${num(observedMin, 2)} .. ${num(observedMax, 2)}`, source, observedMin, observedMax));
-  } else {
-    const step = span / safeBucketCount;
-    for (let index = 0; index < safeBucketCount; index += 1) {
-      const fromValue = observedMin + (step * index);
-      const toValue = index === safeBucketCount - 1 ? observedMax : observedMin + (step * (index + 1));
-      const items = source.filter((entry) =>
-        index === safeBucketCount - 1
-          ? entry.value >= fromValue && entry.value <= toValue
-          : entry.value >= fromValue && entry.value < toValue
-      );
-      if (!items.length) continue;
-      buckets.push(buildBucket(`${definition.key}-bucket-${index}`, `${num(fromValue, 2)} .. ${num(toValue, 2)}`, items, fromValue, toValue));
-    }
-  }
-
-  const lowerTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${definition.key}-lt-${index}`,
-      `<= ${num(bucket.toValue, 2)}`,
-      source.filter((entry) => entry.value <= (bucket.toValue ?? Number.POSITIVE_INFINITY)),
-      observedMin,
-      bucket.toValue ?? observedMax
-    )
-  );
-  const upperTailBuckets = buckets.map((bucket, index) =>
-    buildBucket(
-      `${definition.key}-gt-${index}`,
-      `>= ${num(bucket.fromValue, 2)}`,
-      source.filter((entry) => entry.value >= (bucket.fromValue ?? Number.NEGATIVE_INFINITY)),
-      bucket.fromValue ?? observedMin,
-      observedMax
-    )
-  );
-
-  const base = summarize(source);
-  return {
-    key: definition.key,
-    group: definition.group,
-    label: definition.label,
-    observedMin,
-    observedMax,
-    valueCount: source.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
-}
-
-// Builds a categorical PaperArbOptimizerParameterDto by grouping episodes on a string key.
-// Each unique value (sector / benchTicker) becomes one "bucket".
-function buildCategoricalOptimizerParameter(
-  rows: PaperArbClosedDto[],
-  key: string,
-  label: string,
-  group: OptimizerRangeGroupKey,
-  getValue: (row: PaperArbClosedDto) => string | null | undefined
-): PaperArbOptimizerParameterDto | null {
-  // Group rows by category value
-  const groups = new Map<string, PaperArbClosedDto[]>();
-  for (const row of rows) {
-    const val = getValue(row);
-    const k = val?.trim() || "(none)";
-    const list = groups.get(k) ?? [];
-    list.push(row);
-    groups.set(k, list);
-  }
-  if (!groups.size) return null;
-
-  const summarize = (rs: PaperArbClosedDto[]) => {
-    const trades = rs.length;
-    const wins = rs.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
-    const losses = trades - wins;
-    const totalPnlUsd = rs.reduce((s, r) => s + (r.totalPnlUsd ?? 0), 0);
-    const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
-    const winRate = trades > 0 ? wins / trades : 0;
-    const coveragePct = rows.length > 0 ? trades / rows.length : 0;
-    const score = winRate * Math.sign(avgPnlUsd) * Math.abs(avgPnlUsd);
-    return { trades, wins, losses, totalPnlUsd, avgPnlUsd, winRate, coveragePct, score };
-  };
-
-  const base = summarize(rows);
-  // Sort by totalPnlUsd descending for display
-  const buckets: PaperArbOptimizerRangeBucketDto[] = Array.from(groups.entries())
-    .sort((a, b) => {
-      const sa = summarize(a[1]);
-      const sb = summarize(b[1]);
-      return sb.totalPnlUsd - sa.totalPnlUsd;
-    })
-    .map(([catVal, rs]) => {
-      const s = summarize(rs);
-      return {
-        bucketId: `${key}-cat-${catVal}`,
-        label: catVal,
-        fromValue: null,
-        toValue: null,
-        ...s,
-      };
-    });
-
-  // Tail buckets: worst N (most negative) at each end — for categorical, "lower tail" = worst performers
-  const sorted = [...buckets].sort((a, b) => a.totalPnlUsd - b.totalPnlUsd);
-  const tailK = Math.max(1, Math.ceil(sorted.length * 0.3));
-  const lowerTailBuckets = sorted.slice(0, tailK);
-  const upperTailBuckets = sorted.slice(-tailK);
-
-  return {
-    key,
-    group,
-    label,
-    observedMin: null,
-    observedMax: null,
-    valueCount: rows.length,
-    baseTrades: base.trades,
-    baseWins: base.wins,
-    baseLosses: base.losses,
-    baseTotalPnlUsd: base.totalPnlUsd,
-    baseAvgPnlUsd: base.avgPnlUsd,
-    baseWinRate: base.winRate,
-    buckets,
-    lowerTailBuckets,
-    upperTailBuckets,
-  };
-}
-
-function scoreTailDamage(param: PaperArbOptimizerParameterDto, minTrades: number): number {
-  // Sum of losses from both tail regions — measures how much can be recovered by trimming extremes
-  const tailLoss = (buckets: PaperArbOptimizerRangeBucketDto[]) =>
-    buckets
-      .filter((b) => b.trades >= minTrades && b.totalPnlUsd < 0)
-      .reduce((s, b) => s + Math.abs(b.totalPnlUsd), 0);
-  return tailLoss(param.lowerTailBuckets ?? []) + tailLoss(param.upperTailBuckets ?? []);
-}
-
-function scopeResearchResultValue(row: PaperArbClosedDto, key: ScopeResearchResultKey): number | null {
-  switch (key) {
-    case "avgPnlUsd":
-    case "totalPnlUsd":
-    case "winRate":
-    case "score":
-      return row.totalPnlUsd ?? null;
-    case "rawPnlUsd":
-      return row.rawPnlUsd ?? null;
-    case "benchPnlUsd":
-      return row.benchPnlUsd ?? null;
-    case "hedgedPnlUsd":
-      return row.hedgedPnlUsd ?? null;
-    case "peakMetricAbs":
-      return row.peakMetricAbs ?? null;
-    case "endMetricAbs":
-      return row.endMetricAbs ?? null;
-  }
-}
-
-function scopeResearchMetricValue(row: ScopeResearchStats, key: ScopeResearchResultKey): number {
-  switch (key) {
-    case "avgPnlUsd":
-      return row.avg;
-    case "totalPnlUsd":
-      return row.total;
-    case "winRate":
-      return row.winRate;
-    case "score":
-      return row.score;
-    default:
-      return row.avg;
-  }
-}
-
-function scopeResearchMetricLabel(key: ScopeResearchResultKey): string {
-  switch (key) {
-    case "avgPnlUsd":
-      return "avg/trade";
-    case "totalPnlUsd":
-      return "total";
-    case "winRate":
-      return "win";
-    case "score":
-      return "score";
-    default:
-      return "avg";
-  }
-}
-
-function scopeResearchSourceResultKey(key: ScopeResearchResultKey): ScopeResearchResultKey {
-  switch (key) {
-    case "avgPnlUsd":
-    case "totalPnlUsd":
-    case "winRate":
-    case "score":
-      return "totalPnlUsd";
-    default:
-      return key;
-  }
-}
-
-function scopeResearchOptionByValue<T extends string>(options: Array<ScopeResearchOption<T>>, value: T): ScopeResearchOption<T> {
-  return options.find((option) => option.value === value) ?? options[0];
-}
-
-function scopeResearchPercentile(sortedValues: number[], p: number): number {
-  if (!sortedValues.length) return 0;
-  if (sortedValues.length === 1) return sortedValues[0] ?? 0;
-  const pos = Math.max(0, Math.min(sortedValues.length - 1, (sortedValues.length - 1) * p));
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  const weight = pos - lo;
-  const left = sortedValues[lo] ?? sortedValues[0] ?? 0;
-  const right = sortedValues[hi] ?? sortedValues[sortedValues.length - 1] ?? left;
-  return left + (right - left) * weight;
-}
-
-function scopeResearchSummarize(values: number[]): ScopeResearchStats {
-  const sorted = [...values].sort((a, b) => a - b);
-  const count = sorted.length;
-  const total = sorted.reduce((sum, value) => sum + value, 0);
-  const avg = count ? total / count : 0;
-  const median = scopeResearchPercentile(sorted, 0.5);
-  const q1 = scopeResearchPercentile(sorted, 0.25);
-  const q3 = scopeResearchPercentile(sorted, 0.75);
-  const iqr = q3 - q1;
-  const lowerFence = q1 - iqr * 1.5;
-  const upperFence = q3 + iqr * 1.5;
-  return {
-    count,
-    total,
-    avg,
-    median,
-    winRate: count ? sorted.filter((value) => value > 0).length / count : 0,
-    score: avg,
-    q1,
-    q3,
-    lowerFence,
-    upperFence,
-    min: sorted[0] ?? 0,
-    max: sorted[count - 1] ?? 0,
-  };
-}
-
-function scopeResearchEdges(values: number[], bucketCount: number): number[] {
-  if (!values.length) return [];
-  const sorted = [...values].filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return [];
-  const minValue = sorted[0] ?? 0;
-  const maxValue = sorted[sorted.length - 1] ?? minValue;
-  if (minValue === maxValue) return [minValue - 0.5, maxValue + 0.5];
-
-  const count = Math.max(2, Math.min(32, Math.trunc(bucketCount) || 8));
-  const quantileEdges = Array.from({ length: count + 1 }, (_, index) => {
-    const p = index / count;
-    return scopeResearchPercentile(sorted, p);
-  });
-  quantileEdges[0] = minValue;
-  quantileEdges[quantileEdges.length - 1] = maxValue;
-
-  const deduped = quantileEdges.filter((edge, index, arr) => {
-    if (index === 0) return true;
-    return Math.abs(edge - (arr[index - 1] ?? edge)) > 1e-9;
-  });
-
-  if (deduped.length >= 3) {
-    return deduped;
-  }
-
-  const step = (maxValue - minValue) / count;
-  const fallbackEdges = Array.from({ length: count + 1 }, (_, index) => minValue + step * index);
-  fallbackEdges[0] = minValue;
-  fallbackEdges[fallbackEdges.length - 1] = maxValue;
-  return fallbackEdges;
-}
-
-function scopeResearchFormatValue(value: number, format: ScopeResearchValueFormat, digits = 2): string {
-  if (!Number.isFinite(value)) return "-";
-  switch (format) {
-    case "currency":
-      return `$${num(value, digits)}`;
-    case "clock":
-      return minuteIdxToClockLabel(Math.round(value));
-    case "minutes":
-      return `${intn(value)}m`;
-    case "percent":
-      return `${num(value * 100, 1)}%`;
-    case "number":
-    default:
-      return num(value, digits);
-  }
-}
-
-function scopeResearchRangeLabel(from: number, to: number, format: ScopeResearchValueFormat): string {
-  return `${scopeResearchFormatValue(from, format, format === "percent" ? 3 : 2)} .. ${scopeResearchFormatValue(
-    to,
-    format,
-    format === "percent" ? 3 : 2
-  )}`;
-}
-
-function scopeResearchLabelLines(label: string): [string, string?] {
-  const trimmed = label.trim();
-  if (trimmed.includes(" .. ")) {
-    const [left, right] = trimmed.split(" .. ");
-    return [left?.trim() ?? trimmed, `.. ${right?.trim() ?? ""}`.trim()];
-  }
-  if (trimmed.startsWith(">=") || trimmed.startsWith("<=")) {
-    const parts = trimmed.split(/\s+/);
-    if (parts.length >= 2) {
-      return [parts.slice(0, 2).join(" "), parts.slice(2).join(" ") || undefined];
-    }
-  }
-  const mid = Math.ceil(trimmed.length / 2);
-  if (trimmed.length > 18) {
-    return [trimmed.slice(0, mid).trim(), trimmed.slice(mid).trim()];
-  }
-  return [trimmed];
-}
-
-function scopeResearchDailySeries(points: ScopeResearchPoint[]) {
-  const sorted = [...points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
-  const grouped = Array.from(
-    sorted.reduce((map, point) => {
-      const entry = map.get(point.dateKey) ?? { dateKey: point.dateKey, total: 0, count: 0, avgParam: 0, items: [] as ScopeResearchPoint[] };
-      entry.total += point.result;
-      entry.count += 1;
-      entry.avgParam += point.parameter;
-      entry.items.push(point);
-      map.set(point.dateKey, entry);
-      return map;
-    }, new Map<string, { dateKey: string; total: number; count: number; avgParam: number; items: ScopeResearchPoint[] }>())
-  ).map(([, entry]) => ({
-    ...entry,
-    avgParam: entry.count ? entry.avgParam / entry.count : 0,
-  }));
-
-  let running = 0;
-  return grouped.map((row, index) => {
-    running += row.total;
-    return { ...row, index, cumulative: running };
-  });
-}
-
-function ScopeResearchInsufficientState({
-  message,
-  detail = "Widen range, lower `Min N`, or reduce `Bins`.",
-}: {
-  message: string;
-  detail?: string;
-}) {
-  return (
-    <div className="w-full h-[520px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-5 flex items-center justify-center">
-      <div className="max-w-[420px] text-center">
-        <div className="text-[11px] uppercase tracking-[0.18em] font-mono text-zinc-400">{message}</div>
-        <div className="mt-2 text-[11px] font-mono text-zinc-500">{detail}</div>
-      </div>
-    </div>
-  );
-}
-
-function buildScopeResearchSelectionFromDraft(draft: ScopeResearchDraft): ScopeResearchSelection {
-  return {
-    chartType: draft.chartType,
-    parameterKey: draft.parameterKey,
-    resultKey: scopeResearchNormalizeResultKey(draft.chartType, draft.resultKey),
-    bucketCount: draft.bucketCount,
-    minSamples: draft.minSamples,
-    thresholdMode: draft.thresholdMode,
-    domainFrom: optNumOrNull(draft.domainFrom),
-    domainTo: optNumOrNull(draft.domainTo),
-    extraFilters: draft.extraFilters.map((filter) => ({
-      id: filter.id,
-      parameterKey: filter.parameterKey,
-      from: optNumOrNull(filter.from),
-      to: optNumOrNull(filter.to),
-    })),
-    parallelFilters: draft.parallelFilters.map((filter) => ({
-      id: filter.id,
-      parameterKey: filter.parameterKey,
-      from: optNumOrNull(filter.from),
-      to: optNumOrNull(filter.to),
-    })),
-  };
-}
-
-function scopeResearchFilterMatchesRow(
-  row: PaperArbClosedDto,
-  filters: Array<{ parameterKey: ScopeResearchParameterKey; from: number | null; to: number | null }>
-) {
-  return filters.every((filter) => {
-    const value = scopeResearchParameterValue(row, filter.parameterKey);
-    if (value == null || !Number.isFinite(value)) return false;
-    const lo = filter.from != null && filter.to != null ? Math.min(filter.from, filter.to) : filter.from;
-    const hi = filter.from != null && filter.to != null ? Math.max(filter.from, filter.to) : filter.to;
-    if (lo != null && value < lo) return false;
-    if (hi != null && value > hi) return false;
-    return true;
-  });
-}
-
-function scopeResearchFilterLabel(
-  filter: { parameterKey: ScopeResearchParameterKey; from: number | null; to: number | null }
-) {
-  const option = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, filter.parameterKey);
-  const lo = filter.from != null && filter.to != null ? Math.min(filter.from, filter.to) : filter.from;
-  const hi = filter.from != null && filter.to != null ? Math.max(filter.from, filter.to) : filter.to;
-  if (lo != null && hi != null) {
-    return `${option.label} ${scopeResearchFormatValue(lo, option.format)} .. ${scopeResearchFormatValue(hi, option.format)}`;
-  }
-  if (lo != null) return `${option.label} >= ${scopeResearchFormatValue(lo, option.format)}`;
-  if (hi != null) return `${option.label} <= ${scopeResearchFormatValue(hi, option.format)}`;
-  return option.label;
-}
-
-function computeScopeResearch(
-  rows: PaperArbClosedDto[],
-  selection: ScopeResearchSelection | null,
-  fallbackDate: string,
-  fixedEdges?: number[],
-  includeParallel = true
-): ScopeResearchComputed | null {
-  if (!selection) return null;
-
-  const parameter = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, selection.parameterKey);
-  const result = scopeResearchOptionByValue(SCOPE_RESEARCH_RESULT_OPTIONS, selection.resultKey);
-  const sourceResult = scopeResearchOptionByValue(SCOPE_RESEARCH_RESULT_OPTIONS, scopeResearchSourceResultKey(selection.resultKey));
-  const rawPoints = rows
-    .filter((row) => scopeResearchFilterMatchesRow(row, selection.extraFilters))
-    .map((row) => {
-      const parameterValue = scopeResearchParameterValue(row, selection.parameterKey);
-      const resultValue = scopeResearchResultValue(row, selection.resultKey);
-      const dateKey = getEpisodeDateKey(row, fallbackDate) ?? "unknown";
-      return {
-        row,
-        parameter: parameterValue,
-        result: resultValue,
-        dateKey,
-        sortKey: Number(dateKey.replace(/-/g, "")) || 0,
-      };
-    })
-    .filter(
-      (point): point is ScopeResearchPoint =>
-        point.parameter != null && point.result != null && Number.isFinite(point.parameter) && Number.isFinite(point.result)
-    );
-  const domainLo = selection.domainFrom != null && selection.domainTo != null ? Math.min(selection.domainFrom, selection.domainTo) : selection.domainFrom;
-  const domainHi = selection.domainFrom != null && selection.domainTo != null ? Math.max(selection.domainFrom, selection.domainTo) : selection.domainTo;
-  const points = rawPoints.filter((point) => {
-    if (domainLo != null && point.parameter < domainLo) return false;
-    if (domainHi != null && point.parameter > domainHi) return false;
-    return true;
-  });
-
-  if (!points.length) {
-    return {
-      selection,
-      parameter,
-        result,
-        sourceResult,
-        sourceCount: 0,
-      points: [],
-      bins: [],
-      thresholds: [],
-      bestBin: null,
-      bestThreshold: null,
-      bestBox: null,
-      parallelSeries: [],
-      parallelPointSeries: [],
-    };
-  }
-
-  const parameterValues = points.map((point) => point.parameter);
-  const edges = fixedEdges && fixedEdges.length >= 2 ? fixedEdges : scopeResearchEdges(parameterValues, selection.bucketCount);
-  const minSamples = Math.max(1, Math.trunc(selection.minSamples) || 1);
-  const rawBuckets =
-    edges.length < 2
-      ? []
-      : Array.from({ length: edges.length - 1 }, (_, i) => ({
-          from: edges[i] ?? 0,
-          to: edges[i + 1] ?? 0,
-          values: [] as number[],
-        }));
-
-  if (rawBuckets.length) {
-    const lastIdx = rawBuckets.length - 1;
-    for (const point of points) {
-      const p = point.parameter;
-      for (let i = 0; i <= lastIdx; i++) {
-        const b = rawBuckets[i]!;
-        if (i === lastIdx ? p >= b.from && p <= b.to : p >= b.from && p < b.to) {
-          b.values.push(point.result);
-          break;
-        }
-      }
-    }
-  }
-
-  const bins = rawBuckets
-    .map((bucket) =>
-      bucket.values.length < minSamples
-        ? null
-        : ({
-            label: scopeResearchRangeLabel(bucket.from, bucket.to, parameter.format),
-            from: bucket.from,
-            to: bucket.to,
-            values: [...bucket.values],
-            ...scopeResearchSummarize(bucket.values),
-          } satisfies ScopeResearchBinRow)
-    )
-    .filter(Boolean) as ScopeResearchBinRow[];
-
-  const thresholdSeeds = edges.slice(1, -1).length ? edges.slice(1, -1) : edges.slice(0, -1);
-  const thresholds = thresholdSeeds
-    .map((threshold) => {
-      const subset = points
-        .filter((point) => (selection.thresholdMode === "less_than" ? point.parameter <= threshold : point.parameter >= threshold))
-        .map((point) => point.result);
-      if (subset.length < minSamples) return null;
-      return {
-        label: `${selection.thresholdMode === "less_than" ? "<=" : ">="} ${scopeResearchFormatValue(
-          threshold,
-          parameter.format,
-          parameter.format === "percent" ? 3 : 2
-        )}`,
-        threshold,
-        ...scopeResearchSummarize(subset),
-      } satisfies ScopeResearchThresholdRow;
-    })
-    .filter(Boolean) as ScopeResearchThresholdRow[];
-
-  const bestBin = bins.length
-    ? [...bins].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const bestThreshold = thresholds.length
-    ? [...thresholds].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const bestBox = bins.length
-    ? [...bins].sort((a, b) => {
-        const delta = scopeResearchMetricValue(b, selection.resultKey) - scopeResearchMetricValue(a, selection.resultKey);
-        return delta !== 0 ? delta : b.count - a.count;
-      })[0] ?? null
-    : null;
-  const parallelSeries = includeParallel
-    ? selection.parallelFilters
-        .map((filter) => {
-          const computed = computeScopeResearch(
-            rows,
-            {
-              ...selection,
-              extraFilters: [...selection.extraFilters, filter],
-              parallelFilters: [],
-            },
-            fallbackDate,
-            edges,
-            false
-          );
-          if (!computed) return null;
-          const seriesRows =
-            selection.chartType === "results_more_less_parameter" ? computed.thresholds : computed.bins;
-          if (seriesRows.length < 2) return null;
-          return {
-            id: filter.id,
-            label: scopeResearchFilterLabel(filter),
-            rows: seriesRows,
-          };
-        })
-        .filter(Boolean) as ScopeResearchComputed["parallelSeries"]
-    : [];
-  const parallelPointSeries = includeParallel
-    ? selection.parallelFilters
-        .map((filter) => {
-          const computed = computeScopeResearch(
-            rows,
-            {
-              ...selection,
-              extraFilters: [...selection.extraFilters, filter],
-              parallelFilters: [],
-            },
-            fallbackDate,
-            edges,
-            false
-          );
-          if (!computed || !computed.points.length) return null;
-          return {
-            id: filter.id,
-            label: scopeResearchFilterLabel(filter),
-            points: computed.points,
-          };
-        })
-        .filter(Boolean) as ScopeResearchComputed["parallelPointSeries"]
-    : [];
-
-  return {
-    selection,
-    parameter,
-    result,
-    sourceResult,
-    sourceCount: points.length,
-    points,
-    bins,
-    thresholds,
-    bestBin,
-    bestThreshold,
-    bestBox,
-    parallelSeries,
-    parallelPointSeries,
-  };
-}
-
-function renderScopeChartTooltip(tooltip: ScopeChartTooltipData | null) {
-  if (!tooltip) return null;
-  const accentClass =
-    tooltip.accent === "amber"
-      ? "border-amber-400/25 shadow-[0_10px_30px_rgba(245,158,11,0.12)]"
-      : tooltip.accent === "cyan"
-        ? "border-cyan-400/25 shadow-[0_10px_30px_rgba(34,211,238,0.12)]"
-        : tooltip.accent === "fuchsia"
-          ? "border-fuchsia-400/25 shadow-[0_10px_30px_rgba(217,70,239,0.12)]"
-          : "border-emerald-400/25 shadow-[0_10px_30px_rgba(16,185,129,0.12)]";
-  return (
-    <div
-      className={clsx(
-        "pointer-events-none absolute z-20 min-w-[160px] max-w-[280px] rounded-xl border bg-[#06080d]/96 px-3 py-2 backdrop-blur-xl",
-        accentClass
-      )}
-      style={{
-        left: `${tooltip.x}px`,
-        top: `${tooltip.y}px`,
-        transform: "translate(-50%, -110%)",
-      }}
-    >
-      <div className="text-[10px] font-mono uppercase tracking-[0.16em] text-zinc-300">{tooltip.title}</div>
-      <div className="mt-1 space-y-0.5">
-        {tooltip.lines.map((line, index) => (
-          <div key={`${tooltip.title}-${index}`} className="text-[11px] font-mono text-zinc-400 whitespace-nowrap">
-            {line}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function buildPaperQuery(params: Record<string, any>) {
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null || v === "") continue;
-    if (Array.isArray(v)) {
-      for (const item of v) {
-        if (item === undefined || item === null || item === "") continue;
-        sp.append(k, String(item));
-      }
-      continue;
-    }
-    sp.set(k, String(v));
-  }
-  const qs = sp.toString();
-  return qs ? `?${qs}` : "";
-}
-
-type ProblemDetails = {
-  title?: string;
-  detail?: string;
-  status?: number;
-  type?: string;
-  instance?: string;
-};
-
-async function parseProblemDetailsSafe(res: Response): Promise<ProblemDetails | null> {
-  const ct = res.headers.get("content-type") || "";
-  try {
-    if (ct.includes("application/json")) {
-      const j = (await res.json()) as any;
-      if (j && (j.title || j.detail || j.status)) return j as ProblemDetails;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-async function apiGet<T>(pathAndQuery: string): Promise<T> {
-  const token = getToken();
-  const fullUrl = apiUrl(pathAndQuery);
-  const res = await fetch(fullUrl, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
-
-  if (!res.ok) {
-    const pd = await parseProblemDetailsSafe(res);
-    const txt = pd
-      ? `${pd.title ?? res.statusText}${pd.detail ? ` :: ${pd.detail}` : ""}`
-      : await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} for ${fullUrl}${txt ? ` :: ${txt}` : ""}`);
-  }
-  return (await res.json()) as T;
-}
-
-async function apiPost<T>(path: string, body: any): Promise<T> {
-  const token = getToken();
-  const fullUrl = apiUrl(path);
-  const res = await fetch(fullUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body ?? {}),
-  });
-
-  if (!res.ok) {
-    const pd = await parseProblemDetailsSafe(res);
-    const txt = pd
-      ? `${pd.title ?? res.statusText}${pd.detail ? ` :: ${pd.detail}` : ""}`
-      : await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} for ${fullUrl}${txt ? ` :: ${txt}` : ""}`);
-  }
-  return (await res.json()) as T;
-}
-
-async function apiPostWithTimeout<T>(path: string, body: any, timeoutMs: number): Promise<T> {
-  const token = getToken();
-  const fullUrl = apiUrl(path);
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(fullUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body ?? {}),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      const pd = await parseProblemDetailsSafe(res);
-      const txt = pd
-        ? `${pd.title ?? res.statusText}${pd.detail ? ` :: ${pd.detail}` : ""}`
-        : await res.text().catch(() => "");
-      throw new Error(`${res.status} ${res.statusText} for ${fullUrl}${txt ? ` :: ${txt}` : ""}`);
-    }
-    return (await res.json()) as T;
-  } catch (e: any) {
-    if (e?.name === "AbortError") {
-      throw new Error(`Timeout after ${Math.round(timeoutMs / 1000)}s`);
-    }
-    throw e;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-function normalizeDaysPayload(j: any): string[] {
-  if (Array.isArray(j)) return j.filter((d): d is string => typeof d === "string");
-  if (j && Array.isArray(j.days)) return j.days.filter((d: unknown): d is string => typeof d === "string");
-  if (j && Array.isArray(j.value)) return j.value.filter((d: unknown): d is string => typeof d === "string");
-  return [];
-}
-
-// Release-style priority:
-// 1. non-empty tape days
-// 2. all tape days
-// 3. legacy paper arbitrage days
-async function loadDaysApi(): Promise<string[]> {
-  const endpoints = [
-    "/api/tape/available-nonempty-days",
-    "/api/tape/available-days",
-    "/api/paper/opendoor/days",
-  ];
-
-  let lastError: unknown = null;
-  for (const endpoint of endpoints) {
-    try {
-      const payload = await apiGet<any>(endpoint);
-      const days = normalizeDaysPayload(payload);
-      if (days.length) return days;
-    } catch (e) {
-      lastError = e;
-    }
-  }
-
-  if (lastError) throw lastError;
-  return [];
-}
-
-// Accept either:
-// - { ok, rows: T[] }
-// - T[]
-function normalizeRows<T>(j: any): T[] {
-  if (Array.isArray(j)) return j as T[];
-  if (j && Array.isArray(j.rows)) return j.rows as T[];
-  if (j && Array.isArray(j.items)) return j.items as T[];
-  return [];
-}
-
-const EPISODES_SEARCH_CACHE_TTL_MS = 12_000;
-const EPISODES_SEARCH_CACHE_MAX = 24;
-
-// =========================
-// DESIGN SYSTEM COMPONENTS (kept from your file)
-// =========================
-function NebulaBackground() {
-  return (
-    <div className="fixed inset-0 pointer-events-none z-0 bg-[#030303]">
-      <div className="absolute inset-0 bg-[radial-gradient(680px_420px_at_14%_8%,rgba(16,185,129,0.2),transparent_70%),radial-gradient(720px_420px_at_88%_10%,rgba(139,92,246,0.16),transparent_72%)] blur-[150px]" />
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03]" />
-      <div
-        className="absolute inset-x-0 bottom-0 h-[55vh]"
-        style={{
-          backgroundImage:
-            "radial-gradient(68% 52% at 50% 100%, rgba(16,185,129,0.12) 0%, rgba(16,185,129,0.05) 28%, rgba(0,0,0,0) 70%)",
-          maskImage: "linear-gradient(to top, rgba(0,0,0,1), rgba(0,0,0,0))",
-        }}
-      />
-    </div>
-  );
-}
-
-function GlassCard({
-  children,
-  className,
-  glow = false,
-  hoverable = true,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  glow?: boolean;
-  hoverable?: boolean;
-}) {
-  return (
-    <div
-      className={clsx(
-        "scanner-glass-card bg-[#0a0a0a]/50 backdrop-blur-xl border border-white/[0.06] rounded-2xl shadow-xl transition-all duration-300",
-        hoverable ? "hover:border-white/[0.12] hover:bg-[#0a0a0a]/70" : "hover:border-white/[0.06] hover:bg-[#0a0a0a]/50",
-        glow && "border-l-4 border-l-emerald-500 shadow-[0_0_30px_-10px_rgba(16,185,129,0.18)]",
-        className
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function GlassInput({
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-  width,
-  className,
-  min,
-  max,
-  step,
-  disabled,
-}: {
-  value: string | number;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  placeholder?: string;
-  type?: string;
-  width?: number | string;
-  className?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-  disabled?: boolean;
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={onChange}
-      placeholder={placeholder}
-      min={min}
-      max={max}
-      step={step}
-      disabled={disabled}
-      style={{ width }}
-      className={clsx(
-        "scanner-glass-input bg-black/10 border border-white/5 rounded-md px-2.5 py-1.5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 focus:bg-black/20 hover:border-white/10 hover:bg-black/20 transition-all duration-200 font-mono tabular-nums",
-        className
-      )}
-    />
-  );
-}
-
-const SCANNER_PANEL_SURFACE =
-  "scanner-panel-surface border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-200 hover:border-white/[0.12] hover:bg-[#101010]/60";
-
-const SCANNER_CONTROL_SURFACE =
-  "scanner-control-surface border border-white/5 bg-black/10 transition-all duration-200 hover:border-white/10 hover:bg-black/20";
-
-const SCANNER_EYE_BUTTON =
-  "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
-const STREAM_FIXED_ACTIVE_SOFT =
-  "border-emerald-500/25 bg-emerald-500/10 text-emerald-300 shadow-[0_0_10px_-4px_rgba(16,185,129,0.35)]";
-const STREAM_FIXED_ACTIVE_TEXT = "text-emerald-300";
-const STREAM_FIXED_ICON_GREEN = "#63e6be";
-
-const SOFT_LOSS_TEXT_CLASS = "text-[#f3a6b2]";
-const SOFT_LOSS_SOLID = "rgba(243,166,178,0.95)";
-const SOFT_LOSS_MUTED = "rgba(243,166,178,0.25)";
-const SOFT_LOSS_STROKE = "rgba(243,166,178,0.55)";
-const SOFT_LOSS_LINE = "rgba(243,166,178,0.6)";
-const SOFT_LOSS_CHIP = "border-[rgba(243,166,178,0.18)] bg-[rgba(243,166,178,0.08)] text-[#f3a6b2]/90";
-
-function SummaryMetricCard({
-  label,
-  value,
-  valueClassName,
-  className,
-  inline = false,
-}: {
-  label: string;
-  value: React.ReactNode;
-  valueClassName?: string;
-  className?: string;
-  inline?: boolean;
-}) {
-  return (
-    <GlassCard hoverable={false} className={clsx("p-3", className)}>
-      <div
-        className={clsx(
-          inline
-            ? "h-full flex items-center justify-between gap-4"
-            : "h-full flex flex-col",
-        )}
-      >
-        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{label}</div>
-        <div
-          className={clsx(
-            inline
-              ? "flex items-center justify-end text-base md:text-xl font-semibold font-mono text-right"
-              : "flex-1 flex items-center justify-center text-sm font-mono text-center",
-            valueClassName
-          )}
-        >
-          {value}
-        </div>
-      </div>
-    </GlassCard>
-  );
-}
-
-function GlassSelect({
-  value,
-  onChange,
-  options,
-  className,
-  compact = false,
-  panelOffsetX = 0,
-  panelWidth,
-  panelAnchorRef,
-  onDelete,
-}: {
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  options: Array<GlassSelectOption | GlassSelectGroup>;
-  className?: string;
-  compact?: boolean;
-  panelOffsetX?: number;
-  panelWidth?: number;
-  panelAnchorRef?: React.RefObject<HTMLDivElement | null>;
-  onDelete?: (value: string) => void;
-}) {
-  const { theme } = useUi();
-  const isLightTheme = theme === "light";
-  const [open, setOpen] = useState(false);
-  const [openUpward, setOpenUpward] = useState(false);
-  const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null);
-  const [pendingDeleteValue, setPendingDeleteValue] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const flatOptions = useMemo(
-    () =>
-      options.flatMap((opt) =>
-        "options" in opt ? opt.options.map((groupOption) => ({ ...groupOption, group: opt.label })) : [{ ...opt, group: null as string | null }]
-      ),
-    [options]
-  );
-  const selected = flatOptions.find((opt) => opt.value === value) ?? flatOptions.find((opt) => !opt.disabled) ?? null;
-
-  useEffect(() => {
-    if (!open) return;
-    const updatePosition = () => {
-      const rect = (panelAnchorRef?.current ?? rootRef.current)?.getBoundingClientRect();
-      if (!rect) return;
-      const viewportHeight = window.innerHeight || 0;
-      const roomBelow = viewportHeight - rect.bottom;
-      const roomAbove = rect.top;
-      const nextOpenUpward = roomBelow < 360 && roomAbove > roomBelow;
-      setOpenUpward(nextOpenUpward);
-      setPanelStyle({
-        position: "fixed",
-        left: Math.max(12, rect.left + panelOffsetX),
-        width: panelWidth ?? rect.width,
-        top: nextOpenUpward ? undefined : Math.min(viewportHeight - 12, rect.bottom + 6),
-        bottom: nextOpenUpward ? Math.max(12, viewportHeight - rect.top + 6) : undefined,
-      });
-    };
-    updatePosition();
-    const onPointerDown = (event: MouseEvent) => {
-      const targetNode = event.target as Node;
-      if (!rootRef.current?.contains(targetNode) && !panelRef.current?.contains(targetNode)) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const active = panelRef.current?.querySelector<HTMLButtonElement>("[data-selected='true']");
-    active?.scrollIntoView({ block: "nearest" });
-  }, [open, value]);
-
-  useEffect(() => {
-    if (!open) setPendingDeleteValue(null);
-  }, [open]);
-
-  const emitChange = (nextValue: string) => {
-    onChange({ target: { value: nextValue } } as React.ChangeEvent<HTMLSelectElement>);
-    setOpen(false);
-  };
-
-  return (
-    <div ref={rootRef} className={clsx("relative z-50 font-mono", open && "z-[220] isolate")}>
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={clsx(
-          compact
-            ? "relative flex w-full items-center gap-1.5 h-[14px] border-0 bg-transparent px-0 py-0 text-xs font-mono font-normal normal-case tracking-normal leading-none shadow-none transition-colors duration-150"
-            : "relative flex w-full items-center gap-2.5 h-9 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-300",
-          open
-            ? compact
-              ? clsx(isLightTheme ? "text-slate-900" : "text-zinc-300", "border-transparent bg-transparent shadow-none")
-              : clsx("accent-text", "border-white/10 bg-black/30 shadow-[0_0_15px_-5px_rgba(255,255,255,0.08)]")
-            : compact
-              ? clsx(
-                  isLightTheme ? "text-slate-900 hover:text-slate-900" : "text-zinc-400 hover:text-zinc-200",
-                  "border-transparent bg-transparent shadow-none"
-                )
-              : clsx("accent-text", SCANNER_CONTROL_SURFACE),
-          className
-        )}
-      >
-        <span className={clsx("min-w-0 flex-1 truncate text-left", compact ? "leading-none" : "")}>{selected?.label ?? value}</span>
-        <span className={clsx("opacity-50 ml-1", compact && "ml-0 flex items-center self-center")}>
-          <ChevronIcon open={open} />
-        </span>
-      </button>
-      {open && typeof document !== "undefined" && panelStyle
-        ? createPortal(
-            <div
-              ref={panelRef}
-              style={panelStyle}
-              className={clsx(
-                "z-[9999] overflow-hidden rounded-xl backdrop-blur-xl transition-all duration-200 origin-top",
-                isLightTheme
-                  ? "border border-slate-900/10 bg-white/95 shadow-[0_10px_32px_-12px_rgba(15,23,42,0.18)]"
-                  : "border border-white/[0.08] bg-[#0a0a0a]/90 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)]"
-              )}
-            >
-              <div className="max-h-[340px] overflow-y-auto py-1.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                {options.map((opt) =>
-                  "options" in opt ? (
-                    <div key={`group-${opt.label}`} className="px-1.5 py-1">
-                      <div className={clsx("px-2.5 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-mono", isLightTheme ? "text-slate-500" : "text-zinc-500")}>
-                        {opt.label}
-                      </div>
-                      <div className="space-y-0.5">
-                        {opt.options.map((groupOption) => {
-                          const isSelected = groupOption.value === value;
-                          return (
-                            <button
-                              key={groupOption.value}
-                              type="button"
-                              data-selected={isSelected}
-                              disabled={groupOption.disabled}
-                              onClick={() => !groupOption.disabled && emitChange(groupOption.value)}
-                              className={clsx(
-                                "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                                groupOption.disabled
-                                  ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
-                                  : isSelected
-                                    ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : "accent-soft")
-                                    : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
-                              )}
-                              title={groupOption.disabled ? "Unavailable" : groupOption.label}
-                            >
-                              <span className="min-w-0 flex-1 truncate">{groupOption.label}</span>
-                              {isSelected && <span className={clsx("w-1.5 h-1.5 rounded-full", "accent-dot")} />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={opt.value} className="px-1.5 py-0.5">
-                      <button
-                        type="button"
-                        data-selected={opt.value === value}
-                        disabled={opt.disabled}
-                        onClick={() => {
-                          if (pendingDeleteValue === opt.value) { setPendingDeleteValue(null); return; }
-                          !opt.disabled && emitChange(opt.value);
-                        }}
-                        onContextMenu={onDelete ? (e) => { e.preventDefault(); setPendingDeleteValue(opt.value); } : undefined}
-                        className={clsx(
-                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                          opt.disabled
-                            ? (isLightTheme ? "cursor-not-allowed text-slate-400" : "cursor-not-allowed text-zinc-600")
-                            : opt.value === value
-                              ? (isLightTheme ? "bg-slate-900/10 text-slate-900" : "accent-soft")
-                              : (isLightTheme ? "text-slate-500 hover:bg-slate-900/[0.05] hover:text-slate-900" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200")
-                        )}
-                      >
-                        <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                        {pendingDeleteValue === opt.value && onDelete ? (
-                          <span
-                            role="button"
-                            onClick={(e) => { e.stopPropagation(); onDelete(opt.value); setPendingDeleteValue(null); setOpen(false); }}
-                            className="ml-1 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded text-[11px] leading-none text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors"
-                            title={`Delete ${opt.label}`}
-                          >✕</span>
-                        ) : opt.value === value ? (
-                          <span className={clsx("w-1.5 h-1.5 rounded-full flex-shrink-0", "accent-dot")} />
-                        ) : null}
-                      </button>
-                    </div>
-                  )
-                )}
-              </div>
-            </div>,
-            document.body
-          )
-        : null}
-      <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 opacity-0">
-        <svg
-          width="10"
-          height="6"
-          viewBox="0 0 10 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M1 1L5 5L9 1" />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
-const ChevronIcon = ({ open }: { open: boolean }) => (
-  <svg
-    className={`w-3 h-3 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
-    viewBox="0 0 20 20"
-    fill="none"
-  >
-    <path
-      d="M6 8L10 12L14 8"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const slug = (s: string) =>
-  String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-");
-
-type MsColor = "amber" | "emerald" | "rose" | "cyan" | "fuchsia" | "zinc";
-
-const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
-  if (theme === "sparkle") return "amber";
-  if (theme === "asher") return "zinc";
-  if (theme === "rain") return "amber";
-  if (theme === "inferno") return "amber";
-  if (theme === "light") return "fuchsia";
-  if (theme === "neon") return "fuchsia";
-  if (theme === "space") return "cyan";
-  if (theme === "magma") return "rose";
-  if (theme === "mercury") return "zinc";
-  if (theme === "oceanic") return "cyan";
-  if (theme === "khaki") return "amber";
-  if (theme === "zebra") return "zinc";
-  if (theme === "flamingo") return "rose";
-  if (theme === "money") return "amber";
-  if (theme === "matrix") return "emerald";
-  return "emerald";
-};
-
-const resolveAccentMsColor = (theme: string | null | undefined, color: MsColor): MsColor =>
-  color === "emerald" ? getSonarPrimaryMsColor(theme) : color;
-
-const MSF = {
-  amber: {
-    activeItem: "bg-yellow-300/20 text-yellow-100",
-    inactiveItem: "text-yellow-200/80 hover:bg-yellow-200/10 hover:text-yellow-100",
-    chipActive: "bg-yellow-300 text-[#221400] border-transparent shadow-[0_0_16px_rgba(253,224,71,0.38)]",
-    chipInactive: "text-yellow-200 border-yellow-200/0 hover:bg-yellow-200/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-yellow-200/30",
-    boxChecked: "bg-yellow-300 border-transparent",
-  },
-  zinc: {
-    activeItem: "bg-zinc-200/16 text-white",
-    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-zinc-200 text-[#111111] border-transparent shadow-[0_0_16px_rgba(212,212,216,0.24)]",
-    chipInactive: "text-zinc-200 border-zinc-200/0 hover:bg-zinc-200/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-zinc-200/20",
-    boxChecked: "bg-zinc-200 border-transparent",
-  },
-  emerald: {
-    activeItem: "bg-emerald-500/20 text-white",
-    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-emerald-500 text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]",
-    chipInactive: "text-emerald-500 border-emerald-500/0 hover:bg-emerald-500/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-emerald-500/20",
-    boxChecked: "bg-emerald-500 border-transparent",
-  },
-  rose: {
-    activeItem: "bg-rose-500/20 text-white",
-    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-rose-500 text-white border-transparent shadow-[0_0_16px_rgba(244,63,94,0.42)]",
-    chipInactive: "text-rose-500 border-rose-500/0 hover:bg-rose-500/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-rose-500/20",
-    boxChecked: "bg-rose-500 border-transparent",
-  },
-  cyan: {
-    activeItem: "bg-sky-500/15 text-white",
-    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-sky-400 text-white border-transparent shadow-[0_0_16px_rgba(56,189,248,0.34)]",
-    chipInactive: "text-sky-300 border-sky-400/0 hover:bg-sky-400/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-sky-400/20",
-    boxChecked: "bg-sky-400 border-transparent",
-  },
-  fuchsia: {
-    activeItem: "bg-fuchsia-500/15 text-white",
-    inactiveItem: "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
-    chipActive: "bg-fuchsia-400 text-white border-transparent shadow-[0_0_16px_rgba(232,121,249,0.34)]",
-    chipInactive: "text-fuchsia-300 border-fuchsia-400/0 hover:bg-fuchsia-400/10",
-    arrow: "text-zinc-500 hover:text-zinc-300",
-    divider: "bg-fuchsia-400/20",
-    boxChecked: "bg-fuchsia-400 border-transparent",
-  },
-} as const;
-
-const getSonarAccent = (theme?: string | null) => {
-  if (theme === "inferno") {
-    return { text: "text-orange-100" };
-  }
-  const primary = getSonarPrimaryMsColor(theme);
-  if (primary === "amber") return { text: "text-yellow-200" };
-  if (primary === "zinc") return { text: "text-zinc-200" };
-  if (primary === "fuchsia") return { text: "text-fuchsia-300" };
-  if (primary === "cyan") return { text: "text-sky-300" };
-  return { text: "text-zinc-200" };
-};
-
-const MultiSelectFilter = ({
-  label,
-  options,
-  selected,
-  setSelected,
-  enabled,
-  toggleEnabled,
-  color = "amber",
-  hideArrow = false,
-  onMainClick,
-  panelWidth,
-}: {
-  label: string;
-  options: string[];
-  selected: Set<string>;
-  setSelected: (s: Set<string>) => void;
-  enabled: TriMode;
-  toggleEnabled: () => void;
-  color?: MsColor;
-  hideArrow?: boolean;
-  onMainClick?: () => void;
-  panelWidth?: number;
-}) => {
-  const { theme } = useUi();
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-
-  const id = useMemo(() => `msf-scanner-${slug(label)}`, [label]);
-  const C = MSF[resolveAccentMsColor(theme, color)];
-
-  const toggleOption = (val: string) => {
-    const next = new Set(selected);
-    if (next.has(val)) next.delete(val);
-    else next.add(val);
-    setSelected(next);
-  };
-
-  const recomputePos = () => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 8, width: panelWidth ?? r.width });
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    recomputePos();
-
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const insideWrap = !!wrapRef.current?.contains(target);
-      const menuEl = document.getElementById(id);
-      const insideMenu = !!menuEl?.contains(target);
-      if (!insideWrap && !insideMenu) setOpen(false);
-    };
-
-    const onScroll = () => recomputePos();
-    const onResize = () => recomputePos();
-
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onResize);
-    };
-  }, [open, id]);
-
-  const menu =
-    open && pos
-      ? createPortal(
-          <div
-            id={id}
-            style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
-            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar"
-          >
-            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
-              {options.map((opt, i) => (
-                <button
-                  key={opt || `na-${i}`}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => toggleOption(opt)}
-                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-2 ${
-                    selected.has(opt) ? C.activeItem : C.inactiveItem
-                  }`}
-                >
-                  <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                    {selected.has(opt) ? (
-                      <div className={`w-3 h-3 rounded ${C.boxChecked}`} />
-                    ) : (
-                      <div className="w-3 h-3 rounded border border-white/20" />
-                    )}
-                  </div>
-                  <span className="truncate">{opt}</span>
-                </button>
-              ))}
-              {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
-            </div>
-          </div>,
-          document.body
-        )
-      : null;
-
-  return (
-    <>
-      <div className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
-        <button
-          type="button"
-          onClick={toggleEnabled}
-          className={clsx(
-            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
-            enabled === "off" && C.chipInactive,
-            enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
-            enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
-          )}
-        >
-          <span>{label}</span>
-          {selected.size > 0 && (
-            <span
-              className={clsx(
-                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
-                enabled === "off" && `border-yellow-200/35 ${getSonarAccent(theme).text}`,
-                enabled === "include" && "border-emerald-400/50 text-emerald-400",
-                enabled === "exclude" && "border-red-400/50 text-red-400",
-              )}
-            >
-              {selected.size}
-            </span>
-          )}
-        </button>
-
-        <div className={`w-px h-4 ${C.divider}`} />
-
-        <button
-          type="button"
-          onClick={() => {
-            onMainClick?.();
-            if (!hideArrow) setOpen((v) => !v);
-          }}
-          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-full ${C.arrow}`}
-        >
-          <ChevronIcon open={open} />
-        </button>
-      </div>
-
-      {menu}
-    </>
-  );
-};
-
-function MinMaxRow({
-  label,
-  filterKey,
-  minValue,
-  maxValue,
-  setMin,
-  setMax,
-  mode = "on",
-  onToggleMode,
-  card = false,
-  clearable = false,
-  placeholderMin = "min",
-  placeholderMax = "max",
-  zeroCoverage = false,
-}: {
-  label: string;
-  filterKey?: SharedRangeFilterKey;
-  minValue: string;
-  maxValue: string;
-  setMin: (v: string) => void;
-  setMax: (v: string) => void;
-  mode?: SharedRangeFilterMode;
-  onToggleMode?: (key: SharedRangeFilterKey) => void;
-  card?: boolean;
-  clearable?: boolean;
-  placeholderMin?: string;
-  placeholderMax?: string;
-  zeroCoverage?: boolean;
-}) {
-  const hasValue = Boolean((minValue ?? "").trim() || (maxValue ?? "").trim());
-  const isOff = mode === "off";
-
-  if (card) {
-    return (
-      <div
-        className={clsx(
-          "group flex flex-col gap-1 rounded-xl border p-2 transition-all",
-          hasValue
-            ? isOff
-              ? "border-rose-500/30 bg-rose-500/[0.05]"
-              : zeroCoverage
-                ? "border-yellow-200/35 bg-yellow-200/[0.06]"
-              : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
-            : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
-        )}
-      >
-        <div className="flex items-center justify-between">
-          <div className={clsx("mr-1 truncate text-[10px] font-mono uppercase tracking-widest", zeroCoverage && hasValue && !isOff ? "text-yellow-200" : "text-zinc-500")}>{label}</div>
-          <div className="flex items-center gap-2">
-            {zeroCoverage && hasValue && !isOff && (
-              <span className="text-[10px] font-mono uppercase text-yellow-200/90" title="Current rows have 0% coverage for this field">
-                0%
-              </span>
-            )}
-            {clearable && filterKey && hasValue && onToggleMode && (
-              <button
-                type="button"
-                onClick={() => onToggleMode(filterKey)}
-                className={clsx(
-                  "text-[10px] font-mono transition-colors uppercase",
-                  isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
-                )}
-                title={isOff ? "Stored but ignored in requests" : "Applied to requests"}
-              >
-                {isOff ? "OFF" : "ON"}
-              </button>
-            )}
-            {clearable && hasValue && (
-              <button
-                type="button"
-                onClick={() => {
-                  setMin("");
-                  setMax("");
-                }}
-                className="text-[10px] font-mono text-rose-400 hover:text-rose-300 transition-colors"
-              >
-                CLR
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <GlassInput
-            value={minValue}
-            onChange={(e) => setMin(e.target.value)}
-            placeholder={placeholderMin}
-            className="!h-auto w-full !rounded !border-0 hover:!border-0 focus:!border-0 focus-visible:!border-0 !ring-0 focus:!ring-0 focus-visible:!ring-0 !shadow-none !outline-none !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
-          />
-          <GlassInput
-            value={maxValue}
-            onChange={(e) => setMax(e.target.value)}
-            placeholder={placeholderMax}
-            className="!h-auto w-full !rounded !border-0 hover:!border-0 focus:!border-0 focus-visible:!border-0 !ring-0 focus:!ring-0 focus-visible:!ring-0 !shadow-none !outline-none !bg-black/20 !px-1.5 !py-1 !text-center !text-[11px] !font-mono !text-zinc-200"
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono mb-1">{label}</div>
-      <div className="flex gap-2">
-        <GlassInput value={minValue} onChange={(e) => setMin(e.target.value)} placeholder={placeholderMin} className="w-full" />
-        <GlassInput value={maxValue} onChange={(e) => setMax(e.target.value)} placeholder={placeholderMax} className="w-full" />
-      </div>
-    </div>
-  );
-}
-
-function Segmented({
-  value,
-  onChange,
-  options,
-  className,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string; hint?: string }[];
-  className?: string;
-}) {
-  const activeClass = "accent-soft";
-  return (
-    <div className={clsx("inline-flex rounded-xl p-1", SCANNER_PANEL_SURFACE, className)}>
-      {options.map((o) => {
-        const on = o.value === value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            title={o.hint}
-            onClick={() => onChange(o.value)}
-            className={clsx(
-              "px-3 py-1.5 text-[10px] font-mono font-bold uppercase rounded-lg tracking-wide transition-all border",
-              on ? activeClass : "text-zinc-400 border-transparent hover:text-zinc-200 hover:bg-black/30"
-            )}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function SideBadge({ side }: { side: TapeArbSide }) {
-  const s = normalizeSide(side);
-  const isLong = s.isLong === true;
-  const isShort = s.isLong === false;
-  const colorClass = isLong
-    ? "bg-[#6ee7b7]/10 text-[#6ee7b7] border-[#6ee7b7]/20"
-    : isShort
-      ? "border-[rgba(243,166,178,0.22)] bg-[rgba(243,166,178,0.10)] text-[#f3a6b2]"
-      : "bg-zinc-800/50 text-zinc-400 border-zinc-700/50";
-
-  return (
-    <span
-      className={clsx(
-        "px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold uppercase tracking-wider whitespace-nowrap",
-        colorClass
-      )}
-    >
-      {s.label}
-    </span>
-  );
-}
-
-// =========================
-// Simple SVG line chart (equity curve)
-// =========================
-function EquityChart({
-  points,
-  title,
-  meta,
-  fullscreen = false,
-}: {
-  points: PaperArbEquityPointDto[];
-  title?: string;
-  meta?: string;
-  fullscreen?: boolean;
-}) {
-  const w = fullscreen ? 2800 : 1100;
-  const h = 360;
-  const padLeft = 18;
-  const padRight = 46;
-  const padTop = 34;
-  const padBottom = 40;
-
-  const parseKey = (key: string): { date: string | null; minuteIdx: number | null } => {
-    const m = String(key ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:\s+(\d+))?$/);
-    if (!m) return { date: null, minuteIdx: null };
-    return {
-      date: m[1] ?? null,
-      minuteIdx: m[2] == null ? null : clampInt(m[2], 0),
-    };
-  };
-
-  const formatX = (key: string, sameDay: boolean) => {
-    const { date, minuteIdx } = parseKey(key);
-    if (minuteIdx != null) {
-      const totalMin = minuteIdx; // absolute NY minute-of-day
-      const hh = Math.floor((totalMin % 1440) / 60)
-        .toString()
-        .padStart(2, "0");
-      const mm = (totalMin % 60).toString().padStart(2, "0");
-      return sameDay ? `${hh}:${mm}` : `${date?.slice(5)} ${hh}:${mm}`;
-    }
-    if (date) return sameDay ? date.slice(5) : date;
-    return String(key ?? "");
-  };
-
-  const toTimeValue = (key: string, fallbackIdx: number): number => {
-    const { date, minuteIdx } = parseKey(key);
-    if (date) {
-      const [y, m, d] = date.split("-").map((x) => Number(x));
-      if ([y, m, d].every((x) => Number.isFinite(x))) {
-        const day = Date.UTC(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-        return day + (minuteIdx ?? 0) * 60_000;
-      }
-    }
-    if (minuteIdx != null) return minuteIdx * 60_000;
-    return fallbackIdx;
-  };
-
-  // Normalize timeline to actual time (not array index) and micro-spread identical timestamps.
-  // This avoids visually broken vertical walls when many trades share the same minute.
-  const chartPoints = (() => {
-    const sorted = points
-      .map((p, i) => ({ ...p, _idx: i, _t: toTimeValue(p.key, i) }))
-      .sort((a, b) => (a._t === b._t ? a._idx - b._idx : a._t - b._t));
-
-    const groups: Array<Array<PaperArbEquityPointDto & { _idx: number; _t: number }>> = [];
-    for (const p of sorted) {
-      const g = groups[groups.length - 1];
-      if (g && g[0]._t === p._t) {
-        g.push(p);
-      } else {
-        groups.push([p]);
-      }
-    }
-
-    const out: Array<PaperArbEquityPointDto & { _t: number; _tp: number }> = [];
-    for (let gi = 0; gi < groups.length; gi++) {
-      const g = groups[gi];
-      const baseT = g[0]._t;
-      const nextBaseT = groups[gi + 1]?.[0]?._t ?? baseT + 60_000;
-      const windowMs = Math.max(1, Math.min(60_000, nextBaseT - baseT));
-      const spreadMs = Math.max(0, Math.floor(windowMs * 0.85));
-      const denom = Math.max(1, g.length - 1);
-
-      for (let j = 0; j < g.length; j++) {
-        const p = g[j];
-        const tp = g.length === 1 ? baseT : baseT + Math.round((j / denom) * spreadMs);
-        out.push({ key: p.key, equity: p.equity, pnl: p.pnl, _t: baseT, _tp: tp });
-      }
-    }
-    return out;
-  })();
-
-  const ys = chartPoints.map((p) => p.equity);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const span = maxY - minY || 1;
-
-  const sameDay = (() => {
-    const dates = chartPoints.map((p) => parseKey(p.key).date).filter(Boolean) as string[];
-    if (!dates.length) return false;
-    return dates.every((d) => d === dates[0]);
-  })();
-
-  const toX = (i: number) => {
-    if (chartPoints.length <= 1) return padLeft;
-    const t0 = chartPoints[0]._tp;
-    const t1 = chartPoints[chartPoints.length - 1]._tp;
-    const spanT = Math.max(1, t1 - t0);
-    return padLeft + ((chartPoints[i]._tp - t0) / spanT) * (w - padLeft - padRight);
-  };
-  const toY = (v: number) => padTop + (1 - (v - minY) / span) * (h - padTop - padBottom);
-
-  const lineD = chartPoints
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toY(p.equity).toFixed(2)}`)
-    .join(" ");
-
-  const areaD = `${lineD} L ${toX(chartPoints.length - 1).toFixed(2)} ${(h - padBottom).toFixed(2)} L ${toX(0).toFixed(2)} ${(h - padBottom).toFixed(2)} Z`;
-
-  const yTicks = Array.from({ length: 5 }, (_, i) => {
-    const t = i / 4;
-    const val = maxY - t * span;
-    return { y: toY(val), val };
-  });
-
-  // Axis labels use true minute timestamps (one label per unique minute).
-  const uniqueTimeline = (() => {
-    const out: Array<{ idx: number; key: string; date: string | null; minuteIdx: number | null; t: number }> = [];
-    for (let i = 0; i < chartPoints.length; i++) {
-      const key = chartPoints[i]?.key ?? "";
-      if (i > 0 && chartPoints[i]._t === chartPoints[i - 1]._t) continue;
-      const parsed = parseKey(key);
-      out.push({ idx: i, key, date: parsed.date, minuteIdx: parsed.minuteIdx, t: chartPoints[i]._t });
-    }
-    return out;
-  })();
-
-  const tickCount = Math.min(10, Math.max(3, uniqueTimeline.length));
-  const sampled = Array.from({ length: tickCount }, (_, i) => {
-    const pos = Math.round((i / (tickCount - 1)) * (uniqueTimeline.length - 1));
-    return uniqueTimeline[pos];
-  }).filter((t, i, arr) => i === 0 || t.idx !== arr[i - 1].idx);
-
-  const byTimeLabel = new Map<string, Set<string>>();
-  for (const s of uniqueTimeline) {
-    const timeLabel = s.minuteIdx == null ? formatX(s.key, sameDay) : minuteIdxToClockLabel(s.minuteIdx);
-    if (!byTimeLabel.has(timeLabel)) byTimeLabel.set(timeLabel, new Set<string>());
-    byTimeLabel.get(timeLabel)!.add(s.date ?? "");
-  }
-
-  const xTicks: Array<{ idx: number; x: number; label: string }> = [];
-  let lastPlacedX = -1e9;
-  for (const t of sampled) {
-    const x = toX(t.idx);
-    const mustKeep = t.idx === 0 || t.idx === chartPoints.length - 1;
-    if (!mustKeep && x - lastPlacedX < 72) continue;
-
-    const timeOnly = t.minuteIdx == null ? formatX(t.key, sameDay) : minuteIdxToClockLabel(t.minuteIdx);
-    const dateSet = byTimeLabel.get(timeOnly);
-    const needsDatePrefix = !!dateSet && dateSet.size > 1 && t.date;
-    const label = needsDatePrefix ? `${(t.date ?? "").slice(5)} ${timeOnly}` : formatX(t.key, sameDay);
-
-    if (xTicks.some((z) => z.label === label) && !mustKeep) continue;
-    xTicks.push({ idx: t.idx, x, label });
-    lastPlacedX = x;
-  }
-
-  const peakIdx = ys.reduce((best, v, i) => (v > ys[best] ? i : best), 0);
-  const troughIdx = ys.reduce((best, v, i) => (v < ys[best] ? i : best), 0);
-  const peakX = toX(peakIdx);
-  const peakY = toY(chartPoints[peakIdx]?.equity ?? 0);
-  const troughX = toX(troughIdx);
-  const troughY = toY(chartPoints[troughIdx]?.equity ?? 0);
-
-  const first = chartPoints[0];
-  const last = chartPoints[chartPoints.length - 1];
-  const firstY = toY(first?.equity ?? 0);
-  const lastY = toY(last?.equity ?? 0);
-  const zeroInRange = minY <= 0 && maxY >= 0;
-  const zeroY = zeroInRange ? toY(0) : null;
-
-  return (
-    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      {(title || meta) && (
-        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-        </div>
-      )}
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
-        <defs>
-          <linearGradient id="eq-bg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(16,185,129,0.08)" />
-            <stop offset="100%" stopColor="rgba(2,6,23,0)" />
-          </linearGradient>
-          <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(16,185,129,0.35)" />
-            <stop offset="100%" stopColor="rgba(16,185,129,0.02)" />
-          </linearGradient>
-          <linearGradient id="eq-stroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="rgba(45,212,191,0.95)" />
-            <stop offset="100%" stopColor="rgba(110,231,183,0.95)" />
-          </linearGradient>
-          <filter id="eq-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={h - padTop - padBottom} fill="url(#eq-bg)" />
-
-        {yTicks.map((t) => (
-          <g key={`y-${t.y.toFixed(2)}`}>
-            <line x1={padLeft} x2={w - padRight} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.08)" strokeDasharray="2 4" />
-            <text x={w - 8} y={t.y - 4} fontSize="14" textAnchor="end" className="fill-zinc-400 font-mono">
-              {num(t.val, 2)}
-            </text>
-          </g>
-        ))}
-
-        {zeroY != null && <line x1={padLeft} x2={w - padRight} y1={zeroY} y2={zeroY} stroke="rgba(244,63,94,0.25)" strokeDasharray="4 3" />}
-
-        <path d={areaD} fill="url(#eq-fill)" />
-        <path d={lineD} fill="none" stroke="url(#eq-stroke)" strokeWidth="2.8" filter="url(#eq-glow)" />
-
-        <circle cx={toX(0)} cy={firstY} r="3.2" fill="rgba(167,139,250,0.95)" />
-        <circle cx={toX(chartPoints.length - 1)} cy={lastY} r="4" fill="rgba(16,185,129,1)" />
-        <text x={toX(chartPoints.length - 1) + 8} y={lastY - 10} fontSize="10" className="fill-emerald-300 font-mono">
-          {num(last?.equity ?? null, 2)}
-        </text>
-
-        <circle cx={peakX} cy={peakY} r="3.8" fill="rgba(16,185,129,0.95)" />
-        <text x={peakX + 8} y={peakY - 8} fontSize="10" className="fill-emerald-200 font-mono">
-          peak {num(chartPoints[peakIdx]?.equity ?? null, 2)}
-        </text>
-
-        <circle cx={troughX} cy={troughY} r="3.4" fill="rgba(244,63,94,0.92)" />
-        <text x={troughX + 8} y={troughY + 14} fontSize="10" className="fill-rose-200 font-mono">
-          min {num(chartPoints[troughIdx]?.equity ?? null, 2)}
-        </text>
-
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
-        {xTicks.map((t) => (
-          <g key={`x-${t.idx}`}>
-            <line x1={t.x} x2={t.x} y1={padTop} y2={h - padBottom} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
-            <line x1={t.x} x2={t.x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.25)" />
-            <text x={t.x} y={h - 8} fontSize="14" textAnchor="middle" className="fill-zinc-400 font-mono">
-              {t.label}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </div>
-  );
-}
-
-function OptimizerBarChart({
-  rows,
-  valueKey,
-  title,
-  meta,
-  color = "emerald",
-  maxRows,
-}: {
-  rows: OptimizerResultRow[];
-  valueKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
-  title: string;
-  meta?: string;
-  color?: "emerald" | "sky";
-  maxRows?: number;
-}) {
-  const items = maxRows != null ? rows.slice(0, maxRows) : rows;
-  if (!items.length) {
-    return (
-      <div className="w-full h-[300px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No optimizer results yet.
-      </div>
-    );
-  }
-
-  const values = items.map((r) => Number(r[valueKey] ?? 0));
-  const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
-  const barClass = color === "sky" ? "bg-sky-400/80" : "bg-emerald-400/80";
-
-  return (
-    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-      </div>
-      <div
-        className={clsx(
-          "space-y-2",
-          items.length > 12 && "max-h-[520px] overflow-y-auto pr-1"
-        )}
-      >
-        {items.map((row) => {
-          const v = Number(row[valueKey] ?? 0);
-          const widthPct = Math.max(2, (Math.abs(v) / maxAbs) * 100);
-          return (
-            <div key={`${valueKey}-${row.id}`} className="grid grid-cols-[140px_1fr_64px] gap-3 items-center">
-              <div className="text-[10px] font-mono text-zinc-400 truncate" title={`${row.parameter} | ${row.variant}`}>
-                {row.parameter} {row.variant}
-              </div>
-              <div className="h-5 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
-                <div
-                  className={clsx("h-full", barClass)}
-                  style={{ width: `${widthPct}%`, opacity: v < 0 ? 0.45 : 1 }}
-                />
-              </div>
-              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
-                {valueKey === "trades" ? intn(v) : valueKey === "winRate" ? `${num(v * 100, 1)}%` : num(v, 2)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function OptimizerDualMetricChart({
-  rows,
-  leftKey,
-  rightKey,
-  title,
-  meta,
-  leftLabel,
-  rightLabel,
-}: {
-  rows: OptimizerResultRow[];
-  leftKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
-  rightKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
-  title: string;
-  meta?: string;
-  leftLabel: string;
-  rightLabel: string;
-}) {
-  if (!rows.length) {
-    return (
-      <div className="w-full h-[300px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No optimizer results yet.
-      </div>
-    );
-  }
-
-  const leftValues = rows.map((row) => Number(row[leftKey] ?? 0));
-  const rightValues = rows.map((row) => Number(row[rightKey] ?? 0));
-  const leftMaxAbs = Math.max(1, ...leftValues.map((value) => Math.abs(value)));
-  const rightMaxAbs = Math.max(1, ...rightValues.map((value) => Math.abs(value)));
-  const formatValue = (key: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate", value: number) =>
-    key === "trades" ? intn(value) : key === "winRate" ? `${num(value * 100, 1)}%` : num(value, 2);
-
-  return (
-    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-      </div>
-      <div className="mb-2 grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">
-        <div />
-        <div>{leftLabel}</div>
-        <div />
-        <div>{rightLabel}</div>
-        <div />
-      </div>
-      <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-        {rows.map((row) => {
-          const left = Number(row[leftKey] ?? 0);
-          const right = Number(row[rightKey] ?? 0);
-          const leftWidthPct = Math.max(2, (Math.abs(left) / leftMaxAbs) * 100);
-          const rightWidthPct = Math.max(2, (Math.abs(right) / rightMaxAbs) * 100);
-          return (
-            <div key={`dual-${row.id}`} className="grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center">
-              <div className="text-[10px] font-mono text-zinc-400 truncate" title={`${row.parameter} | ${row.variant}`}>
-                {row.parameter} {row.variant}
-              </div>
-              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full bg-emerald-400/80"
-                  style={{ width: `${leftWidthPct}%`, opacity: left < 0 ? 0.45 : 1 }}
-                />
-              </div>
-              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
-                {formatValue(leftKey, left)}
-              </div>
-              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full bg-sky-400/80"
-                  style={{ width: `${rightWidthPct}%`, opacity: right < 0 ? 0.45 : 1 }}
-                />
-              </div>
-              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
-                {formatValue(rightKey, right)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function EyeToggleIcon({ closed, className }: { closed: boolean; className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      {closed ? (
-        <>
-          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-          <line x1="1" y1="1" x2="23" y2="23"></line>
-        </>
-      ) : (
-        <>
-          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-          <circle cx="12" cy="12" r="3"></circle>
-        </>
-      )}
-    </svg>
-  );
-}
-
-function LockToggleIcon({ open, className }: { open: boolean; className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      {open ? (
-        <>
-          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
-          <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-        </>
-      ) : (
-        <>
-          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
-          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </>
-      )}
-    </svg>
-  );
-}
-
-function CrosshairIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      style={style}
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="6" />
-      <circle cx="12" cy="12" r="1.5" />
-      <path d="M12 2v4" />
-      <path d="M12 18v4" />
-      <path d="M2 12h4" />
-      <path d="M18 12h4" />
-    </svg>
-  );
-}
-
-function OptimizerParameterRangeCard({
-  parameter,
-  rankMetric,
-  minTradesFilter,
-  bucketCount,
-}: {
-  parameter: PaperArbOptimizerParameterDto;
-  rankMetric: OptimizerRangeRankMetric;
-  minTradesFilter: number;
-  bucketCount: number;
-}) {
-  const sortBucketsByMetric = (items: PaperArbOptimizerRangeBucketDto[]) =>
-    [...items].sort((a, b) => {
-      const aMetric = rankMetric === "winRate" ? a.winRate : rankMetric === "totalPnlUsd" ? a.totalPnlUsd : rankMetric === "score" ? a.score : a.avgPnlUsd;
-      const bMetric = rankMetric === "winRate" ? b.winRate : rankMetric === "totalPnlUsd" ? b.totalPnlUsd : rankMetric === "score" ? b.score : b.avgPnlUsd;
-      if (bMetric !== aMetric) return bMetric - aMetric;
-      if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
-      return b.trades - a.trades;
-    });
-  const isCategorical = (parameter.buckets ?? []).some((b) => b.fromValue == null && b.toValue == null && b.label && b.label !== "");
-  const buckets = [...(parameter.buckets ?? [])]
-    .filter((bucket) => bucket.trades >= minTradesFilter)
-    .sort((a, b) => {
-    if (isCategorical) return b.totalPnlUsd - a.totalPnlUsd; // categorical: sort by PnL
-    const av = a.fromValue ?? Number.NEGATIVE_INFINITY;
-    const bv = b.fromValue ?? Number.NEGATIVE_INFINITY;
-    return av - bv;
-  });
-  const maxAbsScore = Math.max(0.000001, ...buckets.map((b) => Math.abs(b.score)));
-  const baseTotalPnl = parameter.baseTotalPnlUsd ?? 0;
-  const baseAvgPnl = parameter.baseAvgPnlUsd ?? 0;
-  const baseWinRate = parameter.baseWinRate ?? 0;
-  const positiveTextClass = "text-[#6ee7b7]";
-  const negativeTextClass = SOFT_LOSS_TEXT_CLASS;
-  const positiveScoreTextClass = "text-[#86efc5]";
-  const negativeScoreTextClass = "text-[#ffb3bf]";
-  const positiveChipClass = "border-[#6ee7b7]/30 bg-[#6ee7b7]/10 text-[#6ee7b7]";
-  const negativeChipClass = "border-[rgba(243,166,178,0.28)] bg-[rgba(243,166,178,0.10)] text-[#f3a6b2]";
-  const valueTextClass = (value: number, neutral = "text-zinc-300") =>
-    value > 0 ? positiveTextClass : value < 0 ? negativeTextClass : neutral;
-  const scoreTextClass = (value: number, neutral = "text-zinc-300") =>
-    value > 0 ? positiveScoreTextClass : value < 0 ? negativeScoreTextClass : neutral;
-  const valueChipClass = (value: number, neutral = "border-white/10 bg-black/20 text-zinc-400") =>
-    value > 0 ? positiveChipClass : value < 0 ? negativeChipClass : neutral;
-  const bestBucket = useMemo(
-    () => sortBucketsByMetric(buckets)[0] ?? null,
-    [buckets, rankMetric]
-  );
-  const bestLowerTail = useMemo(
-    () => sortBucketsByMetric((parameter.lowerTailBuckets ?? []).filter((bucket) => bucket.trades >= minTradesFilter))[0] ?? null,
-    [parameter.lowerTailBuckets, minTradesFilter, rankMetric]
-  );
-  const bestUpperTail = useMemo(
-    () => sortBucketsByMetric((parameter.upperTailBuckets ?? []).filter((bucket) => bucket.trades >= minTradesFilter))[0] ?? null,
-    [parameter.upperTailBuckets, minTradesFilter, rankMetric]
-  );
-  const summaryCards = [
-    { label: "BEST RANGE", item: bestBucket },
-    ...(parameter.lowerTailBuckets?.length ? [{ label: "BEST <= X", item: bestLowerTail }] : []),
-    ...(parameter.upperTailBuckets?.length ? [{ label: "BEST >= X", item: bestUpperTail }] : []),
-  ];
-
-  return (
-    <GlassCard className="p-0 overflow-hidden border border-white/5 bg-black/20 shadow-none">
-      <div className="border-b border-white/5 bg-black/10 px-2.5 py-2">
-        <div className="flex items-center justify-between gap-2.5">
-          <div className="min-w-0 flex items-center gap-2">
-            <div className={clsx("text-[12px] uppercase tracking-[0.18em] font-mono", "accent-text")}>{parameter.label}</div>
-            {rankMetric === "tailDamage" && (() => {
-              const td = scoreTailDamage(parameter, minTradesFilter);
-              return td > 0 ? (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300 uppercase tracking-wide">
-                  -{num(td, 0)}
-                </span>
-              ) : null;
-            })()}
-          </div>
-          <div className="flex shrink-0 items-center gap-1 text-right whitespace-nowrap">
-            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
-              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
-                <span className="uppercase tracking-[0.16em] text-zinc-500">Trades</span>
-                <span className="text-[11px] text-zinc-100">{intn(parameter.baseTrades)}</span>
-              </div>
-            </div>
-            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
-              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
-                <span className="uppercase tracking-[0.16em] text-zinc-500">PnL</span>
-                <span className={clsx("text-[11px]", valueTextClass(baseTotalPnl, "text-zinc-100"))}>{num(baseTotalPnl, 2)}</span>
-              </div>
-            </div>
-            <div className="rounded-md border border-white/5 bg-black/20 px-1.5 py-1 min-w-[54px]">
-              <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
-                <span className="uppercase tracking-[0.16em] text-zinc-500">Avg</span>
-                <span className={clsx("text-[11px]", valueTextClass(baseAvgPnl, "text-zinc-100"))}>{num(baseAvgPnl, 2)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="p-2.5">
-      <div className={clsx("grid gap-1.5 mb-2", summaryCards.length >= 3 ? "grid-cols-1 md:grid-cols-3" : summaryCards.length === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
-        {summaryCards.map((entry) => (
-          <div key={`${parameter.key}-${entry.label}`} className="rounded-lg border border-white/5 bg-black/20 px-2 py-1.5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">{entry.label}</div>
-                <div className="text-[11px] font-mono text-zinc-100 mt-1 truncate">{entry.item?.label ?? "-"}</div>
-              </div>
-              <div className="shrink-0 text-right text-[10px] font-mono">
-                <div className="text-zinc-400">trades {intn(entry.item?.trades)}</div>
-                <div className="text-zinc-500 mt-0.5">hit {num((entry.item?.winRate ?? 0) * 100, 1)}%</div>
-              </div>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between gap-3 text-[10px] font-mono">
-              <div className="min-w-0">
-                <span className={clsx(valueTextClass(entry.item?.avgPnlUsd ?? 0, "text-zinc-300"))}>avg {num(entry.item?.avgPnlUsd, 2)}</span>
-                <span className="text-zinc-500"> | </span>
-                <span className="text-zinc-400">pnl {num(entry.item?.totalPnlUsd, 2)}</span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl))}>
-                dAvg {num((entry.item?.avgPnlUsd ?? 0) - baseAvgPnl, 2)}
-                </span>
-                <span className={clsx("rounded-md border px-1.5 py-0.5", valueChipClass((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl))}>
-                dPnL {num((entry.item?.totalPnlUsd ?? 0) - baseTotalPnl, 2)}
-                </span>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-7 xl:grid-cols-8 gap-1 mb-2.5">
-        {buckets.map((bucket) => (
-          <div
-            key={`heat-${bucket.bucketId}`}
-            className={clsx(
-              "h-7 rounded border border-white/5 flex items-center justify-center text-[9px] font-mono bg-black/20",
-              bucket.avgPnlUsd > 0
-                ? "bg-[#6ee7b7]/20 text-[#6ee7b7]"
-                : bucket.avgPnlUsd < 0
-                  ? "bg-[#f87171]/20 text-[#f87171]"
-                  : "bg-white/[0.04] text-zinc-400"
-            )}
-            title={`${bucket.label} | avg ${num(bucket.avgPnlUsd, 2)} | pnl ${num(bucket.totalPnlUsd, 2)} | trades ${intn(bucket.trades)}`}
-            style={{ opacity: Math.max(0.35, bucket.coveragePct) }}
-          >
-            {num(bucket.avgPnlUsd, 1)}
-          </div>
-        ))}
-      </div>
-
-      <div className="space-y-1.5 mb-2.5 rounded-xl border border-white/5 bg-black/20 p-2">
-        <div className="flex items-center justify-between">
-          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Range Strength</div>
-          <div className="text-[9px] font-mono text-zinc-600">score</div>
-        </div>
-        {buckets.map((bucket) => {
-          const widthPct = Math.max(6, (Math.abs(bucket.score) / maxAbsScore) * 100);
-          return (
-            <div key={bucket.bucketId} className="grid grid-cols-[112px_1fr_54px] gap-2 items-center">
-              <div className="text-[10px] font-mono text-zinc-400 truncate" title={bucket.label}>
-                {bucket.label}
-              </div>
-              <div className="h-[18px] rounded bg-black/20 border border-white/5 overflow-hidden">
-                <div
-                  className={clsx(
-                    "h-full",
-                    bucket.score >= 0 ? "bg-[#6ee7b7]/80" : "bg-[#f3a6b2]/80"
-                  )}
-                  style={{
-                    width: `${widthPct}%`,
-                    opacity: bucket.coveragePct < 0.08 ? 0.4 : 1,
-                  }}
-                />
-              </div>
-              <div className={clsx("text-right text-[10px] font-mono font-semibold tabular-nums", scoreTextClass(bucket.score))}>
-                {num(bucket.score, 2)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="overflow-auto rounded-xl border border-white/5 bg-black/20">
-        <table className="min-w-[760px] w-full text-[10px] font-mono">
-          <thead className="sticky top-0 z-10 bg-black/30 text-zinc-400 border-b border-white/5 backdrop-blur-sm">
-            <tr>
-              <th className="text-left px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Range</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">N</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Cov</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Win</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dW</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">PnL</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dP</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Avg</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dA</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">W/L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {buckets.map((bucket) => (
-              <tr key={`${parameter.key}-${bucket.bucketId}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                <td className="px-2 py-1.5 text-zinc-200 whitespace-nowrap">{bucket.label}</td>
-                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{intn(bucket.trades)}</td>
-                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{num(bucket.coveragePct * 100, 1)}%</td>
-                <td className="px-2 py-1 text-right tabular-nums text-zinc-300">{num(bucket.winRate * 100, 1)}%</td>
-                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.winRate - baseWinRate))}>
-                  {num((bucket.winRate - baseWinRate) * 100, 1)}%
-                </td>
-                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd))}>
-                  {num(bucket.totalPnlUsd, 2)}
-                </td>
-                <td className={clsx("px-2 py-1 text-right tabular-nums", valueTextClass(bucket.totalPnlUsd - baseTotalPnl))}>
-                  {num(bucket.totalPnlUsd - baseTotalPnl, 2)}
-                </td>
-                <td className={clsx("px-2 py-1 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd))}>
-                  {num(bucket.avgPnlUsd, 2)}
-                </td>
-                <td className={clsx("px-2 py-1.5 text-right tabular-nums font-bold", valueTextClass(bucket.avgPnlUsd - baseAvgPnl))}>
-                  {num(bucket.avgPnlUsd - baseAvgPnl, 2)}
-                </td>
-                <td className="px-2 py-1.5 text-right tabular-nums text-zinc-300 whitespace-nowrap">
-                  {intn(bucket.wins)} / {intn(bucket.losses)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      </div>
-    </GlassCard>
-  );
-}
-
-function StartsByTimeChart({
-  rows,
-  title,
-  meta,
-  fullscreen = false,
-  xFrom,
-  xTo,
-}: {
-  rows: PaperArbClosedDto[];
-  title?: string;
-  meta?: string;
-  fullscreen?: boolean;
-  xFrom?: number | null;
-  xTo?: number | null;
-}) {
-  const w = fullscreen ? 2800 : 1100;
-  const h = 320;
-  const padLeft = 22;
-  const padRight = 40;
-  const padTop = 40;
-  const footerH = 40;
-  const padBottom = 56;
-
-  const bins = useMemo(() => {
-    const m = new Map<number, { ok: number; bad: number }>();
-    if (xFrom != null && xTo != null) {
-      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { ok: 0, bad: 0 });
-    }
-    for (const r of rows) {
-      const idx = Number(r.startMinuteIdx);
-      if (!Number.isFinite(idx)) continue;
-      const b = Math.trunc(idx / 5) * 5;
-      const prev = m.get(b) ?? { ok: 0, bad: 0 };
-      if ((r.totalPnlUsd ?? 0) > 0) prev.ok += 1;
-      else prev.bad += 1;
-      m.set(b, prev);
-    }
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows, xFrom, xTo]);
-
-  if (!bins.length) {
-    return (
-      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No start events for chart.
-      </div>
-    );
-  }
-
-  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.ok, v.bad)));
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const barGap = 2;
-  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
-  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
-  const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
-  const xTickItems = (() => {
-    const src = bins.map(([idx], i) => ({ idx, i }));
-    const target = Math.max(4, Math.min(10, src.length));
-    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
-    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
-    const out: Array<{ idx: number; x: number }> = [];
-    let lastX = -1e9;
-    for (const t of uniq) {
-      const x = padLeft + t.i * (groupW + barGap) + groupW / 2;
-      const mustKeep = t.i === 0 || t.i === src.length - 1;
-      if (!mustKeep && x - lastX < 86) continue;
-      out.push({ idx: t.idx, x });
-      lastX = x;
-    }
-    return out;
-  })();
-  const totalOk = bins.reduce((s, [, v]) => s + v.ok, 0);
-  const totalBad = bins.reduce((s, [, v]) => s + v.bad, 0);
-  const total = totalOk + totalBad;
-  const hit = total > 0 ? totalOk / total : 0;
-  const nonEmptyBins = bins.filter(([, v]) => v.ok + v.bad > 0).length;
-  const avgOkBin = nonEmptyBins ? totalOk / nonEmptyBins : 0;
-  const avgBadBin = nonEmptyBins ? totalBad / nonEmptyBins : 0;
-  const bestOk = bins.reduce((best, cur) => (cur[1].ok > best[1].ok ? cur : best), bins[0]);
-  const bestBad = bins.reduce((best, cur) => (cur[1].bad > best[1].bad ? cur : best), bins[0]);
-
-  return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      {(title || meta) && (
-        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-        </div>
-      )}
-      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
-          START OK
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/90" />
-          START BAD
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
-        <defs>
-          <linearGradient id="starts-ok-bar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
-            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
-          </linearGradient>
-          <linearGradient id="starts-bad-bar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
-            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
-          </linearGradient>
-        </defs>
-
-        {yTicks.map((t) => {
-          const y = padTop + plotH - (t / maxY) * plotH;
-          return (
-            <g key={`y-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              {t > 0 && (
-                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
-                  {t}
-                </text>
-              )}
-            </g>
-          );
-        })}
-
-        {bins.map(([idx, v], i) => {
-          const xBase = padLeft + i * (groupW + barGap);
-          const hOk = plotH * (v.ok / maxY);
-          const hBad = plotH * (v.bad / maxY);
-          const yOk = padTop + plotH - hOk;
-          const yBad = padTop + plotH - hBad;
-          return (
-            <g key={`${idx}-${i}`}>
-              <rect x={xBase} y={yOk} width={barW} height={hOk} rx="3" fill="url(#starts-ok-bar)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={yBad} width={barW} height={hBad} rx="3" fill="url(#starts-bad-bar)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
-            </g>
-          );
-        })}
-
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
-
-        {xTickItems.map((t, i) => {
-          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
-          return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
-              {minuteIdxToClockLabel(t.idx)}
-            </text>
-          );
-        })}
-      </svg>
-
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-        <div className="flex items-center gap-3 text-[10px] font-mono">
-          <span className="text-emerald-300/90">ok {intn(totalOk)}</span>
-          <span className="text-rose-300/90">bad {intn(totalBad)}</span>
-          <span className="text-zinc-500">hit {num(hit * 100, 1)}%</span>
-          <span className="text-zinc-500">avg/bin {num(avgOkBin, 2)} / {num(avgBadBin, 2)}</span>
-          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-            best ok: <span className="text-emerald-300">{minuteIdxToClockLabel(bestOk[0])}</span> ({intn(bestOk[1].ok)})
-          </span>
-          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-            best bad: <span className="text-rose-300">{minuteIdxToClockLabel(bestBad[0])}</span> ({intn(bestBad[1].bad)})
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StartsEndsByTimeChart({
-  rows,
-  title,
-  meta,
-  fullscreen = false,
-  xFrom,
-  xTo,
-}: {
-  rows: PaperArbClosedDto[];
-  title?: string;
-  meta?: string;
-  fullscreen?: boolean;
-  xFrom?: number | null;
-  xTo?: number | null;
-}) {
-  const w = fullscreen ? 2800 : 1100;
-  const h = 360;
-  const padLeft = 22;
-  const padRight = 40;
-  const padTop = 56;
-  const padBottom = 40;
-
-  const bins = useMemo(() => {
-    const m = new Map<number, { starts: number; ends: number }>();
-    if (xFrom != null && xTo != null) {
-      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { starts: 0, ends: 0 });
-    }
-    for (const r of rows) {
-      const s = Number(r.startMinuteIdx);
-      const e = Number(r.endMinuteIdx);
-
-      if (Number.isFinite(s)) {
-        const b = Math.trunc(s / 5) * 5;
-        const prev = m.get(b) ?? { starts: 0, ends: 0 };
-        prev.starts += 1;
-        m.set(b, prev);
-      }
-      if (Number.isFinite(e)) {
-        const b = Math.trunc(e / 5) * 5;
-        const prev = m.get(b) ?? { starts: 0, ends: 0 };
-        prev.ends += 1;
-        m.set(b, prev);
-      }
-    }
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows, xFrom, xTo]);
-
-  if (!bins.length) {
-    return (
-      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No start/end events for chart.
-      </div>
-    );
-  }
-
-  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.starts, v.ends)));
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const barGap = 2;
-  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
-  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
-  const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
-
-  return (
-    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      {(title || meta) && (
-        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-        </div>
-      )}
-
-      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
-          START
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/80" />
-          END
-        </div>
-      </div>
-
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
-        <defs>
-          <linearGradient id="se-start" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
-            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
-          </linearGradient>
-          <linearGradient id="se-end" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
-            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
-          </linearGradient>
-        </defs>
-
-        {yTicks.map((t) => {
-          const y = padTop + plotH - (t / maxY) * plotH;
-          return (
-            <g key={`y-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              <text x={w - 8} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
-                {t}
-              </text>
-            </g>
-          );
-        })}
-
-        {bins.map(([idx, v], i) => {
-          const xBase = padLeft + i * (groupW + barGap);
-          const hs = plotH * (v.starts / maxY);
-          const he = plotH * (v.ends / maxY);
-          const ys = padTop + plotH - hs;
-          const ye = padTop + plotH - he;
-          return (
-            <g key={`${idx}-${i}`}>
-              <rect x={xBase} y={ys} width={barW} height={hs} rx="3" fill="url(#se-start)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={ye} width={barW} height={he} rx="3" fill="url(#se-end)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
-            </g>
-          );
-        })}
-
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
-
-        {bins
-          .filter((_, i) => i % Math.ceil(bins.length / 8) === 0 || i === bins.length - 1)
-          .map(([idx], i) => {
-            const pos = bins.findIndex(([k]) => k === idx);
-            const x = padLeft + pos * (groupW + barGap) + groupW / 2;
-            return (
-              <text key={`x-${idx}-${i}`} x={x} y={h - 8} textAnchor="middle" fontSize="14" className="fill-zinc-300 font-mono">
-                {minuteIdxToClockLabel(idx)}
-              </text>
-            );
-          })}
-      </svg>
-    </div>
-  );
-}
-
-function PeakStrengthByTimeChart({
-  rows,
-  title,
-  meta,
-  fullscreen = false,
-  xFrom,
-  xTo,
-}: {
-  rows: PaperArbClosedDto[];
-  title?: string;
-  meta?: string;
-  fullscreen?: boolean;
-  xFrom?: number | null;
-  xTo?: number | null;
-}) {
-  const w = fullscreen ? 2800 : 1100;
-  const h = 320;
-  const padLeft = 28;
-  const padRight = 46;
-  const padTop = 40;
-  const footerH = 40;
-  const padBottom = 56;
-
-  const bins = useMemo(() => {
-    const m = new Map<number, { count: number; sumAbs: number }>();
-    if (xFrom != null && xTo != null) {
-      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { count: 0, sumAbs: 0 });
-    }
-    for (const r of rows) {
-      const p = Number(r.peakMinuteIdx);
-      if (!Number.isFinite(p)) continue;
-      const b = Math.trunc(p / 5) * 5;
-      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? r.peakMetric ?? 0));
-      const prev = m.get(b) ?? { count: 0, sumAbs: 0 };
-      prev.count += 1;
-      prev.sumAbs += Number.isFinite(peakAbs) ? peakAbs : 0;
-      m.set(b, prev);
-    }
-    return [...m.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([idx, v]) => ({ idx, count: v.count, avgAbs: v.count ? v.sumAbs / v.count : 0 }));
-  }, [rows, xFrom, xTo]);
-
-  if (!bins.length) {
-    return (
-      <div className="w-full h-[360px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No peak events for chart.
-      </div>
-    );
-  }
-
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const maxCount = Math.max(1, ...bins.map((b) => b.count));
-  const maxAbs = Math.max(0.0001, ...bins.map((b) => b.avgAbs));
-  const barGap = 1;
-  const barW = Math.max(3, Math.floor(plotW / bins.length) - barGap);
-
-  const toX = (i: number) => padLeft + i * (barW + barGap) + barW / 2;
-  const toYCount = (v: number) => padTop + plotH - (v / maxCount) * plotH;
-  const toYAbs = (v: number) => padTop + plotH - (v / maxAbs) * plotH;
-  const lineD = bins
-    .map((b, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toYAbs(b.avgAbs).toFixed(2)}`)
-    .join(" ");
-  const peakVals = bins.filter((b) => b.count > 0).map((b) => b.avgAbs);
-  const avgPeak = peakVals.length ? peakVals.reduce((s, v) => s + v, 0) / peakVals.length : 0;
-  const sortedPeak = [...peakVals].sort((a, b) => a - b);
-  const medPeak = sortedPeak.length ? sortedPeak[Math.floor((sortedPeak.length - 1) * 0.5)] : 0;
-  const p90Peak = sortedPeak.length ? sortedPeak[Math.floor((sortedPeak.length - 1) * 0.9)] : 0;
-  const maxCountBin = bins.reduce((best, cur) => (cur.count > best.count ? cur : best), bins[0]);
-  const strengthRanges = [
-    { label: "<0.5", min: 0, max: 0.5 },
-    { label: "0.5-1", min: 0.5, max: 1 },
-    { label: "1-2", min: 1, max: 2 },
-    { label: "2-4", min: 2, max: 4 },
-    { label: "4+", min: 4, max: Number.POSITIVE_INFINITY },
-  ];
-  const strengthDist = strengthRanges.map((r) => ({
-    ...r,
-    count: bins.filter((b) => b.avgAbs >= r.min && b.avgAbs < r.max).reduce((s, b) => s + b.count, 0),
-  }));
-  const xTickItems = (() => {
-    const src = bins.map((b, i) => ({ idx: b.idx, i }));
-    const target = Math.max(4, Math.min(10, src.length));
-    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
-    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
-    const out: Array<{ idx: number; x: number }> = [];
-    let lastX = -1e9;
-    for (const t of uniq) {
-      const x = toX(t.i);
-      const mustKeep = t.i === 0 || t.i === src.length - 1;
-      if (!mustKeep && x - lastX < 86) continue;
-      out.push({ idx: t.idx, x });
-      lastX = x;
-    }
-    return out;
-  })();
-
-  return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      {(title || meta) && (
-        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-        </div>
-      )}
-
-      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-violet-400/80" />
-          COUNT
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-300/90" />
-          AVG PEAK ABS
-        </div>
-      </div>
-
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
-        <defs>
-          <linearGradient id="peak-count" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(167,139,250,0.95)" />
-            <stop offset="100%" stopColor="rgba(167,139,250,0.25)" />
-          </linearGradient>
-          <filter id="peak-line-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.8" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        {[0, 0.33, 0.66, 1].map((t, i) => {
-          const y = padTop + plotH - t * plotH;
-          const left = Math.round(t * maxCount);
-          const right = num(t * maxAbs, 3);
-          return (
-            <g key={`grid-${i}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              {left > 0 && (
-                <text x={padLeft + 2} y={y - 3} fontSize="16" className="fill-zinc-300 font-mono">
-                  {left}
-                </text>
-              )}
-              {t > 0 && (
-                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-amber-200/80 font-mono">
-                  {right}
-                </text>
-              )}
-            </g>
-          );
-        })}
-
-        {bins.map((b, i) => {
-          const x = padLeft + i * (barW + barGap);
-          const hh = plotH * (b.count / maxCount);
-          const y = padTop + plotH - hh;
-          return <rect key={`b-${b.idx}-${i}`} x={x} y={y} width={barW} height={hh} rx="3" fill="url(#peak-count)" stroke="rgba(196,181,253,0.55)" strokeWidth="0.6" />;
-        })}
-
-        <path d={lineD} fill="none" stroke="rgba(252,211,77,0.95)" strokeWidth="2" filter="url(#peak-line-glow)" />
-        {bins.map((b, i) => (
-          <circle key={`p-${b.idx}-${i}`} cx={toX(i)} cy={toYAbs(b.avgAbs)} r="2.5" fill="rgba(252,211,77,0.95)" />
-        ))}
-
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
-        {xTickItems.map((t, i) => {
-          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
-          return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
-              {minuteIdxToClockLabel(t.idx)}
-            </text>
-          );
-        })}
-      </svg>
-
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-        <div className="flex items-center gap-3 text-[10px] font-mono">
-          <span className="text-zinc-500">avg {num(avgPeak, 3)}</span>
-          <span className="text-zinc-500">median {num(medPeak, 3)}</span>
-          <span className="text-zinc-500">p90 {num(p90Peak, 3)}</span>
-          <span className="text-violet-300/90">max count {intn(maxCountBin.count)} @ {minuteIdxToClockLabel(maxCountBin.idx)}</span>
-          {strengthDist.map((d) => (
-            <span key={d.label} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-              {d.label}: <span className="text-amber-300">{intn(d.count)}</span>
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PeakReversionTwoThirdsChart({
-  rows,
-  title,
-  meta,
-  fullscreen = false,
-  xFrom,
-  xTo,
-}: {
-  rows: PaperArbClosedDto[];
-  title?: string;
-  meta?: string;
-  fullscreen?: boolean;
-  xFrom?: number | null;
-  xTo?: number | null;
-}) {
-  const w = fullscreen ? 2800 : 1100;
-  const h = 320;
-  const padLeft = 22;
-  const padRight = 40;
-  const padTop = 40;
-  const footerH = 40;
-  const padBottom = 56;
-
-  const bins = useMemo(() => {
-    const m = new Map<number, { yes: number; no: number }>();
-    if (xFrom != null && xTo != null) {
-      for (let b = Math.trunc(xFrom / 5) * 5; b <= xTo; b += 5) m.set(b, { yes: 0, no: 0 });
-    }
-    for (const r of rows) {
-      const t = Number(r.peakMinuteIdx);
-      if (!Number.isFinite(t)) continue;
-      const b = Math.trunc(t / 5) * 5;
-
-      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? 0));
-      const endAbs = Math.abs(Number(r.endMetricAbs ?? 0));
-      const revertedFrac = peakAbs > 0 ? (peakAbs - endAbs) / peakAbs : 0;
-      const ok = revertedFrac >= 2 / 3;
-
-      const prev = m.get(b) ?? { yes: 0, no: 0 };
-      if (ok) prev.yes += 1;
-      else prev.no += 1;
-      m.set(b, prev);
-    }
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
-  }, [rows, xFrom, xTo]);
-
-  const stats = useMemo(() => {
-    const valsAll: number[] = [];
-    const valsYes: number[] = [];
-    const valsNo: number[] = [];
-    const distRanges = [
-      { label: "<0.5", min: 0, max: 0.5 },
-      { label: "0.5-1", min: 0.5, max: 1 },
-      { label: "1-2", min: 1, max: 2 },
-      { label: "2-4", min: 2, max: 4 },
-      { label: "4+", min: 4, max: Number.POSITIVE_INFINITY },
-    ];
-    const dist = distRanges.map((r) => ({ ...r, yes: 0, no: 0 }));
-
-    for (const r of rows) {
-      const peakAbs = Math.abs(Number(r.peakMetricAbs ?? 0));
-      if (!Number.isFinite(peakAbs) || peakAbs <= 0) continue;
-      const endAbs = Math.abs(Number(r.endMetricAbs ?? 0));
-      const revertedFrac = peakAbs > 0 ? (peakAbs - endAbs) / peakAbs : 0;
-      const ok = revertedFrac >= 2 / 3;
-
-      valsAll.push(peakAbs);
-      if (ok) valsYes.push(peakAbs);
-      else valsNo.push(peakAbs);
-
-      const bucket = dist.find((d) => peakAbs >= d.min && peakAbs < d.max);
-      if (bucket) {
-        if (ok) bucket.yes += 1;
-        else bucket.no += 1;
-      }
-    }
-
-    const avg = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
-    const pctl = (a: number[], p: number) => {
-      if (!a.length) return 0;
-      const s = [...a].sort((x, y) => x - y);
-      const idx = Math.min(s.length - 1, Math.max(0, Math.round((s.length - 1) * p)));
-      return s[idx] ?? 0;
-    };
-    return {
-      avgAll: avg(valsAll),
-      medAll: pctl(valsAll, 0.5),
-      p90All: pctl(valsAll, 0.9),
-      avgYes: avg(valsYes),
-      avgNo: avg(valsNo),
-      dist,
-    };
-  }, [rows]);
-
-  if (!bins.length) {
-    return (
-      <div className="w-full h-[320px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
-        No peak reversion data.
-      </div>
-    );
-  }
-
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const maxY = Math.max(1, ...bins.map(([, v]) => Math.max(v.yes, v.no)));
-  const barGap = 2;
-  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
-  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
-  const totalYes = bins.reduce((s, [, v]) => s + v.yes, 0);
-  const totalNo = bins.reduce((s, [, v]) => s + v.no, 0);
-  const total = totalYes + totalNo;
-  const yesRate = total ? totalYes / total : 0;
-  const xTickItems = (() => {
-    const src = bins.map(([idx], i) => ({ idx, i }));
-    const target = Math.max(4, Math.min(10, src.length));
-    const sampled = Array.from({ length: target }, (_, k) => src[Math.round((k / (target - 1)) * (src.length - 1))]);
-    const uniq = sampled.filter((t, i, arr) => i === 0 || t.i !== arr[i - 1].i);
-    const out: Array<{ idx: number; x: number }> = [];
-    let lastX = -1e9;
-    for (const t of uniq) {
-      const x = padLeft + t.i * (groupW + barGap) + groupW / 2;
-      const mustKeep = t.i === 0 || t.i === src.length - 1;
-      if (!mustKeep && x - lastX < 86) continue;
-      out.push({ idx: t.idx, x });
-      lastX = x;
-    }
-    return out;
-  })();
-
-  return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      {(title || meta) && (
-        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
-          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
-        </div>
-      )}
-      <div className="absolute top-7 left-3 z-10 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-300/90" />
-          REVERTED ≥ 2/3
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
-          <span className="w-2.5 h-2.5 rounded-sm bg-rose-400/90" />
-          NOT REVERTED
-        </div>
-        <div className="text-[10px] font-mono text-zinc-500">
-          hit {num(yesRate * 100, 1)}%
-        </div>
-      </div>
-
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
-        <defs>
-          <linearGradient id="rev-yes" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
-            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
-          </linearGradient>
-          <linearGradient id="rev-no" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
-            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
-          </linearGradient>
-        </defs>
-
-        {[0, 0.33, 0.66, 1].map((t, i) => {
-          const y = padTop + plotH - t * plotH;
-          const val = Math.round(t * maxY);
-          return (
-            <g key={`y-${i}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              {val > 0 && (
-                <text x={w - 8} y={y - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
-                  {val}
-                </text>
-              )}
-            </g>
-          );
-        })}
-
-        {bins.map(([idx, v], i) => {
-          const xBase = padLeft + i * (groupW + barGap);
-          const hYes = plotH * (v.yes / maxY);
-          const hNo = plotH * (v.no / maxY);
-          const yYes = padTop + plotH - hYes;
-          const yNo = padTop + plotH - hNo;
-          return (
-            <g key={`${idx}-${i}`}>
-              <rect x={xBase} y={yYes} width={barW} height={hYes} rx="3" fill="url(#rev-yes)" stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" />
-              <rect x={xBase + barW + 1} y={yNo} width={barW} height={hNo} rx="3" fill="url(#rev-no)" stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" />
-            </g>
-          );
-        })}
-
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.15)" />
-        {xTickItems.map((t, i) => {
-          const anchor = i === 0 ? "start" : i === xTickItems.length - 1 ? "end" : "middle";
-          return (
-            <text key={`x-${t.idx}-${i}`} x={t.x} y={h - footerH + 12} textAnchor={anchor as any} fontSize="18" className="fill-zinc-200 font-mono">
-              {minuteIdxToClockLabel(t.idx)}
-            </text>
-          );
-        })}
-      </svg>
-
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-        <div className="flex items-center gap-3 text-[10px] font-mono">
-          <span className="text-zinc-500">peakAbs avg {num(stats.avgAll, 3)}</span>
-          <span className="text-zinc-500">median {num(stats.medAll, 3)}</span>
-          <span className="text-zinc-500">p90 {num(stats.p90All, 3)}</span>
-          <span className="text-emerald-300/90">avg(reverted) {num(stats.avgYes, 3)}</span>
-          <span className="text-rose-300/90">avg(not) {num(stats.avgNo, 3)}</span>
-          {stats.dist.map((d) => (
-            <span key={d.label} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-              {d.label}: <span className="text-emerald-300">{intn(d.yes)}</span>/<span className="text-rose-300">{intn(d.no)}</span>
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ScopeResearchSeriesChart({
-  rows,
-  parallelSeries = [],
-  title,
-  meta,
-  resultKey,
-  resultFormat,
-  accent = "emerald",
-  fullscreen = false,
-}: {
-  rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
-  parallelSeries?: Array<{
-    id: string;
-    label: string;
-    rows: Array<ScopeResearchBinRow | ScopeResearchThresholdRow>;
-  }>;
-  title: string;
-  meta?: string;
-  resultKey: ScopeResearchResultKey;
-  resultFormat: ScopeResearchValueFormat;
-  accent?: "emerald" | "amber";
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = fullscreen ? 2800 : 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 24;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 62;
-  const padBottom = 96;
-  const splitGap = 10;
-  const topH = h - padTop - padBottom - 72;
-  const barsTop = padTop + topH + splitGap;
-  const barsH = h - barsTop - padBottom;
-
-  if (!rows.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[360px]")}>
-        No scope data for selected settings.
-      </div>
-    );
-  }
-  if (rows.length < 3) {
-    return <ScopeResearchInsufficientState message="Need at least 3 populated groups for this graph." />;
-  }
-
-  const maxCount = Math.max(1, ...rows.map((row) => row.count));
-  const metricLabel = scopeResearchMetricLabel(resultKey);
-  const metricValues = rows.map((row) => scopeResearchMetricValue(row, resultKey));
-  const medianValues = rows.map((row) => row.median);
-  const winRateValues = rows.map((row) => row.winRate);
-  const parallelMetricValues = parallelSeries.flatMap((series) => series.rows.map((row) => scopeResearchMetricValue(row, resultKey)));
-  const supportValues =
-    resultKey === "winRate" ? [] : resultKey === "avgPnlUsd" || resultKey === "score" ? medianValues : winRateValues;
-  const minMetric = Math.min(...metricValues, ...(supportValues.length ? supportValues : []), ...(parallelMetricValues.length ? parallelMetricValues : [0]));
-  const maxMetric = Math.max(...metricValues, ...(supportValues.length ? supportValues : []), ...(parallelMetricValues.length ? parallelMetricValues : [0]));
-  const metricSpan = maxMetric - minMetric || 1;
-  const xAt = (index: number) =>
-    rows.length === 1 ? (padLeft + (w - padRight)) / 2 : padLeft + (index / (rows.length - 1)) * (w - padLeft - padRight);
-  const yMetric = (value: number) => padTop + (1 - (value - minMetric) / metricSpan) * topH;
-  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
-  const lineD = metricValues.map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yMetric(value).toFixed(2)}`).join(" ");
-  const medianD = medianValues
-    .map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yMetric(value).toFixed(2)}`)
-    .join(" ");
-  const winD = winRateValues
-    .map((value, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${(padTop + (1 - value) * topH).toFixed(2)}`)
-    .join(" ");
-  const areaD = `${lineD} L ${xAt(rows.length - 1).toFixed(2)} ${(padTop + topH).toFixed(2)} L ${xAt(0).toFixed(2)} ${(padTop + topH).toFixed(2)} Z`;
-  const accentStops =
-    accent === "amber"
-      ? {
-          strokeA: "rgba(251,191,36,0.95)",
-          strokeB: "rgba(245,158,11,0.9)",
-          fillA: "rgba(251,191,36,0.28)",
-          fillB: "rgba(251,191,36,0.02)",
-          bar: "rgba(245,158,11,0.7)",
-        }
-      : {
-          strokeA: "rgba(45,212,191,0.95)",
-          strokeB: "rgba(110,231,183,0.95)",
-          fillA: "rgba(16,185,129,0.3)",
-          fillB: "rgba(16,185,129,0.02)",
-          bar: "rgba(56,189,248,0.58)",
-        };
-  const parallelPalette = [
-    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
-    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
-    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
-    { stroke: SOFT_LOSS_SOLID, chip: SOFT_LOSS_CHIP },
-  ];
-
-  const showTooltip = (
-    event: React.MouseEvent<SVGElement>,
-    row: ScopeResearchBinRow | ScopeResearchThresholdRow,
-    seriesLabel?: string
-  ) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: seriesLabel ? `${seriesLabel} | ${row.label}` : row.label,
-      accent: accent === "amber" ? "amber" : "emerald",
-      lines: [
-        `${metricLabel} ${scopeResearchFormatValue(scopeResearchMetricValue(row, resultKey), resultFormat)}`,
-        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
-        `total ${scopeResearchFormatValue(row.total, resultFormat)}`,
-        `count ${intn(row.count)}`,
-        `win ${num(row.winRate * 100, 1)}%`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">{metricLabel}</span>
-        {resultKey !== "winRate" ? <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">median</span> : null}
-        {resultKey !== "totalPnlUsd" ? <span className="rounded-full border border-violet-500/15 bg-violet-500/8 px-2 py-0.5 text-violet-300/90">win</span> : null}
-        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
-        {parallelSeries.map((series, index) => (
-          <span
-            key={`parallel-chip-${series.id}`}
-            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
-            title={series.label}
-          >
-            {series.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <linearGradient id={`scope-line-${chartId}`} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor={accentStops.strokeA} />
-            <stop offset="100%" stopColor={accentStops.strokeB} />
-          </linearGradient>
-          <linearGradient id={`scope-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={accentStops.fillA} />
-            <stop offset="100%" stopColor={accentStops.fillB} />
-          </linearGradient>
-          <linearGradient id={`scope-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={accentStops.bar} />
-            <stop offset="100%" stopColor="rgba(15,23,42,0.18)" />
-          </linearGradient>
-          <filter id={`scope-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={topH} fill="rgba(8,15,26,0.45)" rx="14" />
-        <rect x={padLeft} y={barsTop} width={w - padLeft - padRight} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + topH - t * topH;
-          const value = minMetric + metricSpan * t;
-          return (
-            <g key={`metric-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(value, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={padTop + topH} y2={padTop + topH} stroke="rgba(255,255,255,0.12)" />
-        <path d={areaD} fill={`url(#scope-fill-${chartId})`} />
-        {resultKey !== "winRate" ? <path d={medianD} fill="none" stroke="rgba(244,244,245,0.35)" strokeWidth="1.2" strokeDasharray="5 5" /> : null}
-        {resultKey !== "totalPnlUsd" ? <path d={winD} fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.4" strokeDasharray="4 5" /> : null}
-        <path d={lineD} fill="none" stroke={`url(#scope-line-${chartId})`} strokeWidth="2.8" filter={`url(#scope-glow-${chartId})`} />
-        {parallelSeries.map((series, seriesIndex) => {
-          const color = parallelPalette[seriesIndex % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
-          const rowsByLabel = new Map(series.rows.map((row) => [row.label, row]));
-          const points = rows
-            .map((row, index) => {
-              const match = rowsByLabel.get(row.label);
-              return match ? { row: match, index } : null;
-            })
-            .filter(Boolean) as Array<{ row: ScopeResearchBinRow | ScopeResearchThresholdRow; index: number }>;
-          if (points.length < 2) return null;
-          const pathD = points
-            .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(point.index).toFixed(2)} ${yMetric(scopeResearchMetricValue(point.row, resultKey)).toFixed(2)}`)
-            .join(" ");
-          return (
-            <g key={`parallel-series-${series.id}`}>
-              <path d={pathD} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" opacity="0.95" />
-              {points.map((point) => (
-                <circle
-                  key={`parallel-point-${series.id}-${point.index}`}
-                  cx={xAt(point.index)}
-                  cy={yMetric(scopeResearchMetricValue(point.row, resultKey))}
-                  r="3.2"
-                  fill={color}
-                  onMouseMove={(event) => showTooltip(event, point.row, series.label)}
-                  onMouseEnter={(event) => showTooltip(event, point.row, series.label)}
-                />
-              ))}
-            </g>
-          );
-        })}
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const barW = Math.max(14, Math.min(34, (w - padLeft - padRight) / Math.max(1, rows.length) - 10));
-          const y = yBar(row.count);
-          return (
-            <g key={`${row.label}-${index}`}>
-              <rect
-                x={x - Math.max(20, barW)}
-                y={padTop}
-                width={Math.max(40, barW * 2)}
-                height={h - padTop - padBottom + 8}
-                fill="transparent"
-                onMouseMove={(event) => showTooltip(event, row)}
-                onMouseEnter={(event) => showTooltip(event, row)}
-              />
-              <rect
-                x={x - barW / 2}
-                y={y}
-                width={barW}
-                height={Math.max(3, barsTop + barsH - y)}
-                rx="5"
-                fill={`url(#scope-bars-${chartId})`}
-                stroke="rgba(125,211,252,0.35)"
-                strokeWidth="0.8"
-              />
-              <circle cx={x} cy={yMetric(scopeResearchMetricValue(row, resultKey))} r="4.2" fill={accentStops.strokeA} onMouseMove={(event) => showTooltip(event, row)} />
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const [line1, line2] = scopeResearchLabelLines(row.label);
-          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
-          return (
-            <g key={`tick-${row.label}`}>
-              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.2)" />
-              <text x={x} y={h - 26} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
-                <tspan x={x} dy="0">{line1}</tspan>
-                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchBoxChart({
-  rows,
-  title,
-  meta,
-  resultFormat,
-  fullscreen = false,
-}: {
-  rows: ScopeResearchBinRow[];
-  title: string;
-  meta?: string;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = fullscreen ? 2800 : 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 24;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 48;
-  const padBottom = 92;
-  if (!rows.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[360px]")}>
-        No box groups for selected settings.
-      </div>
-    );
-  }
-  if (rows.length < 3) {
-    return <ScopeResearchInsufficientState message="Need at least 3 populated boxes for `simple_box`." />;
-  }
-  const minY = Math.min(...rows.map((row) => row.lowerFence));
-  const maxY = Math.max(...rows.map((row) => row.upperFence));
-  const span = maxY - minY || 1;
-  const plotH = h - padTop - padBottom;
-  const xAt = (index: number) =>
-    rows.length === 1 ? (padLeft + (w - padRight)) / 2 : padLeft + (index / Math.max(1, rows.length - 1)) * (w - padLeft - padRight);
-  const yAt = (value: number) => padTop + (1 - (value - minY) / span) * plotH;
-  const boxWidth = Math.max(28, Math.min(56, (w - padLeft - padRight) / Math.max(1, rows.length) - 10));
-
-  const showTooltip = (event: React.MouseEvent<SVGElement>, row: ScopeResearchBinRow) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: row.label,
-      accent: "cyan",
-      lines: [
-        `avg ${scopeResearchFormatValue(row.avg, resultFormat)}`,
-        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
-        `q1 ${scopeResearchFormatValue(row.q1, resultFormat)}`,
-        `q3 ${scopeResearchFormatValue(row.q3, resultFormat)}`,
-        `min/max ${scopeResearchFormatValue(row.min, resultFormat)} / ${scopeResearchFormatValue(row.max, resultFormat)}`,
-        `count ${intn(row.count)}`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <filter id={`scope-box-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={plotH} fill="rgba(8,15,26,0.34)" rx="14" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + plotH - t * plotH;
-          const value = minY + span * t;
-          return (
-            <g key={`box-y-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(value, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const yMin = yAt(row.min);
-          const yMax = yAt(row.max);
-          const yQ1 = yAt(row.q1);
-          const yMedian = yAt(row.median);
-          const yQ3 = yAt(row.q3);
-          const yLow = yAt(row.lowerFence);
-          const yHigh = yAt(row.upperFence);
-          return (
-            <g key={`${row.label}-${index}`}>
-              <rect
-                x={x - Math.max(24, boxWidth)}
-                y={padTop}
-                width={Math.max(48, boxWidth * 2)}
-                height={plotH}
-                fill="transparent"
-                onMouseEnter={(event) => showTooltip(event, row)}
-                onMouseMove={(event) => showTooltip(event, row)}
-              />
-              <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke="rgba(255,255,255,0.35)" />
-              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMax} y2={yMax} stroke={SOFT_LOSS_LINE} />
-              <line x1={x - boxWidth / 3} x2={x + boxWidth / 3} y1={yMin} y2={yMin} stroke={SOFT_LOSS_LINE} />
-              <rect
-                x={x - boxWidth / 2}
-                y={yQ3}
-                width={boxWidth}
-                height={Math.max(3, yQ1 - yQ3)}
-                rx="6"
-                fill="rgba(34,211,238,0.16)"
-                stroke="rgba(34,211,238,0.75)"
-                filter={`url(#scope-box-glow-${chartId})`}
-              />
-              <line x1={x - boxWidth / 2} x2={x + boxWidth / 2} y1={yMedian} y2={yMedian} stroke="rgba(110,231,183,0.95)" strokeWidth="2" />
-              <circle cx={x} cy={yAt(row.avg)} r="4.2" fill="rgba(250,204,21,0.92)" onMouseMove={(event) => showTooltip(event, row)} />
-              <text x={x} y={padTop - 8} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
-                {intn(row.count)}
-              </text>
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={h - padBottom} y2={h - padBottom} stroke="rgba(255,255,255,0.12)" />
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const [line1, line2] = scopeResearchLabelLines(row.label);
-          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
-          return (
-            <g key={`box-tick-${row.label}`}>
-              <line x1={x} x2={x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.2)" />
-              <text x={x} y={h - 26} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
-                <tspan x={x} dy="0">{line1}</tspan>
-                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchDistributionChart({
-  points,
-  title,
-  meta,
-  resultFormat,
-  fullscreen = false,
-}: {
-  points: ScopeResearchPoint[];
-  title: string;
-  meta?: string;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 24;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 60;
-  const padBottom = 80;
-  const values = points.map((point) => point.result).filter(Number.isFinite);
-  const edges = scopeResearchEdges(values, Math.min(24, Math.max(8, Math.round(Math.sqrt(values.length)))));
-  const bins =
-    edges.length < 2
-      ? []
-      : Array.from({ length: edges.length - 1 }, (_, index) => {
-          const from = edges[index] ?? 0;
-          const to = edges[index + 1] ?? 0;
-          const items = points.filter((point) =>
-            index === edges.length - 2 ? point.result >= from && point.result <= to : point.result >= from && point.result < to
-          );
-          return {
-            label: scopeResearchRangeLabel(from, to, resultFormat),
-            from,
-            to,
-            count: items.length,
-            positive: to >= 0,
-          };
-        }).filter((bin) => bin.count > 0);
-
-  if (!bins.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-        No distribution data for selected settings.
-      </div>
-    );
-  }
-  if (bins.length < 3) {
-    return <ScopeResearchInsufficientState message="Need at least 3 populated bars for `distribution`." />;
-  }
-
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const maxCount = Math.max(1, ...bins.map((bin) => bin.count));
-  const minValue = edges[0] ?? 0;
-  const maxValue = edges[edges.length - 1] ?? 1;
-  const meanValue = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-  const barW = Math.max(10, Math.min(58, plotW / bins.length - 8));
-  const xAt = (index: number) => padLeft + ((index + 0.5) / bins.length) * plotW;
-  const yCount = (value: number) => padTop + plotH - (value / maxCount) * plotH;
-  const meanX = padLeft + ((meanValue - minValue) / (maxValue - minValue || 1)) * plotW;
-
-  const showTooltip = (
-    event: React.MouseEvent<SVGElement>,
-    bin: { label: string; count: number; from: number; to: number; positive: boolean }
-  ) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: bin.label,
-      accent: "fuchsia",
-      lines: [
-        `count ${intn(bin.count)}`,
-        `from ${scopeResearchFormatValue(bin.from, resultFormat)}`,
-        `to ${scopeResearchFormatValue(bin.to, resultFormat)}`,
-        bin.positive ? "positive bucket" : "negative bucket",
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">positive</span>
-        <span className="rounded-full border border-rose-500/15 bg-rose-500/8 px-2 py-0.5 text-rose-300/90">negative</span>
-        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">mean</span>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <linearGradient id={`scope-dist-pos-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(16,185,129,0.78)" />
-            <stop offset="100%" stopColor="rgba(16,185,129,0.14)" />
-          </linearGradient>
-          <linearGradient id={`scope-dist-neg-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(244,63,94,0.78)" />
-            <stop offset="100%" stopColor="rgba(244,63,94,0.14)" />
-          </linearGradient>
-        </defs>
-        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + plotH - t * plotH;
-          return (
-            <g key={`dist-grid-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {intn(Math.round(maxCount * t))}
-              </text>
-            </g>
-          );
-        })}
-        {bins.map((bin, index) => {
-          const x = xAt(index);
-          const y = yCount(bin.count);
-          return (
-            <g key={`dist-bar-${bin.label}-${index}`}>
-              <rect
-                x={x - Math.max(18, barW)}
-                y={padTop}
-                width={Math.max(36, barW * 2)}
-                height={plotH}
-                fill="transparent"
-                onMouseEnter={(event) => showTooltip(event, bin)}
-                onMouseMove={(event) => showTooltip(event, bin)}
-              />
-              <rect
-                x={x - barW / 2}
-                y={y}
-                width={barW}
-                height={Math.max(3, padTop + plotH - y)}
-                rx="8"
-                fill={bin.positive ? `url(#scope-dist-pos-${chartId})` : `url(#scope-dist-neg-${chartId})`}
-                stroke={bin.positive ? "rgba(16,185,129,0.32)" : "rgba(244,63,94,0.32)"}
-              />
-            </g>
-          );
-        })}
-        <line x1={meanX} x2={meanX} y1={padTop} y2={padTop + plotH} stroke="rgba(244,244,245,0.55)" strokeDasharray="5 5" />
-        <line x1={padLeft} x2={w - padRight} y1={padTop + plotH} y2={padTop + plotH} stroke="rgba(255,255,255,0.12)" />
-        {bins.map((bin, index) => {
-          const x = xAt(index);
-          const [line1, line2] = scopeResearchLabelLines(bin.label);
-          const textAnchor = index === 0 ? "start" : index === bins.length - 1 ? "end" : "middle";
-          return (
-            <g key={`dist-tick-${bin.label}`}>
-              <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 24} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
-                <tspan x={x} dy="0">{line1}</tspan>
-                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchViolinChart({
-  rows,
-  title,
-  meta,
-  resultFormat,
-  fullscreen = false,
-}: {
-  rows: ScopeResearchBinRow[];
-  title: string;
-  meta?: string;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 24;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 60;
-  const padBottom = 92;
-  const barsH = 60;
-  const plotH = h - padTop - padBottom - barsH;
-  const barsTop = padTop + plotH + 12;
-  if (!rows.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-        No violin groups for selected settings.
-      </div>
-    );
-  }
-  if (rows.length < 3) {
-    return <ScopeResearchInsufficientState message="Need at least 3 populated violins for `beauty_violin`." />;
-  }
-  const minY = Math.min(...rows.map((row) => row.min));
-  const maxY = Math.max(...rows.map((row) => row.max));
-  const spanY = maxY - minY || 1;
-  const maxCount = Math.max(1, ...rows.map((row) => row.count));
-  const plotW = w - padLeft - padRight;
-  const xAt = (index: number) =>
-    rows.length === 1 ? padLeft + plotW / 2 : padLeft + (index / Math.max(1, rows.length - 1)) * plotW;
-  const yAt = (value: number) => padTop + plotH - ((value - minY) / spanY) * plotH;
-  const barW = Math.max(18, Math.min(44, plotW / Math.max(1, rows.length) - 10));
-  const violinHalfW = Math.max(22, Math.min(54, plotW / Math.max(1, rows.length) * 0.28));
-
-  const buildViolinPath = (row: ScopeResearchBinRow, centerX: number) => {
-    if (row.values.length < 2 || row.min === row.max) {
-      const y = yAt(row.median);
-      return `M ${(centerX - 8).toFixed(1)} ${y.toFixed(1)} L ${(centerX + 8).toFixed(1)} ${y.toFixed(1)}`;
-    }
-    const slices = 14;
-    const step = (row.max - row.min) / slices || 1;
-    const counts = Array.from({ length: slices }, (_, index) => {
-      const y0 = row.min + step * index;
-      const y1 = index === slices - 1 ? row.max + 1e-9 : y0 + step;
-      return row.values.filter((value) => value >= y0 && value < y1).length;
-    });
-    const maxSlice = Math.max(1, ...counts);
-    const points = counts.map((count, index) => {
-      const yValue = row.min + step * (index + 0.5);
-      const width = Math.max(4, (count / maxSlice) * violinHalfW);
-      return { y: yAt(yValue), width };
-    });
-    const right = points.map((point, index) => `${index === 0 ? "M" : "L"} ${(centerX + point.width).toFixed(1)} ${point.y.toFixed(1)}`);
-    const left = [...points]
-      .reverse()
-      .map((point) => `L ${(centerX - point.width).toFixed(1)} ${point.y.toFixed(1)}`);
-    return [...right, ...left, "Z"].join(" ");
-  };
-
-  const showTooltip = (event: React.MouseEvent<SVGElement>, row: ScopeResearchBinRow) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: row.label,
-      accent: "fuchsia",
-      lines: [
-        `avg ${scopeResearchFormatValue(row.avg, resultFormat)}`,
-        `median ${scopeResearchFormatValue(row.median, resultFormat)}`,
-        `q1/q3 ${scopeResearchFormatValue(row.q1, resultFormat)} / ${scopeResearchFormatValue(row.q3, resultFormat)}`,
-        `range ${scopeResearchFormatValue(row.min, resultFormat)} .. ${scopeResearchFormatValue(row.max, resultFormat)}`,
-        `count ${intn(row.count)}`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <span className="rounded-full border border-fuchsia-500/15 bg-fuchsia-500/8 px-2 py-0.5 text-fuchsia-300/90">violin</span>
-        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">meanline</span>
-        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <linearGradient id={`scope-violin-fill-${chartId}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="rgba(217,70,239,0.24)" />
-            <stop offset="100%" stopColor="rgba(34,211,238,0.18)" />
-          </linearGradient>
-          <linearGradient id={`scope-violin-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(56,189,248,0.74)" />
-            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
-          </linearGradient>
-          <filter id={`scope-violin-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
-        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + plotH - t * plotH;
-          return (
-            <g key={`violin-grid-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const barHeight = Math.max(4, (row.count / maxCount) * barsH);
-          const boxTop = yAt(row.q3);
-          const boxBottom = yAt(row.q1);
-          return (
-            <g key={`violin-${row.label}-${index}`}>
-              <rect
-                x={x - Math.max(28, violinHalfW + 10)}
-                y={padTop}
-                width={Math.max(56, (violinHalfW + 10) * 2)}
-                height={barsTop + barsH - padTop}
-                fill="transparent"
-                onMouseEnter={(event) => showTooltip(event, row)}
-                onMouseMove={(event) => showTooltip(event, row)}
-              />
-              <path d={buildViolinPath(row, x)} fill={`url(#scope-violin-fill-${chartId})`} stroke="rgba(217,70,239,0.65)" strokeWidth="1.2" filter={`url(#scope-violin-glow-${chartId})`} />
-              <line x1={x} x2={x} y1={yAt(row.min)} y2={yAt(row.max)} stroke="rgba(255,255,255,0.25)" />
-              <rect x={x - barW / 2} y={boxTop} width={barW} height={Math.max(4, boxBottom - boxTop)} rx="6" fill="rgba(34,211,238,0.14)" stroke="rgba(34,211,238,0.65)" />
-              <line x1={x - barW / 2} x2={x + barW / 2} y1={yAt(row.median)} y2={yAt(row.median)} stroke="rgba(244,244,245,0.85)" strokeWidth="1.8" />
-              <line x1={x - barW / 2} x2={x + barW / 2} y1={yAt(row.avg)} y2={yAt(row.avg)} stroke="rgba(110,231,183,0.95)" strokeWidth="2.1" />
-              <circle cx={x} cy={yAt(row.avg)} r="3.4" fill="rgba(250,204,21,0.94)" />
-              <rect
-                x={x - barW / 2}
-                y={barsTop + barsH - barHeight}
-                width={barW}
-                height={barHeight}
-                rx="7"
-                fill={`url(#scope-violin-bars-${chartId})`}
-                stroke="rgba(56,189,248,0.3)"
-              />
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {rows.map((row, index) => {
-          const x = xAt(index);
-          const [line1, line2] = scopeResearchLabelLines(row.label);
-          const textAnchor = index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle";
-          return (
-            <g key={`violin-tick-${row.label}`}>
-              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 24} textAnchor={textAnchor} fontSize="10" className="fill-zinc-500 font-mono">
-                <tspan x={x} dy="0">{line1}</tspan>
-                {line2 ? <tspan x={x} dy="13">{line2}</tspan> : null}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchScatterByDateChart({
-  points,
-  parallelSeries = [],
-  title,
-  meta,
-  parameterFormat,
-  resultFormat,
-  fullscreen = false,
-}: {
-  points: ScopeResearchPoint[];
-  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
-  title: string;
-  meta?: string;
-  parameterFormat: ScopeResearchValueFormat;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 20;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 60;
-  const padBottom = 72;
-  if (!points.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-        No scatter data for selected settings.
-      </div>
-    );
-  }
-  if (points.length < 3 || new Set(points.map((point) => point.dateKey)).size < 2) {
-    return <ScopeResearchInsufficientState message="Need at least 3 points across 2 dates for `scatter_by_date`." />;
-  }
-  const sorted = [...points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
-  const plotW = w - padLeft - padRight;
-  const plotH = h - padTop - padBottom;
-  const minY = Math.min(...sorted.map((point) => point.result));
-  const maxY = Math.max(...sorted.map((point) => point.result));
-  const spanY = maxY - minY || 1;
-  const meanValue = sorted.reduce((sum, point) => sum + point.result, 0) / Math.max(1, sorted.length);
-  const uniqueDates = Array.from(new Set(sorted.map((point) => point.dateKey)));
-  const xAt = (index: number) => padLeft + (index / Math.max(1, sorted.length - 1)) * plotW;
-  const yAt = (value: number) => padTop + plotH - (value - minY) / spanY * plotH;
-  const dateTicks = uniqueDates.filter((_, index) => {
-    if (uniqueDates.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(uniqueDates.length / 6));
-    return index === 0 || index === uniqueDates.length - 1 || index % step === 0;
-  });
-  const maxParamAbs = Math.max(1, ...sorted.map((row) => Math.abs(row.parameter)));
-  const parallelPalette = [
-    { stroke: "rgba(56,189,248,0.95)", fill: "rgba(56,189,248,0.9)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
-    { stroke: "rgba(217,70,239,0.95)", fill: "rgba(217,70,239,0.9)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
-    { stroke: "rgba(251,191,36,0.95)", fill: "rgba(251,191,36,0.9)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
-  ];
-
-  const showTooltip = (event: React.MouseEvent<SVGElement>, point: ScopeResearchPoint) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: point.dateKey,
-      accent: "cyan",
-      lines: [
-        `param ${scopeResearchFormatValue(point.parameter, parameterFormat)}`,
-        `result ${scopeResearchFormatValue(point.result, resultFormat)}`,
-        `ticker ${point.row.ticker || "-"}`,
-        `bench ${point.row.benchTicker || "-"}`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <span className="rounded-full border border-cyan-500/15 bg-cyan-500/8 px-2 py-0.5 text-cyan-300/90">result</span>
-        <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-400">mean</span>
-        <span className="rounded-full border border-amber-500/15 bg-amber-500/8 px-2 py-0.5 text-amber-300/90">param glow</span>
-        {parallelSeries.map((series, index) => (
-          <span
-            key={`scatter-chip-${series.id}`}
-            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
-            title={series.label}
-          >
-            {series.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <filter id={`scope-scatter-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill="rgba(8,15,26,0.36)" rx="16" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + plotH - t * plotH;
-          return (
-            <g key={`scatter-grid-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={yAt(meanValue)} y2={yAt(meanValue)} stroke="rgba(244,244,245,0.45)" strokeDasharray="5 5" />
-        {sorted.map((point, index) => {
-          const x = xAt(index);
-          const y = yAt(point.result);
-          const intensity = Math.min(1, Math.max(0.12, Math.abs(point.parameter) / maxParamAbs));
-          return (
-            <g key={`scatter-${point.dateKey}-${index}`}>
-              <circle
-                cx={x}
-                cy={y}
-                r={9}
-                fill="transparent"
-                onMouseEnter={(event) => showTooltip(event, point)}
-                onMouseMove={(event) => showTooltip(event, point)}
-              />
-              <circle cx={x} cy={y} r={7} fill={`rgba(250,204,21,${0.08 + intensity * 0.18})`} filter={`url(#scope-scatter-glow-${chartId})`} />
-              <circle cx={x} cy={y} r={3.4} fill="rgba(34,211,238,0.92)" stroke="rgba(255,255,255,0.18)" />
-            </g>
-          );
-        })}
-        {parallelSeries.map((series, seriesIndex) => {
-          const color = parallelPalette[seriesIndex % parallelPalette.length];
-          const seriesPoints = [...series.points].sort((a, b) => a.sortKey - b.sortKey || a.parameter - b.parameter);
-          return seriesPoints.map((point, index) => {
-            const baseIndex = sorted.findIndex((candidate) => candidate === point);
-            if (baseIndex < 0) return null;
-            const x = xAt(baseIndex);
-            const y = yAt(point.result);
-            return (
-              <g key={`scatter-parallel-${series.id}-${index}`}>
-                <circle cx={x} cy={y} r={8} fill="transparent" onMouseEnter={(event) => showTooltip(event, point)} onMouseMove={(event) => showTooltip(event, point)} />
-                <circle cx={x} cy={y} r={5.2} fill={color.fill} opacity="0.16" />
-                <circle cx={x} cy={y} r={2.6} fill={color.fill} stroke="rgba(255,255,255,0.18)" />
-              </g>
-            );
-          });
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={padTop + plotH} y2={padTop + plotH} stroke="rgba(255,255,255,0.12)" />
-        {dateTicks.map((dateKey) => {
-          const index = sorted.findIndex((candidate) => candidate.dateKey === dateKey);
-          const x = xAt(index);
-          return (
-            <g key={`scatter-tick-${dateKey}-${index}`}>
-              <line x1={x} x2={x} y1={padTop + plotH} y2={padTop + plotH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text
-                x={x}
-                y={h - 16}
-                textAnchor="middle"
-                fontSize="11"
-                className="fill-zinc-500 font-mono"
-              >
-                {dateKey.slice(5)}
-              </text>
-            </g>
-          );
-        })}
-        <text x={padLeft + 8} y={22} fontSize="11" className="fill-zinc-500 font-mono">
-          by date | {scopeResearchFormatValue(sorted[0]?.parameter ?? 0, parameterFormat)} ..{" "}
-          {scopeResearchFormatValue(sorted[sorted.length - 1]?.parameter ?? 0, parameterFormat)}
-        </text>
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchCumsumChart({
-  points,
-  parallelSeries = [],
-  title,
-  meta,
-  resultFormat,
-  fullscreen = false,
-}: {
-  points: ScopeResearchPoint[];
-  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
-  title: string;
-  meta?: string;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 20;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 60;
-  const padBottom = 72;
-  if (!points.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-        No cumulative data for selected settings.
-      </div>
-    );
-  }
-  const daily = scopeResearchDailySeries(points);
-  if (daily.length < 2) {
-    return <ScopeResearchInsufficientState message="Need at least 2 points for `cumsum_chart`." detail="Widen range or reduce `Min N`." />;
-  }
-  const series = daily;
-  const plotW = w - padLeft - padRight;
-  const topH = h - padTop - padBottom - 68;
-  const barsTop = padTop + topH + 12;
-  const barsH = 56;
-  const minY = Math.min(0, ...series.map((point) => point.cumulative));
-  const maxY = Math.max(0, ...series.map((point) => point.cumulative));
-  const spanY = maxY - minY || 1;
-  const maxCount = Math.max(1, ...series.map((point) => point.count));
-  const parallelDailySeries = parallelSeries
-    .map((seriesItem) => ({
-      id: seriesItem.id,
-      label: seriesItem.label,
-      series: scopeResearchDailySeries(seriesItem.points),
-    }))
-    .filter((seriesItem) => seriesItem.series.length >= 1);
-  const parallelPalette = [
-    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
-    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
-    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
-  ];
-  const xAt = (index: number) => padLeft + (index / Math.max(1, series.length - 1)) * plotW;
-  const yAt = (value: number) => padTop + topH - (value - minY) / spanY * topH;
-  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
-  const lineD = series.map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`).join(" ");
-  const areaD = `${lineD} L ${xAt(series.length - 1).toFixed(1)} ${(padTop + topH).toFixed(1)} L ${xAt(0).toFixed(1)} ${(padTop + topH).toFixed(1)} Z`;
-  const ticks = series.filter((_, index) => {
-    if (series.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(series.length / 6));
-    return index === 0 || index === series.length - 1 || index % step === 0;
-  });
-  const showTooltip = (
-    event: React.MouseEvent<SVGElement>,
-    point: (typeof series)[number]
-  ) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: point.dateKey,
-      accent: "emerald",
-      lines: [
-        `day pnl ${scopeResearchFormatValue(point.total, resultFormat)}`,
-        `equity ${scopeResearchFormatValue(point.cumulative, resultFormat)}`,
-        `count ${intn(point.count)}`,
-        `avg/trade ${scopeResearchFormatValue(point.count ? point.total / point.count : 0, resultFormat)}`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        <span className="rounded-full border border-emerald-500/15 bg-emerald-500/8 px-2 py-0.5 text-emerald-300/90">equity</span>
-        <span className="rounded-full border border-sky-500/15 bg-sky-500/8 px-2 py-0.5 text-sky-300/90">count</span>
-        {parallelDailySeries.map((seriesItem, index) => (
-          <span
-            key={`cumsum-chip-${seriesItem.id}`}
-            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
-            title={seriesItem.label}
-          >
-            {seriesItem.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <linearGradient id={`scope-cumsum-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(52,211,153,0.24)" />
-            <stop offset="100%" stopColor="rgba(16,185,129,0.02)" />
-          </linearGradient>
-          <linearGradient id={`scope-cumsum-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(56,189,248,0.72)" />
-            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
-          </linearGradient>
-          <filter id={`scope-cumsum-glow-${chartId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x={padLeft} y={padTop} width={plotW} height={topH} fill="rgba(8,15,26,0.36)" rx="16" />
-        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + topH - t * topH;
-          return (
-            <g key={`cumsum-grid-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        <path d={areaD} fill={`url(#scope-cumsum-fill-${chartId})`} />
-        <path d={lineD} fill="none" stroke="rgba(52,211,153,0.95)" strokeWidth="3" filter={`url(#scope-cumsum-glow-${chartId})`} />
-        {parallelDailySeries.map((seriesItem, index) => {
-          const color = parallelPalette[index % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
-          const byDate = new Map(seriesItem.series.map((item) => [item.dateKey, item]));
-          const aligned = series
-            .map((basePoint) => {
-              const match = byDate.get(basePoint.dateKey);
-              return match ? { ...match, baseIndex: basePoint.index } : null;
-            })
-            .filter(Boolean) as Array<(typeof seriesItem.series)[number] & { baseIndex: number }>;
-          if (!aligned.length) return null;
-          const path = aligned
-            .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xAt(point.baseIndex).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`)
-            .join(" ");
-          return (
-            <g key={`cumsum-parallel-${seriesItem.id}`}>
-              <path d={path} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" />
-              {aligned.map((point) => (
-                <circle key={`cumsum-parallel-point-${seriesItem.id}-${point.baseIndex}`} cx={xAt(point.baseIndex)} cy={yAt(point.cumulative)} r={2.8} fill={color} />
-              ))}
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={yAt(0)} y2={yAt(0)} stroke="rgba(255,255,255,0.14)" />
-        {series.map((point) => (
-          <g key={`cumsum-point-${point.dateKey}-${point.index}`}>
-            <circle
-              cx={xAt(point.index)}
-              cy={yAt(point.cumulative)}
-              r={8}
-              fill="transparent"
-              onMouseEnter={(event) => showTooltip(event, point)}
-              onMouseMove={(event) => showTooltip(event, point)}
-            />
-            <circle cx={xAt(point.index)} cy={yAt(point.cumulative)} r={3.6} fill="rgba(110,231,183,0.96)" />
-            <rect
-              x={xAt(point.index) - 10}
-              y={yBar(point.count)}
-              width={20}
-              height={Math.max(4, barsTop + barsH - yBar(point.count))}
-              rx="6"
-              fill={`url(#scope-cumsum-bars-${chartId})`}
-              stroke="rgba(56,189,248,0.24)"
-            />
-          </g>
-        ))}
-        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {ticks.map((point) => {
-          const x = xAt(point.index);
-          return (
-            <g key={`cumsum-tick-${point.dateKey}-${point.index}`}>
-              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 16} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
-                {point.dateKey.slice(5)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function ScopeResearchTradePerformanceChart({
-  points,
-  parallelSeries = [],
-  title,
-  meta,
-  resultFormat,
-  fullscreen = false,
-}: {
-  points: ScopeResearchPoint[];
-  parallelSeries?: Array<{ id: string; label: string; points: ScopeResearchPoint[] }>;
-  title: string;
-  meta?: string;
-  resultFormat: ScopeResearchValueFormat;
-  fullscreen?: boolean;
-}) {
-  const [tooltip, setTooltip] = useState<ScopeChartTooltipData | null>(null);
-  const chartId = useId().replace(/:/g, "");
-  const w = 1100;
-  const h = fullscreen ? 820 : 520;
-  const padLeft = fullscreen ? 10 : 20;
-  const padRight = fullscreen ? 54 : 82;
-  const padTop = 88;
-  const padBottom = 72;
-  if (!points.length) {
-    return (
-      <div className={clsx("w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-        No performance data for selected settings.
-      </div>
-    );
-  }
-  if (points.length < 1 || new Set(points.map((point) => point.dateKey)).size < 1) {
-    return <ScopeResearchInsufficientState message="Need at least 1 date for `trade_performance`." detail="Widen range or lower extra filters." />;
-  }
-
-  const series = scopeResearchDailySeries(points);
-  const summary = scopeResearchSummarize(points.map((point) => point.result));
-  const parallelDailySeries = parallelSeries
-    .map((seriesItem) => ({
-      id: seriesItem.id,
-      label: seriesItem.label,
-      series: scopeResearchDailySeries(seriesItem.points),
-    }))
-    .filter((seriesItem) => seriesItem.series.length >= 1);
-  const bestDay = [...series].sort((a, b) => b.total - a.total)[0] ?? null;
-  const worstDay = [...series].sort((a, b) => a.total - b.total)[0] ?? null;
-  const plotW = w - padLeft - padRight;
-  const topH = h - padTop - padBottom - 72;
-  const barsTop = padTop + topH + 12;
-  const barsH = 56;
-  const minY = Math.min(0, ...series.map((row) => row.cumulative));
-  const maxY = Math.max(0, ...series.map((row) => row.cumulative));
-  const spanY = maxY - minY || 1;
-  const maxCount = Math.max(1, ...series.map((row) => row.count));
-  const parallelPalette = [
-    { stroke: "rgba(56,189,248,0.95)", chip: "border-sky-500/15 bg-sky-500/8 text-sky-300/90" },
-    { stroke: "rgba(217,70,239,0.95)", chip: "border-fuchsia-500/15 bg-fuchsia-500/8 text-fuchsia-300/90" },
-    { stroke: "rgba(251,191,36,0.95)", chip: "border-amber-500/15 bg-amber-500/8 text-amber-300/90" },
-  ];
-  const xAt = (index: number) => padLeft + (index / Math.max(1, series.length - 1)) * plotW;
-  const yAt = (value: number) => padTop + topH - ((value - minY) / spanY) * topH;
-  const yBar = (value: number) => barsTop + barsH - (value / maxCount) * barsH;
-  const lineD = series.map((row, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(1)} ${yAt(row.cumulative).toFixed(1)}`).join(" ");
-  const areaD = `${lineD} L ${xAt(series.length - 1).toFixed(1)} ${(padTop + topH).toFixed(1)} L ${xAt(0).toFixed(1)} ${(padTop + topH).toFixed(1)} Z`;
-  const ticks = series.filter((_, index) => {
-    if (series.length <= 6) return true;
-    const step = Math.max(1, Math.ceil(series.length / 6));
-    return index === 0 || index === series.length - 1 || index % step === 0;
-  });
-
-  const showTooltip = (event: React.MouseEvent<SVGElement>, point: (typeof series)[number]) => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      title: point.dateKey,
-      accent: "emerald",
-      lines: [
-        `day pnl ${scopeResearchFormatValue(point.total, resultFormat)}`,
-        `equity ${scopeResearchFormatValue(point.cumulative, resultFormat)}`,
-        `count ${intn(point.count)}`,
-        `avg/trade ${scopeResearchFormatValue(point.count ? point.total / point.count : 0, resultFormat)}`,
-      ],
-    });
-  };
-
-  return (
-    <div className={clsx("relative w-full rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 overflow-hidden", fullscreen ? "h-full min-h-0" : "h-[520px]")}>
-      {renderScopeChartTooltip(tooltip)}
-      <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="text-[9px] uppercase tracking-[0.18em] font-mono text-zinc-500">{title}</div>
-        <div className="text-[10px] font-mono text-zinc-600 truncate ml-4">{meta}</div>
-      </div>
-      <div className="absolute top-7 left-3 right-3 z-10 grid grid-cols-2 xl:grid-cols-4 gap-2">
-        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Trades</div>
-          <div className="mt-1 text-[16px] font-mono text-zinc-100">{intn(summary.count)}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Total</div>
-          <div className="mt-1 text-[16px] font-mono text-emerald-300">{scopeResearchFormatValue(summary.total, resultFormat)}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Best Day</div>
-          <div className="mt-1 text-[14px] font-mono text-cyan-300 truncate">{bestDay ? `${bestDay.dateKey.slice(5)}  ${scopeResearchFormatValue(bestDay.total, resultFormat)}` : "-"}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-black/25 px-3 py-2">
-          <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">Worst Day</div>
-          <div className="mt-1 text-[14px] font-mono text-rose-300 truncate">{worstDay ? `${worstDay.dateKey.slice(5)}  ${scopeResearchFormatValue(worstDay.total, resultFormat)}` : "-"}</div>
-        </div>
-      </div>
-      <div className="absolute top-[72px] left-3 z-10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-        {parallelDailySeries.map((seriesItem, index) => (
-          <span
-            key={`performance-chip-${seriesItem.id}`}
-            className={clsx("rounded-full border px-2 py-0.5 max-w-[180px] truncate", parallelPalette[index % parallelPalette.length]?.chip)}
-            title={seriesItem.label}
-          >
-            {seriesItem.label}
-          </span>
-        ))}
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full" onMouseLeave={() => setTooltip(null)}>
-        <defs>
-          <linearGradient id={`scope-performance-fill-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(52,211,153,0.24)" />
-            <stop offset="100%" stopColor="rgba(16,185,129,0.03)" />
-          </linearGradient>
-          <linearGradient id={`scope-performance-bars-${chartId}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(56,189,248,0.72)" />
-            <stop offset="100%" stopColor="rgba(14,165,233,0.14)" />
-          </linearGradient>
-        </defs>
-        <rect x={padLeft} y={padTop} width={plotW} height={topH} fill="rgba(8,15,26,0.36)" rx="16" />
-        <rect x={padLeft} y={barsTop} width={plotW} height={barsH} fill="rgba(8,15,26,0.28)" rx="14" />
-        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-          const y = padTop + topH - t * topH;
-          return (
-            <g key={`perf-grid-${t}`}>
-              <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeDasharray="2 5" />
-              <text x={w - 6} y={y - 4} textAnchor="end" fontSize="11" className="fill-zinc-500 font-mono">
-                {scopeResearchFormatValue(minY + spanY * t, resultFormat)}
-              </text>
-            </g>
-          );
-        })}
-        <path d={areaD} fill={`url(#scope-performance-fill-${chartId})`} />
-        <path d={lineD} fill="none" stroke="rgba(52,211,153,0.94)" strokeWidth="3" />
-        {parallelDailySeries.map((seriesItem, index) => {
-          const color = parallelPalette[index % parallelPalette.length]?.stroke ?? "rgba(56,189,248,0.95)";
-          const byDate = new Map(seriesItem.series.map((item) => [item.dateKey, item]));
-          const aligned = series
-            .map((basePoint) => {
-              const match = byDate.get(basePoint.dateKey);
-              return match ? { ...match, baseIndex: basePoint.index } : null;
-            })
-            .filter(Boolean) as Array<(typeof seriesItem.series)[number] & { baseIndex: number }>;
-          if (!aligned.length) return null;
-          const path = aligned
-            .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xAt(point.baseIndex).toFixed(1)} ${yAt(point.cumulative).toFixed(1)}`)
-            .join(" ");
-          return <path key={`performance-parallel-${seriesItem.id}`} d={path} fill="none" stroke={color} strokeWidth="2.1" strokeDasharray="6 5" />;
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={yAt(0)} y2={yAt(0)} stroke="rgba(255,255,255,0.14)" />
-        {series.map((point) => {
-          const x = xAt(point.index);
-          const y = yAt(point.cumulative);
-          return (
-            <g key={`perf-point-${point.dateKey}`}>
-              <rect
-                x={x - 12}
-                y={padTop}
-                width={24}
-                height={barsTop + barsH - padTop}
-                fill="transparent"
-                onMouseEnter={(event) => showTooltip(event, point)}
-                onMouseMove={(event) => showTooltip(event, point)}
-              />
-              <circle cx={x} cy={y} r={3.8} fill="rgba(110,231,183,0.96)" />
-              <rect x={x - 10} y={yBar(point.count)} width={20} height={Math.max(4, barsTop + barsH - yBar(point.count))} rx="6" fill={`url(#scope-performance-bars-${chartId})`} stroke="rgba(56,189,248,0.24)" />
-            </g>
-          );
-        })}
-        <line x1={padLeft} x2={w - padRight} y1={barsTop + barsH} y2={barsTop + barsH} stroke="rgba(255,255,255,0.12)" />
-        {ticks.map((point) => {
-          const x = xAt(point.index);
-          return (
-            <g key={`perf-tick-${point.dateKey}`}>
-              <line x1={x} x2={x} y1={barsTop + barsH} y2={barsTop + barsH + 6} stroke="rgba(255,255,255,0.18)" />
-              <text x={x} y={h - 16} textAnchor="middle" fontSize="10" className="fill-zinc-500 font-mono">
-                {point.dateKey.slice(5)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function fmtHms(d: Date | null): string {
-  if (!d) return "";
-  const hh = d.getHours().toString().padStart(2, "0");
-  const mm = d.getMinutes().toString().padStart(2, "0");
-  const ss = d.getSeconds().toString().padStart(2, "0");
-  return `${hh}:${mm}:${ss}`;
-}
+  excludeScopeParameters: [
+    "startMetricAbs", "peakMetricAbs", "endMetricAbs",
+    "reversionAbs", "reversionPct",
+    "peakMinuteIdx", "timeToPeak",
+    "minHoldCandles",
+  ],
+  excludeScopeResults: ["benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs"],
+  defaultScopeAxes: { left: "rating", right: "spread" },
+});
 
 // =========================
 // MAIN PAGE
@@ -7132,218 +128,6 @@ type ArbitrageScannerProps = {
   navScannerHref?: string;
   navSonarHref?: string;
 };
-
-function ScannerAnalyticsLog({
-  rows,
-  priceMode,
-  context,
-}: {
-  rows: PaperArbClosedDto[];
-  priceMode: PaperArbPriceMode;
-  context: ScannerLogContext;
-}) {
-  const sorted = useMemo(() => [...rows].sort((a, b) => b.startMinuteIdx - a.startMinuteIdx), [rows]);
-
-  function fmtTime(tsNy: string | null | undefined): string {
-    if (!tsNy) return "—";
-    const m = tsNy.match(/(\d{2}:\d{2}:\d{2})/);
-    return m ? m[1] : tsNy;
-  }
-
-  function fmtDateLabel(dateValue: string | null | undefined): string {
-    if (!dateValue) return "—";
-    const m = String(dateValue).match(/(\d{4})-(\d{2})-(\d{2})/);
-    if (!m) return String(dateValue);
-    return `${m[2]}/${m[3]}`;
-  }
-
-  function fmtPct(value: number | null | undefined): string {
-    if (value == null || !Number.isFinite(value)) return "—";
-    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-  }
-
-  function buildDecisionContext(): string {
-    return [
-      `session=${context.session}`,
-      `band=${context.ruleBand}`,
-      `metric=${context.metric}`,
-      `close=${context.closeMode}`,
-      `price=${context.priceMode}`,
-      `pnl=${context.pnlMode}`,
-    ].join(" | ");
-  }
-
-  function buildGateContext(entryPct: number | null | undefined, exitPct: number | null | undefined): string {
-    return [
-      `start>=${context.startAbs.toFixed(2)}`,
-      `start<=${context.startAbsMax || "-"}`,
-      `end<=${context.endAbs.toFixed(2)}`,
-      `hold>=${context.minHoldCandles}m`,
-      `tick=${fmtPct(entryPct)}`,
-      `bench=${fmtPct(exitPct)}`,
-    ].join(" | ");
-  }
-
-  function buildScaleContext(entryCount: number, addsCount: number): string {
-    return [
-      `mode=${context.dilutionMode}`,
-      `step=${context.dilutionStep.toFixed(2)}`,
-      `max=${context.maxAdds}`,
-      `entries=${entryCount}`,
-      `adds=${addsCount}`,
-    ].join(" | ");
-  }
-
-  function buildExecContext(): string {
-    return [
-      `scope=${context.scopeMode}`,
-      `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
-      `offset=${context.offset}`,
-      `zap=${context.zapMode}`,
-    ].join(" | ");
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Scanner Analytics Log</span>
-          <span className="text-[10px] font-mono text-zinc-600">{rows.length} entries</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => downloadEpisodesCsv(rows, `scanner-analytics-log-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, context)}
-          className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
-        >
-          ↓ CSV
-        </button>
-      </div>
-
-      <style jsx global>{`
-        .scanner-analytics-log-table th, .scanner-analytics-log-table td { padding: 3px 5px !important; }
-      `}</style>
-      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <table className="scanner-analytics-log-table min-w-[2600px] w-full text-[10px] font-mono">
-          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
-            <tr>
-              <th className="text-left text-violet-400">Date</th>
-              <th className="text-left">Time</th>
-              <th className="text-left">AddTimes</th>
-              <th className="text-left">Addσ</th>
-              <th className="text-left">Event</th>
-              <th className="text-left">Ticker</th>
-              <th className="text-left">Bench</th>
-              <th className="text-left">Side</th>
-              <th className="text-left text-cyan-300">DecisionCtx</th>
-              <th className="text-right text-violet-400">σZap</th>
-              <th className="text-right text-violet-300">ZAPL</th>
-              <th className="text-right text-violet-300">ZAPS</th>
-              <th className="text-right">Tick%</th>
-              <th className="text-right">Bench%</th>
-              <th className="text-right text-sky-400">Corr</th>
-              <th className="text-right text-sky-400">Beta</th>
-              <th className="text-right text-sky-300">σHist</th>
-              <th className="text-right text-amber-400">Rating</th>
-              <th className="text-right text-amber-300">Total</th>
-              <th className="text-right">Hold</th>
-              <th className="text-right">MinHold</th>
-              <th className="text-left text-sky-300">GateCtx</th>
-              <th className="text-left text-fuchsia-300">ScaleCtx</th>
-              <th className="text-left text-emerald-300">ExecCtx</th>
-              <th className="text-left">Filters</th>
-              <th className="text-left">Reason</th>
-              <th className="text-right text-emerald-400">P&amp;L</th>
-              <th className="text-left">Peak</th>
-              <th className="text-left">End</th>
-              <th className="text-right">Entries</th>
-              <th className="text-right">Adds</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((r, i) => {
-              const isBidAsk = priceMode === "BidAsk";
-              const isLong = r.side === "Long";
-              // Entry: Long pays ask, Short receives bid
-              const entryPct = isBidAsk
-                ? (isLong ? (r.startAskPct ?? r.lstPrcLstClsPct) : (r.startBidPct ?? r.lstPrcLstClsPct))
-                : r.lstPrcLstClsPct;
-              // Exit: Long receives bid, Short pays ask
-              const exitPct = isBidAsk
-                ? (isLong ? (r.endBidPct ?? r.endLstPrcLstClsPct) : (r.endAskPct ?? r.endLstPrcLstClsPct))
-                : r.endLstPrcLstClsPct;
-              const holdMin = r.endMinuteIdx - r.startMinuteIdx;
-              const pnl = r.totalPnlUsd ?? null;
-              const entryCount = Number.isFinite(r.entryCount ?? NaN) ? Math.max(1, Math.trunc(r.entryCount as number)) : 1;
-              const addsCount = Math.max(0, entryCount - 1);
-              const addMinuteIdxs = (r.entryMinuteIdxs ?? []).slice(1);
-              const addMetricsAbs = (r.entryMetricAbs ?? r.entryMetrics ?? []).slice(1);
-              const addTimesLabel = addMinuteIdxs.length
-                ? addMinuteIdxs.map((idx) => minuteIdxToClockLabel(idx)).join(" | ")
-                : "—";
-              const addSigmasLabel = addMetricsAbs.length
-                ? addMetricsAbs.map((value) => value == null || !Number.isFinite(value) ? "-" : `${Number(value).toFixed(2)}σ`).join(" | ")
-                : "—";
-              const filtersLabel = `entries=${entryCount} | adds=${addsCount} | spread=${num(r.spreadBidPct, 4)}`;
-              const decisionCtx = buildDecisionContext();
-              const gateCtx = buildGateContext(entryPct, exitPct);
-              const scaleCtx = buildScaleContext(entryCount, addsCount);
-              const execCtx = buildExecContext();
-              return (
-                <tr key={r.episodeId ?? i} className="border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]">
-                  <td className="text-zinc-600 whitespace-nowrap">{fmtDateLabel(r.dateNy ?? r.date ?? r.tradeDateNy ?? "—")}</td>
-                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.startTsNy)}</td>
-                  <td className="text-zinc-500 max-w-[160px] truncate" title={addTimesLabel}>{addTimesLabel}</td>
-                  <td className="text-zinc-500 max-w-[180px] truncate" title={addSigmasLabel}>{addSigmasLabel}</td>
-                  <td>
-                    <span className={clsx(
-                      "inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider bg-zinc-500/20 text-zinc-300 border border-zinc-500/30"
-                    )}>EPISODE</span>
-                  </td>
-                  <td className="text-zinc-100 font-semibold">{r.ticker}</td>
-                  <td className="text-zinc-400">{r.benchTicker}</td>
-                  <td><SideBadge side={r.side} /></td>
-                  <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
-                  <td className="text-right tabular-nums text-violet-300">{num(r.startMetric, 2)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{num(r.peakMetric, 2)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{num(r.endMetric, 2)}</td>
-                  <td className={clsx("text-right tabular-nums", entryPct != null && entryPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(entryPct)}</td>
-                  <td className={clsx("text-right tabular-nums", exitPct != null && exitPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(exitPct)}</td>
-                  <td className="text-right tabular-nums text-sky-300">{num(r.corr, 2)}</td>
-                  <td className="text-right tabular-nums text-sky-300">{num(r.beta, 2)}</td>
-                  <td className="text-right tabular-nums text-sky-200">{num(r.sigma, 2)}</td>
-                  <td className="text-right tabular-nums text-amber-300">{r.rating != null ? r.rating.toFixed(1) : "—"}</td>
-                  <td className="text-right tabular-nums text-amber-200">{r.ratingTotal ?? "—"}</td>
-                  <td className="text-right tabular-nums text-zinc-400">{Number.isFinite(holdMin) ? `${holdMin}m` : "—"}</td>
-                  <td className="text-right tabular-nums text-zinc-500">{r.minHoldCandles ?? "—"}</td>
-                  <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
-                  <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
-                  <td className="text-emerald-200 max-w-[220px] truncate" title={execCtx}>{execCtx}</td>
-                  <td className="text-zinc-500 max-w-[160px] truncate">{filtersLabel}</td>
-                  <td className="text-zinc-500 max-w-[180px] truncate">{r.closeMode ?? "—"}</td>
-                  <td className={clsx(
-                    "text-right tabular-nums font-semibold",
-                    pnl != null && pnl > 0 ? "text-emerald-400" : pnl != null && pnl < 0 ? "text-rose-300" : "text-zinc-400"
-                  )}>{num(pnl, 2)}</td>
-                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.peakTsNy)}</td>
-                  <td className="text-zinc-500 whitespace-nowrap">{fmtTime(r.endTsNy)}</td>
-                  <td className="text-right tabular-nums text-zinc-500">{entryCount}</td>
-                  <td className="text-right tabular-nums text-sky-300">{addsCount}</td>
-                </tr>
-              );
-            })}
-            {!rows.length && (
-              <tr>
-                <td colSpan={31} className="px-4 py-10 text-center text-zinc-600">
-                  No analytics trades yet. Run Analytics for a date range.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
 export default function OpenDoorScanner({
   initialPrimaryPanel = "scanner",
@@ -7389,7 +173,469 @@ export default function OpenDoorScanner({
       return "scanner";
     }
   });
-  const [internalTab, setInternalTab] = useState<TabKey>("active");
+  // Shared with ArbitrageScanner and defined once in useScannerFilters. Destructured so the
+  // references throughout this file stay as they were. OpenDoor's own knobs (exit class, the
+  // three gates, up/down levels) stay declared below - they are this strategy's, not the shell's.
+  const scannerFilters = useScannerFilters({
+    strategy: STRATEGY,
+    streamAutomationConfigOverride,
+    startAbsDefault: 0,
+  });
+  const {
+    internalTab,
+    setInternalTab,
+    internalRuleBand,
+    setInternalRuleBand,
+    zapMode,
+    setZapMode,
+    showSharedMinMax,
+    setShowSharedMinMax,
+    days,
+    setDays,
+    dateMode,
+    setDateMode,
+    dateNy,
+    setDateNy,
+    dateFrom,
+    setDateFrom,
+    dateTo,
+    setDateTo,
+    rangePreset,
+    setRangePreset,
+    internalSession,
+    setInternalSession,
+    metric,
+    setMetric,
+    closeMode,
+    setCloseMode,
+    startAbs,
+    setStartAbs,
+    startAbsMax,
+    setStartAbsMax,
+    endAbs,
+    setEndAbs,
+    minHoldCandles,
+    setMinHoldCandles,
+    startCutoffTime,
+    setStartCutoffTime,
+    preStartTime,
+    setPreStartTime,
+    pnlMode,
+    setPnlMode,
+    priceMode,
+    setPriceMode,
+    sizingMode,
+    setSizingMode,
+    sizeValue,
+    setSizeValue,
+    dilutionMode,
+    setDilutionMode,
+    dilutionStep,
+    setDilutionStep,
+    maxAdds,
+    setMaxAdds,
+    addDelayMinutes,
+    setAddDelayMinutes,
+    includeEquityCurve,
+    setIncludeEquityCurve,
+    equityCurveMode,
+    setEquityCurveMode,
+    topN,
+    setTopN,
+    scopeMode,
+    setScopeMode,
+    offset,
+    setOffset,
+    qTicker,
+    setQTicker,
+    qSide,
+    setQSide,
+    streamSortKey,
+    setStreamSortKey,
+    activeRows,
+    setActiveRows,
+    episodesRows,
+    setEpisodesRows,
+    analytics,
+    setAnalytics,
+    loading,
+    setLoading,
+    err,
+    setErr,
+    updatedAt,
+    setUpdatedAt,
+    listMode,
+    setListMode,
+    showIgnore,
+    setShowIgnore,
+    showApply,
+    setShowApply,
+    showPin,
+    setShowPin,
+    showPresets,
+    setShowPresets,
+    scannerPresets,
+    setScannerPresets,
+    scannerPresetBusy,
+    setScannerPresetBusy,
+    scannerPresetSaveMode,
+    setScannerPresetSaveMode,
+    scannerPresetDraftName,
+    setScannerPresetDraftName,
+    scannerPresetStatus,
+    setScannerPresetStatus,
+    episodesSort,
+    setEpisodesSort,
+    analyticsSort,
+    setAnalyticsSort,
+    showAdvanced,
+    setShowAdvanced,
+    ratingMode,
+    setRatingMode,
+    topMode,
+    setTopMode,
+    topSigmaOn,
+    setTopSigmaOn,
+    topBenchOn,
+    setTopBenchOn,
+    topTimeOn,
+    setTopTimeOn,
+    ratingType,
+    setRatingType,
+    ratingRules,
+    setRatingRules,
+    ratingEnabledBands,
+    setRatingEnabledBands,
+    ignoreTickersText,
+    setIgnoreTickersText,
+    tickersText,
+    setTickersText,
+    benchTickersText,
+    setBenchTickersText,
+    sideFilter,
+    setSideFilter,
+    selExchanges,
+    setSelExchanges,
+    selCountries,
+    setSelCountries,
+    selSectors,
+    setSelSectors,
+    countryEnabled,
+    setCountryEnabled,
+    exchangeEnabled,
+    setExchangeEnabled,
+    sectorEnabled,
+    setSectorEnabled,
+    scopeBenchText,
+    setScopeBenchText,
+    imbExchsText,
+    setImbExchsText,
+    minTierBp,
+    setMinTierBp,
+    maxTierBp,
+    setMaxTierBp,
+    minCorr,
+    setMinCorr,
+    maxCorr,
+    setMaxCorr,
+    minBeta,
+    setMinBeta,
+    maxBeta,
+    setMaxBeta,
+    minSigma,
+    setMinSigma,
+    maxSigma,
+    setMaxSigma,
+    minMarketCapM,
+    setMinMarketCapM,
+    maxMarketCapM,
+    setMaxMarketCapM,
+    minRoundLot,
+    setMinRoundLot,
+    maxRoundLot,
+    setMaxRoundLot,
+    minAdv20,
+    setMinAdv20,
+    maxAdv20,
+    setMaxAdv20,
+    minAdv20NF,
+    setMinAdv20NF,
+    maxAdv20NF,
+    setMaxAdv20NF,
+    minAdv90,
+    setMinAdv90,
+    maxAdv90,
+    setMaxAdv90,
+    minAdv90NF,
+    setMinAdv90NF,
+    maxAdv90NF,
+    setMaxAdv90NF,
+    minPreMktVol,
+    setMinPreMktVol,
+    maxPreMktVol,
+    setMaxPreMktVol,
+    minPreMktVolNF,
+    setMinPreMktVolNF,
+    maxPreMktVolNF,
+    setMaxPreMktVolNF,
+    minSpread,
+    setMinSpread,
+    maxSpread,
+    setMaxSpread,
+    minSpreadBps,
+    setMinSpreadBps,
+    maxSpreadBps,
+    setMaxSpreadBps,
+    minGap,
+    setMinGap,
+    maxGap,
+    setMaxGap,
+    minGapPct,
+    setMinGapPct,
+    maxGapPct,
+    setMaxGapPct,
+    minClsToClsPct,
+    setMinClsToClsPct,
+    maxClsToClsPct,
+    setMaxClsToClsPct,
+    minVWAP,
+    setMinVWAP,
+    maxVWAP,
+    setMaxVWAP,
+    minLo,
+    setMinLo,
+    maxLo,
+    setMaxLo,
+    minAvPreMhv,
+    setMinAvPreMhv,
+    maxAvPreMhv,
+    setMaxAvPreMhv,
+    minLstPrcL,
+    setMinLstPrcL,
+    maxLstPrcL,
+    setMaxLstPrcL,
+    minLstCls,
+    setMinLstCls,
+    maxLstCls,
+    setMaxLstCls,
+    minYCls,
+    setMinYCls,
+    maxYCls,
+    setMaxYCls,
+    minTCls,
+    setMinTCls,
+    maxTCls,
+    setMaxTCls,
+    minLstClsNewsCnt,
+    setMinLstClsNewsCnt,
+    maxLstClsNewsCnt,
+    setMaxLstClsNewsCnt,
+    minVolNFfromLstCls,
+    setMinVolNFfromLstCls,
+    maxVolNFfromLstCls,
+    setMaxVolNFfromLstCls,
+    minAvPostMhVol90NF,
+    setMinAvPostMhVol90NF,
+    maxAvPostMhVol90NF,
+    setMaxAvPostMhVol90NF,
+    minVolRel,
+    setMinVolRel,
+    maxVolRel,
+    setMaxVolRel,
+    minPreMhBidLstPrcPct,
+    setMinPreMhBidLstPrcPct,
+    maxPreMhBidLstPrcPct,
+    setMaxPreMhBidLstPrcPct,
+    minPreMhLoLstPrcPct,
+    setMinPreMhLoLstPrcPct,
+    maxPreMhLoLstPrcPct,
+    setMaxPreMhLoLstPrcPct,
+    minPreMhHiLstClsPct,
+    setMinPreMhHiLstClsPct,
+    maxPreMhHiLstClsPct,
+    setMaxPreMhHiLstClsPct,
+    minPreMhLoLstClsPct,
+    setMinPreMhLoLstClsPct,
+    maxPreMhLoLstClsPct,
+    setMaxPreMhLoLstClsPct,
+    minLstPrcLstClsPct,
+    setMinLstPrcLstClsPct,
+    maxLstPrcLstClsPct,
+    setMaxLstPrcLstClsPct,
+    minImbExch925,
+    setMinImbExch925,
+    maxImbExch925,
+    setMaxImbExch925,
+    minImbExch1555,
+    setMinImbExch1555,
+    maxImbExch1555,
+    setMaxImbExch1555,
+    requireHasNews,
+    setRequireHasNews,
+    excludeHasNews,
+    setExcludeHasNews,
+    requireHasReport,
+    setRequireHasReport,
+    excludeHasReport,
+    setExcludeHasReport,
+    minNewsCnt,
+    setMinNewsCnt,
+    maxNewsCnt,
+    setMaxNewsCnt,
+    requireIsPTP,
+    setRequireIsPTP,
+    requireIsSSR,
+    setRequireIsSSR,
+    requireIsETF,
+    setRequireIsETF,
+    requireIsCrap,
+    setRequireIsCrap,
+    excludeDividend,
+    setExcludeDividend,
+    excludePTP,
+    setExcludePTP,
+    excludeSSR,
+    setExcludeSSR,
+    excludeETF,
+    setExcludeETF,
+    excludeCrap,
+    setExcludeCrap,
+    includeUSA,
+    setIncludeUSA,
+    includeChina,
+    setIncludeChina,
+    minMdnPreMhVol90,
+    setMinMdnPreMhVol90,
+    maxMdnPreMhVol90,
+    setMaxMdnPreMhVol90,
+    minPreMhMDV90NF,
+    setMinPreMhMDV90NF,
+    maxPreMhMDV90NF,
+    setMaxPreMhMDV90NF,
+    minPreMhMDV20NF,
+    setMinPreMhMDV20NF,
+    maxPreMhMDV20NF,
+    setMaxPreMhMDV20NF,
+    minMdnPostMhVol90NF,
+    setMinMdnPostMhVol90NF,
+    maxMdnPostMhVol90NF,
+    setMaxMdnPostMhVol90NF,
+    minAvPreMhVol90NF,
+    setMinAvPreMhVol90NF,
+    maxAvPreMhVol90NF,
+    setMaxAvPreMhVol90NF,
+    minAvPreMhValue20NF,
+    setMinAvPreMhValue20NF,
+    maxAvPreMhValue20NF,
+    setMaxAvPreMhValue20NF,
+    minAvPreMhValue90NF,
+    setMinAvPreMhValue90NF,
+    maxAvPreMhValue90NF,
+    setMaxAvPreMhValue90NF,
+    minAvgDailyValue20,
+    setMinAvgDailyValue20,
+    maxAvgDailyValue20,
+    setMaxAvgDailyValue20,
+    minAvgDailyValue90,
+    setMinAvgDailyValue90,
+    maxAvgDailyValue90,
+    setMaxAvgDailyValue90,
+    minVolatility20,
+    setMinVolatility20,
+    maxVolatility20,
+    setMaxVolatility20,
+    minVolatility90,
+    setMinVolatility90,
+    maxVolatility90,
+    setMaxVolatility90,
+    minImbARCA,
+    setMinImbARCA,
+    maxImbARCA,
+    setMaxImbARCA,
+    minImbExchValue,
+    setMinImbExchValue,
+    maxImbExchValue,
+    setMaxImbExchValue,
+    sharedRangeFilterModes,
+    setSharedRangeFilterModes,
+    scanStartMin,
+    setScanStartMin,
+    scanStartMax,
+    setScanStartMax,
+    scanStartStep,
+    setScanStartStep,
+    scanEndMin,
+    setScanEndMin,
+    scanEndMax,
+    setScanEndMax,
+    scanEndStep,
+    setScanEndStep,
+    scanObjective,
+    setScanObjective,
+    scanTopK,
+    setScanTopK,
+    scanRows,
+    setScanRows,
+    scanLoading,
+    setScanLoading,
+    scanErr,
+    setScanErr,
+    scanProgress,
+    setScanProgress,
+    optimizerRows,
+    setOptimizerRows,
+    optimizerComboRows,
+    setOptimizerComboRows,
+    optimizerLoading,
+    setOptimizerLoading,
+    optimizerErr,
+    setOptimizerErr,
+    optimizerProgress,
+    setOptimizerProgress,
+    optimizerRanges,
+    setOptimizerRanges,
+    optimizerRangesLoading,
+    setOptimizerRangesLoading,
+    optimizerRangesErr,
+    setOptimizerRangesErr,
+    optimizerRangeGroupStatus,
+    setOptimizerRangeGroupStatus,
+    optimizerRangeGroupHidden,
+    setOptimizerRangeGroupHidden,
+    optimizerStatsHidden,
+    setOptimizerStatsHidden,
+    scopeSelectedParameterKeys,
+    setScopeSelectedParameterKeys,
+    scopeParameterGroupExpanded,
+    setScopeParameterGroupExpanded,
+    scopeOverlayParameterKeys,
+    setScopeOverlayParameterKeys,
+    optimizerRangeRankMetric,
+    setOptimizerRangeRankMetric,
+    optimizerRangeMinTrades,
+    setOptimizerRangeMinTrades,
+    optimizerBucketCount,
+    setOptimizerBucketCount,
+    scopeResearchDrafts,
+    setScopeResearchDrafts,
+    scopeResearchSelections,
+    setScopeResearchSelections,
+    scopeFullscreenPanel,
+    setScopeFullscreenPanel,
+    scopeResearchFiltersHidden,
+    setScopeResearchFiltersHidden,
+    arbitrageTickerMetaByTicker,
+    setArbitrageTickerMetaByTicker,
+    arbitrageTickerMetaLoading,
+    setArbitrageTickerMetaLoading,
+    streamAutoStartLocked,
+    setStreamAutoStartLocked,
+    streamAutomationTogglePending,
+    setStreamAutomationTogglePending,
+    streamWindowCaptureBusy,
+    setStreamWindowCaptureBusy,
+  } = scannerFilters;
+
   // OpenDoor exit class — replaces the inherited Arbitrage session-band selector (GLOB/BLUE/
   // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
   // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from ruleBand/session,
@@ -7594,21 +840,21 @@ export default function OpenDoorScanner({
     return { rows, tickers: rows.length, totalObs, totalPnl, weightedRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
   }, [openDoorResearch]);
 
-  const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
-  const [zapMode, setZapMode] = useState<ZapMode>("zap");
-  const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
+
+
+
 
   // days + date mode
-  const [days, setDays] = useState<string[]>([]);
-  const [dateMode, setDateMode] = useState<DateMode>("day");
-  const [dateNy, setDateNy] = useState<string>(todayNyYmd());
-  const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
-  const [dateTo, setDateTo] = useState<string>(todayNyYmd());
-  const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
+
+
+
+
+
+
   const routeLocksPrimaryPanel = initialPrimaryPanel === "stream" || initialPrimaryPanel === "scanner";
   const isStreamOnlyShell = shellMode === "streamOnly";
   const tab = controlledTab ?? internalTab;
-  const [internalSession, setInternalSession] = useState<PaperArbSession>("GLOB");
+
   const session = controlledSession ?? internalSession;
   const ruleBand = controlledRuleBand ?? internalRuleBand;
   const setTab = useCallback((nextTab: TabKey) => {
@@ -7638,37 +884,25 @@ export default function OpenDoorScanner({
   const dateToSelectWrapperRef = useRef<HTMLDivElement | null>(null);
 
   // global filters (variant)
-  const [metric, setMetric] = useState<PaperArbMetric>("SigmaZap");
-  const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
+
+
   // OpenDoor does not pre-gate its situation list on deviation — candidate selection is entirely
   // STACK/BENCH/DEV plus the UP/DOWN MINRATE/MINTOTAL/MINMOVE gates, and any further narrowing is
   // done in the UI on top of the full list. 0 is the backend's "no start-deviation gate" value.
-  const [startAbs, setStartAbs] = useState<number>(0);
-  const [startAbsMax, setStartAbsMax] = useState<string>("");
-  const [endAbs, setEndAbs] = useState<number>(0.05);
-  const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
-  const [startCutoffTime, setStartCutoffTime] = useState<string>(
-    () => streamAutomationConfigOverride?.startCutoffTime ?? "09:20"
-  );
-  const [preStartTime, setPreStartTime] = useState<string>(
-    () => streamAutomationConfigOverride?.preStartTime ?? "21:00"
-  );
-  const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
-  const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
-  const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
-  const [sizeValue, setSizeValue] = useState<number>(1000);
-  const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>(
-    () => streamAutomationConfigOverride?.scaleMode === "single" ? "Undiluted" : "Diluted"
-  );
-  const [dilutionStep, setDilutionStep] = useState<number>(
-    () => normalizeDilutionStepValue(streamAutomationConfigOverride?.dilutionStep ?? 0.3)
-  );
-  const [maxAdds, setMaxAdds] = useState<number>(
-    () => normalizeMaxAddsValue(streamAutomationConfigOverride?.maxAdds ?? 3)
-  );
-  const [addDelayMinutes, setAddDelayMinutes] = useState<number>(
-    () => Math.max(0, Math.trunc(streamAutomationConfigOverride?.addDelayMinutes ?? 0))
-  );
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   // Every dilution/scale-in control must push its value into the stream automation engine, not
   // just local state — otherwise the engine keeps running on streamAutomationConfigOverride's own
@@ -7699,32 +933,32 @@ export default function OpenDoorScanner({
   }, [onStreamAutomationConfigChange]);
 
   // analytics options
-  const [includeEquityCurve, setIncludeEquityCurve] = useState(true);
-  const [equityCurveMode, setEquityCurveMode] = useState<"Daily" | "Trade">("Daily");
-  const [topN, setTopN] = useState<number>(1000);
-  const [scopeMode, setScopeMode] = useState<"ALL" | "TOP">("ALL");
-  const [offset, setOffset] = useState<number>(0);
+
+
+
+
+
 
   // table sub-filters (client-side)
-  const [qTicker, setQTicker] = useState("");
-  const [qSide, setQSide] = useState<"" | "Long" | "Short">("");
-  const [streamSortKey, setStreamSortKey] = useState<"alpha" | "sigma" | "netEdge">("alpha");
+
+
+
 
   // data
-  const [activeRows, setActiveRows] = useState<PaperArbActiveRow[]>([]);
-  const [episodesRows, setEpisodesRows] = useState<PaperArbClosedDto[]>([]);
-  const [analytics, setAnalytics] = useState<PaperArbAnalyticsResponse | null>(null);
+
+
+
 
   // ui state
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [listMode, setListMode] = useState<PaperListMode>("off");
-  const [showIgnore, setShowIgnore] = useState(false);
-  const [showApply, setShowApply] = useState(false);
-  const [showPin, setShowPin] = useState(false);
-  const [showPresets, setShowPresets] = useState(false);
-  const [scannerPresets, setScannerPresets] = useState<PresetDto[]>([]);
+
+
+
+
+
+
+
+
+
   const [scannerPresetId, setScannerPresetId] = useState(() => {
     if (typeof window === "undefined") return "";
     try {
@@ -7733,212 +967,186 @@ export default function OpenDoorScanner({
       return "";
     }
   });
-  const [scannerPresetBusy, setScannerPresetBusy] = useState(false);
-  const [scannerPresetSaveMode, setScannerPresetSaveMode] = useState(false);
-  const [scannerPresetDraftName, setScannerPresetDraftName] = useState("");
-  const [scannerPresetStatus, setScannerPresetStatus] = useState<string>("");
-  const [episodesSort, setEpisodesSort] = useState<{ key: EpisodeSortKey; dir: SortDir }>({
-    key: "total",
-    dir: "desc",
-  });
-  const [analyticsSort, setAnalyticsSort] = useState<{ key: EpisodeSortKey; dir: SortDir }>({
-    key: "total",
-    dir: "desc",
-  });
+
+
+
+
+
+
 
   // episodes: advanced POST search toggle + advanced panel
   const [episodesUseSearch, setEpisodesUseSearch] = useState<boolean>(false);
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+
 
   // ===== Advanced filters (ALL switches)
   // rating
-  const [ratingMode, setRatingMode] = useState<PaperArbRatingMode>("SESSION");
-  const [topMode, setTopMode] = useState(false);
-  const [topSigmaOn, setTopSigmaOn] = useState(true);
-  const [topBenchOn, setTopBenchOn] = useState(false);
-  const [topTimeOn, setTopTimeOn] = useState(false);
-  const [ratingType, setRatingType] = useState<PaperArbRatingType>("any");
-  const [ratingRules, setRatingRules] = useState<PaperArbRatingRule[]>([
-    { band: "BLUE", minRate: 0, minTotal: 0 },
-    { band: "ARK", minRate: 0, minTotal: 0 },
-    { band: "PRE", minRate: 0, minTotal: 0 },
-    { band: "OPEN", minRate: 0, minTotal: 0 },
-    { band: "INTRA", minRate: 0, minTotal: 0 },
-    { band: "PRINT", minRate: 0, minTotal: 0 },
-    { band: "POST", minRate: 0, minTotal: 0 },
-    { band: "GLOBAL", minRate: 0, minTotal: 0 },
-  ]);
-  const [ratingEnabledBands, setRatingEnabledBands] = useState<Record<PaperArbRatingBand, boolean>>({
-    BLUE: false,
-    ARK: false,
-    PRE: false,
-    OPEN: false,
-    INTRA: false,
-    PRINT: false,
-    POST: false,
-    GLOBAL: true,
-  });
+
+
+
+
+
+
+
+
 
   // lists
-  const [ignoreTickersText, setIgnoreTickersText] = useState<string>("");
-  const [tickersText, setTickersText] = useState<string>("");
-  const [benchTickersText, setBenchTickersText] = useState<string>("");
+
+
+
   const ignoreFileInputRef = useRef<HTMLInputElement | null>(null);
   const applyFileInputRef = useRef<HTMLInputElement | null>(null);
   const pinFileInputRef = useRef<HTMLInputElement | null>(null);
   const sessionSelectWrapperRef = useRef<HTMLDivElement | null>(null);
-  const [sideFilter, setSideFilter] = useState<"" | "Long" | "Short">("");
 
-  const [selExchanges, setSelExchanges] = useState<Set<string>>(new Set());
-  const [selCountries, setSelCountries] = useState<Set<string>>(new Set());
-  const [selSectors, setSelSectors] = useState<Set<string>>(new Set());
-  const [countryEnabled, setCountryEnabled] = useState<TriMode>("off");
-  const [exchangeEnabled, setExchangeEnabled] = useState<TriMode>("off");
-  const [sectorEnabled, setSectorEnabled] = useState<TriMode>("off");
-  const [scopeBenchText, setScopeBenchText] = useState<string>("");
 
-  const [imbExchsText, setImbExchsText] = useState<string>("");
+
+
+
+
+
+
+
+
+
 
   // numeric ranges (as strings for easy empty/null)
-  const [minTierBp, setMinTierBp] = useState<string>("");
-  const [maxTierBp, setMaxTierBp] = useState<string>("");
-  const [minCorr, setMinCorr] = useState<string>("");
-  const [maxCorr, setMaxCorr] = useState<string>("");
-  const [minBeta, setMinBeta] = useState<string>("");
-  const [maxBeta, setMaxBeta] = useState<string>("");
-  const [minSigma, setMinSigma] = useState<string>("");
-  const [maxSigma, setMaxSigma] = useState<string>("");
 
-  const [minMarketCapM, setMinMarketCapM] = useState<string>("1000");
-  const [maxMarketCapM, setMaxMarketCapM] = useState<string>("");
 
-  const [minRoundLot, setMinRoundLot] = useState<string>("");
-  const [maxRoundLot, setMaxRoundLot] = useState<string>("");
 
-  const [minAdv20, setMinAdv20] = useState<string>("");
-  const [maxAdv20, setMaxAdv20] = useState<string>("");
-  const [minAdv20NF, setMinAdv20NF] = useState<string>("");
-  const [maxAdv20NF, setMaxAdv20NF] = useState<string>("");
 
-  const [minAdv90, setMinAdv90] = useState<string>("");
-  const [maxAdv90, setMaxAdv90] = useState<string>("");
-  const [minAdv90NF, setMinAdv90NF] = useState<string>("10000000");
-  const [maxAdv90NF, setMaxAdv90NF] = useState<string>("");
 
-  const [minPreMktVol, setMinPreMktVol] = useState<string>("");
-  const [maxPreMktVol, setMaxPreMktVol] = useState<string>("");
-  const [minPreMktVolNF, setMinPreMktVolNF] = useState<string>("");
-  const [maxPreMktVolNF, setMaxPreMktVolNF] = useState<string>("");
 
-  const [minSpread, setMinSpread] = useState<string>("");
-  const [maxSpread, setMaxSpread] = useState<string>("");
-  const [minSpreadBps, setMinSpreadBps] = useState<string>("");
-  const [maxSpreadBps, setMaxSpreadBps] = useState<string>("");
 
-  const [minGap, setMinGap] = useState<string>("");
-  const [maxGap, setMaxGap] = useState<string>("");
-  const [minGapPct, setMinGapPct] = useState<string>("");
-  const [maxGapPct, setMaxGapPct] = useState<string>("");
 
-  const [minClsToClsPct, setMinClsToClsPct] = useState<string>("");
-  const [maxClsToClsPct, setMaxClsToClsPct] = useState<string>("");
 
-  const [minVWAP, setMinVWAP] = useState<string>("");
-  const [maxVWAP, setMaxVWAP] = useState<string>("");
 
-  const [minLo, setMinLo] = useState<string>("");
-  const [maxLo, setMaxLo] = useState<string>("");
-  const [minAvPreMhv, setMinAvPreMhv] = useState<string>("");
-  const [maxAvPreMhv, setMaxAvPreMhv] = useState<string>("");
-  const [minLstPrcL, setMinLstPrcL] = useState<string>("");
-  const [maxLstPrcL, setMaxLstPrcL] = useState<string>("");
-  const [minLstCls, setMinLstCls] = useState<string>("");
-  const [maxLstCls, setMaxLstCls] = useState<string>("");
-  const [minYCls, setMinYCls] = useState<string>("");
-  const [maxYCls, setMaxYCls] = useState<string>("");
-  const [minTCls, setMinTCls] = useState<string>("");
-  const [maxTCls, setMaxTCls] = useState<string>("");
-  const [minLstClsNewsCnt, setMinLstClsNewsCnt] = useState<string>("");
-  const [maxLstClsNewsCnt, setMaxLstClsNewsCnt] = useState<string>("");
-  const [minVolNFfromLstCls, setMinVolNFfromLstCls] = useState<string>("");
-  const [maxVolNFfromLstCls, setMaxVolNFfromLstCls] = useState<string>("");
-  const [minAvPostMhVol90NF, setMinAvPostMhVol90NF] = useState<string>("");
-  const [maxAvPostMhVol90NF, setMaxAvPostMhVol90NF] = useState<string>("");
-  const [minVolRel, setMinVolRel] = useState<string>("");
-  const [maxVolRel, setMaxVolRel] = useState<string>("");
-  const [minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct] = useState<string>("");
-  const [maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct] = useState<string>("");
-  const [minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct] = useState<string>("");
-  const [maxPreMhLoLstPrcPct, setMaxPreMhLoLstPrcPct] = useState<string>("");
-  const [minPreMhHiLstClsPct, setMinPreMhHiLstClsPct] = useState<string>("");
-  const [maxPreMhHiLstClsPct, setMaxPreMhHiLstClsPct] = useState<string>("");
-  const [minPreMhLoLstClsPct, setMinPreMhLoLstClsPct] = useState<string>("");
-  const [maxPreMhLoLstClsPct, setMaxPreMhLoLstClsPct] = useState<string>("");
-  const [minLstPrcLstClsPct, setMinLstPrcLstClsPct] = useState<string>("");
-  const [maxLstPrcLstClsPct, setMaxLstPrcLstClsPct] = useState<string>("");
-  const [minImbExch925, setMinImbExch925] = useState<string>("");
-  const [maxImbExch925, setMaxImbExch925] = useState<string>("");
-  const [minImbExch1555, setMinImbExch1555] = useState<string>("");
-  const [maxImbExch1555, setMaxImbExch1555] = useState<string>("");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   // news flags
-  const [requireHasNews, setRequireHasNews] = useState<boolean>(false);
-  const [excludeHasNews, setExcludeHasNews] = useState<boolean>(false);
-  const [requireHasReport, setRequireHasReport] = useState<boolean>(false);
-  const [excludeHasReport, setExcludeHasReport] = useState<boolean>(false);
-  const [minNewsCnt, setMinNewsCnt] = useState<string>("");
-  const [maxNewsCnt, setMaxNewsCnt] = useState<string>("");
+
+
+
+
+
+
 
   // require flags
-  const [requireIsPTP, setRequireIsPTP] = useState<boolean>(false);
-  const [requireIsSSR, setRequireIsSSR] = useState<boolean>(false);
-  const [requireIsETF, setRequireIsETF] = useState<boolean>(false);
-  const [requireIsCrap, setRequireIsCrap] = useState<boolean>(false);
+
+
+
+
 
   // exclude flags
-  const [excludeDividend, setExcludeDividend] = useState<boolean>(false);
-  const [excludePTP, setExcludePTP] = useState<boolean>(false);
-  const [excludeSSR, setExcludeSSR] = useState<boolean>(false);
-  const [excludeETF, setExcludeETF] = useState<boolean>(false);
-  const [excludeCrap, setExcludeCrap] = useState<boolean>(false);
-  const [includeUSA, setIncludeUSA] = useState<boolean>(false);
-  const [includeChina, setIncludeChina] = useState<boolean>(false);
+
+
+
+
+
+
+
 
   // medians
-  const [minMdnPreMhVol90, setMinMdnPreMhVol90] = useState<string>("");
-  const [maxMdnPreMhVol90, setMaxMdnPreMhVol90] = useState<string>("");
 
-  const [minPreMhMDV90NF, setMinPreMhMDV90NF] = useState<string>("");
-  const [maxPreMhMDV90NF, setMaxPreMhMDV90NF] = useState<string>("");
 
-  const [minPreMhMDV20NF, setMinPreMhMDV20NF] = useState<string>("");
-  const [maxPreMhMDV20NF, setMaxPreMhMDV20NF] = useState<string>("");
 
-  const [minMdnPostMhVol90NF, setMinMdnPostMhVol90NF] = useState<string>("");
-  const [maxMdnPostMhVol90NF, setMaxMdnPostMhVol90NF] = useState<string>("");
-  const [minAvPreMhVol90NF, setMinAvPreMhVol90NF] = useState<string>("");
-  const [maxAvPreMhVol90NF, setMaxAvPreMhVol90NF] = useState<string>("");
-  const [minAvPreMhValue20NF, setMinAvPreMhValue20NF] = useState<string>("");
-  const [maxAvPreMhValue20NF, setMaxAvPreMhValue20NF] = useState<string>("");
-  const [minAvPreMhValue90NF, setMinAvPreMhValue90NF] = useState<string>("");
-  const [maxAvPreMhValue90NF, setMaxAvPreMhValue90NF] = useState<string>("");
-  const [minAvgDailyValue20, setMinAvgDailyValue20] = useState<string>("");
-  const [maxAvgDailyValue20, setMaxAvgDailyValue20] = useState<string>("");
-  const [minAvgDailyValue90, setMinAvgDailyValue90] = useState<string>("");
-  const [maxAvgDailyValue90, setMaxAvgDailyValue90] = useState<string>("");
-  const [minVolatility20, setMinVolatility20] = useState<string>("");
-  const [maxVolatility20, setMaxVolatility20] = useState<string>("");
-  const [minVolatility90, setMinVolatility90] = useState<string>("");
-  const [maxVolatility90, setMaxVolatility90] = useState<string>("");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   // imbalance
-  const [minImbARCA, setMinImbARCA] = useState<string>("");
-  const [maxImbARCA, setMaxImbARCA] = useState<string>("");
-  const [minImbExchValue, setMinImbExchValue] = useState<string>("");
-  const [maxImbExchValue, setMaxImbExchValue] = useState<string>("");
-  const [sharedRangeFilterModes, setSharedRangeFilterModes] = useState<Record<SharedRangeFilterKey, SharedRangeFilterMode>>(
-    DEFAULT_SHARED_RANGE_FILTER_MODES
-  );
+
+
+
+
+
   const zeroCoverageFilterKeys = useMemo(() => {
     if (!episodesRows.length) return new Set<SharedRangeFilterKey>();
 
@@ -7982,65 +1190,46 @@ export default function OpenDoorScanner({
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
   const optimizerBucketReloadRef = useRef<number | null>(null);
-  const [scanStartMin, setScanStartMin] = useState<number>(0.05);
-  const [scanStartMax, setScanStartMax] = useState<number>(0.2);
-  const [scanStartStep, setScanStartStep] = useState<number>(0.01);
-  const [scanEndMin, setScanEndMin] = useState<number>(0.01);
-  const [scanEndMax, setScanEndMax] = useState<number>(0.1);
-  const [scanEndStep, setScanEndStep] = useState<number>(0.01);
-  const [scanObjective, setScanObjective] = useState<"pnl" | "winrate">("pnl");
-  const [scanTopK, setScanTopK] = useState<number>(20);
-  const [scanRows, setScanRows] = useState<EpisodeScanResult[]>([]);
-  const [scanLoading, setScanLoading] = useState<boolean>(false);
-  const [scanErr, setScanErr] = useState<string | null>(null);
-  const [scanProgress, setScanProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  const [optimizerRows, setOptimizerRows] = useState<OptimizerResultRow[]>([]);
-  const [optimizerComboRows, setOptimizerComboRows] = useState<OptimizerResultRow[]>([]);
-  const [optimizerLoading, setOptimizerLoading] = useState<boolean>(false);
-  const [optimizerErr, setOptimizerErr] = useState<string | null>(null);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   // Result of the last run-button press. Empty until then, so nothing is computed in the background.
   const [optimizerRangeParameters, setOptimizerRangeParameters] = useState<PaperArbOptimizerParameterDto[]>([]);
-  const [optimizerProgress, setOptimizerProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  const [optimizerRanges, setOptimizerRanges] = useState<PaperArbOptimizerRangesResponse | null>(null);
-  const [optimizerRangesLoading, setOptimizerRangesLoading] = useState<boolean>(false);
-  const [optimizerRangesErr, setOptimizerRangesErr] = useState<string | null>(null);
-  const [optimizerRangeGroupStatus, setOptimizerRangeGroupStatus] = useState<Record<OptimizerRangeGroupKey, OptimizerRangeGroupStatus>>({
-    "RATING GATES": { loading: false, error: null, partial: false },
-    "ZAP THRESHOLDS": { loading: false, error: null, partial: false },
-    "TAPE FILTERS": { loading: false, error: null, partial: false },
-  });
-  const [optimizerRangeGroupHidden, setOptimizerRangeGroupHidden] = useState<Record<OptimizerRangeGroupKey, boolean>>({
-    "RATING GATES": true,
-    "ZAP THRESHOLDS": true,
-    "TAPE FILTERS": true,
-  });
-  const [optimizerStatsHidden, setOptimizerStatsHidden] = useState<boolean>(true);
-  const [scopeSelectedParameterKeys, setScopeSelectedParameterKeys] = useState<string[]>([]);
-  const [scopeParameterGroupExpanded, setScopeParameterGroupExpanded] = useState<Record<string, boolean>>({});
-  const [scopeOverlayParameterKeys, setScopeOverlayParameterKeys] = useState<[string, string]>(["", ""]);
-  const [optimizerRangeRankMetric, setOptimizerRangeRankMetric] = useState<OptimizerRangeRankMetric>("avgPnlUsd");
-  const [optimizerRangeMinTrades, setOptimizerRangeMinTrades] = useState<number>(25);
-  const [optimizerBucketCount, setOptimizerBucketCount] = useState<number>(8);
-  const [scopeResearchDrafts, setScopeResearchDrafts] = useState<Record<ScopePanelKey, ScopeResearchDraft>>(DEFAULT_SCOPE_RESEARCH_DRAFTS);
-  const [scopeResearchSelections, setScopeResearchSelections] = useState<Record<ScopePanelKey, ScopeResearchSelection | null>>({
-    left: null,
-    right: null,
-  });
-  const [scopeFullscreenPanel, setScopeFullscreenPanel] = useState<ScopePanelKey | null>(null);
-  const [scopeResearchFiltersHidden, setScopeResearchFiltersHidden] = useState<
-    Record<ScopePanelKey, { extra: boolean; parallel: boolean }>
-  >({
-    left: { extra: false, parallel: false },
-    right: { extra: false, parallel: false },
-  });
-  const [arbitrageTickerMetaByTicker, setArbitrageTickerMetaByTicker] = useState<
-    Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null; sectorL3?: string | null; benchTicker?: string | null }>
-  >({});
-  const [arbitrageTickerMetaLoading, setArbitrageTickerMetaLoading] = useState(false);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   const arbitrageTickerMetaLoadedRef = useRef(false);
 
-  const episodesSearchCacheRef = useRef<Map<string, { ts: number; rows: PaperArbClosedDto[] }>>(new Map());
-  const episodesSearchInFlightRef = useRef<Map<string, Promise<PaperArbClosedDto[]>>>(new Map());
+  const episodesSearchCache = useEpisodesSearchCache<PaperArbClosedDto>();
 
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
@@ -8263,68 +1452,39 @@ export default function OpenDoorScanner({
     gateRate?: number | null;
     gateTotal?: number | null;
   };
-  const [openDoorSnapshotRows, setOpenDoorSnapshotRows] = useState<OpenDoorPaperClosed[]>([]);
   const [openDoorSnapshotLoading, setOpenDoorSnapshotLoading] = useState(false);
   const [openDoorSnapshotError, setOpenDoorSnapshotError] = useState<string | null>(null);
 
+  // Entering the tab loads the day; the SNAPSHOT numbers are then derived from those very rows
+  // (openDoorSnapshotRows, defined after filteredEpisodes further down). This used to be a second,
+  // independent fetch whose body carried only the exit class, the three source toggles, the six
+  // gates and sizeValue - so the whole filter toolbar (the shared min/max ranges, IGN/APP/PIN, the
+  // flag row, the country/exchange/sector selects) changed nothing in the P&L, trade count and win
+  // rate on this screen, while the charts beside them, fed by filteredEpisodes, honoured all of it.
+  // One fetch, one set of rows, one answer.
   useEffect(() => {
-    // Must mirror the SNAPSHOT block's own render condition exactly — in a streamOnly shell the
+    // Must mirror the SNAPSHOT block's own render condition exactly - in a streamOnly shell the
     // table renders under the "episodes" tab, so gating the fetch on "analytics" alone left it
     // permanently empty there.
     if (!(primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")))) return;
     if (!toYmd(dateFrom) || !toYmd(dateTo)) return;
 
     let cancelled = false;
-    const load = async () => {
+    (async () => {
       setOpenDoorSnapshotLoading(true);
       try {
-        const resp = await apiPost<{ ok: boolean; items: any[] }>("/api/paper/opendoor/episodes/search", {
-          dateFrom,
-          dateTo,
-          exitClass: openDoorExitClass,
-          useStack: openDoorUseStack,
-          useBench: openDoorUseBench,
-          useDevSig: openDoorUseDevSig,
-          upMinRate: openDoorUpMinRate,
-          upMinTotal: openDoorUpMinTotal,
-          upMinMove: openDoorUpMinMove,
-          downMinRate: openDoorDownMinRate,
-          downMinTotal: openDoorDownMinTotal,
-          downMinMove: openDoorDownMinMove,
-          sizeValue: sizeValue,
-        });
+        // Same call RUN makes on this tab, and episodesSearchCache keys on the request body, so
+        // the two no longer hit the bridge twice for the same day.
+        const rows = await fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo));
         if (cancelled) return;
-        // The endpoint now speaks the shared PaperArbClosedDto shape (so the EPISODES tab, filters
-        // and Visual Scope can consume it unchanged). This table predates that and reads OpenDoor's
-        // own field names, so translate once here rather than touching every cell below.
-        // Entry/exit fills are side-dependent: Long buys the ask and sells the bid, Short the reverse.
-        const rows: OpenDoorPaperClosed[] = (Array.isArray(resp?.items) ? resp.items : []).map((r: any) => {
-          const isLong = String(r?.side ?? "") === "Long";
-          return {
-            ticker: String(r?.ticker ?? ""),
-            benchTicker: r?.benchTicker ?? null,
-            side: isLong ? "Long" : "Short",
-            entryMinuteIdx: Number(r?.startMinuteIdx),
-            exitMinuteIdx: Number(r?.endMinuteIdx),
-            entryStack: (isLong ? r?.startAskPct : r?.startBidPct) ?? null,
-            exitStack: (isLong ? r?.endBidPct : r?.endAskPct) ?? null,
-            move: r?.move ?? null,
-            pnl: r?.totalPnlUsd ?? null,
-            entryDevSig: r?.entryDevSig ?? null,
-            entryBench: r?.startBenchLstPrcLstClsPct ?? null,
-            gateRate: r?.rating ?? null,
-            gateTotal: r?.ratingTotal ?? null,
-          };
-        });
-        setOpenDoorSnapshotRows(rows);
+        setEpisodesRows(rows);
         setOpenDoorSnapshotError(null);
       } catch (e: any) {
         if (!cancelled) setOpenDoorSnapshotError(e?.message || "Failed to load OpenDoor snapshot");
       } finally {
         if (!cancelled) setOpenDoorSnapshotLoading(false);
       }
-    };
-    load();
+    })();
     return () => { cancelled = true; };
   }, [
     primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, openDoorExitClass,
@@ -8334,35 +1494,29 @@ export default function OpenDoorScanner({
     sizeValue,
   ]);
 
-  const openDoorSnapshotStats = useMemo(() => {
-    const rows = openDoorSnapshotRows.filter((r) => r.pnl != null);
-    const wins = rows.filter((r) => (r.pnl ?? 0) > 0);
-    const losses = rows.filter((r) => (r.pnl ?? 0) < 0);
-
-    const trades = rows.length;
-    const totalPnl = rows.reduce((s, r) => s + (r.pnl ?? 0), 0);
-    const winRate = trades > 0 ? wins.length / trades : 0;
-    const avgTrade = trades > 0 ? totalPnl / trades : 0;
-    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl ?? 0)) : 0;
-    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl ?? 0)) : 0;
-    const avgWin = wins.length ? wins.reduce((s, r) => s + (r.pnl ?? 0), 0) / wins.length : 0;
-    const avgLoss = losses.length ? losses.reduce((s, r) => s + (r.pnl ?? 0), 0) / losses.length : 0;
-    const grossWin = wins.reduce((s, r) => s + (r.pnl ?? 0), 0);
-    const grossLoss = Math.abs(losses.reduce((s, r) => s + (r.pnl ?? 0), 0));
-    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
-    const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
-
-    const sorted = [...openDoorSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
-
-    return { rows: sorted, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
-  }, [openDoorSnapshotRows]);
+  // ========= Drop loaded rows as soon as the selected date changes
+  //
+  // Rows answer for the date they were fetched with, and plenty is derived from them: the IGN
+  // ticker scope, the scope-research panels, the equity curve. Leaving the previous day's rows on
+  // screen while the header already shows a new date let that derived state answer for the wrong
+  // day.
+  const loadedForDateKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = dateMode === "day" ? `day:${dateNy}` : `${dateMode}:${dateFrom}..${dateTo}`;
+    if (loadedForDateKeyRef.current === key) return;
+    loadedForDateKeyRef.current = key;
+    setActiveRows([]);
+    setEpisodesRows([]);
+    setAnalytics(null);
+    setUpdatedAt(null);
+  }, [dateMode, dateNy, dateFrom, dateTo]);
 
   // ========= Load available days on mount
   useEffect(() => {
     (async () => {
       try {
         setErr(null);
-        const d = await loadDaysApi();
+        const d = await loadDaysApi(STRATEGY.api.daysEndpoint);
         setDays(d);
         if (d.length && !d.includes(dateNy)) {
           setDateNy(d[0]);
@@ -8380,7 +1534,7 @@ export default function OpenDoorScanner({
     try {
       const res = await fetch(`/api/tape/day?dateNy=${encodeURIComponent(d)}`, { method: "DELETE" });
       if (!res.ok) return;
-      const fresh = await loadDaysApi();
+      const fresh = await loadDaysApi(STRATEGY.api.daysEndpoint);
       setDays(fresh);
       if (dateNy === d) {
         const next = fresh[0] ?? "";
@@ -8434,14 +1588,7 @@ export default function OpenDoorScanner({
   };
 
   // ========= Persist/restore filters (like reference terminal)
-  useLayoutEffect(() => {
-    filtersRestoringRef.current = true;
-    try {
-      const raw = localStorage.getItem(filtersLsKey);
-      if (!raw) {
-        // no saved state
-      } else {
-        const s = JSON.parse(raw) as Record<string, any>;
+  useFilterRestore(filtersLsKey, filtersHydratedRef, filtersRestoringRef, (s) => {
 
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
@@ -8494,6 +1641,20 @@ export default function OpenDoorScanner({
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
+
+        // OpenDoor gate settings. Restored here rather than left at their defaults so the toolbar
+        // shows what is actually being traded after a reload — and so the copy pushed to the
+        // bridge (see the effect below) is the operator's, not a fresh page's.
+        if (s.openDoorExitClass === "10m" || s.openDoorExitClass === "30m") setOpenDoorExitClass(s.openDoorExitClass);
+        if (typeof s.openDoorUseStack === "boolean") setOpenDoorUseStack(s.openDoorUseStack);
+        if (typeof s.openDoorUseBench === "boolean") setOpenDoorUseBench(s.openDoorUseBench);
+        if (typeof s.openDoorUseDevSig === "boolean") setOpenDoorUseDevSig(s.openDoorUseDevSig);
+        if (typeof s.openDoorUpMinRate === "number") setOpenDoorUpMinRate(s.openDoorUpMinRate);
+        if (typeof s.openDoorUpMinTotal === "number") setOpenDoorUpMinTotal(s.openDoorUpMinTotal);
+        if (typeof s.openDoorUpMinMove === "number") setOpenDoorUpMinMove(s.openDoorUpMinMove);
+        if (typeof s.openDoorDownMinRate === "number") setOpenDoorDownMinRate(s.openDoorDownMinRate);
+        if (typeof s.openDoorDownMinTotal === "number") setOpenDoorDownMinTotal(s.openDoorDownMinTotal);
+        if (typeof s.openDoorDownMinMove === "number") setOpenDoorDownMinMove(s.openDoorDownMinMove);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -8625,6 +1786,10 @@ export default function OpenDoorScanner({
         applyStr(s.minPreMktVol, setMinPreMktVol); applyStr(s.maxPreMktVol, setMaxPreMktVol);
         applyStr(s.minPreMktVolNF, setMinPreMktVolNF); applyStr(s.maxPreMktVolNF, setMaxPreMktVolNF);
         applyStr(s.minSpread, setMinSpread); applyStr(s.maxSpread, setMaxSpread);
+        // Payloads written before the persist key was corrected carry the value as a number under
+        // the request-shaped name, so the setting is recoverable rather than lost on first load.
+        if (typeof s.minSpread !== "string" && typeof s.minSpreadBidPct === "number") setMinSpread(String(s.minSpreadBidPct));
+        if (typeof s.maxSpread !== "string" && typeof s.maxSpreadBidPct === "number") setMaxSpread(String(s.maxSpreadBidPct));
         applyStr(s.minSpreadBps, setMinSpreadBps); applyStr(s.maxSpreadBps, setMaxSpreadBps);
         applyStr(s.minGap, setMinGap); applyStr(s.maxGap, setMaxGap);
         applyStr(s.minGapPct, setMinGapPct); applyStr(s.maxGapPct, setMaxGapPct);
@@ -8679,15 +1844,6 @@ export default function OpenDoorScanner({
         if (typeof s.excludeCrap === "boolean") setExcludeCrap(s.excludeCrap);
         if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
         if (typeof s.includeChina === "boolean") setIncludeChina(s.includeChina);
-      }
-    } catch {
-      // ignore broken storage
-    } finally {
-      filtersHydratedRef.current = true;
-      queueMicrotask(() => {
-        filtersRestoringRef.current = false;
-      });
-    }
   }, [controlledRuleBand, controlledSession, controlledTab, routeLocksPrimaryPanel]);
 
   const persistedFilters = useMemo(
@@ -8714,6 +1870,19 @@ export default function OpenDoorScanner({
       priceMode,
       sizingMode,
       sizeValue,
+      // OpenDoor's own gate settings. These used to be plain component state that reset on every
+      // reload, so "the filters I trade with" existed only until the tab was refreshed — and the
+      // server engine, which reads them from the bridge, had nothing to read.
+      openDoorExitClass,
+      openDoorUseStack,
+      openDoorUseBench,
+      openDoorUseDevSig,
+      openDoorUpMinRate,
+      openDoorUpMinTotal,
+      openDoorUpMinMove,
+      openDoorDownMinRate,
+      openDoorDownMinTotal,
+      openDoorDownMinMove,
       dilutionMode,
       dilutionStep,
       maxAdds,
@@ -8776,8 +1945,12 @@ export default function OpenDoorScanner({
       maxPreMktVol,
       minPreMktVolNF,
       maxPreMktVolNF,
-      minSpreadBidPct: minSpread ? Number(minSpread) : undefined,
-      maxSpreadBidPct: maxSpread ? Number(maxSpread) : undefined,
+      // Stored under the state's own names: this object is read back by the restore effect and by
+      // the shared-filter preset builder, both of which look for minSpread/maxSpread. Writing the
+      // request-shaped minSpreadBidPct/maxSpreadBidPct instead meant the spread filter survived
+      // neither a reload nor a saved preset.
+      minSpread,
+      maxSpread,
       minSpreadBps,
       maxSpreadBps,
       minGap,
@@ -8806,11 +1979,11 @@ export default function OpenDoorScanner({
       maxVolNFfromLstCls,
       requireHasNews,
       excludeHasNews,
-      // Report filtering is done client-side now (see passesStaticMetricRangeFilters) so the
-      // scanner, Sonar and Stream share one rule. Sending these would make the server pre-filter
-      // with its coarse HasReport boolean, which removes strictly more rows and would win.
-      requireHasReport: null,
-      excludeHasReport: null,
+      // These were nulled here back when this object doubled as the request body. It is storage
+      // only now — the request builders carry their own copies — so nulling just lost both report
+      // toggles on every reload.
+      requireHasReport,
+      excludeHasReport,
       minNewsCnt,
       maxNewsCnt,
       requireIsPTP,
@@ -8872,6 +2045,13 @@ export default function OpenDoorScanner({
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
       session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
+      // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
+      // changing any of them left persistedFilters identical and the debounced write never fired —
+      // they reached localStorage only by accident, whenever some other field changed next. On
+      // OpenDoor sizeValue also goes to the server and is part of its cache variant key.
+      sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
+      optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount,
+      topMode, topSigmaOn, topBenchOn, topTimeOn,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
@@ -8899,6 +2079,9 @@ export default function OpenDoorScanner({
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
+      openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+      openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+      openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     ]
   );
 
@@ -9140,15 +2323,10 @@ export default function OpenDoorScanner({
     }
   };
 
-  useEffect(() => {
-    if (!filtersHydratedRef.current) return;
-    if (filtersRestoringRef.current) return;
-    try {
-      localStorage.setItem(filtersLsKey, JSON.stringify(persistedFilters));
-    } catch {
-      // ignore quota/storage errors
-    }
-  }, [persistedFilters]);
+  // Debounced write + unmount flush, shared with the other scanners. OpenDoor wrote
+  // synchronously on every change and never flushed on unmount - it never received the
+  // debounce Arbitrage got, so a ~200-field payload was serialised on each keystroke.
+  usePersistedFilters(filtersLsKey, persistedFilters, filtersHydratedRef, filtersRestoringRef);
 
   const derivedStreamSignalClass = useMemo(() => {
     if (ruleBand === "GLOBAL") return "global";
@@ -9264,6 +2442,51 @@ export default function OpenDoorScanner({
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
+  // Mirror the operator's saved filter state onto the bridge, which is where the server-side engine
+  // reads it at 09:20 — it has to gate on the tuned values, not on descriptor defaults, and it must
+  // keep doing so with no tab open. Both halves go in one PUT: the rating-gate values AND the rest
+  // of the toolbar (`streamFilterConfig`, the very config the browser engine filters live rows
+  // with), so the two can never drift apart on the server.
+  //
+  // Debounced because these are steppers and text boxes: typing a MINRATE or a bound would
+  // otherwise be one PUT per keystroke.
+  //
+  // Only the hydration guard, deliberately: unlike the localStorage write this must also fire ONCE
+  // on mount, or a bridge that has never been pushed to would keep running on defaults until the
+  // operator happened to touch a control. The debounce is what makes that safe — the restore's own
+  // re-render cancels the pending timer before it can send pre-restore values.
+  useEffect(() => {
+    if (!filtersHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushOpenDoorLiveParams({
+        exitClass: openDoorExitClass,
+        useStack: openDoorUseStack,
+        useBench: openDoorUseBench,
+        useDevSig: openDoorUseDevSig,
+        upMinRate: openDoorUpMinRate,
+        upMinTotal: openDoorUpMinTotal,
+        upMinMove: openDoorUpMinMove,
+        downMinRate: openDoorDownMinRate,
+        downMinTotal: openDoorDownMinTotal,
+        downMinMove: openDoorDownMinMove,
+        sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
+        filters: toOpenDoorLiveFilters(streamFilterConfig, {
+          countries: countryEnabled,
+          exchanges: exchangeEnabled,
+          sectors: sectorEnabled,
+        }),
+        source: "opendoor-scanner",
+      });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
+    sizingMode, sizeValue, streamFilterConfig,
+    countryEnabled, exchangeEnabled, sectorEnabled,
+  ]);
+
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
     const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
       min: rangeValueOrNull(key, minRaw),
@@ -9274,12 +2497,16 @@ export default function OpenDoorScanner({
       const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
 
       return {
-        cls: streamSignalClass,
+        // No Arbitrage rating anywhere: zero floors so neither the server nor the client filter
+        // can reject on it, plus the explicit skip so the BIN/BINS lookups (which reject a ticker
+        // merely for having no Arbitrage bin data) never run either.
+        cls: OPEN_DOOR_CLS,
         type: ratingType ?? "any",
         mode: scopeModeForSnapshot,
         ratingMode,
-        minRate: streamRatingRule.minRate,
-        minTotal: streamRatingRule.minTotal,
+        skipArbitrageRating: true,
+        minRate: OPEN_DOOR_NO_ARB_RATE,
+        minTotal: OPEN_DOOR_NO_ARB_TOTAL,
         tickersFilterNorm: splitListUpper(tickersText).join(","),
         listMode,
         ignoreSet: new Set(splitListUpper(ignoreTickersText)),
@@ -9489,6 +2716,7 @@ export default function OpenDoorScanner({
     noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
     startCutoffTime,
+    entryStopTime: streamAutomationConfigOverride?.entryStopTime,
     preStartTime,
   }), [
     addDelayMinutes,
@@ -9514,6 +2742,44 @@ export default function OpenDoorScanner({
     Boolean(streamAutoStartEnabledOverride) ||
     Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
 
+  // The OpenDoor stream must receive the SAME universe OpenDoor Sonar does, or the shared gate
+  // still judges different sets of tickers. Sonar asks the server with cls="global", minRate=0.3,
+  // minTotal=1 and — critically — NO startAbs: its entry rule is the per-bin gate, not a sigma
+  // floor, so a server-side sigma threshold would silently narrow the universe before the gate
+  // ever sees it. These mirror OpenDoorSonar's own defaults and must be changed together with it.
+  const openDoorSignalsRequest = useMemo(() => ({
+    cls: OPEN_DOOR_CLS,
+    minRate: OPEN_DOOR_NO_ARB_RATE,
+    minTotal: OPEN_DOOR_NO_ARB_TOTAL,
+    omitStartAbs: true,
+  }), []);
+
+  // Same rule, same function, same rows as OpenDoor Sonar — see lib/opendoor/gate.ts for why it
+  // is not duplicated here. The scanner has no ADVANCED toggle (that is a Sonar-only view), so
+  // the standard 09:20 bin columns are always the ones read.
+  const openDoorStreamGate = useCallback(
+    (signal: any) => matchOpenDoorGate(
+      openDoorRatingByTicker[String(signal?.ticker ?? "").toUpperCase().trim()],
+      readOpenDoorGateValues(signal),
+      {
+        exitClass: openDoorExitClass,
+        advancedMode: false,
+        useStack: openDoorUseStack,
+        useBench: openDoorUseBench,
+        useDevSig: openDoorUseDevSig,
+        upMinRate: openDoorUpMinRate,
+        upMinTotal: openDoorUpMinTotal,
+        upMinMove: openDoorUpMinMove,
+        downMinRate: openDoorDownMinRate,
+        downMinTotal: openDoorDownMinTotal,
+        downMinMove: openDoorDownMinMove,
+      }
+    ),
+    [openDoorRatingByTicker, openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove]
+  );
+
   const {
     streamEntryReadyCount,
     streamAutoEnabled,
@@ -9535,6 +2801,14 @@ export default function OpenDoorScanner({
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
   } = useStreamEngine({
+    // OpenDoor's real gate is per-bin, per-direction, at the selected exit horizon — a rule the
+    // Arbitrage-shaped session rating cannot express, which is why the stream tab used to show
+    // hundreds of candidates where Sonar showed single digits. This runs the SAME function Sonar
+    // filters with (lib/opendoor/gate.ts) over the SAME SSE rows, so the two agree exactly.
+    signalGate: openDoorStreamGate,
+    // OpenDoor ends its session with a single Ctrl+E at CUTOFF, not Arbitrage's Ctrl+Q -> Ctrl+O.
+    cutoffAction: "exit-all" as const,
+    signalsRequest: openDoorSignalsRequest,
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     trackedSignalsEnabled: streamTrackedSignalsEnabled,
@@ -9571,7 +2845,7 @@ export default function OpenDoorScanner({
     })),
     onFetchActiveTickers: async () => {
       const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
-      const j = await apiGet<any>(`/api/paper/opendoor/active${qs}`);
+      const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
       const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
       return rows.map((r) => ({
         ticker: r.ticker,
@@ -9587,9 +2861,9 @@ export default function OpenDoorScanner({
   const tapeMeta = useTapeMeta();
   const streamPositionMeta = useStreamPositionMeta();
   const streamFilterPassLogCount = useStreamFilterPassLogCount();
-  const [streamAutoStartLocked, setStreamAutoStartLocked] = useState(false);
-  const [streamAutomationTogglePending, setStreamAutomationTogglePending] = useState<null | "start" | "stop">(null);
-  const [streamWindowCaptureBusy, setStreamWindowCaptureBusy] = useState(false);
+
+
+
   const streamAutomationLaunchEnabled = streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab";
   const streamStrategyModeEnabled = effectiveStreamAutomationConfig.strategyModeEnabled;
   const effectiveStreamAutoEnabled = typeof streamAutoEnabledOverride === "boolean" ? streamAutoEnabledOverride : streamAutoEnabled;
@@ -9640,7 +2914,6 @@ export default function OpenDoorScanner({
     }
     return Array.from(s).sort();
   }, [tapeMeta.sectors, streamSignalMeta.sectors, episodesRows]);
-
 
   const toggleStreamAutomationRunFromHeader = async () => {
     if (!streamAutomationLaunchEnabled) return;
@@ -9737,6 +3010,7 @@ export default function OpenDoorScanner({
       downMinTotal: openDoorDownMinTotal,
       downMinMove: openDoorDownMinMove,
       tickers: reqTickers.length ? reqTickers : null,
+      excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
 
       // Toolbar flag/multi-select filters, mirroring what the Arbitrage scanner sends. Enforced
@@ -9752,6 +3026,12 @@ export default function OpenDoorScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+
+      // USA / CHINA. PaperFilters.PassesStaticMetaFilters has matched on these all along (it reads
+      // the country string, so "UNITED STATES"/"US" and CHINA/"HONG KONG" both land); they were
+      // simply never put in this body, which left both buttons inert on OpenDoor.
+      includeUSA: includeUSA ? true : null,
+      includeChina: includeChina ? true : null,
 
       exchanges: exchangeEnabled === "include" && selExchanges.size ? Array.from(selExchanges) : null,
       countries: countryEnabled === "include" && selCountries.size ? Array.from(selCountries) : null,
@@ -9974,6 +3254,7 @@ export default function OpenDoorScanner({
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
 
       tickers: reqTickers.length ? reqTickers : null,
+      excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
@@ -10124,35 +3405,16 @@ export default function OpenDoorScanner({
 
   async function fetchEpisodesSearchRows(req: PaperArbAnalyticsRequest): Promise<PaperArbClosedDto[]> {
     // Callers still hand over the inherited Arbitrage request object (it also drives the analytics
-    // endpoint), but the OpenDoor search takes an entirely different body — only the date range is
+    // endpoint), but the OpenDoor search takes an entirely different body - only the date range is
     // shared. Translating here keeps every call site untouched.
     const body = buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
     const key = JSON.stringify(body);
-    const now = Date.now();
-    const cached = episodesSearchCacheRef.current.get(key);
-    if (cached && now - cached.ts <= EPISODES_SEARCH_CACHE_TTL_MS) {
-      return cached.rows;
-    }
-
-    const inFlight = episodesSearchInFlightRef.current.get(key);
-    if (inFlight) return inFlight;
-
-    const requestPromise = apiPost<any>("/api/paper/opendoor/episodes/search", body)
-      .then((j) => normalizeRows<PaperArbClosedDto>(j) ?? [])
-      .then((rows) => {
-        episodesSearchCacheRef.current.set(key, { ts: Date.now(), rows });
-        if (episodesSearchCacheRef.current.size > EPISODES_SEARCH_CACHE_MAX) {
-          const oldestKey = episodesSearchCacheRef.current.keys().next().value;
-          if (oldestKey) episodesSearchCacheRef.current.delete(oldestKey);
-        }
-        return rows;
-      })
-      .finally(() => {
-        episodesSearchInFlightRef.current.delete(key);
-      });
-
-    episodesSearchInFlightRef.current.set(key, requestPromise);
-    return requestPromise;
+    return episodesSearchCache.get(key, () =>
+      // See the same call in ArbitrageScanner: ask for best_params once per ticker rather than on
+      // every row, and reattach it as a shared reference.
+      apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
+        .then((j) => normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [])
+    );
   }
 
   // ========= Run handler
@@ -10170,14 +3432,14 @@ export default function OpenDoorScanner({
       if (tab === "active") {
         setAnalytics(null);
         const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
-        const j = await apiGet<any>(`/api/paper/opendoor/active${qs}`);
+        const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
         const rows = normalizeRows<PaperArbActiveRow>(j);
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
         setAnalytics(null);
         if (!(episodesUseSearch || forceEpisodesSearch)) {
           const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
-          const j = await apiGet<any>(`/api/paper/opendoor/episodes${qs}`);
+          const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
           setEpisodesRows(rows ?? []);
         } else {
@@ -10238,7 +3500,7 @@ export default function OpenDoorScanner({
         req.startAbsMax = null;
         req.endAbs = c.e;
         const j = await apiPost<any>(
-          "/api/paper/opendoor/episodes/search",
+          `${STRATEGY.api.base}/episodes/search`,
           buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom)
         );
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
@@ -11017,16 +4279,17 @@ export default function OpenDoorScanner({
   const requestScopedTickers = useMemo(() => {
     if (listMode === "apply") return Array.from(applySet);
     if (listMode === "pin") return Array.from(pinSet);
-    if (listMode !== "ignore") return [] as string[];
+    return [] as string[];
+  }, [listMode, applySet, pinSet]);
 
-    const seen = new Set<string>();
-    for (const row of [...activeRows, ...episodesRows]) {
-      const ticker = tickerKey((row as any)?.ticker);
-      if (!ticker || ignoreSet.has(ticker)) continue;
-      seen.add(ticker);
-    }
-    return Array.from(seen);
-  }, [listMode, applySet, pinSet, ignoreSet, activeRows, episodesRows]);
+  // IGN travels to the server as a deny-list. It used to be inverted here into an allow-list built
+  // out of the rows currently on screen, so every request was scoped to the PREVIOUS request's
+  // result set — and on OpenDoor that list also reached the engine, which cached the day it
+  // produced under a key that ignored tickers.
+  const requestExcludedTickers = useMemo(
+    () => (listMode === "ignore" ? Array.from(ignoreSet) : ([] as string[])),
+    [listMode, ignoreSet]
+  );
 
   const listModeAllowsTicker = (tkRaw: string | null | undefined) => {
     const tk = tickerKey(tkRaw);
@@ -11230,7 +4493,7 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
@@ -11307,7 +4570,56 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+
+  // The SNAPSHOT table predates the shared row shape and reads OpenDoor's own field names, so
+  // translate once here rather than in every cell. Entry/exit fills are side-dependent: Long buys
+  // the ask and sells the bid, Short the reverse.
+  const openDoorSnapshotRows = useMemo<OpenDoorPaperClosed[]>(
+    () =>
+      filteredEpisodes.map((r: any) => {
+        const isLong = String(r?.side ?? "") === "Long";
+        return {
+          ticker: String(r?.ticker ?? ""),
+          benchTicker: r?.benchTicker ?? null,
+          side: isLong ? "Long" : "Short",
+          entryMinuteIdx: Number(r?.startMinuteIdx),
+          exitMinuteIdx: Number(r?.endMinuteIdx),
+          entryStack: (isLong ? r?.startAskPct : r?.startBidPct) ?? null,
+          exitStack: (isLong ? r?.endBidPct : r?.endAskPct) ?? null,
+          move: r?.move ?? null,
+          pnl: r?.totalPnlUsd ?? null,
+          entryDevSig: r?.entryDevSig ?? null,
+          entryBench: r?.startBenchLstPrcLstClsPct ?? null,
+          gateRate: r?.rating ?? null,
+          gateTotal: r?.ratingTotal ?? null,
+        };
+      }),
+    [filteredEpisodes]
+  );
+
+  const openDoorSnapshotStats = useMemo(() => {
+    const rows = openDoorSnapshotRows.filter((r) => r.pnl != null);
+    const wins = rows.filter((r) => (r.pnl ?? 0) > 0);
+    const losses = rows.filter((r) => (r.pnl ?? 0) < 0);
+
+    const trades = rows.length;
+    const totalPnl = rows.reduce((s, r) => s + (r.pnl ?? 0), 0);
+    const winRate = trades > 0 ? wins.length / trades : 0;
+    const avgTrade = trades > 0 ? totalPnl / trades : 0;
+    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl ?? 0)) : 0;
+    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl ?? 0)) : 0;
+    const avgWin = wins.length ? wins.reduce((s, r) => s + (r.pnl ?? 0), 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((s, r) => s + (r.pnl ?? 0), 0) / losses.length : 0;
+    const grossWin = wins.reduce((s, r) => s + (r.pnl ?? 0), 0);
+    const grossLoss = Math.abs(losses.reduce((s, r) => s + (r.pnl ?? 0), 0));
+    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
+    const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
+
+    const sorted = [...openDoorSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
+
+    return { rows: sorted, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
+  }, [openDoorSnapshotRows]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -11436,6 +4748,9 @@ export default function OpenDoorScanner({
         closeMode: rowCloseMode,
         gapPct: rowGapPct,
         benchGapPct: row.benchGapPct ?? (row as any).BenchGapPct ?? null,
+        // OpenDoor rows carry no start class, so every Passive close marks against the gap —
+        // the behaviour this scanner has always had.
+        passiveGapExit: "always",
       });
       const serverRawPnl = row.rawPnlUsd ?? (row as any).RawPnlUsd ?? null;
       const serverBenchPnl = row.benchPnlUsd ?? (row as any).BenchPnlUsd ?? null;
@@ -12377,220 +5692,32 @@ export default function OpenDoorScanner({
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* Header */}
-        <header className="scanner-header-surface bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            <GlitchTitle text={scannerShellTitle} />
-          </div>
-
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className={headerNavGroupClass}>
-              <Link
-                href={navStreamHref}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
-                  primaryPanel === "stream"
-                    ? "accent-soft"
-                    : headerNavInactiveClass
-                )}
-                title={primaryPanel === "stream" ? "STREAM (current)" : "Open STREAM"}
-              >
-                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                </svg>
-                STREAM
-              </Link>
-              <Link
-                href={navScannerHref}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
-                  primaryPanel === "scanner"
-                    ? "accent-soft"
-                    : headerNavInactiveClass
-                )}
-                title={primaryPanel === "scanner" ? "SCANNER (current)" : "Open SCANNER"}
-              >
-                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-                </svg>
-                SCANNER
-              </Link>
-              <Link
-                href={navSonarHref}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
-                  headerNavInactiveClass
-                )}
-                title="Open SONAR"
-              >
-                <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="2"/>
-                  <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-                </svg>
-                SONAR
-              </Link>
-            </div>
-
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              <div
-                className={clsx(
-                  "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                  listMode === "ignore" ? "border-rose-500/30 bg-rose-500/12" : "border-white/10 bg-white/5 hover:bg-white/10"
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModeIgnore();
-                    setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                    listMode === "ignore" ? "text-rose-300" : "text-zinc-300"
-                  )}
-                  title="LIST MODE: IGNORE"
-                >
-                  <span className="tracking-wide">IGN</span>
-                  {ignCount > 0 && <span className="opacity-70">({ignCount})</span>}
-                </button>
-                <div className="w-px bg-white/10" />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = !showIgnore;
-                    setShowIgnore(next);
-                    if (next) setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                    showIgnore ? "text-rose-300" : "text-zinc-400 hover:text-white"
-                  )}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showIgnore ? "" : "opacity-80"}>
-                    <line x1="8" y1="6" x2="21" y2="6" />
-                    <line x1="8" y1="12" x2="21" y2="12" />
-                    <line x1="8" y1="18" x2="21" y2="18" />
-                    <line x1="3" y1="6" x2="3.01" y2="6" />
-                    <line x1="3" y1="12" x2="3.01" y2="12" />
-                    <line x1="3" y1="18" x2="3.01" y2="18" />
-                  </svg>
-                </button>
-              </div>
-
-              <div
-                className={clsx(
-                  "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                  listMode === "apply" ? "border-emerald-500/25 bg-emerald-500/10" : "border-white/10 bg-white/5 hover:bg-white/10"
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModeApply();
-                    setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                    listMode === "apply" ? "text-emerald-300" : "text-zinc-300"
-                  )}
-                  title="LIST MODE: APPLY"
-                >
-                  <span className="tracking-wide">APP</span>
-                  {appCount > 0 && <span className="opacity-70">({appCount})</span>}
-                </button>
-                <div className="w-px bg-white/10" />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = !showApply;
-                    setShowApply(next);
-                    if (next) setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                    showApply ? "text-emerald-300" : "text-zinc-400 hover:text-white"
-                  )}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showApply ? "" : "opacity-80"}>
-                    <line x1="8" y1="6" x2="21" y2="6" />
-                    <line x1="8" y1="12" x2="21" y2="12" />
-                    <line x1="8" y1="18" x2="21" y2="18" />
-                    <line x1="3" y1="6" x2="3.01" y2="6" />
-                    <line x1="3" y1="12" x2="3.01" y2="12" />
-                    <line x1="3" y1="18" x2="3.01" y2="18" />
-                  </svg>
-                </button>
-              </div>
-
-              <div
-                className={clsx(
-                  "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                  listMode === "pin" ? "border-violet-400/30 bg-violet-400/12" : "border-white/10 bg-white/5 hover:bg-white/10"
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModePin();
-                    setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                    listMode === "pin" ? "text-violet-200" : "text-zinc-300"
-                  )}
-                  title="LIST MODE: PIN"
-                >
-                  <span className="tracking-wide">PIN</span>
-                  {pinCount > 0 && <span className="opacity-70">({pinCount})</span>}
-                </button>
-                <div className="w-px bg-white/10" />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = !showPin;
-                    setShowPin(next);
-                    if (next) setShowAdvanced(true);
-                  }}
-                  className={clsx(
-                    "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                    showPin ? "text-violet-300" : "text-zinc-400 hover:text-white"
-                  )}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showPin ? "" : "opacity-80"}>
-                    <line x1="8" y1="6" x2="21" y2="6" />
-                    <line x1="8" y1="12" x2="21" y2="12" />
-                    <line x1="8" y1="18" x2="21" y2="18" />
-                    <line x1="3" y1="6" x2="3.01" y2="6" />
-                    <line x1="3" y1="12" x2="3.01" y2="12" />
-                    <line x1="3" y1="18" x2="3.01" y2="18" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={run}
-              disabled={!canRun}
-              className={clsx(
-                "h-7 w-7 flex items-center justify-center rounded-full transition-all active:scale-95",
-                canRun
-                  ? "accent-text hover:opacity-80"
-                  : "text-zinc-600 cursor-not-allowed"
-              )}
-              title={variantString}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </svg>
-            </button>
-
-          </div>
-        </header>
+        <ScannerHeader
+          scannerShellTitle={scannerShellTitle}
+          headerNavGroupClass={headerNavGroupClass}
+          headerNavInactiveClass={headerNavInactiveClass}
+          navStreamHref={navStreamHref}
+          navScannerHref={navScannerHref}
+          navSonarHref={navSonarHref}
+          primaryPanel={primaryPanel}
+          listMode={listMode}
+          ignCount={ignCount}
+          appCount={appCount}
+          pinCount={pinCount}
+          showIgnore={showIgnore}
+          showApply={showApply}
+          showPin={showPin}
+          setShowIgnore={setShowIgnore}
+          setShowApply={setShowApply}
+          setShowPin={setShowPin}
+          setShowAdvanced={setShowAdvanced}
+          setModeIgnore={setModeIgnore}
+          setModeApply={setModeApply}
+          setModePin={setModePin}
+          canRun={canRun}
+          run={run}
+          variantString={variantString}
+        />
 
         {showPresets && (
           <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 backdrop-blur-md">
@@ -12611,129 +5738,23 @@ export default function OpenDoorScanner({
         )}
 
         {(showIgnore || showApply || showPin) && (
-          <GlassCard className="p-3 border-white/[0.08] bg-[#05070b]/95">
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-              {showIgnore && (
-                <div className="rounded-xl border border-rose-500/25 bg-rose-500/[0.05] p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] uppercase tracking-widest font-mono text-rose-300">
-                      IGNORE TICKERS
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => ignoreFileInputRef.current?.click()}
-                        className="text-[10px] font-mono px-2 py-1 rounded border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors"
-                      >
-                        IMPORT CSV
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIgnoreTickersText("")}
-                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
-                      >
-                        CLR
-                      </button>
-                    </div>
-                  </div>
-                  <textarea
-                    value={ignoreTickersText}
-                    onChange={(e) => setIgnoreTickersText(e.target.value.toUpperCase())}
-                    rows={4}
-                    placeholder="AAPL, TSLA, NVDA"
-                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-500/45 font-mono"
-                  />
-                  <input
-                    ref={ignoreFileInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={onIgnoreFileSelected}
-                    className="hidden"
-                  />
-                </div>
-              )}
-
-              {showApply && (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] uppercase tracking-widest font-mono text-emerald-300">
-                      APPLY TICKERS
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => applyFileInputRef.current?.click()}
-                        className="text-[10px] font-mono px-2 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
-                      >
-                        IMPORT CSV
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTickersText("")}
-                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
-                      >
-                        CLR
-                      </button>
-                    </div>
-                  </div>
-                  <textarea
-                    value={tickersText}
-                    onChange={(e) => setTickersText(e.target.value.toUpperCase())}
-                    rows={4}
-                    placeholder="AAPL, TSLA, NVDA"
-                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-500/40 font-mono"
-                  />
-                  <input
-                    ref={applyFileInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={onApplyFileSelected}
-                    className="hidden"
-                  />
-                </div>
-              )}
-
-              {showPin && (
-                <div className="rounded-xl border border-violet-400/25 bg-violet-400/[0.05] p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] uppercase tracking-widest font-mono text-violet-200">
-                      PIN TICKERS
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => pinFileInputRef.current?.click()}
-                        className="text-[10px] font-mono px-2 py-1 rounded border border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition-colors"
-                      >
-                        IMPORT CSV
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBenchTickersText("")}
-                        className="text-[10px] font-mono text-zinc-500 hover:text-white transition-colors"
-                      >
-                        CLR
-                      </button>
-                    </div>
-                  </div>
-                  <textarea
-                    value={benchTickersText}
-                    onChange={(e) => setBenchTickersText(e.target.value.toUpperCase())}
-                    rows={4}
-                    placeholder="AAPL, TSLA, NVDA"
-                    className="w-full resize-y bg-black/20 border border-white/10 rounded-md px-2.5 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-400/45 font-mono"
-                  />
-                  <input
-                    ref={pinFileInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={onPinFileSelected}
-                    className="hidden"
-                  />
-                </div>
-              )}
-            </div>
-          </GlassCard>
+          <TickerListDrawers
+            showIgnore={showIgnore}
+            showApply={showApply}
+            showPin={showPin}
+            ignoreTickersText={ignoreTickersText}
+            tickersText={tickersText}
+            benchTickersText={benchTickersText}
+            setIgnoreTickersText={setIgnoreTickersText}
+            setTickersText={setTickersText}
+            setBenchTickersText={setBenchTickersText}
+            ignoreFileInputRef={ignoreFileInputRef}
+            applyFileInputRef={applyFileInputRef}
+            pinFileInputRef={pinFileInputRef}
+            onIgnoreFileSelected={onIgnoreFileSelected}
+            onApplyFileSelected={onApplyFileSelected}
+            onPinFileSelected={onPinFileSelected}
+          />
         )}
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -12920,7 +5941,6 @@ export default function OpenDoorScanner({
             </div>
           ))}
         </div>
-
 
         <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
@@ -13162,730 +6182,29 @@ export default function OpenDoorScanner({
         </div>
 
         {showSharedMinMax && (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-              <MinMaxRow label="ADV20" filterKey="adv20" mode={sharedRangeFilterModes.adv20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv20} maxValue={maxAdv20} setMin={setMinAdv20} setMax={setMaxAdv20} card clearable />
-              <MinMaxRow label="ADV20NF" filterKey="adv20nf" mode={sharedRangeFilterModes.adv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv20NF} maxValue={maxAdv20NF} setMin={setMinAdv20NF} setMax={setMaxAdv20NF} card clearable />
-              <MinMaxRow label="ADV90" filterKey="adv90" mode={sharedRangeFilterModes.adv90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv90} maxValue={maxAdv90} setMin={setMinAdv90} setMax={setMaxAdv90} card clearable />
-              <MinMaxRow label="ADV90NF" filterKey="adv90nf" mode={sharedRangeFilterModes.adv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAdv90NF} maxValue={maxAdv90NF} setMin={setMinAdv90NF} setMax={setMaxAdv90NF} card clearable />
-              <MinMaxRow label="AvPreMhv" filterKey="avpremhv" mode={sharedRangeFilterModes.avpremhv} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhv} maxValue={maxAvPreMhv} setMin={setMinAvPreMhv} setMax={setMaxAvPreMhv} card clearable />
-              <MinMaxRow label="RoundLot" filterKey="roundlot" mode={sharedRangeFilterModes.roundlot} onToggleMode={toggleSharedRangeFilterMode} minValue={minRoundLot} maxValue={maxRoundLot} setMin={setMinRoundLot} setMax={setMaxRoundLot} card clearable />
-              <MinMaxRow label="VWAP" filterKey="vwap" mode={sharedRangeFilterModes.vwap} onToggleMode={toggleSharedRangeFilterMode} minValue={minVWAP} maxValue={maxVWAP} setMin={setMinVWAP} setMax={setMaxVWAP} card clearable />
-              <MinMaxRow label="SpreadBid%" filterKey="spread" mode={sharedRangeFilterModes.spread} onToggleMode={toggleSharedRangeFilterMode} minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable />
-              <MinMaxRow label="LstPrcL" filterKey="lstprcl" mode={sharedRangeFilterModes.lstprcl} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcL} maxValue={maxLstPrcL} setMin={setMinLstPrcL} setMax={setMaxLstPrcL} card clearable />
-              <MinMaxRow label="LstCls" filterKey="lstcls" mode={sharedRangeFilterModes.lstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstCls} maxValue={maxLstCls} setMin={setMinLstCls} setMax={setMaxLstCls} card clearable />
-              <MinMaxRow label="YCls" filterKey="ycls" mode={sharedRangeFilterModes.ycls} onToggleMode={toggleSharedRangeFilterMode} minValue={minYCls} maxValue={maxYCls} setMin={setMinYCls} setMax={setMaxYCls} card clearable />
-              <MinMaxRow label="TCls" filterKey="tcls" mode={sharedRangeFilterModes.tcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minTCls} maxValue={maxTCls} setMin={setMinTCls} setMax={setMaxTCls} card clearable />
-              <MinMaxRow label="ClsToCls%" filterKey="clstocls" mode={sharedRangeFilterModes.clstocls} onToggleMode={toggleSharedRangeFilterMode} minValue={minClsToClsPct} maxValue={maxClsToClsPct} setMin={setMinClsToClsPct} setMax={setMaxClsToClsPct} card clearable />
-              <MinMaxRow label="Lo" filterKey="lo" mode={sharedRangeFilterModes.lo} onToggleMode={toggleSharedRangeFilterMode} minValue={minLo} maxValue={maxLo} setMin={setMinLo} setMax={setMaxLo} card clearable />
-              <MinMaxRow
-                label="LstClsNewsCnt"
-                filterKey="lstclsnewscnt"
-                mode={sharedRangeFilterModes.lstclsnewscnt}
-                onToggleMode={toggleSharedRangeFilterMode}
-                minValue={minLstClsNewsCnt}
-                maxValue={maxLstClsNewsCnt}
-                setMin={setMinLstClsNewsCnt}
-                setMax={setMaxLstClsNewsCnt}
-                card
-                clearable
-              />
-              <MinMaxRow
-                label="MarketCapM"
-                filterKey="marketcapm"
-                mode={sharedRangeFilterModes.marketcapm}
-                onToggleMode={toggleSharedRangeFilterMode}
-                minValue={minMarketCapM}
-                maxValue={maxMarketCapM}
-                setMin={setMinMarketCapM}
-                setMax={setMaxMarketCapM}
-                card
-                clearable
-              />
-              <MinMaxRow label="PreMhVolNF" filterKey="premhvolnf" mode={sharedRangeFilterModes.premhvolnf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMktVolNF} maxValue={maxPreMktVolNF} setMin={setMinPreMktVolNF} setMax={setMaxPreMktVolNF} card clearable />
-              <MinMaxRow
-                label="VolNFfromLstCls"
-                filterKey="volnffromlstcls"
-                mode={sharedRangeFilterModes.volnffromlstcls}
-                onToggleMode={toggleSharedRangeFilterMode}
-                minValue={minVolNFfromLstCls}
-                maxValue={maxVolNFfromLstCls}
-                setMin={setMinVolNFfromLstCls}
-                setMax={setMaxVolNFfromLstCls}
-                card
-                clearable
-                zeroCoverage={zeroCoverageFilterKeys.has("volnffromlstcls")}
-              />
-              <MinMaxRow label="AvPostMhVol90NF" filterKey="avpostmhvol90nf" mode={sharedRangeFilterModes.avpostmhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPostMhVol90NF} maxValue={maxAvPostMhVol90NF} setMin={setMinAvPostMhVol90NF} setMax={setMaxAvPostMhVol90NF} card clearable />
-              <MinMaxRow label="AvPreMhVol90NF" filterKey="avpremhvol90nf" mode={sharedRangeFilterModes.avpremhvol90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhVol90NF} maxValue={maxAvPreMhVol90NF} setMin={setMinAvPreMhVol90NF} setMax={setMaxAvPreMhVol90NF} card clearable />
-              <MinMaxRow label="AvPreMhValue20NF" filterKey="avpremhvalue20nf" mode={sharedRangeFilterModes.avpremhvalue20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue20NF} maxValue={maxAvPreMhValue20NF} setMin={setMinAvPreMhValue20NF} setMax={setMaxAvPreMhValue20NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avpremhvalue20nf")} />
-              <MinMaxRow label="AvPreMhValue90NF" filterKey="avpremhvalue90nf" mode={sharedRangeFilterModes.avpremhvalue90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvPreMhValue90NF} maxValue={maxAvPreMhValue90NF} setMin={setMinAvPreMhValue90NF} setMax={setMaxAvPreMhValue90NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avpremhvalue90nf")} />
-              <MinMaxRow label="AvgDailyValue20" filterKey="avgdailyvalue20" mode={sharedRangeFilterModes.avgdailyvalue20} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue20} maxValue={maxAvgDailyValue20} setMin={setMinAvgDailyValue20} setMax={setMaxAvgDailyValue20} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avgdailyvalue20")} />
-              <MinMaxRow label="AvgDailyValue90" filterKey="avgdailyvalue90" mode={sharedRangeFilterModes.avgdailyvalue90} onToggleMode={toggleSharedRangeFilterMode} minValue={minAvgDailyValue90} maxValue={maxAvgDailyValue90} setMin={setMinAvgDailyValue90} setMax={setMaxAvgDailyValue90} card clearable zeroCoverage={zeroCoverageFilterKeys.has("avgdailyvalue90")} />
-              <MinMaxRow label="Volatility20" filterKey="volatility20" mode={sharedRangeFilterModes.volatility20} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility20} maxValue={maxVolatility20} setMin={setMinVolatility20} setMax={setMaxVolatility20} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volatility20")} />
-              <MinMaxRow label="Volatility90" filterKey="volatility90" mode={sharedRangeFilterModes.volatility90} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolatility90} maxValue={maxVolatility90} setMin={setMinVolatility90} setMax={setMaxVolatility90} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volatility90")} />
-              <MinMaxRow label="PreMhMDV20NF" filterKey="premhmdv20nf" mode={sharedRangeFilterModes.premhmdv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV20NF} maxValue={maxPreMhMDV20NF} setMin={setMinPreMhMDV20NF} setMax={setMaxPreMhMDV20NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhmdv20nf")} />
-              <MinMaxRow label="PreMhMDV90NF" filterKey="premhmdv90nf" mode={sharedRangeFilterModes.premhmdv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV90NF} maxValue={maxPreMhMDV90NF} setMin={setMinPreMhMDV90NF} setMax={setMaxPreMhMDV90NF} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhmdv90nf")} />
-              <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable zeroCoverage={zeroCoverageFilterKeys.has("volrel")} />
-              <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhbidlstprc")} />
-              <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhlolstprc")} />
-              <MinMaxRow label="PreMhHiLstCls%" filterKey="premhhilstcls" mode={sharedRangeFilterModes.premhhilstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhHiLstClsPct} maxValue={maxPreMhHiLstClsPct} setMin={setMinPreMhHiLstClsPct} setMax={setMaxPreMhHiLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhhilstcls")} />
-              <MinMaxRow label="PreMhLoLstCls%" filterKey="premhlolstcls" mode={sharedRangeFilterModes.premhlolstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstClsPct} maxValue={maxPreMhLoLstClsPct} setMin={setMinPreMhLoLstClsPct} setMax={setMaxPreMhLoLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("premhlolstcls")} />
-              <MinMaxRow label="LstPrcLstCls%" filterKey="lstprclstcls" mode={sharedRangeFilterModes.lstprclstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcLstClsPct} maxValue={maxLstPrcLstClsPct} setMin={setMinLstPrcLstClsPct} setMax={setMaxLstPrcLstClsPct} card clearable zeroCoverage={zeroCoverageFilterKeys.has("lstprclstcls")} />
-              <MinMaxRow label="ImbExch9:25" filterKey="imbexch925" mode={sharedRangeFilterModes.imbexch925} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch925} maxValue={maxImbExch925} setMin={setMinImbExch925} setMax={setMaxImbExch925} card clearable zeroCoverage={zeroCoverageFilterKeys.has("imbexch925")} />
-              <MinMaxRow label="ImbExch15:55" filterKey="imbexch1555" mode={sharedRangeFilterModes.imbexch1555} onToggleMode={toggleSharedRangeFilterMode} minValue={minImbExch1555} maxValue={maxImbExch1555} setMin={setMinImbExch1555} setMax={setMaxImbExch1555} card clearable zeroCoverage={zeroCoverageFilterKeys.has("imbexch1555")} />
-            </div>
+          <SharedMinMaxPanel
+            filters={scannerFilters}
+            zeroCoverageFilterKeys={zeroCoverageFilterKeys}
+            toggleSharedRangeFilterMode={toggleSharedRangeFilterMode}
+          />
           )}
 
         <div className="flex flex-col gap-3">
-        <GlassCard className="order-2 p-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              {[
-                { key: "Active", label: "ACTIVE" },
-                { key: "Passive", label: "PASSIVE" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => setCloseMode(m.key as PaperArbCloseMode)}
-                  className={clsx(
-                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    closeMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              {[
-                { key: "Hedged", label: "HEDGED" },
-                { key: "RawOnly", label: "RAWONLY" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => setPnlMode(m.key as PaperArbPnlMode)}
-                  className={clsx(
-                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    pnlMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              {[
-                { key: "LastPrint", label: "PRINT" },
-                { key: "BidAsk", label: "BIDASK" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => setPriceMode(m.key as PaperArbPriceMode)}
-                  className={clsx(
-                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    priceMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              {[
-                { key: "Notional", label: "USD" },
-                { key: "Tier", label: "TIER" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => {
-                    const nextMode = m.key as PaperArbSizingMode;
-                    setSizingMode(nextMode);
-                    setSizeValue((current) =>
-                      nextMode === "Tier"
-                        ? 1
-                        : normalizeScannerSizeValue(nextMode, current)
-                    );
-                  }}
-                  className={clsx(
-                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    sizingMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
-                {sizingMode === "Notional" ? "SIZE" : "TIERS"}
-              </span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={sizingMode === "Tier" ? 1 : 1000}
-                  step={sizingMode === "Tier" ? 1 : 1000}
-                  value={formatScannerSizeValue(sizingMode, sizeValue)}
-                  onChange={(e) => setSizeValue(normalizeScannerSizeValue(sizingMode, Number(e.target.value)))}
-                  className={clsx("center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setSizeValue((v) => stepScannerSizeValue(sizingMode, v, 1))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label={sizingMode === "Tier" ? "Increase tier count" : "Increase size"}
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setSizeValue((v) => stepScannerSizeValue(sizingMode, v, -1))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label={sizingMode === "Tier" ? "Decrease tier count" : "Decrease size"}
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              {[
-                { key: "Undiluted", label: "UNDILUTED" },
-                { key: "Diluted", label: "DILUTED" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => applyDilutionMode(m.key as PaperArbDilutionMode)}
-                  className={clsx(
-                    "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    dilutionMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">STEP</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0.1}
-                  step={0.1}
-                  value={formatDilutionStepValue(dilutionStep)}
-                  onChange={(e) => applyDilutionStep(Number(e.target.value))}
-                  disabled={dilutionMode !== "Diluted"}
-                  className={clsx(
-                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-                    "accent-text"
-                  )}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, 1))}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase dilution step"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, -1))}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Decrease dilution step"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MAXADD</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={9}
-                  step={1}
-                  value={maxAdds}
-                  onChange={(e) => applyMaxAdds(Number(e.target.value))}
-                  disabled={dilutionMode !== "Diluted"}
-                  className={clsx(
-                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-                    "accent-text"
-                  )}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyMaxAdds(maxAdds + 1)}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase max additions"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyMaxAdds(maxAdds - 1)}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Decrease max additions"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={60}
-                  step={1}
-                  value={addDelayMinutes}
-                  onChange={(e) => applyAddDelayMinutes(Number(e.target.value))}
-                  disabled={dilutionMode !== "Diluted"}
-                  className={clsx(
-                    "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-                    "accent-text"
-                  )}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAddDelayMinutes(addDelayMinutes + 1)}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase add delay minutes"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAddDelayMinutes(addDelayMinutes - 1)}
-                    disabled={dilutionMode !== "Diluted"}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Decrease add delay minutes"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
-              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={180}
-                  step={1}
-                  value={minHoldCandles}
-                  onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMinHoldCandles((v) => Math.max(0, Math.min(180, Math.trunc(v + 1))))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase min hold"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setMinHoldCandles((v) => Math.max(0, Math.min(180, Math.trunc(v - 1))))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease min hold"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20">
-              <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
-              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={600}
-                  step={1}
-                  value={effectiveStreamAutomationConfig.queueDelayMinSeconds}
-                  onChange={(e) => {
-                    const nextMin = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
-                    const nextMax = Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds);
-                    onStreamAutomationConfigChange?.({
-                      queueDelayMinSeconds: nextMin,
-                      queueDelayMaxSeconds: nextMax,
-                    });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMinSeconds + 1)));
-                      const nextMax = Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds);
-                      onStreamAutomationConfigChange?.({
-                        queueDelayMinSeconds: nextMin,
-                        queueDelayMaxSeconds: nextMax,
-                      });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase delay min seconds"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const nextMin = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMinSeconds - 1)));
-                      onStreamAutomationConfigChange?.({
-                        queueDelayMinSeconds: nextMin,
-                        queueDelayMaxSeconds: Math.max(nextMin, effectiveStreamAutomationConfig.queueDelayMaxSeconds),
-                      });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease delay min seconds"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-              <span className="flex h-7 items-center justify-center text-[10px] font-mono text-zinc-600">-</span>
-              <div className="group relative h-8 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={600}
-                  step={1}
-                  value={effectiveStreamAutomationConfig.queueDelayMaxSeconds}
-                  onChange={(e) => {
-                    const nextMax = Math.max(0, Math.min(600, clampInt(e.target.value, 0)));
-                    const nextMin = Math.min(effectiveStreamAutomationConfig.queueDelayMinSeconds, nextMax);
-                    onStreamAutomationConfigChange?.({
-                      queueDelayMinSeconds: nextMin,
-                      queueDelayMaxSeconds: nextMax,
-                    });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMaxSeconds + 1)));
-                      onStreamAutomationConfigChange?.({
-                        queueDelayMaxSeconds: nextMax,
-                      });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase delay max seconds"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const nextMax = Math.max(0, Math.min(600, Math.trunc(effectiveStreamAutomationConfig.queueDelayMaxSeconds - 1)));
-                      const nextMin = Math.min(effectiveStreamAutomationConfig.queueDelayMinSeconds, nextMax);
-                      onStreamAutomationConfigChange?.({
-                        queueDelayMinSeconds: nextMin,
-                        queueDelayMaxSeconds: nextMax,
-                      });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease delay max seconds"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-              <span className="flex h-8 items-center pr-3 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
-            </div>
-
-            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="Position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning.">
-              <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">START</span>
-              {/* Hour stepper */}
-              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={23}
-                  step={1}
-                  value={Number(preStartTime.split(":")[0] ?? "21")}
-                  onChange={(e) => {
-                    const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
-                    const m = preStartTime.split(":")[1] ?? "00";
-                    const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-                    setPreStartTime(nextPreStartTime);
-                    onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") + 1));
-                      const m = preStartTime.split(":")[1] ?? "00";
-                      const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-                      setPreStartTime(nextPreStartTime);
-                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase pre-session start hour"
-                  >▲</button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") - 1));
-                      const m = preStartTime.split(":")[1] ?? "00";
-                      const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-                      setPreStartTime(nextPreStartTime);
-                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease pre-session start hour"
-                  >▼</button>
-                </div>
-              </div>
-              <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
-              {/* Minute stepper */}
-              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={59}
-                  step={5}
-                  value={Number(preStartTime.split(":")[1] ?? "00")}
-                  onChange={(e) => {
-                    const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
-                    const h = preStartTime.split(":")[0] ?? "21";
-                    const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-                    setPreStartTime(nextPreStartTime);
-                    onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") + 5));
-                      const h = preStartTime.split(":")[0] ?? "21";
-                      const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-                      setPreStartTime(nextPreStartTime);
-                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase pre-session start minute"
-                  >▲</button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") - 5));
-                      const h = preStartTime.split(":")[0] ?? "21";
-                      const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-                      setPreStartTime(nextPreStartTime);
-                      onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease pre-session start minute"
-                  >▼</button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
-              <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>
-              {/* Hour stepper */}
-              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={23}
-                  step={1}
-                  value={Number(startCutoffTime.split(":")[0] ?? "9")}
-                  onChange={(e) => {
-                    const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
-                    const m = startCutoffTime.split(":")[1] ?? "00";
-                    const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-                    setStartCutoffTime(nextCutoffTime);
-                    onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") + 1));
-                      const m = startCutoffTime.split(":")[1] ?? "00";
-                      const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-                      setStartCutoffTime(nextCutoffTime);
-                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase cutoff hour"
-                  >▲</button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") - 1));
-                      const m = startCutoffTime.split(":")[1] ?? "00";
-                      const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-                      setStartCutoffTime(nextCutoffTime);
-                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease cutoff hour"
-                  >▼</button>
-                </div>
-              </div>
-              <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
-              {/* Minute stepper */}
-              <div className="group relative h-8 w-9 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={59}
-                  step={5}
-                  value={Number(startCutoffTime.split(":")[1] ?? "20")}
-                  onChange={(e) => {
-                    const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
-                    const h = startCutoffTime.split(":")[0] ?? "09";
-                    const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-                    setStartCutoffTime(nextCutoffTime);
-                    onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                  }}
-                  className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") + 5));
-                      const h = startCutoffTime.split(":")[0] ?? "09";
-                      const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-                      setStartCutoffTime(nextCutoffTime);
-                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                    }}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Increase cutoff minute"
-                  >▲</button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") - 5));
-                      const h = startCutoffTime.split(":")[0] ?? "09";
-                      const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-                      setStartCutoffTime(nextCutoffTime);
-                      onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-                    }}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    aria-label="Decrease cutoff minute"
-                  >▼</button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex-1" />
-
-            {tab === "episodes" && !isStreamOnlyShell && filteredEpisodes.length > 0 && (
-              <button
-                type="button"
-                onClick={downloadEpisodesLog}
-                className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
-                title={`Download ${filteredEpisodes.length} episodes as JSONL`}
-              >
-                ↓ LOG
-              </button>
-            )}
-
-            {streamFilterPassLogCount > 0 && (
-              <button
-                type="button"
-                onClick={downloadStreamFilterPassLog}
-                className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
-                title={`Download ${streamFilterPassLogCount} stream filter-pass entries as CSV (tickers that first appeared as ENTRY_READY)`}
-              >
-                ↓ STREAM LOG ({streamFilterPassLogCount})
-              </button>
-            )}
-
-
-          </div>
-        </GlassCard>
+        <ExecutionSettingsPanel
+          filters={scannerFilters}
+          tab={tab}
+          isStreamOnlyShell={isStreamOnlyShell}
+          applyDilutionMode={applyDilutionMode}
+          applyDilutionStep={applyDilutionStep}
+          applyMaxAdds={applyMaxAdds}
+          applyAddDelayMinutes={applyAddDelayMinutes}
+          effectiveStreamAutomationConfig={effectiveStreamAutomationConfig}
+          onStreamAutomationConfigChange={onStreamAutomationConfigChange}
+          streamFilterPassLogCount={streamFilterPassLogCount}
+          filteredEpisodes={filteredEpisodes}
+          downloadEpisodesLog={downloadEpisodesLog}
+          downloadStreamFilterPassLog={downloadStreamFilterPassLog}
+        />
 
         <div className="order-1 flex flex-wrap items-center gap-4">
             <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-900/30 bg-rose-900/10 p-1.5">
@@ -14408,7 +6727,6 @@ export default function OpenDoorScanner({
             </div>
           </div>
         )}
-
 
         {primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell && (
           <div className="space-y-3">
@@ -15141,7 +7459,7 @@ export default function OpenDoorScanner({
                   const draft = scopeResearchDrafts[panel.key];
                   const computed = scopeResearchComputedByPanel[panel.key];
                   const bounds = scopeResearchObservedBoundsByPanel[panel.key];
-                  const parameterOption = scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, draft.parameterKey);
+                  const parameterOption = scopeResearchOptionByValue(STRATEGY.scope.parameterOptions, draft.parameterKey);
                   return (
                     <div
                       key={`scope-grid-${panel.key}`}
@@ -15173,7 +7491,7 @@ export default function OpenDoorScanner({
                                     [panel.key]: {
                                       ...prev[panel.key],
                                       chartType: mode.key,
-                                      resultKey: scopeResearchNormalizeResultKey(mode.key, prev[panel.key].resultKey),
+                                      resultKey: STRATEGY.scope.normalizeResultKey(mode.key, prev[panel.key].resultKey),
                                     },
                                   }))
                                 }
@@ -15223,7 +7541,7 @@ export default function OpenDoorScanner({
                               onClick={() =>
                                 setScopeResearchSelections((prev) => ({
                                   ...prev,
-                                  [panel.key]: buildScopeResearchSelectionFromDraft(draft),
+                                  [panel.key]: buildScopeResearchSelectionFromDraft(draft, STRATEGY.scope),
                                 }))
                               }
                               className={clsx(
@@ -15253,7 +7571,7 @@ export default function OpenDoorScanner({
                                   [panel.key]: { ...prev[panel.key], parameterKey: e.target.value as ScopeResearchParameterKey },
                                 }))
                               }
-                              options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                              options={STRATEGY.scope.parameterSelectGroups}
                               className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
@@ -15267,7 +7585,7 @@ export default function OpenDoorScanner({
                                   [panel.key]: { ...prev[panel.key], resultKey: e.target.value as ScopeResearchResultKey },
                                 }))
                               }
-                              options={scopeResearchResultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
+                              options={STRATEGY.scope.resultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
                               className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
@@ -15498,7 +7816,7 @@ export default function OpenDoorScanner({
                                           },
                                         }))
                                       }
-                                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                                      options={STRATEGY.scope.parameterSelectGroups}
                                       className="w-full"
                                     />
                                   </div>
@@ -15630,7 +7948,7 @@ export default function OpenDoorScanner({
                                           },
                                         }))
                                       }
-                                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                                      options={STRATEGY.scope.parameterSelectGroups}
                                       className="w-full"
                                     />
                                   </div>
@@ -15757,7 +8075,7 @@ export default function OpenDoorScanner({
                         type="button"
                         onClick={() => {
                           setScopeResearchChartType(mode.key);
-                          setScopeResearchResultKey(scopeResearchNormalizeResultKey(mode.key, scopeResearchResultKey));
+                          setScopeResearchResultKey(STRATEGY.scope.normalizeResultKey(mode.key, scopeResearchResultKey));
                         }}
                         className={clsx(
                           "h-8 px-3 rounded-lg border whitespace-nowrap leading-none transition-all text-[10px] font-mono uppercase",
@@ -15775,7 +8093,7 @@ export default function OpenDoorScanner({
                     <GlassSelect
                       value={scopeResearchParameterKey}
                       onChange={(e) => setScopeResearchParameterKey(e.target.value as ScopeResearchParameterKey)}
-                      options={SCOPE_RESEARCH_PARAMETER_SELECT_GROUPS}
+                      options={STRATEGY.scope.parameterSelectGroups}
                     />
                   </div>
                   <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
@@ -15783,7 +8101,7 @@ export default function OpenDoorScanner({
                     <GlassSelect
                       value={scopeResearchResultKey}
                       onChange={(e) => setScopeResearchResultKey(e.target.value as ScopeResearchResultKey)}
-                      options={scopeResearchResultOptionsForChart(scopeResearchChartType).map((option) => ({ value: option.value, label: option.label }))}
+                      options={STRATEGY.scope.resultOptionsForChart(scopeResearchChartType).map((option) => ({ value: option.value, label: option.label }))}
                     />
                   </div>
                   <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
@@ -15818,7 +8136,7 @@ export default function OpenDoorScanner({
                       value={scopeResearchDomainFrom}
                       onChange={(e) => setScopeResearchDomainFrom(e.target.value)}
                       width={84}
-                      placeholder={scopeResearchObservedBounds.min != null ? scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format) : "min"}
+                      placeholder={scopeResearchObservedBounds.min != null ? scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(STRATEGY.scope.parameterOptions, scopeResearchParameterKey).format) : "min"}
                     />
                   </div>
                   <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
@@ -15829,17 +8147,17 @@ export default function OpenDoorScanner({
                       value={scopeResearchDomainTo}
                       onChange={(e) => setScopeResearchDomainTo(e.target.value)}
                       width={84}
-                      placeholder={scopeResearchObservedBounds.max != null ? scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format) : "max"}
+                      placeholder={scopeResearchObservedBounds.max != null ? scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(STRATEGY.scope.parameterOptions, scopeResearchParameterKey).format) : "max"}
                     />
                   </div>
                   <div className="text-[10px] font-mono text-zinc-600">
                     {scopeResearchObservedBounds.min != null && scopeResearchObservedBounds.max != null
-                      ? `range ${scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format)} .. ${scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(SCOPE_RESEARCH_PARAMETER_OPTIONS, scopeResearchParameterKey).format)}`
+                      ? `range ${scopeResearchFormatValue(scopeResearchObservedBounds.min, scopeResearchOptionByValue(STRATEGY.scope.parameterOptions, scopeResearchParameterKey).format)} .. ${scopeResearchFormatValue(scopeResearchObservedBounds.max, scopeResearchOptionByValue(STRATEGY.scope.parameterOptions, scopeResearchParameterKey).format)}`
                       : "Detached from optimizer."}
                   </div>
                   <button
                     type="button"
-                    onClick={() => setScopeResearchSelection(buildScopeResearchSelectionFromDraft(scopeResearchDrafts.left))}
+                    onClick={() => setScopeResearchSelection(buildScopeResearchSelectionFromDraft(scopeResearchDrafts.left, STRATEGY.scope))}
                     className="px-3 py-1.5 rounded-lg border border-white/[0.12] bg-white/[0.04] text-zinc-100 hover:bg-white/[0.07] text-[10px] font-mono font-bold uppercase tracking-[0.16em] transition-all"
                   >
                     Apply
@@ -16183,230 +8501,10 @@ export default function OpenDoorScanner({
           </div>
         )}
 
-
-        <style jsx global>{`
-          .analytics-trades-table th,
-          .analytics-trades-table td {
-            padding: 4px 7px !important;
-          }
-          input.center-spin[type="number"] {
-            -moz-appearance: textfield;
-          }
-          input.center-spin[type="number"]::-webkit-outer-spin-button,
-          input.center-spin[type="number"]::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-          }
-        `}</style>
+        <ScannerTableStyles />
       </div>
-      <style>{`
-        .scanner-borderless .scanner-header-surface,
-        .scanner-borderless .scanner-glass-card,
-        .scanner-borderless .scanner-panel-surface,
-        .scanner-borderless .scanner-control-surface,
-        .scanner-borderless .scanner-eye-button {
-          border-color: transparent !important;
-        }
-
-        .scanner-borderless .border-white\\/5,
-        .scanner-borderless .border-white\\/10,
-        .scanner-borderless .border-white\\/\\[0\\.04\\],
-        .scanner-borderless .border-white\\/\\[0\\.06\\],
-        .scanner-borderless .border-white\\/\\[0\\.07\\],
-        .scanner-borderless .border-white\\/\\[0\\.08\\],
-        .scanner-borderless .border-white\\/\\[0\\.12\\] {
-          border-color: transparent !important;
-        }
-
-        .scanner-light-theme {
-          color: #111827;
-          color-scheme: light;
-        }
-
-        .scanner-light-theme .scanner-header-surface,
-        .scanner-light-theme .scanner-glass-card,
-        .scanner-light-theme .scanner-panel-surface,
-        .scanner-light-theme .scanner-eye-button,
-        .scanner-light-theme .scanner-control-surface,
-        .scanner-light-theme .scanner-glass-input {
-          background: rgba(255, 255, 255, 0.28) !important;
-          border-color: rgba(15, 23, 42, 0.1) !important;
-          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05) !important;
-        }
-
-        .scanner-light-theme button,
-        .scanner-light-theme input,
-        .scanner-light-theme select,
-        .scanner-light-theme textarea {
-          color: #111827;
-        }
-
-        .scanner-light-theme .bg-black\\/20,
-        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/40,
-        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/30,
-        .scanner-light-theme .bg-\\[\\#0a0a0a\\]\\/60,
-        .scanner-light-theme .bg-\\[\\#05070b\\]\\/95,
-        .scanner-light-theme .bg-\\[\\#06070c\\]\\/90,
-        .scanner-light-theme .bg-\\[\\#070707\\]\\/95,
-        .scanner-light-theme .bg-\\[\\#070910\\]\\/95,
-        .scanner-light-theme .bg-\\[\\#090b10\\],
-        .scanner-light-theme .bg-\\[\\#090a0f\\]\\/90,
-        .scanner-light-theme .bg-\\[\\#111111\\]\\/95,
-        .scanner-light-theme .bg-\\[\\#05070b\\]\\/95,
-        .scanner-light-theme .bg-white\\/5,
-        .scanner-light-theme .bg-white\\/10,
-        .scanner-light-theme .bg-white\\/\\[0\\.03\\],
-        .scanner-light-theme .bg-white\\/\\[0\\.04\\] {
-          background-color: rgba(255, 255, 255, 0.38) !important;
-        }
-
-        .scanner-light-theme [class*="bg-[linear-gradient"] {
-          background: rgba(255, 255, 255, 0.38) !important;
-          background-image: none !important;
-        }
-
-        .scanner-light-theme .border-white\\/5,
-        .scanner-light-theme .border-white\\/10,
-        .scanner-light-theme .border-white\\/\\[0\\.04\\],
-        .scanner-light-theme .border-white\\/\\[0\\.06\\],
-        .scanner-light-theme .border-white\\/\\[0\\.08\\],
-        .scanner-light-theme .border-white\\/\\[0\\.12\\] {
-          border-color: rgba(15, 23, 42, 0.1) !important;
-        }
-
-        .scanner-light-theme .scanner-glass-input {
-          color: #111827 !important;
-        }
-
-        .scanner-light-theme .scanner-glass-input::placeholder {
-          color: rgba(17, 24, 39, 0.42) !important;
-        }
-
-        .scanner-light-theme .text-white,
-        .scanner-light-theme .text-zinc-50,
-        .scanner-light-theme .text-zinc-100,
-        .scanner-light-theme .text-zinc-200,
-        .scanner-light-theme .text-zinc-300,
-        .scanner-light-theme .text-zinc-400 {
-          color: #111827 !important;
-        }
-
-        .scanner-light-theme .text-zinc-500,
-        .scanner-light-theme .text-zinc-600,
-        .scanner-light-theme .text-zinc-700 {
-          color: rgba(17, 24, 39, 0.64) !important;
-        }
-
-        .scanner-light-theme svg text,
-        .scanner-light-theme .fill-zinc-200,
-        .scanner-light-theme .fill-zinc-300,
-        .scanner-light-theme .fill-zinc-400,
-        .scanner-light-theme .fill-zinc-500,
-        .scanner-light-theme .fill-zinc-600,
-        .scanner-light-theme .text-\\[9px\\].uppercase.tracking-\\[0\\.18em\\].font-mono.text-zinc-500,
-        .scanner-light-theme .text-\\[10px\\].uppercase.tracking-widest.font-mono.text-zinc-500,
-        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-500,
-        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-600,
-        .scanner-light-theme .text-xs.font-mono.text-zinc-500,
-        .scanner-light-theme .text-zinc-400.font-normal,
-        .scanner-light-theme .text-zinc-500.font-normal {
-          color: #111827 !important;
-          fill: #111827 !important;
-        }
-
-        .scanner-light-theme .hover\\:text-white:hover,
-        .scanner-light-theme .hover\\:text-zinc-200:hover,
-        .scanner-light-theme .hover\\:text-zinc-300:hover,
-        .scanner-light-theme .hover\\:text-violet-200:hover,
-        .scanner-light-theme .hover\\:text-rose-400:hover {
-          color: #111827 !important;
-        }
-
-        .scanner-light-theme .text-violet-300,
-        .scanner-light-theme .text-violet-400,
-        .scanner-light-theme .text-violet-500,
-        .scanner-light-theme .text-violet-600 {
-          color: #4c1d95 !important;
-        }
-
-        .scanner-light-theme .fill-zinc-400,
-        .scanner-light-theme .fill-zinc-500,
-        .scanner-light-theme .fill-zinc-600 {
-          fill: rgba(17, 24, 39, 0.7) !important;
-        }
-
-        .scanner-light-theme svg rect[fill="rgba(8,15,26,0.36)"],
-        .scanner-light-theme svg rect[fill="rgba(8,15,26,0.28)"] {
-          fill: rgba(255, 255, 255, 0.28) !important;
-        }
-
-        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.06)"],
-        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.12)"],
-        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.14)"],
-        .scanner-light-theme svg line[stroke="rgba(255,255,255,0.18)"] {
-          stroke: rgba(15, 23, 42, 0.12) !important;
-        }
-
-        .scanner-light-theme svg text.fill-zinc-500,
-        .scanner-light-theme svg text.fill-zinc-400,
-        .scanner-light-theme svg text.fill-zinc-600 {
-          fill: rgba(17, 24, 39, 0.64) !important;
-        }
-
-        .scanner-light-theme table thead.bg-\\[\\#111111\\]\\/95,
-        .scanner-light-theme table thead.bg-\\[\\#090a0f\\]\\/90,
-        .scanner-light-theme .text-xs.font-mono.text-zinc-500.bg-\\[\\#070707\\]\\/95,
-        .scanner-light-theme .dark-pro-table,
-        .scanner-light-theme [title="dark pro table"] {
-          background: rgba(255, 255, 255, 0.38) !important;
-          color: #111827 !important;
-        }
-
-        .scanner-light-theme .text-\\[10px\\].font-mono.text-zinc-600 {
-          color: rgba(17, 24, 39, 0.52) !important;
-        }
-
-        .scanner-light-theme table,
-        .scanner-light-theme thead,
-        .scanner-light-theme tbody,
-        .scanner-light-theme tr,
-        .scanner-light-theme th,
-        .scanner-light-theme td {
-          color: #111827;
-        }
-
-        .scanner-light-theme .stroke-white\\/10,
-        .scanner-light-theme .stroke-white\\/\\[0\\.06\\],
-        .scanner-light-theme .stroke-white\\/\\[0\\.08\\] {
-          stroke: rgba(15, 23, 42, 0.14) !important;
-        }
-
-        .scanner-light-theme .text-emerald-300,
-        .scanner-light-theme .text-emerald-400 {
-          color: #047857 !important;
-        }
-
-        .scanner-light-theme .text-rose-300,
-        .scanner-light-theme .text-rose-400 {
-          color: #be123c !important;
-        }
-
-        .scanner-light-theme .bg-violet-300\\/10,
-        .scanner-light-theme .bg-violet-300\\/8,
-        .scanner-light-theme .bg-violet-200\\/10 {
-          background-color: rgba(221, 214, 254, 0.55) !important;
-        }
-
-        .scanner-light-theme .hover\\:bg-black\\/30:hover,
-        .scanner-light-theme .hover\\:bg-black\\/20:hover,
-        .scanner-light-theme .hover\\:bg-white\\/5:hover,
-        .scanner-light-theme .hover\\:bg-white\\/10:hover,
-        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.03\\]:hover,
-        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.04\\]:hover,
-        .scanner-light-theme .hover\\:bg-white\\/\\[0\\.05\\]:hover {
-          background-color: rgba(255, 255, 255, 0.5) !important;
-        }
-      `}</style>
+      <ScannerThemeStyles />
     </div>
   );
 }
+

@@ -9,9 +9,10 @@ import {
   IconScanner, 
   IconScope, 
   IconSwagger, 
-  IconSpectr, 
-  IconSwift 
-} from "./AppIcons"; 
+  IconSpectr,
+  IconSwift,
+  IconCaesar
+} from "./AppIcons";
 
 type AccentColor = "green" | "violet" | "blue" | "orange" | "rose" | "amber" | "cyan" | "indigo";
 
@@ -31,6 +32,7 @@ const ITEMS: DockItem[] = [
   { key: "swagger", href: "http://localhost:5197/swagger", label: "Swagger", Icon: IconSwagger, accent: "amber" },
   { key: "spectr", href: "/tape", label: "Spectr", Icon: IconSpectr, accent: "violet" },
   { key: "swift", href: "/sifter", label: "Swift", Icon: IconSwift, accent: "rose" },
+  { key: "caesar", href: "/caesar", label: "Caesar", Icon: IconCaesar, accent: "orange" },
 ];
 
 function accentClasses(accent: AccentColor, active: boolean) {
@@ -52,7 +54,9 @@ export function AppDock() {
 
   return (
     <div className="p-4 w-fit mx-auto">
-      <div className="grid grid-cols-3 gap-6">
+      {/* 4 columns keeps the 7th tile (Caesar) on the second row — 3 columns would add a third
+          row and push the dock down over the hero clock. */}
+      <div className="grid grid-cols-4 gap-6">
         {ITEMS.map((it) => {
           const isExternal = it.href.startsWith("http");
           const active = !isExternal && (pathname === it.href || pathname.startsWith(it.href + "/"));

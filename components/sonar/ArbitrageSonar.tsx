@@ -2268,6 +2268,16 @@ type PinColor = "orange" | "lavender" | "cyan";
 type PinMap = Record<string, PinColor>;
 
 export type SonarExactFilterSnapshot = {
+  /**
+   * Skip Arbitrage's own rating gate (session best-rating and the BIN/BINS bin lookups).
+   *
+   * Strategies that rate by their OWN file must set this. OpenDoor scores a signal against its
+   * summary.csv per-bin table (lib/opendoor/gate.ts); running Arbitrage's rating first pre-thins
+   * the feed by an unrelated rule, so the OpenDoor gate then judges a universe Arbitrage already
+   * cut. OpenDoorSonar's own copy of this function has never applied it — this flag is what lets
+   * the shared copy behave the same way for the stream.
+   */
+  skipArbitrageRating?: boolean;
   cls: string;
   type: string;
   mode: string;
@@ -2511,7 +2521,9 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     }
     if (failedRangeBound) continue;
 
-    if (useBinRatingFilter) {
+    if (f.skipArbitrageRating) {
+      // Rated by the strategy's own file instead — see skipArbitrageRating.
+    } else if (useBinRatingFilter) {
       if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
     } else if (useSigBinFilter) {
       if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;

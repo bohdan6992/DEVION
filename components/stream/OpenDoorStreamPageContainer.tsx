@@ -89,7 +89,10 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     printCloseTime: "09:20",
     noSpreadExit: true,
     betaMode: false,
-    startCutoffTime: "09:20",
+    // CUTOFF is the CLOSE moment (Ctrl+E). Entries stop earlier, at entryStopTime, so the
+    // ~09:20 burst has a few minutes to finish flushing through the queue.
+    startCutoffTime: "10:00",
+    entryStopTime: "09:25",
     preStartTime: "21:00",
   };
 }
@@ -119,6 +122,7 @@ function sameStreamAutomationConfig(
     left.noSpreadExit === right.noSpreadExit &&
     left.betaMode === right.betaMode &&
     left.startCutoffTime === right.startCutoffTime &&
+    left.entryStopTime === right.entryStopTime &&
     left.preStartTime === right.preStartTime
   );
 }
@@ -219,6 +223,7 @@ function readInitialAutomationConfig(automationKey: string): StreamAutomationCon
       noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig().noSpreadExit,
       betaMode: typeof parsed.betaMode === "boolean" ? parsed.betaMode : false,
       startCutoffTime: typeof parsed.startCutoffTime === "string" && parsed.startCutoffTime ? parsed.startCutoffTime : defaultAutomationConfig().startCutoffTime,
+      entryStopTime: typeof parsed.entryStopTime === "string" && parsed.entryStopTime ? parsed.entryStopTime : defaultAutomationConfig().entryStopTime,
       preStartTime: typeof parsed.preStartTime === "string" && parsed.preStartTime ? parsed.preStartTime : defaultAutomationConfig().preStartTime,
     };
   } catch {
@@ -355,6 +360,11 @@ function OpenDoorStreamPageContainerInner({
         body: JSON.stringify({
           clientId: streamPageClientId,
           source: "opendoor-stream-page",
+          // Without this the heartbeat lands on the bridge's "__default__" key while the state
+          // pull above uses the real strategyId, so this strategy's UiHeartbeatAtUtc/UiConnected
+          // never update and anything server-side that asks "is this strategy's tab alive" is
+          // answered for the wrong strategy. StreamPageContainer already sends it.
+          strategyId,
         }),
       });
     } catch {
