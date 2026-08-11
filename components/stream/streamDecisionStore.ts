@@ -13,6 +13,7 @@ export type StreamDecisionStoreRow = {
   safePrice: number | null;
   netEdge: number | null;
   positionBp: number | null;
+  report: string | null;
   status: "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
   reason: string;
   updatedAt: number;
@@ -35,6 +36,7 @@ function sameDecisionRow(a: StreamDecisionStoreRow | undefined, b: StreamDecisio
     sameNullableNumber(a.safePrice, b.safePrice) &&
     sameNullableNumber(a.netEdge, b.netEdge) &&
     sameNullableNumber(a.positionBp, b.positionBp) &&
+    a.report === b.report &&
     a.status === b.status &&
     a.reason === b.reason &&
     a.updatedAt === b.updatedAt

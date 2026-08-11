@@ -13,6 +13,24 @@ import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFil
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "@/lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "@/types/presets";
 import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
+import { rowExcludedByBorrow } from "../../lib/filters/borrow";
+import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
+import ScannerHeader from "../scanner/shell/panels/ScannerHeader";
+// The min/max card lives with the rest of the shared UI kit under components/scanner/shared —
+// one implementation for Sonar and Scanner, so the grid cannot drift apart again.
+import { MinMaxRow, MultiSelectFilter } from "../scanner/shared/ui";
+import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_INPUT, FILTER_PILL, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE, toolbarButtonClass } from "../shared/filters/styles";
+import FilterRatingRow from "../shared/filters/FilterRatingRow";
+import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import {
+  SECTOR_CORR_DEFAULT,
+  SECTOR_CORR_MAX,
+  SECTOR_CORR_MIN,
+  clampSectorCorrThreshold,
+  parseSectorCorrThreshold,
+  rowExcludedByCorr,
+  useSectorCorrExclusion,
+} from "../../lib/filters/sectorCorr";
 
 /* =========================
    TYPES
@@ -1168,109 +1186,29 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
   };
 }
 
-/* =========================
-   MinMax component
-========================= */
-type MinMaxProps = {
-  label: string;
-  filterKey?: RangeBoundKey;
-  min: string;
-  max: string;
-  setMin: (v: string) => void;
-  setMax: (v: string) => void;
-  mode?: "on" | "off";
-  onToggleMode?: (key: RangeBoundKey) => void;
-  minPh?: string;
-  maxPh?: string;
-  startEditing: () => void;
-  stopEditing: () => void;
-};
 
+/* =========================
+   Range-bound filter modes
+========================= */
 const RANGE_BOUND_KEYS = [
   "Corr", "Beta", "Sigma",
-  "ADV20", "ADV20NF", "ADV90", "ADV90NF", "AvPreMhv", "RoundLot", "VWAP", "SpreadBidPct", "LstPrcL",
-  "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt", "MarketCapM", "PreMhVolNF",
-  "VolNFfromLstCls", "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
-  "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90", "PreMhMDV20NF", "PreMhMDV90NF",
-  "VolRel", "PreMhBidLstPrcPct", "PreMhLoLstPrcPct",
-  "PreMhHiLstClsPct", "PreMhLoLstClsPct", "LstPrcLstClsPct", "ImbExch925", "ImbExch1555",
+  "ADV20", "ADV20NF", "ADV90", "ADV90NF",
+  "AvPreMhv", "RoundLot", "VWAP", "SpreadBidPct", "LstPrcL",
+  "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt",
+  "MarketCapM", "PreMhVolNF", "VolNFfromLstCls",
+  "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
+  "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90",
+  "PreMhMDV20NF", "PreMhMDV90NF", "VolRel",
+  "PreMhBidLstPrcPct", "PreMhLoLstPrcPct", "PreMhHiLstClsPct", "PreMhLoLstClsPct",
+  "LstPrcLstClsPct", "ImbExch925", "ImbExch1555",
 ] as const;
-type RangeBoundKey = typeof RANGE_BOUND_KEYS[number];
-type RangeFilterMode = "on" | "off";
-type RangeFilterModes = Record<RangeBoundKey, RangeFilterMode>;
+
+export type RangeBoundKey = (typeof RANGE_BOUND_KEYS)[number];
+export type RangeFilterMode = "on" | "off";
+export type RangeFilterModes = Record<RangeBoundKey, RangeFilterMode>;
 
 const createDefaultRangeModes = (): RangeFilterModes =>
   Object.fromEntries(RANGE_BOUND_KEYS.map((key) => [key, "on"])) as RangeFilterModes;
-
-export const MinMax = React.memo(function MinMax(props: MinMaxProps) {
-  const hasValue = Boolean(props.min || props.max);
-  const isOff = props.mode === "off";
-
-  return (
-    <div
-      className={clsx(
-        "group flex flex-col gap-1 rounded-xl border p-2 transition-all",
-        hasValue
-          ? isOff
-            ? "border-rose-500/30 bg-rose-500/[0.05]"
-            : "border-[#6ee7b7]/30 bg-[#6ee7b7]/[0.05]"
-          : "border-white/5 bg-[#0a0a0a]/40 hover:border-white/10"
-      )}
-      onFocusCapture={props.startEditing}
-      onBlurCapture={(e) => {
-        const next = e.relatedTarget as Node | null;
-        if (next && e.currentTarget.contains(next)) return;
-        props.stopEditing();
-      }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="mr-1 truncate text-[10px] font-mono uppercase tracking-widest text-zinc-500">{props.label}</div>
-        <div className="flex items-center gap-2">
-          {hasValue && props.filterKey && props.onToggleMode && (
-            <button
-              type="button"
-              onClick={() => props.onToggleMode?.(props.filterKey!)}
-              className={clsx(
-                "text-[10px] font-mono transition-colors uppercase",
-                isOff ? "text-rose-300 hover:text-rose-200" : "text-[#6ee7b7] hover:text-[#a7f3d0]"
-              )}
-              title={isOff ? "Stored but ignored in filters" : "Applied to filters"}
-            >
-              {isOff ? "OFF" : "ON"}
-            </button>
-          )}
-          {hasValue && (
-            <button
-              type="button"
-              onClick={() => {
-                props.setMin("");
-                props.setMax("");
-              }}
-              className="text-[10px] font-mono text-rose-400 hover:text-rose-300 transition-colors"
-            >
-              CLR
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="flex gap-2">
-        <input
-          className="w-full rounded border-0 bg-black/20 px-1.5 py-1 text-center text-[11px] font-mono text-zinc-200 tabular-nums shadow-none outline-none ring-0 transition-all placeholder:text-zinc-600 hover:border-0 focus:border-0 focus:outline-none focus:ring-0"
-          value={props.min}
-          placeholder={props.minPh ?? "min"}
-          onChange={(e) => props.setMin(e.target.value)}
-        />
-        <input
-          className="w-full rounded border-0 bg-black/20 px-1.5 py-1 text-center text-[11px] font-mono text-zinc-200 tabular-nums shadow-none outline-none ring-0 transition-all placeholder:text-zinc-600 hover:border-0 focus:border-0 focus:outline-none focus:ring-0"
-          value={props.max}
-          placeholder={props.maxPh ?? "max"}
-          onChange={(e) => props.setMax(e.target.value)}
-        />
-      </div>
-    </div>
-  );
-});
 
 /* =========================
    UI Helper Components
@@ -1485,12 +1423,13 @@ const getSonarAccent = (theme?: string | null) => {
   };
 };
 
-const SONAR_FILTER_GROUP_BASE =
-  "inline-flex items-center gap-2 rounded-xl border p-1.5";
-const SONAR_FILTER_INNER_PILL =
-  "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all";
-const SONAR_FILTER_INPUT =
-  "h-7 rounded-lg border px-3 py-0 text-[11px] font-mono text-center tabular-nums leading-none transition-all focus:outline-none";
+// Aliases, not copies: the ZAP slot and a few one-off controls still render their own markup
+// here, and the shared toolbar rows render theirs from components/shared/filters/styles. Two
+// literal copies of the same strings is exactly how the Scanner's ZAP group ended up a shade
+// darker than the Sonar's, so there is one definition now.
+const SONAR_FILTER_GROUP_BASE = FILTER_GROUP_BASE;
+const SONAR_FILTER_INNER_PILL = FILTER_PILL;
+const SONAR_FILTER_INPUT = FILTER_INPUT;
 
 const ChevronIcon = ({ open }: { open: boolean }) => (
   <svg
@@ -1508,161 +1447,6 @@ const ChevronIcon = ({ open }: { open: boolean }) => (
   </svg>
 );
 
-const MultiSelectFilter = ({
-  label,
-  options,
-  selected,
-  setSelected,
-  enabled,
-  toggleEnabled,
-  color = "amber",
-  hideArrow = false,
-  onMainClick,
-}: {
-  label: string;
-  options: string[];
-  selected: Set<string>;
-  setSelected: (s: Set<string>) => void;
-  enabled: TriMode;
-  toggleEnabled: () => void;
-  color?: MsColor;
-  hideArrow?: boolean;
-  onMainClick?: () => void;
-}) => {
-  const { theme } = useUi();
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-
-  const id = useMemo(() => `msf-${slug(label)}`, [label]);
-  const C = MSF[resolveAccentMsColor(theme, color)];
-
-  const toggleOption = (val: string) => {
-    const next = new Set(selected);
-    if (next.has(val)) next.delete(val);
-    else next.add(val);
-    setSelected(next);
-  };
-
-
-
-
-  const recomputePos = () => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 8, width: Math.max(220, r.width) });
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    recomputePos();
-
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const insideWrap = !!wrapRef.current?.contains(target);
-      const menuEl = document.getElementById(id);
-      const insideMenu = !!menuEl?.contains(target);
-      if (!insideWrap && !insideMenu) setOpen(false);
-    };
-
-    const onScroll = () => recomputePos();
-    const onResize = () => recomputePos();
-
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onResize);
-    };
-  }, [open, id]);
-
-  const menu =
-    open && pos
-      ? createPortal(
-          <div
-            id={id}
-            style={{ position: "fixed", left: pos.left, top: pos.top, width: pos.width, zIndex: 999999 }}
-            className="bg-[#0a0a0a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar"
-          >
-            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
-              {options.map((opt, i) => (
-                <button
-                  key={opt || `na-${i}`}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => toggleOption(opt)}
-                  className={`text-left px-2 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-2 ${
-                    selected.has(opt) ? C.activeItem : C.inactiveItem
-                  }`}
-                >
-                  <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                    {selected.has(opt) ? (
-                      <div className={`w-3 h-3 rounded ${C.boxChecked}`} />
-                    ) : (
-                      <div className="w-3 h-3 rounded border border-white/20" />
-                    )}
-                  </div>
-
-                  <span className="truncate">{opt}</span>
-                </button>
-              ))}
-              {options.length === 0 && <div className="text-[10px] text-zinc-600 px-2 py-1 text-center">No options</div>}
-            </div>
-          </div>,
-          document.body
-        )
-      : null;
-
-  return (
-    <>
-      <div className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
-        <button
-          type="button"
-          onClick={toggleEnabled}
-          className={clsx(
-            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
-            enabled === "off" && C.chipInactive,
-            enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
-            enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
-          )}
-        >
-          <span>{label}</span>
-          {selected.size > 0 && (
-            <span
-              className={clsx(
-                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
-                enabled === "off" && `border-yellow-200/35 accent-text`,
-                enabled === "include" && "border-emerald-400/50 text-emerald-400",
-                enabled === "exclude" && "border-red-400/50 text-red-400",
-              )}
-            >
-              {selected.size}
-            </span>
-          )}
-        </button>
-
-        <div className={`w-px h-4 ${C.divider}`} />
-
-        <button
-          type="button"
-          onClick={() => {
-            onMainClick?.();
-            if (!hideArrow) setOpen((v) => !v);
-          }}
-          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-full ${C.arrow}`}
-        >
-          <ChevronIcon open={open} />
-        </button>
-      </div>
-
-      {menu}
-    </>
-  );
-};
 
 type SingleSelectFilterProps = {
   hideArrow?: boolean;
@@ -1989,12 +1773,7 @@ const FB = {
 } as const;
 
 const FilterButton: React.FC<FilterButtonProps> = ({ active, label, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all ${
-      active ? "accent-chip" : "border border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
-    }`}
-  >
+  <button type="button" onClick={onClick} className={toolbarButtonClass(active)}>
     {label}
   </button>
 );
@@ -2301,6 +2080,11 @@ export type SonarExactFilterSnapshot = {
   excludeReport: boolean;
   excludeETF: boolean;
   excludeCrap: boolean;
+  excludeItb: boolean;
+  excludeHard: boolean;
+  excludeCorr: boolean;
+  /** Peers of today's reporting tickers, resolved by the bridge. See `lib/filters/sectorCorr`. */
+  corrExcluded: Set<string>;
   activeMode: ActiveMode;
   includeUSA: boolean;
   includeChina: boolean;
@@ -2556,6 +2340,8 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
     if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
     if (f.excludeReport && hasTodayReport(s)) continue;
+    // CORR: not "this ticker reports" but "this ticker moves with one that does".
+    if (f.excludeCorr && rowExcludedByCorr(s, f.corrExcluded)) continue;
     if (f.excludeETF) {
       if (boolIsETF(s) === true) continue;
       const eqt = strEquityType(s).toLowerCase();
@@ -2565,6 +2351,9 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       const px = numLastClose(s);
       if (px != null && px < 5) continue;
     }
+    // Borrow availability (B5ETB) — one reader shared with the Scanner, which receives the same
+    // field under a different spelling. See lib/filters/borrow.
+    if (rowExcludedByBorrow(s, f.excludeItb, f.excludeHard)) continue;
 
     if (f.includeUSA || f.includeChina) {
       const matchUSA = isUSA(s);
@@ -3057,9 +2846,10 @@ export default function ArbitrageSonar() {
   const sonarActiveFilterIconClass = isLightTheme ? "text-slate-400" : "text-[#8f919b]";
   const sonarActiveFilterActiveIconClass = "text-current";
   const secondaryGroupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
-  const secondaryButtonBaseClass =
-    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border";
-  const secondaryButtonInactiveClass = "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
+  // Aliases of the shared toolbar style, not copies — this pair is the original from which the
+  // class-row pills were forked, and keeping a second literal here is how they drifted apart.
+  const secondaryButtonBaseClass = TOOLBAR_BUTTON_BASE;
+  const secondaryButtonInactiveClass = TOOLBAR_BUTTON_INACTIVE;
   const secondaryButtonSoftActiveClass = isLightTheme
     ? "bg-slate-900/10 text-slate-900 border-slate-900/10 shadow-none"
     : accentButtonClass;
@@ -3076,8 +2866,6 @@ export default function ArbitrageSonar() {
   const [betaMax, setBetaMax] = useState("");
   const [sigmaMin, setSigmaMin] = useState("");
   const [sigmaMax, setSigmaMax] = useState("");
-  const [corrEnabled, setCorrEnabled] = useState(false);
-  const [corrAbs, setCorrAbs] = useState(0.5);
 
 
   const [minRate, setMinRate] = useState<number>(0.3);
@@ -3292,6 +3080,12 @@ export default function ArbitrageSonar() {
   const [excludeReport, setExcludeReport] = useState(false);
   const [excludeETF, setExcludeETF] = useState(false);
   const [excludeCrap, setExcludeCrap] = useState(false);
+  // B5ETB borrow availability: ITB drops rows valued "ITB", HARD drops rows valued "NO".
+  const [excludeItb, setExcludeItb] = useState(false);
+  const [excludeHard, setExcludeHard] = useState(false);
+  // CORR drops names correlated with today's reporting tickers; the box holds the |corr| cutoff.
+  const [excludeCorr, setExcludeCorr] = useState(false);
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
   const [activeMode, setActiveMode] = useState<ActiveMode>("off");
 
 
@@ -3357,7 +3151,10 @@ export default function ArbitrageSonar() {
   const [activePanelVisible, setActivePanelVisible] = useState<boolean>(true);
   const [activePanelCollapsed, setActivePanelCollapsed] = useState<boolean>(true);
   const [activePanelMode, setActivePanelMode] = useState<"mini" | "expanded">("mini");
-  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
+  // Same name, polarity and default as the Scanner's toggle for the identical grid. It used
+  // to be `filtersCollapsed` (inverted), which is why the two surfaces read as different
+  // controls even though they gate the same thing.
+  const [showSharedMinMax, setShowSharedMinMax] = useState(true);
 
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeErr, setActiveErr] = useState<string | null>(null);
@@ -3653,7 +3450,9 @@ export default function ArbitrageSonar() {
         if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
         if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
-        if (typeof s?.filtersCollapsed === "boolean") setFiltersCollapsed(s.filtersCollapsed);
+        if (typeof s?.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
+        // Layouts saved before the rename stored the inverted `filtersCollapsed`.
+        else if (typeof s?.filtersCollapsed === "boolean") setShowSharedMinMax(!s.filtersCollapsed);
 
         // toggles
         for (const k of [
@@ -3824,7 +3623,7 @@ export default function ArbitrageSonar() {
           zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
 
           // query params
-          ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+          ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
           topMode, topSigmaOn, topBenchOn, topTimeOn,
 
           // toggles
@@ -3883,7 +3682,7 @@ export default function ArbitrageSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
-    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, filtersCollapsed,
+    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
     filterReport, equityType,
@@ -4312,6 +4111,14 @@ export default function ArbitrageSonar() {
     imbExch1555Min, imbExch1555Max,
   ]);
 
+  // Seeds come from `allItems` — the whole sample, before any UI filter. A reporting ticker the
+  // user hid for an unrelated reason still contaminates the names that move with it.
+  const corrThreshold = useMemo(
+    () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
+    [corrThresholdInput]
+  );
+  const sectorCorr = useSectorCorrExclusion(allItems, excludeCorr, corrThreshold);
+
   const snapshot = useMemo(() => {
     return {
       cls,
@@ -4338,6 +4145,10 @@ export default function ArbitrageSonar() {
       excludeReport,
       excludeETF,
       excludeCrap,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      corrExcluded: sectorCorr.excluded,
       activeMode,
 
       includeUSA,
@@ -4376,6 +4187,7 @@ export default function ArbitrageSonar() {
     listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+    excludeItb, excludeHard, excludeCorr, sectorCorr.excluded,
     activeMode, // include in dependencies
     includeUSA, includeChina,
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
@@ -5051,221 +4863,35 @@ export default function ArbitrageSonar() {
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* ========================= HEADER ========================= */}
-        <header className="bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            <GlitchTitle text="ARBITRAGE SONAR" />
-          </div>
-          
-
-          <div className="flex items-center gap-3">
-
-          {/* ========================= MODE + ACTIVE FILTER ========================= */}
-          <div className="flex items-center gap-3">
-            {/* Group 1: STREAM / SCANNER / SONAR */}
-            <div className={secondaryGroupClass}>
-              <Link
-                href="/stream/arbitrage"
-                className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /stream/arbitrage"
-              >
-                STREAM
-              </Link>
-
-              {/* SCANNER */}
-              <Link
-                href="/paper/arbitrage"
-                className={`${secondaryButtonBaseClass} ${secondaryButtonInactiveClass}`}
-                title="Open /paper/arbitrage"
-              >
-                SCANNER
-              </Link>
-
-              {/* SONAR (current) */}
-              <button
-                type="button"
-                className={`${secondaryButtonBaseClass} ${accentButtonClass}`}
-                title="SONAR (current)"
-              >
-                SONAR
-              </button>
-            </div>
-
-          </div>
-
-
-
-            {/* ========================= LIST MODES + DRAWER TOGGLES (two-click-areas) ========================= */}
-            <div className="flex items-center gap-3">
-              <div className={secondaryGroupClass}>
-                {/* ---------- IGNORE pill ---------- */}
-                <div
-                  className={clsx(
-                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "ignore" ? "border-rose-500/30 bg-rose-500/12" : "border-white/10 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  {/* MODE area */}
-                  <button
-                    type="button"
-                    onClick={setModeIgnore}
-                    className={clsx(
-                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "ignore" ? "text-rose-300" : "text-zinc-300"
-                    )}
-                    title="LIST MODE: IGNORE"
-                  >
-                    <span className="tracking-wide">IGN</span>
-                    {ignoreSet.size > 0 && <span className="opacity-70">({ignoreSet.size})</span>}
-                  </button>
-
-                  <div className="w-px bg-white/10" />
-
-                  {/* LIST drawer area */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowIgnore((v) => !v);
-                    }}
-                    className={clsx(
-                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showIgnore ? "text-rose-300" : "text-zinc-400 hover:text-white"
-                    )}
-                    title={showIgnore ? "Hide IGNORE list" : "Show IGNORE list"}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showIgnore ? "" : "opacity-80"}>
-                      <line x1="8" y1="6" x2="21" y2="6" />
-                      <line x1="8" y1="12" x2="21" y2="12" />
-                      <line x1="8" y1="18" x2="21" y2="18" />
-                      <line x1="3" y1="6" x2="3.01" y2="6" />
-                      <line x1="3" y1="12" x2="3.01" y2="12" />
-                      <line x1="3" y1="18" x2="3.01" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* ---------- APPLY pill ---------- */}
-                <div
-                  className={clsx(
-                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "apply" ? "border-[#6ee7b7]/25 bg-[#6ee7b7]/10" : "border-white/10 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  {/* MODE area */}
-                  <button
-                    type="button"
-                    onClick={setModeApply}
-                    className={clsx(
-                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "apply" ? "text-emerald-300" : "text-zinc-300"
-                    )}
-                    title="LIST MODE: APPLY"
-                  >
-                    <span className="tracking-wide">APP</span>
-                    {applySet.size > 0 && <span className="opacity-70">({applySet.size})</span>}
-                  </button>
-
-                  <div className="w-px bg-white/10" />
-
-                  {/* LIST drawer area */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowApply((v) => !v);
-                    }}
-                    className={clsx(
-                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showApply ? "text-[#6ee7b7]" : "text-zinc-400 hover:text-white"
-                    )}
-                    title={showApply ? "Hide APPLY list" : "Show APPLY list"}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showApply ? "" : "opacity-80"}>
-                      <line x1="8" y1="6" x2="21" y2="6" />
-                      <line x1="8" y1="12" x2="21" y2="12" />
-                      <line x1="8" y1="18" x2="21" y2="18" />
-                      <line x1="3" y1="6" x2="3.01" y2="6" />
-                      <line x1="3" y1="12" x2="3.01" y2="12" />
-                      <line x1="3" y1="18" x2="3.01" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* ---------- PIN pill ---------- */}
-                <div
-                  className={clsx(
-                    "flex items-stretch overflow-hidden rounded-lg border transition-all",
-                    listMode === "pin" ? "border-violet-400/30 bg-violet-400/12" : "border-white/10 bg-white/5 hover:bg-white/10"
-                  )}
-                >
-                  {/* MODE area */}
-                  <button
-                    type="button"
-                    onClick={setModePin}
-                    className={clsx(
-                      "px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2",
-                      listMode === "pin" ? "text-violet-200" : "text-zinc-300"
-                    )}
-                    title="LIST MODE: PIN"
-                  >
-                    <span className="tracking-wide">PIN</span>
-                    {Object.keys(pinMap).length > 0 && <span className="opacity-70">({Object.keys(pinMap).length})</span>}
-                  </button>
-
-                  <div className="w-px bg-white/10" />
-
-                  {/* LIST drawer area */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowPin((v) => !v);
-                    }}
-                    className={clsx(
-                      "px-2.5 py-1.5 flex items-center justify-center transition-colors group",
-                      showPin ? "text-violet-300" : "text-zinc-400 hover:text-white"
-                    )}
-                    title={showPin ? "Hide PIN list" : "Show PIN list"}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={showPin ? "" : "opacity-80"}>
-                      <line x1="8" y1="6" x2="21" y2="6" />
-                      <line x1="8" y1="12" x2="21" y2="12" />
-                      <line x1="8" y1="18" x2="21" y2="18" />
-                      <line x1="3" y1="6" x2="3.01" y2="6" />
-                      <line x1="3" y1="12" x2="3.01" y2="12" />
-                      <line x1="3" y1="18" x2="3.01" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-              {/* REFRESH */}
-              <button
-                type="button"
-                onClick={() => setStreamReconnectVersion((v) => v + 1)}
-                className={`w-9 h-9 flex items-center justify-center rounded-lg border bg-[#0a0a0a]/40 transition-all active:scale-95 ${accentOutlineButtonClass}`}
-                title="Reconnect stream"
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                  className={loading ? "animate-spin" : ""}
-                >
-                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                  <polyline points="21 3 21 9 15 9" />
-                </svg>
-              </button>
-            </div>
-
-          </div>
-        </header>
+        {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
+        <ScannerHeader
+          scannerShellTitle="ARBITRAGE SONAR"
+          headerNavGroupClass={secondaryGroupClass}
+          headerNavInactiveClass={secondaryButtonInactiveClass}
+          navStreamHref="/stream/arbitrage"
+          navScannerHref="/paper/arbitrage"
+          navSonarHref="/sonar"
+          primaryPanel="sonar"
+          listMode={listMode}
+          ignCount={ignoreSet.size}
+          appCount={applySet.size}
+          pinCount={Object.keys(pinMap).length}
+          showIgnore={showIgnore}
+          showApply={showApply}
+          showPin={showPin}
+          setShowIgnore={setShowIgnore}
+          setShowApply={setShowApply}
+          setShowPin={setShowPin}
+          // The Sonar has no advanced panel to reveal; the Scanner opens one alongside the drawers.
+          setShowAdvanced={() => {}}
+          setModeIgnore={setModeIgnore}
+          setModeApply={setModeApply}
+          setModePin={setModePin}
+          canRun={!loading}
+          run={() => setStreamReconnectVersion((v) => v + 1)}
+          busy={loading}
+          variantString="Reconnect stream"
+        />
 
         {showPresets && (
           <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
@@ -5285,173 +4911,91 @@ export default function ArbitrageSonar() {
           </div>
         )}
 
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className={sonarActiveFilterStripClass}>
-            <button
-              type="button"
-              onClick={() => setActiveMode("onlyActive")}
-              className={[
-                sonarActiveFilterButtonBaseClass,
-                activeMode === "onlyActive"
-                  ? sonarActiveFilterButtonActiveClass
-                  : sonarActiveFilterButtonInactiveClass,
-              ].join(" ")}
-              title="Show only ACTIVE positions (PositionBp != 0)"
-            >
-              {renderSonarActiveFilterIcon("active", activeMode === "onlyActive")}
-              ACTIVE
-            </button>
+        {/* Rating row — shared with the other Sonar and both Scanners.
+            See components/shared/filters/FilterRatingRow. */}
+        <FilterRatingRow
+          activeMode={activeMode}
+          setActiveMode={setActiveMode}
+          stripClass={sonarActiveFilterStripClass}
+          stripButtonBaseClass={sonarActiveFilterButtonBaseClass}
+          stripButtonActiveClass={sonarActiveFilterButtonActiveClass}
+          stripButtonInactiveClass={sonarActiveFilterButtonInactiveClass}
+          renderActiveIcon={renderSonarActiveFilterIcon}
+          modeSlot={
+            <>
 
-            <button
-              type="button"
-              onClick={() => setActiveMode("onlyInactive")}
-              className={[
-                sonarActiveFilterButtonBaseClass,
-                activeMode === "onlyInactive"
-                  ? sonarActiveFilterButtonActiveClass
-                  : sonarActiveFilterButtonInactiveClass,
-              ].join(" ")}
-              title="Show only INACTIVE positions (PositionBp == 0)"
-            >
-              {renderSonarActiveFilterIcon("inactive", activeMode === "onlyInactive")}
-              INACTIVE
-            </button>
+              {/* TOP mode toggle */}
+              <div className="flex h-7 items-center gap-1.5">
+                <div className="flex h-7 items-center rounded-lg bg-black/20">
+                  {([false, true] as const).map((isTop) => (
+                    <button
+                      key={String(isTop)}
+                      type="button"
+                      onClick={() => setTopMode(isTop)}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                        topMode === isTop
+                          ? isTop
+                            ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                            : secondaryButtonSoftActiveClass
+                          : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      {isTop ? "TOP" : "ALL"}
+                    </button>
+                  ))}
+                </div>
+                {topMode && (
+                  <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+                    {([
+                      { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
+                      { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
+                      { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
+                    ] as const).map(({ key, label, on, set }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => set((v) => !v)}
+                        className={clsx(
+                          "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
+                          on
+                            ? "accent-fill"
+                            : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-            <button
-              type="button"
-              onClick={() => setActiveMode("off")}
-              className={[
-                sonarActiveFilterButtonBaseClass,
-                activeMode === "off"
-                  ? sonarActiveFilterButtonActiveClass
-                  : sonarActiveFilterButtonInactiveClass,
-              ].join(" ")}
-              title="Show ALL positions"
-            >
-              {renderSonarActiveFilterIcon("all", activeMode === "off")}
-              ALL
-            </button>
-          </div>
-
-          <div className="ml-auto flex flex-wrap justify-end gap-3">
-
-          {/* TOP mode toggle */}
-          <div className="flex h-7 items-center gap-1.5">
-            <div className="flex h-7 items-center rounded-lg bg-black/20">
-              {([false, true] as const).map((isTop) => (
-                <button
-                  key={String(isTop)}
-                  type="button"
-                  onClick={() => setTopMode(isTop)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    topMode === isTop
-                      ? isTop
-                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : secondaryButtonSoftActiveClass
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {isTop ? "TOP" : "ALL"}
-                </button>
-              ))}
-            </div>
-            {topMode && (
-              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                {([
-                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                ] as const).map(({ key, label, on, set }) => (
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
                   <button
-                    key={key}
+                    key={modeKey}
                     type="button"
-                    onClick={() => set((v) => !v)}
+                    onClick={() => setRatingMode(modeKey)}
                     className={clsx(
-                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                      on
-                        ? "accent-fill"
-                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                      ratingMode === modeKey
+                        ? secondaryButtonSoftActiveClass
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     )}
                   >
-                    {label}
+                    {modeKey}
                   </button>
                 ))}
               </div>
-            )}
-          </div>
-
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
-              <button
-                key={modeKey}
-                type="button"
-                onClick={() => setRatingMode(modeKey)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
-                    ? secondaryButtonSoftActiveClass
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                {modeKey}
-              </button>
-            ))}
-          </div>
-
-          {fields.map((field) => (
-            <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode={field.integer ? "numeric" : "decimal"}
-                  step={field.step}
-                  min={field.min}
-                  value={field.val}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    if (!Number.isFinite(next)) {
-                      field.set(field.min);
-                      return;
-                    }
-                    field.set(field.integer ? Math.max(field.min, Math.trunc(next)) : Math.max(field.min, +next.toFixed(4)));
-                  }}
-                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, field.step)} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bumpNumField(field, -field.step)} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {[
+            </>
+          }
+          steppers={fields}
+          ranges={[
             { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
             { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
             { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
-          ].map((field) => (
-            <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
-              <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">{field.label}</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input type="number" inputMode="decimal" step={field.step} value={field.minValue} onChange={(e) => field.setMin(e.target.value)} className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]" placeholder="min" />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
-                </div>
-              </div>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input type="number" inputMode="decimal" step={field.step} value={field.maxValue} onChange={(e) => field.setMax(e.target.value)} className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]" placeholder="max" />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
-                </div>
-              </div>
-            </div>
-          ))}
-          </div>
-        </div>
+          ]}
+        />
 
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
@@ -5486,51 +5030,6 @@ export default function ArbitrageSonar() {
 
           {/* RIGHT GROUP */}
           <div className="flex gap-2 items-center">
-            {false && fields.map((f) => (
-              <div key={f.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
-                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{f.label}</span>
-                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={f.step}
-                    min={f.min}
-                    value={Number.isFinite(f.val) ? f.val : ""}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      if (raw === "") return;
-                      let n = Number(raw);
-                      if (!Number.isFinite(n)) return;
-                      if (f.integer) n = Math.trunc(n);
-                      n = Math.max(f.min, n);
-                      f.set(n);
-                    }}
-                    placeholder={f.ph}
-                    className={`center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center ${accentTextSoftClass} placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]`}
-                  />
-                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpNumField(f, f.step)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label={`Increase ${f.label}`}
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpNumField(f, -f.step)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label={`Decrease ${f.label}`}
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
 
             <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
               <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
@@ -5664,11 +5163,12 @@ export default function ArbitrageSonar() {
 
             {/* COLLAPSE BUTTON - MUST BE LAST (after OFFSET) */}
               <button
-                onClick={() => setFiltersCollapsed(!filtersCollapsed)}
-                className="flex h-7 w-12 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
-                title={filtersCollapsed ? "Show Filters" : "Collapse Filters"}
+                type="button"
+                onClick={() => setShowSharedMinMax((v) => !v)}
+                className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
+                title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
               >
-                {filtersCollapsed ? (
+                {!showSharedMinMax ? (
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     width="14"
@@ -5703,263 +5203,109 @@ export default function ArbitrageSonar() {
               </button>
 
         </div>
+        </div>
 
         {/* ========================= THRESHOLDS GRID ========================= */}
-        {!filtersCollapsed && (
+        {showSharedMinMax && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-            <MinMax label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} min={adv20Min} max={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} min={adv20NFMin} max={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} min={adv90Min} max={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} min={adv90NFMin} max={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} min={avPreMhvMin} max={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} min={roundLotMin} max={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} min={vwapMin} max={vwapMax} setMin={setVwapMin} setMax={setVwapMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="SpreadBid%" filterKey="SpreadBidPct" mode={rangeModes.SpreadBidPct} onToggleMode={toggleRangeMode} min={spreadMin} max={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} min={lstPrcLMin} max={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} minValue={adv20Min} maxValue={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} minValue={adv20NFMin} maxValue={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} minValue={adv90Min} maxValue={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} minValue={adv90NFMin} maxValue={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} minValue={avPreMhvMin} maxValue={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} minValue={roundLotMin} maxValue={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} minValue={vwapMin} maxValue={vwapMax} setMin={setVwapMin} setMax={setVwapMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="SpreadBid%" filterKey="SpreadBidPct" mode={rangeModes.SpreadBidPct} onToggleMode={toggleRangeMode} minValue={spreadMin} maxValue={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} minValue={lstPrcLMin} maxValue={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
 
-            <MinMax label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} min={lstClsMin} max={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} min={yClsMin} max={yClsMax} setMin={setYClsMin} setMax={setYClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} min={tClsMin} max={tClsMax} setMin={setTClsMin} setMax={setTClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} min={clsToClsPctMin} max={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} min={loMin} max={loMax} setMin={setLoMin} setMax={setLoMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} min={lstClsNewsCntMin} max={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} min={marketCapMMin} max={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} min={preMhVolNFMin} max={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} min={volNFfromLstClsMin} max={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} min={avPostMhVol90NFMin} max={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} min={avPreMhVol90NFMin} max={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} min={avPreMhValue20NFMin} max={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} min={avPreMhValue90NFMin} max={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} min={avgDailyValue20Min} max={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} min={avgDailyValue90Min} max={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} min={volatility20Min} max={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} min={volatility90Min} max={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} min={preMhMDV20NFMin} max={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} min={preMhMDV90NFMin} max={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} min={volRelMin} max={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} min={preMhBidLstPrcPctMin} max={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} min={preMhLoLstPrcPctMin} max={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} min={preMhHiLstClsPctMin} max={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} min={preMhLoLstClsPctMin} max={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} min={lstPrcLstClsPctMin} max={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} min={imbExch925Min} max={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} startEditing={startEditing} stopEditing={stopEditing} />
-            <MinMax label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} min={imbExch1555Min} max={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} startEditing={startEditing} stopEditing={stopEditing} />
+            <MinMaxRow card clearable label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} minValue={lstClsMin} maxValue={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} minValue={yClsMin} maxValue={yClsMax} setMin={setYClsMin} setMax={setYClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} minValue={tClsMin} maxValue={tClsMax} setMin={setTClsMin} setMax={setTClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} minValue={clsToClsPctMin} maxValue={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} minValue={loMin} maxValue={loMax} setMin={setLoMin} setMax={setLoMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} minValue={lstClsNewsCntMin} maxValue={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} minValue={marketCapMMin} maxValue={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} minValue={preMhVolNFMin} maxValue={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} minValue={volNFfromLstClsMin} maxValue={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} minValue={avPostMhVol90NFMin} maxValue={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} minValue={avPreMhVol90NFMin} maxValue={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} minValue={avPreMhValue20NFMin} maxValue={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} minValue={avPreMhValue90NFMin} maxValue={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} minValue={avgDailyValue20Min} maxValue={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} minValue={avgDailyValue90Min} maxValue={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} minValue={volatility20Min} maxValue={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} minValue={volatility90Min} maxValue={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} minValue={preMhMDV20NFMin} maxValue={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} minValue={preMhMDV90NFMin} maxValue={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} minValue={volRelMin} maxValue={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} minValue={preMhBidLstPrcPctMin} maxValue={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} minValue={preMhLoLstPrcPctMin} maxValue={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} minValue={preMhHiLstClsPctMin} maxValue={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} minValue={preMhLoLstClsPctMin} maxValue={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} minValue={lstPrcLstClsPctMin} maxValue={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} minValue={imbExch925Min} maxValue={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
+            <MinMaxRow card clearable label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} minValue={imbExch1555Min} maxValue={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
           </div>
         )}
 
-        <div className="hidden mb-3 flex flex-wrap justify-end gap-3">
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
-              <button
-                key={modeKey}
-                type="button"
-                onClick={() => setRatingMode(modeKey)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
-                    ? secondaryButtonSoftActiveClass
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                {modeKey}
-              </button>
-            ))}
-          </div>
-
-          {fields.map((field) => (
-            <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode={field.integer ? "numeric" : "decimal"}
-                  step={field.step}
-                  min={field.min}
-                  value={field.val}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    if (!Number.isFinite(next)) {
-                      field.set(field.min);
-                      return;
-                    }
-                    field.set(field.integer ? Math.max(field.min, Math.trunc(next)) : Math.max(field.min, +next.toFixed(4)));
-                  }}
-                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpNumField(field, field.step)}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpNumField(field, -field.step)}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {[
-            { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
-            { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
-            { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
-          ].map((field) => (
-            <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
-              <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
-                {field.label}
-              </span>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={field.step}
-                  value={field.minValue}
-                  onChange={(e) => field.setMin(e.target.value)}
-                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                  placeholder="min"
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={field.step}
-                  value={field.maxValue}
-                  onChange={(e) => field.setMax(e.target.value)}
-                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                  placeholder="max"
-                />
-                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
-                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    ▼
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        </div>
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* RED GROUP */}
-          <div className={`${SONAR_FILTER_GROUP_BASE} border-rose-500/20 bg-rose-500/[0.06]`}>
-            {[
-              { label: "Div", val: excludeDividend, set: setExcludeDividend },
-              { label: "News", val: excludeNews, set: setExcludeNews },
-              { label: "PTP", val: excludePTP, set: setExcludePTP },
-              { label: "SSR", val: excludeSSR, set: setExcludeSSR },
-              { label: "Rep", val: excludeReport, set: setExcludeReport },
-              { label: "ETF", val: excludeETF, set: setExcludeETF },
-              { label: "CRAP", val: excludeCrap, set: setExcludeCrap, title: "LstClose < 5" },
-            ].map((b) => (
-              <button
-                key={b.label}
-                onClick={() => b.set(!b.val)}
-                title={b.title}
-                className={`${SONAR_FILTER_INNER_PILL} ${
-                  b.val ? "bg-rose-500 text-white border-transparent shadow-[0_0_16px_rgba(244,63,94,0.42)]" : "bg-transparent border-transparent text-rose-500 hover:bg-rose-500/10"
-                }`}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-
-          {/* GREEN GROUP */}
-          <div className={`${SONAR_FILTER_GROUP_BASE} border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)]`}>
-            {[
-              { label: "USA", val: includeUSA, set: setIncludeUSA },
-              { label: "CHINA", val: includeChina, set: setIncludeChina },
-            ].map((b) => (
-              <button
-                key={b.label}
-                onClick={() => b.set(!b.val)}
-                className={`${SONAR_FILTER_INNER_PILL} ${
-                  b.val ? "bg-[rgba(16,185,129,0.95)] text-white border-transparent shadow-[0_0_16px_rgba(16,185,129,0.36)]" : "bg-transparent border-transparent text-[#34d399] hover:bg-[rgba(16,185,129,0.10)]"
-                }`}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-
-          {/* YELLOW GROUP */}
-          <div className={`${SONAR_FILTER_GROUP_BASE} border-yellow-200/20 bg-yellow-200/[0.06]`}>
-            <MultiSelectFilter
-              label="Country"
-              options={allCountries}
-              selected={selCountries}
-              setSelected={setSelCountries}
-              enabled={countryEnabled}
-              toggleEnabled={() => setCountryEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-              color="amber"
-            />
-            <MultiSelectFilter
-              label="Exchange"
-              options={allExchanges}
-              selected={selExchanges}
-              setSelected={setSelExchanges}
-              enabled={exchangeEnabled}
-              toggleEnabled={() => setExchangeEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-              color="amber"
-            />
-            <MultiSelectFilter
-              label="Sector"
-              options={allSectors}
-              selected={selSectors}
-              setSelected={setSelSectors}
-              enabled={sectorEnabled}
-              toggleEnabled={() => setSectorEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-              color="amber"
-            />
-          </div>
-
-          <div className="flex-1" />          
-
-          {/* SORT (blue group; MSF-like control; one toggle button; no "SORT" label) */}
-          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-sky-500/20 bg-sky-500/[0.06]`}>
-            {/* dropdown control styled like MSF (but BLUE) */}
+        {/* Shared with OpenDoor Sonar, both Scanners and Stream — see components/shared/filters.
+            The ZAP group stays here as a slot: it is an Arbitrage statistic and OpenDoor has no
+            equivalent. */}
+        <FilterFlagsRow
+          exclusions={[
+            { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
+            { label: "HARD", value: excludeHard, set: setExcludeHard, title: "B5ETB = NO (hard to borrow)" },
+            { label: "Div", value: excludeDividend, set: setExcludeDividend },
+            { label: "News", value: excludeNews, set: setExcludeNews },
+            { label: "PTP", value: excludePTP, set: setExcludePTP },
+            { label: "SSR", value: excludeSSR, set: setExcludeSSR },
+            { label: "ETF", value: excludeETF, set: setExcludeETF },
+            { label: "CRAP", value: excludeCrap, set: setExcludeCrap, title: "LstClose < 5" },
+          ]}
+          report={{ label: "REP", value: excludeReport, set: setExcludeReport, title: "Exclude report=true" }}
+          corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}
+          corrThresholdInput={corrThresholdInput}
+          setCorrThresholdInput={setCorrThresholdInput}
+          corrThreshold={corrThreshold}
+          corrStatus={sectorCorr}
+          regions={[
+            { label: "USA", value: includeUSA, set: setIncludeUSA },
+            { label: "CHINA", value: includeChina, set: setIncludeChina },
+          ]}
+          selectsSlot={
+            <>
+              <MultiSelectFilter
+                label="Country"
+                options={allCountries}
+                selected={selCountries}
+                setSelected={setSelCountries}
+                enabled={countryEnabled}
+                toggleEnabled={() => setCountryEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
+              <MultiSelectFilter
+                label="Exchange"
+                options={allExchanges}
+                selected={selExchanges}
+                setSelected={setSelExchanges}
+                enabled={exchangeEnabled}
+                toggleEnabled={() => setExchangeEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
+              <MultiSelectFilter
+                label="Sector"
+                options={allSectors}
+                selected={selSectors}
+                setSelected={setSelSectors}
+                enabled={sectorEnabled}
+                toggleEnabled={() => setSectorEnabled(m => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                color="amber"
+              />
+            </>
+          }
+          sortSlot={
             <SingleSelectFilter
               value={sortKey}
               onChange={(v) => {
@@ -5983,280 +5329,167 @@ export default function ArbitrageSonar() {
                 { value: "pin", label: "PIN" },
               ]}
             />
+          }
+          zapSlot={
+            <>
+            {/* ZAP FILTERS */}
+            <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
+              {/* mode toggles */}
+              <button
+                type="button"
+                onClick={() => setZapMode((m) => (m === "zap" ? "off" : "zap"))}
+                className={[
+                  SONAR_FILTER_INNER_PILL,
+                  zapMode === "zap"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+                ].join(" ")}
+              >
+                % ZAP
+              </button>
 
+              <button
+                type="button"
+                onClick={() => setZapMode((m) => (m === "sigma" ? "off" : "sigma"))}
+                className={[
+                  `${SONAR_FILTER_INNER_PILL} gap-1`,
+                  zapMode === "sigma"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+                ].join(" ")}
+              >
+                <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+              </button>
 
-          </div>
+              <button
+                type="button"
+                onClick={() => setZapMode((m) => (m === "delta" ? "off" : "delta"))}
+                className={[
+                  `${SONAR_FILTER_INNER_PILL} gap-1`,
+                  zapMode === "delta"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+                ].join(" ")}
+                title="Use sigma threshold above direction-specific median print plus the first input delta"
+              >
+                <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+              </button>
 
-          {/* CORR (pink group; button + threshold input) */}
-          <div className="hidden">
-            <button
-              type="button"
-              onClick={() => setCorrEnabled((v) => !v)}
-              className={[
-                SONAR_FILTER_INNER_PILL,
-                corrEnabled
-                  ? "bg-pink-500 text-white border-transparent shadow-[0_0_16px_rgba(236,72,153,0.38)]"
-                  : "bg-transparent border-transparent text-pink-300/70 hover:bg-pink-500/10 hover:text-pink-200",
-              ].join(" ")}
-              title="Toggle correlation hide filter"
-            >
-              CORR
-            </button>
-              <div className={clsx("group relative w-[72px]", !corrEnabled && "opacity-60")}>
+              {/* 1) show/filter threshold (single) */}
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
                 <input
                   type="number"
-                  step={0.05}
-                  min={0.5}
-                  max={1.0}
-                  value={corrAbs}
-                  disabled={!corrEnabled}
+                  step={zapMode === "zap" ? 0.1 : 0.05}
+                  min={zapMode === "zap" ? 0.3 : 0.05}
+                  value={zapShowAbs}
+                  disabled={zapMode === "off"}
                   onChange={(e) => {
-                    const raw = parseFloat(e.target.value);
-                    const v = Number.isFinite(raw) ? raw : 0.5;
-                    const clamped = Math.min(1.0, Math.max(0.5, v));
-                    setCorrAbs(clamped);
+                    const v = clampFloat(e.target.value, zapMode === "zap" ? 0.3 : 0.05);
+                    setZapShowAbs(v);
                   }}
-                  className={[
-                    "center-spin w-full h-7 rounded-md !pl-2 !pr-5 text-[11px] font-mono text-center tabular-nums leading-none transition-all focus:outline-none",
-                    corrEnabled
-                      ? "bg-black/25 border border-transparent text-pink-100"
-                      : "bg-black/10 border border-white/10 text-zinc-600 cursor-not-allowed",
-                  ].join(" ")}
-                  title="Threshold in [0.5..1.0] for |corr|"
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  title={zapMode === "delta" ? "Additional delta above direction-specific median print" : "Threshold for filtering (ZAP or SIGZAP depending on mode)"}
                 />
                 <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
-                    disabled={!corrEnabled}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setCorrAbs((v) => Math.min(1.0, Math.max(0.5, +(v + 0.05).toFixed(4))))}
+                    onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v + (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase correlation threshold"
+                    aria-label="Increase zap threshold"
                   >
                     ▲
                   </button>
                   <button
                     type="button"
-                    disabled={!corrEnabled}
+                    disabled={zapMode === "off"}
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setCorrAbs((v) => Math.min(1.0, Math.max(0.5, +(v - 0.05).toFixed(4))))}
+                    onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v - (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease correlation threshold"
+                    aria-label="Decrease zap threshold"
                   >
                     ▼
                   </button>
                 </div>
               </div>
-          </div>
 
-          <div className="hidden">
-            {[
-              { label: "CORR MIN", value: corrMin, setValue: setCorrMin, step: 0.05 },
-              { label: "CORR MAX", value: corrMax, setValue: setCorrMax, step: 0.05 },
-              { label: "BETA MIN", value: betaMin, setValue: setBetaMin, step: 0.1 },
-              { label: "BETA MAX", value: betaMax, setValue: setBetaMax, step: 0.1 },
-              { label: "SIGMA MIN", value: sigmaMin, setValue: setSigmaMin, step: 0.1 },
-              { label: "SIGMA MAX", value: sigmaMax, setValue: setSigmaMax, step: 0.1 },
-            ].map((field) => (
-              <div key={field.label} className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={field.step}
-                    value={field.value}
-                    onChange={(e) => field.setValue(e.target.value)}
-                    className="center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none transition-all"
-                  />
-                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        const next = (toNum(field.value) ?? 0) + field.step;
-                        field.setValue(String(+next.toFixed(4)));
-                      }}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        const next = (toNum(field.value) ?? 0) - field.step;
-                        field.setValue(String(+next.toFixed(4)));
-                      }}
-                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      ▼
-                    </button>
-                  </div>
+              {/* 2) SILVER (too high) */}
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <input
+                  type="number"
+                  step={zapMode === "sigma" ? 0.1 : 0.5}
+                  min={0}
+                  value={zapSilverAbs}
+                  disabled={zapMode === "off"}
+                  onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  title="SILVER highlight when |metric| >= this (active+inactive)"
+                />
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapSilverAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase silver threshold"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapSilverAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                    aria-label="Decrease silver threshold"
+                  >
+                    ▼
+                  </button>
                 </div>
               </div>
-            ))}
-          </div>
 
-
-          {/* ZAP FILTERS */}
-          <div className={`ml-auto ${SONAR_FILTER_GROUP_BASE} border-violet-500/20 bg-violet-500/[0.06]`}>
-            {/* mode toggles */}
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "zap" ? "off" : "zap"))}
-              className={[
-                SONAR_FILTER_INNER_PILL,
-                zapMode === "zap"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-            >
-              % ZAP
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "sigma" ? "off" : "sigma"))}
-              className={[
-                `${SONAR_FILTER_INNER_PILL} gap-1`,
-                zapMode === "sigma"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-            >
-              <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setZapMode((m) => (m === "delta" ? "off" : "delta"))}
-              className={[
-                `${SONAR_FILTER_INNER_PILL} gap-1`,
-                zapMode === "delta"
-                  ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                  : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
-              ].join(" ")}
-              title="Use sigma threshold above direction-specific median print plus the first input delta"
-            >
-              <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
-            </button>
-
-            {/* 1) show/filter threshold (single) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "zap" ? 0.1 : 0.05}
-                min={zapMode === "zap" ? 0.3 : 0.05}
-                value={zapShowAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => {
-                  const v = clampFloat(e.target.value, zapMode === "zap" ? 0.3 : 0.05);
-                  setZapShowAbs(v);
-                }}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title={zapMode === "delta" ? "Additional delta above direction-specific median print" : "Threshold for filtering (ZAP or SIGZAP depending on mode)"}
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
+              {/* 3) GOLD (only active normalization) */}
+              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <input
+                  type="number"
+                  step={zapMode === "sigma" ? 0.05 : 0.1}
+                  min={0}
+                  value={zapGoldAbs}
                   disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v + (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase zap threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapShowAbs((v) => Math.max(zapMode === "zap" ? 0.3 : 0.05, +(v - (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease zap threshold"
-                >
-                  ▼
-                </button>
+                  onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  title="GOLD highlight when |metric| <= this (ONLY active positions)"
+                />
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapGoldAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase gold threshold"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapGoldAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                    aria-label="Decrease gold threshold"
+                  >
+                    ▼
+                  </button>
+                </div>
               </div>
+
             </div>
-
-            {/* 2) SILVER (too high) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "sigma" ? 0.1 : 0.5}
-                min={0}
-                value={zapSilverAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => setZapSilverAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title="SILVER highlight when |metric| >= this (active+inactive)"
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase silver threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapSilverAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.1 : 0.5)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease silver threshold"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-
-            {/* 3) GOLD (only active normalization) */}
-            <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-              <input
-                type="number"
-                step={zapMode === "sigma" ? 0.05 : 0.1}
-                min={0}
-                value={zapGoldAbs}
-                disabled={zapMode === "off"}
-                onChange={(e) => setZapGoldAbs(clampFloat(e.target.value, 0))}
-                className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                title="GOLD highlight when |metric| <= this (ONLY active positions)"
-              />
-              <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v + (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                  aria-label="Increase gold threshold"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  disabled={zapMode === "off"}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setZapGoldAbs((v) => Math.max(0, +(v - (zapMode === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                  aria-label="Decrease gold threshold"
-                >
-                  ▼
-                </button>
-              </div>
-            </div>
-
-          </div>
-
-        </div>
-
+            </>
+          }
+        />
         {/* ========================= DRAWERS (Ignore/Apply) ========================= */}
         {(showIgnore || showApply || showPin) && (
           <div className="grid grid-cols-7 gap-4">
@@ -6439,141 +5672,58 @@ export default function ArbitrageSonar() {
         )}
 
         {/* ========================= ACTIVE PANEL ========================= */}
+        {/* The strip itself is shared with OpenDoor Sonar, the Scanners and Stream — see
+            components/shared/filters/ActiveTickerCard. Only the expanded body below stays local:
+            it is the live-snapshot grid, which no other surface has. */}
         {activePanelVisible && (
-          <div className="relative overflow-hidden border border-white/10 rounded-2xl bg-black/40 animate-in fade-in zoom-in-95 duration-300">
-            <div className={`absolute inset-y-0 left-0 w-px ${accentLineClass}`} />
-            <div className="relative flex flex-col gap-3 px-4 py-3 border-b border-white/10 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0 flex flex-col gap-2 lg:justify-center">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">{activeTicker ?? "-"}</span>
-
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
-                    <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
-                    <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
-                    <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
-                    <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
-                    <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
-                    <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
-                    <span>MD Print Pos: <span className="text-zinc-200">{activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2)}</span></span>
-                    <span>MD Print Neg: <span className="text-zinc-200">{activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2)}</span></span>
-                  </div>
-                </div>
-
-                {activeLoading && <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500 animate-pulse">loading data stream...</div>}
-                {activeErr && <div className="w-fit text-[11px] text-rose-300 font-mono bg-rose-500/10 px-2 py-1 border border-rose-500/20">{activeErr}</div>}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 self-start lg:self-center">
-                <button
-                  type="button"
-                  disabled={!activeTickerNorm}
-                  onClick={() => {
-                    if (!activeTickerNorm) return;
-                    if (activeInIgnoreList) removeFromSet(setIgnoreSet, IGNORE_LS_KEY, activeTickerNorm);
-                    else {
-                      addToSet(setIgnoreSet, IGNORE_LS_KEY, [activeTickerNorm]);
-                      if (listMode === "off") setListMode("ignore");
-                    }
-                  }}
-                  className={[
-                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
-                    !activeTickerNorm
-                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
-                      : activeInIgnoreList
-                        ? "border-rose-500/35 bg-rose-500/12 text-rose-300"
-                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
-                  ].join(" ")}
-                  title={activeInIgnoreList ? "Remove ticker from Ignore List" : "Add ticker to Ignore List"}
-                >
-                  IGN
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!activeTickerNorm}
-                  onClick={() => {
-                    if (!activeTickerNorm) return;
-                    if (activeInApplyList) removeFromSet(setApplySet, APPLY_LS_KEY, activeTickerNorm);
-                    else {
-                      addToSet(setApplySet, APPLY_LS_KEY, [activeTickerNorm]);
-                      if (listMode === "off") setListMode("apply");
-                    }
-                  }}
-                  className={[
-                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
-                    !activeTickerNorm
-                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
-                      : activeInApplyList
-                        ? "border-[#6ee7b7]/35 bg-[#6ee7b7]/12 text-[#6ee7b7]"
-                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
-                  ].join(" ")}
-                  title={activeInApplyList ? "Remove ticker from Apply Only List" : "Add ticker to Apply Only List"}
-                >
-                  APP
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!activeTickerNorm}
-                  onClick={() => {
-                    if (!activeTickerNorm) return;
-                    if (activePinColor) removePin(activeTickerNorm);
-                    else {
-                      addPins([activeTickerNorm], pinColor);
-                      if (listMode === "off") setListMode("pin");
-                    }
-                  }}
-                  className={[
-                    "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border text-[10px] font-mono uppercase tracking-[0.14em] transition-colors",
-                    !activeTickerNorm
-                      ? "border-white/10 text-zinc-600 opacity-50 cursor-not-allowed"
-                      : activePinColor
-                        ? "border-violet-500/35 bg-violet-500/12 text-violet-200"
-                        : "border-white/10 bg-transparent text-zinc-300 hover:bg-white/[0.05]",
-                  ].join(" ")}
-                  title={activePinColor ? "Remove ticker from Pin List" : "Add ticker to Pin List"}
-                >
-                  PIN
-                </button>
-
-                <button
-                  onClick={() => setActivePanelMode((m) => (m === "mini" ? "expanded" : "mini"))}
-                  className="inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-300 hover:bg-white/[0.05] transition-colors"
-                >
-                  {activePanelMode === "mini" ? "EXPAND" : "MINI"}
-                </button>
-
-                <button
-                  onClick={() => setActivePanelCollapsed(!activePanelCollapsed)}
-                  className="inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg border border-white/10 bg-transparent text-[10px] font-mono text-zinc-300 hover:bg-white/[0.05] transition-colors group"
-                  title={activePanelCollapsed ? "Show Panel" : "Collapse Panel"}
-                >
-                  {activePanelCollapsed ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                      <circle cx="12" cy="12" r="3"></circle>
-                    </svg>
-                  ) : (
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="group-hover:text-rose-400 transition-colors"
-                    >
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                      <line x1="1" y1="1" x2="23" y2="23"></line>
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
+          <ActiveTickerCard
+            ticker={activeTicker ?? null}
+            stats={[
+              { label: "Exchange", value: activeExchange2 !== "-" ? activeExchange2 : "-" },
+              { label: "Bench", value: activeBench !== "-" ? activeBench : "-" },
+              { label: "Beta", value: activeBeta == null ? "-" : fmtNum(activeBeta, 2) },
+              { label: "Sig", value: activeSigma == null ? "-" : fmtNum(activeSigma, 2) },
+              { label: "Rate", value: bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`, accent: true },
+              { label: "N", value: bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff) },
+              { label: "MD Print Pos", value: activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2) },
+              { label: "MD Print Neg", value: activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2) },
+            ]}
+            loading={activeLoading}
+            error={activeErr}
+            accentLineClass={accentLineClass}
+            accentTextClass={accentTextClass}
+            lists={{
+              inIgnore: activeInIgnoreList,
+              inApply: activeInApplyList,
+              pinned: Boolean(activePinColor),
+              onToggleIgnore: () => {
+                if (!activeTickerNorm) return;
+                if (activeInIgnoreList) removeFromSet(setIgnoreSet, IGNORE_LS_KEY, activeTickerNorm);
+                else {
+                  addToSet(setIgnoreSet, IGNORE_LS_KEY, [activeTickerNorm]);
+                  if (listMode === "off") setListMode("ignore");
+                }
+              },
+              onToggleApply: () => {
+                if (!activeTickerNorm) return;
+                if (activeInApplyList) removeFromSet(setApplySet, APPLY_LS_KEY, activeTickerNorm);
+                else {
+                  addToSet(setApplySet, APPLY_LS_KEY, [activeTickerNorm]);
+                  if (listMode === "off") setListMode("apply");
+                }
+              },
+              onTogglePin: () => {
+                if (!activeTickerNorm) return;
+                if (activePinColor) removePin(activeTickerNorm);
+                else {
+                  addPins([activeTickerNorm], pinColor);
+                  if (listMode === "off") setListMode("pin");
+                }
+              },
+            }}
+            expanded={{ value: activePanelMode !== "mini", onToggle: () => setActivePanelMode((m) => (m === "mini" ? "expanded" : "mini")) }}
+            collapsed={{ value: activePanelCollapsed, onToggle: () => setActivePanelCollapsed(!activePanelCollapsed) }}
+          >
             {!activePanelCollapsed && (
               <div className="relative p-4 space-y-4">
                 {(() => {
@@ -6782,7 +5932,7 @@ export default function ArbitrageSonar() {
                 )}
               </div>
             )}
-          </div>
+          </ActiveTickerCard>
         )}
 
         {activePanelVisible && (

@@ -20,6 +20,7 @@ export type StreamActiveDecisionRow = {
   spread: number | null;
   spreadBidPct: number | null;
   netEdge: number | null;
+  report: string | null;
   status: StreamDecisionRow["status"] | StreamPosition["status"];
 };
 
@@ -81,6 +82,7 @@ function sameActiveRow(left: StreamActiveDecisionRow, right: StreamActiveDecisio
     sameNullableNumber(left.spread, right.spread) &&
     sameNullableNumber(left.spreadBidPct, right.spreadBidPct) &&
     sameNullableNumber(left.netEdge, right.netEdge) &&
+    left.report === right.report &&
     left.status === right.status
   );
 }
@@ -133,6 +135,7 @@ function buildActiveRows(
       spread,
       spreadBidPct: decision?.spreadBidPct ?? null,
       netEdge,
+      report: decision?.report ?? null,
       status: position.status,
     });
   }

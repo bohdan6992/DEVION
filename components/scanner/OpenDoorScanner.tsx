@@ -40,7 +40,17 @@ import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
-import { rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
+import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
+import { rowExcludedByBorrow } from "../../lib/filters/borrow";
+import {
+  SECTOR_CORR_DEFAULT,
+  SECTOR_CORR_MAX,
+  SECTOR_CORR_MIN,
+  clampSectorCorrThreshold,
+  parseSectorCorrThreshold,
+  rowExcludedByCorr,
+  useSectorCorrExclusion,
+} from "../../lib/filters/sectorCorr";
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
@@ -49,7 +59,7 @@ import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
-import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
+import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
 import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
 import { OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
 import { SCANNER_CONTROL_SURFACE, SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
@@ -57,6 +67,10 @@ import { CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockT
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
+import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
+import { TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
+import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
@@ -128,6 +142,8 @@ type ArbitrageScannerProps = {
   navScannerHref?: string;
   navSonarHref?: string;
 };
+
+const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
 
 export default function OpenDoorScanner({
   initialPrimaryPanel = "scanner",
@@ -499,6 +515,9 @@ export default function OpenDoorScanner({
     excludeETF,
     setExcludeETF,
     excludeCrap,
+    excludeItb, setExcludeItb,
+    excludeHard, setExcludeHard,
+    excludeCorr, setExcludeCorr,
     setExcludeCrap,
     includeUSA,
     setIncludeUSA,
@@ -2487,6 +2506,51 @@ export default function OpenDoorScanner({
     countryEnabled, exchangeEnabled, sectorEnabled,
   ]);
 
+  // Which session a row's report marker is judged against. The marker carries only day/month, so
+  // it only means anything relative to a date: for the Scanner that is the tape day the row came
+  // from, never "today". Rows carry their own `dateNy`; the selected day is the fallback for any
+  // row that predates the server projecting it.
+  const fallbackSessionDay = useMemo(
+    () => parseSessionDay(dateMode === "day" ? dateNy : dateTo || dateFrom || dateNy),
+    [dateMode, dateNy, dateFrom, dateTo]
+  );
+  const reportSessionForRow = useCallback(
+    (row: any) => parseSessionDay(row?.dateNy ?? row?.date ?? row?.tradeDateNy) ?? fallbackSessionDay,
+    [fallbackSessionDay]
+  );
+
+  // CORR: drop names correlated with today's reporting tickers. Seeds are the whole sample this
+  // surface knows about — episodes plus the live active set — evaluated with the same report rule
+  // the REP button uses. The correlation table itself lives on the bridge (86 MB).
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
+  const corrThreshold = useMemo(
+    () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
+    [corrThresholdInput]
+  );
+  // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
+  const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
+  const activeCardStats = useMemo(() => {
+    const f = activeSnapshot.fields ?? {};
+    const pick = (key: string) => {
+      const v = (f as any)[key];
+      return v == null || String(v).trim() === "" ? "-" : String(v);
+    };
+    return [
+      { label: "Exchange", value: pick("Exchange") },
+      { label: "Bench", value: pick("Bench") },
+      { label: "Beta", value: pick("Beta") },
+      { label: "Sig", value: pick("Sig") },
+      { label: "SpreadBid%", value: pick("SpreadBid%") },
+    ];
+  }, [activeSnapshot.fields]);
+
+  const corrSeedRows = useMemo(
+    () => [...(episodesRows as any[]), ...(activeRows as any[])],
+    [episodesRows, activeRows]
+  );
+  const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr, corrThreshold, reportSessionForRow);
+
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
     const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
       min: rangeValueOrNull(key, minRaw),
@@ -2560,6 +2624,10 @@ export default function OpenDoorScanner({
       excludeReport: excludeHasReport,
       excludeETF: excludeETF,
       excludeCrap: excludeCrap,
+      excludeItb: excludeItb,
+      excludeHard: excludeHard,
+      excludeCorr: excludeCorr,
+      corrExcluded: sectorCorr.excluded,
       activeMode: "off",
       includeUSA: includeUSA,
       includeChina: includeChina,
@@ -2595,6 +2663,10 @@ export default function OpenDoorScanner({
       endAbs,
       excludeDividend,
       excludeCrap,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      sectorCorr.excluded,
       excludeETF,
       excludeHasNews,
       excludeHasReport,
@@ -4372,15 +4444,21 @@ export default function OpenDoorScanner({
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     if (!passesSharedRangeBounds(row)) return false;
 
-    // Report gate: same rule as Sonar and Stream (rowReportAffectsTodaySession over the raw vendor
-    // marker), so one toggle behaves identically on every surface. Deliberately NOT the server's
-    // HasReport boolean — the tape collapses the marker to "any marker means yes" at write time,
-    // which discards the date and the release time the rule is built on.
+    // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
+    // against the TAPE DAY this row belongs to rather than against today. The marker carries only
+    // day/month ("10/08 BMO"), so comparing a replayed day's rows to today's date made every one
+    // of them read as stale — the toggle looked wired and rejected nothing.
+    // Deliberately NOT the server's HasReport boolean: the tape collapses the marker to "any
+    // marker means yes", discarding the date and release time the rule is built on.
     if (requireHasReport || excludeHasReport) {
-      const affectsToday = rowReportAffectsTodaySession(row);
-      if (excludeHasReport && affectsToday) return false;
-      if (requireHasReport && !affectsToday) return false;
+      const affectsSession = rowReportAffectsSession(row, reportSessionForRow(row));
+      if (excludeHasReport && affectsSession) return false;
+      if (requireHasReport && !affectsSession) return false;
     }
+    // Borrow availability (B5ETB), written to the tape so it exists on a Scanner row at all.
+    if (rowExcludedByBorrow(row, excludeItb, excludeHard)) return false;
+    // CORR: not "this ticker reports" but "this ticker moves with one that does".
+    if (excludeCorr && rowExcludedByCorr(row, sectorCorr.excluded)) return false;
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 
@@ -4493,7 +4571,7 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = qTicker.trim().toUpperCase();
@@ -4570,7 +4648,7 @@ export default function OpenDoorScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   // The SNAPSHOT table predates the shared row shape and reads OpenDoor's own field names, so
   // translate once here rather than in every cell. Entry/exit fills are side-dependent: Long buys
@@ -5737,6 +5815,17 @@ export default function OpenDoorScanner({
           </div>
         )}
 
+        {/* Active ticker, shared with Sonar and Stream. The Sonar owns the selection; this reads
+            its per-strategy localStorage key so the same ticker is active on every surface. */}
+        {activeSelection.ticker && (
+          <ActiveTickerCard
+            ticker={activeSelection.ticker}
+            stats={activeCardStats}
+            loading={activeSnapshot.loading}
+            error={activeSnapshot.error}
+          />
+        )}
+
         {(showIgnore || showApply || showPin) && (
           <TickerListDrawers
             showIgnore={showIgnore}
@@ -5942,7 +6031,7 @@ export default function OpenDoorScanner({
           ))}
         </div>
 
-        <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
             <div className="flex h-7 items-center gap-2">
               {[
@@ -5954,10 +6043,10 @@ export default function OpenDoorScanner({
                   type="button"
                   onClick={() => setOpenDoorExitClass(b.key as "10m" | "30m")}
                   className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                    TOOLBAR_BUTTON_BASE,
                     openDoorExitClass === b.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
                   )}
                 >
                   {b.label}
@@ -6101,7 +6190,7 @@ export default function OpenDoorScanner({
                   scannerPresetBusy
                     ? "border-transparent text-zinc-600"
                     : scannerPresetSaveMode
-                      ? "accent-soft"
+                      ? TOOLBAR_BUTTON_ACTIVE
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -6206,165 +6295,80 @@ export default function OpenDoorScanner({
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
         />
 
-        <div className="order-1 flex flex-wrap items-center gap-4">
-            <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-900/30 bg-rose-900/10 p-1.5">
-              {[
-                {
-                  label: "Div",
-                  disabled: false,
-                  title: "Exclude dividend=true",
-                  active: excludeDividend,
-                  onClick: () => setExcludeDividend((v) => !v),
-                },
-                {
-                  label: "News",
-                  disabled: false,
-                  title: "Exclude news=true",
-                  active: excludeHasNews,
-                  onClick: () => {
-                    setExcludeHasNews((v) => !v);
-                    setRequireHasNews(false);
-                  },
-                },
-                {
-                  label: "PTP",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludePTP,
-                  onClick: () => {
-                    setExcludePTP((v) => !v);
-                    setRequireIsPTP(false);
-                  },
-                },
-                {
-                  label: "SSR",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeSSR,
-                  onClick: () => {
-                    setExcludeSSR((v) => !v);
-                    setRequireIsSSR(false);
-                  },
-                },
-                {
-                  label: "Rep",
-                  disabled: false,
-                  title: "Exclude report=true",
-                  active: excludeHasReport,
-                  onClick: () => {
-                    setExcludeHasReport((v) => !v);
-                    setRequireHasReport(false);
-                  },
-                },
-                {
-                  label: "ETF",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeETF,
-                  onClick: () => {
-                    setExcludeETF((v) => !v);
-                    setRequireIsETF(false);
-                  },
-                },
-                {
-                  label: "CRAP",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeCrap,
-                  onClick: () => {
-                    setExcludeCrap((v) => !v);
-                    setRequireIsCrap(false);
-                  },
-                },
-              ].map((b) => (
-                <button
-                  key={b.label}
-                  type="button"
-                  onClick={b.onClick}
-                  title={b.title}
-                  disabled={b.disabled}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
-                    b.disabled
-                      ? "bg-transparent text-zinc-600 border border-zinc-800 cursor-not-allowed"
-                      : b.active
-                        ? "bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.6)]"
-                        : "bg-transparent text-rose-500 hover:bg-rose-500/10"
-                  )}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="inline-flex items-center gap-2 rounded-xl border border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)] p-1.5">
-              {[
-                { label: "USA", active: includeUSA, onClick: () => setIncludeUSA((v) => !v) },
-                { label: "CHINA", active: includeChina, onClick: () => setIncludeChina((v) => !v) },
-              ].map((b) => (
-                <button
-                  key={b.label}
-                  type="button"
-                  onClick={b.onClick}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
-                    b.active
-                      ? "bg-[rgba(16,185,129,0.95)] text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
-                      : "bg-transparent text-[#34d399] hover:bg-[rgba(16,185,129,0.10)]"
-                  )}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
-              <MultiSelectFilter
-                label="COUNTRY"
-                options={streamCountries}
-                selected={selCountries}
-                setSelected={setSelCountries}
-                enabled={countryEnabled}
-                toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-              />
-              <MultiSelectFilter
-                label="EXCHANGE"
-                options={streamExchanges}
-                selected={selExchanges}
-                setSelected={setSelExchanges}
-                enabled={exchangeEnabled}
-                toggleEnabled={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-              />
-              <MultiSelectFilter
-                label="SECTOR"
-                options={streamSectors}
-                selected={selSectors}
-                setSelected={setSelSectors}
-                enabled={sectorEnabled}
-                toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-                panelWidth={220}
-              />
-            </div>
-
-            <div className="inline-flex items-center gap-1 rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-1.5">
+          {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
+              Adding a filter is now one edit here plus the rule in lib/filters, instead of the
+              same edit in four files. Each exclusion also clears its paired `require*` flag, so
+              the two halves of a tri-state can never both be on. */}
+          <FilterFlagsRow
+              className="order-1"
+            exclusions={[
+              { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
+              { label: "HARD", value: excludeHard, set: setExcludeHard, title: "B5ETB = NO (hard to borrow)" },
+              { label: "Div", value: excludeDividend, set: setExcludeDividend, title: "Exclude dividend=true" },
+              { label: "News", value: excludeHasNews, set: (v) => { setExcludeHasNews(v); setRequireHasNews(false); }, title: "Exclude news=true" },
+              { label: "PTP", value: excludePTP, set: (v) => { setExcludePTP(v); setRequireIsPTP(false); } },
+              { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); } },
+              { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); } },
+              { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); } },
+            ]}
+            report={{
+              label: "REP",
+              value: excludeHasReport,
+              set: (v) => { setExcludeHasReport(v); setRequireHasReport(false); },
+              title: "Exclude report=true",
+            }}
+            corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}
+            corrThresholdInput={corrThresholdInput}
+            setCorrThresholdInput={setCorrThresholdInput}
+            corrThreshold={corrThreshold}
+            corrStatus={sectorCorr}
+            regions={[
+              { label: "USA", value: includeUSA, set: setIncludeUSA },
+              { label: "CHINA", value: includeChina, set: setIncludeChina },
+            ]}
+            selectsSlot={
+              <>
+                <MultiSelectFilter
+                  label="COUNTRY"
+                  options={streamCountries}
+                  selected={selCountries}
+                  setSelected={setSelCountries}
+                  enabled={countryEnabled}
+                  toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                />
+                <MultiSelectFilter
+                  label="EXCHANGE"
+                  options={streamExchanges}
+                  selected={selExchanges}
+                  setSelected={setSelExchanges}
+                  enabled={exchangeEnabled}
+                  toggleEnabled={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                />
+                <MultiSelectFilter
+                  label="SECTOR"
+                  options={streamSectors}
+                  selected={selSectors}
+                  setSelected={setSelSectors}
+                  enabled={sectorEnabled}
+                  toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                  panelWidth={220}
+                />
+              </>
+            }
+            sortSlot={
               <div className="relative flex h-7 items-center rounded-full border border-sky-400/25 bg-[#0a1520]/85">
                 <GlassSelect
                   value={streamSortKey}
                   onChange={(e) => setStreamSortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
-                  options={[
-                    { value: "alpha", label: "ABC" },
-                    { value: "sigma", label: "SIG" },
-                    { value: "netEdge", label: "EDGE" },
-                  ]}
+                  options={STREAM_SORT_KEY_OPTIONS}
                   className="!h-7 !min-w-[74px] !w-[74px] !py-0 !px-2 !bg-transparent !border-0 !focus:border-0 text-right rounded-full"
                 />
               </div>
-            </div>
-
-        </div>
+            }
+          />
         </div>
 
         {/* Error */}

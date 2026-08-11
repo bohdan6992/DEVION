@@ -427,7 +427,9 @@ export const MultiSelectFilter = ({
     const el = wrapRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 8, width: panelWidth ?? r.width });
+    // At least 220px unless the caller asks for a specific width: option labels (sector names,
+    // exchange codes) do not fit the trigger button, which is what the Sonar copy enforced.
+    setPos({ left: r.left, top: r.bottom + 8, width: panelWidth ?? Math.max(220, r.width) });
   };
 
   useEffect(() => {
@@ -510,7 +512,9 @@ export const MultiSelectFilter = ({
             <span
               className={clsx(
                 "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
-                enabled === "off" && `border-yellow-200/35 ${getSonarAccent(theme).text}`,
+                // `accent-text` is the CSS-variable utility that replaced getSonarAccent(); the
+                // Sonar copy of this component had already moved and this one had not.
+                enabled === "off" && `border-yellow-200/35 accent-text`,
                 enabled === "include" && "border-emerald-400/50 text-emerald-400",
                 enabled === "exclude" && "border-red-400/50 text-red-400",
               )}
@@ -539,7 +543,18 @@ export const MultiSelectFilter = ({
   );
 };
 
-export function MinMaxRowImpl({
+/**
+ * One min/max card, shared by the Scanners AND the Sonars.
+ *
+ * The Sonars used to carry their own copy of this card. It drifted: the copy used raw inputs with
+ * `tabular-nums` while this one uses GlassInput without it, and it never gained the zero-coverage
+ * state. Same control, two implementations, guaranteed to diverge again — so there is one now.
+ *
+ * Generic over the filter key because the two surfaces key their range modes differently (the
+ * Sonar by `RangeBoundKey` like "ADV20", the Scanner by `SharedRangeFilterKey` like "adv20").
+ * Typing it as `string` would have let a Sonar key reach a Scanner toggler unnoticed.
+ */
+export function MinMaxRowImpl<K extends string = SharedRangeFilterKey>({
   label,
   filterKey,
   minValue,
@@ -553,20 +568,28 @@ export function MinMaxRowImpl({
   placeholderMin = "min",
   placeholderMax = "max",
   zeroCoverage = false,
+  onStartEditing,
+  onStopEditing,
 }: {
   label: string;
-  filterKey?: SharedRangeFilterKey;
+  filterKey?: K;
   minValue: string;
   maxValue: string;
   setMin: (v: string) => void;
   setMax: (v: string) => void;
   mode?: SharedRangeFilterMode;
-  onToggleMode?: (key: SharedRangeFilterKey) => void;
+  onToggleMode?: (key: K) => void;
   card?: boolean;
   clearable?: boolean;
   placeholderMin?: string;
   placeholderMax?: string;
   zeroCoverage?: boolean;
+  /**
+   * Live surfaces pass these to pause the incoming stream while a box has focus. Without it the
+   * Sonar re-sorts under the cursor mid-edit, which is why its copy of this card had them.
+   */
+  onStartEditing?: () => void;
+  onStopEditing?: () => void;
 }) {
   const hasValue = Boolean((minValue ?? "").trim() || (maxValue ?? "").trim());
   const isOff = mode === "off";
@@ -574,6 +597,14 @@ export function MinMaxRowImpl({
   if (card) {
     return (
       <div
+        onFocusCapture={onStartEditing}
+        onBlurCapture={(e) => {
+          if (!onStopEditing) return;
+          const next = e.relatedTarget as Node | null;
+          // Moving between the two inputs of the same card is not the end of editing.
+          if (next && e.currentTarget.contains(next)) return;
+          onStopEditing();
+        }}
         className={clsx(
           "group flex flex-col gap-1 rounded-xl border p-2 transition-all",
           hasValue
@@ -649,7 +680,8 @@ export function MinMaxRowImpl({
   );
 }
 
-export const MinMaxRow = React.memo(MinMaxRowImpl);
+// `as typeof` keeps the generic through memo, which otherwise widens it away.
+export const MinMaxRow = React.memo(MinMaxRowImpl) as typeof MinMaxRowImpl;
 
 export function SegmentedImpl({
   value,

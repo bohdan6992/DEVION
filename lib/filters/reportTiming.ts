@@ -69,12 +69,30 @@ export function getNewYorkMonthDay(): { month: number; day: number } {
 }
 
 /**
+ * The session a report is judged against. Live surfaces leave it null and get today in New York;
+ * the Scanner replays a past tape day and must pass THAT day, or every marker reads as stale and
+ * the REP/CORR filters quietly pass everything through.
+ */
+export type ReportSessionDay = { year: number; month: number; day: number };
+
+/** Parses "YYYY-MM-DD" (the tape's dateNy). Returns null for anything else. */
+export function parseSessionDay(dateNy: string | null | undefined): ReportSessionDay | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateNy ?? "").trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+/**
  * Weekend-aware only. US market holidays are NOT handled: on the session after a holiday this
  * steps back to the holiday itself rather than to the last real trading day, so an AMC report from
  * the true previous session would be missed. Wiring a market calendar in here is the proper fix.
  */
-export function getNewYorkPrevTradingMonthDay(): { month: number; day: number } {
-  const { year, month, day } = getNewYorkYmd();
+export function getNewYorkPrevTradingMonthDay(session?: ReportSessionDay | null): { month: number; day: number } {
+  const { year, month, day } = session ?? getNewYorkYmd();
   const d = new Date(Date.UTC(year, month - 1, day));
   do {
     d.setUTCDate(d.getUTCDate() - 1);
@@ -128,9 +146,17 @@ export function pickReportValue(row: any): any {
  * ticker cannot be filtered on one surface and shown on another.
  */
 export function rowReportAffectsTodaySession(row: any): boolean {
+  return rowReportAffectsSession(row, null);
+}
+
+/**
+ * Same verdict against an explicit session. `session = null` means "today in New York", which is
+ * what every live surface wants; the Scanner passes the tape day it is replaying.
+ */
+export function rowReportAffectsSession(row: any, session?: ReportSessionDay | null): boolean {
   const raw = pickReportValue(row);
 
-  const byDate = parseReportDateAffectsTodaySession(raw);
+  const byDate = parseReportDateAffectsSession(raw, session);
   if (byDate != null) return byDate;
 
   const byBool = readLooseBool(raw);
@@ -147,6 +173,11 @@ export function rowReportAffectsTodaySession(row: any): boolean {
  * then fall back to its own boolean parsing).
  */
 export function parseReportDateAffectsTodaySession(value: any): boolean | null {
+  return parseReportDateAffectsSession(value, null);
+}
+
+/** Date/qualifier half of the verdict, judged against `session` (null = today in New York). */
+export function parseReportDateAffectsSession(value: any, session?: ReportSessionDay | null): boolean | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
 
@@ -158,7 +189,12 @@ export function parseReportDateAffectsTodaySession(value: any): boolean | null {
   // Bulk of the live feed uses a separator-less DDMMHHMM stamp — "29070800" is 29/07 08:00 and
   // "28071600" is 28/07 16:00. It carries no AMC/BMO token and no colon, so every other branch
   // here misses it and the report silently reads as "none".
-  const compact = /^(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(raw);
+  // The feed drops the day's leading zero, so the same stamp arrives as 7 digits for the 1st-9th
+  // of a month ("7081610" = 07/08 16:10). Requiring exactly 8 made every such report parse as no
+  // date at all, fall through to the boolean fallback, and read as "no report" — silently blind
+  // on roughly a third of the days in each month.
+  const compactRaw = /^\d{7,8}$/.test(raw) ? raw.padStart(8, "0") : raw;
+  const compact = /^(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(compactRaw);
   if (compact) {
     const d = Number(compact[1]);
     const mo = Number(compact[2]);
@@ -168,9 +204,9 @@ export function parseReportDateAffectsTodaySession(value: any): boolean | null {
     day = d;
     month = mo;
     afterCloseOverride = hh * 60 + mi >= MARKET_CLOSE_MINUTE;
-    const today = getNewYorkMonthDay();
+    const today = session ?? getNewYorkMonthDay();
     if (afterCloseOverride) {
-      const prev = getNewYorkPrevTradingMonthDay();
+      const prev = getNewYorkPrevTradingMonthDay(session);
       return month === prev.month && day === prev.day;
     }
     return month === today.month && day === today.day;
@@ -202,11 +238,11 @@ export function parseReportDateAffectsTodaySession(value: any): boolean | null {
     // An after-close release belongs to the next trading day, so it is relevant today only when
     // dated the previous trading day. Today's own after-close report lands after today's close and
     // cannot move today's session.
-    const prev = getNewYorkPrevTradingMonthDay();
+    const prev = getNewYorkPrevTradingMonthDay(session);
     return month === prev.month && day === prev.day;
   }
 
   // BMO / intraday / unqualified: belongs to its own day.
-  const today = getNewYorkMonthDay();
+  const today = session ?? getNewYorkMonthDay();
   return month === today.month && day === today.day;
 }

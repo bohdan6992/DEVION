@@ -30,7 +30,17 @@ import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
-import { rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
+import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
+import { rowExcludedByBorrow } from "../../lib/filters/borrow";
+import {
+  SECTOR_CORR_DEFAULT,
+  SECTOR_CORR_MAX,
+  SECTOR_CORR_MIN,
+  clampSectorCorrThreshold,
+  parseSectorCorrThreshold,
+  rowExcludedByCorr,
+  useSectorCorrExclusion,
+} from "../../lib/filters/sectorCorr";
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
@@ -48,6 +58,10 @@ import { CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockT
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
+import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
+import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
+import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
@@ -111,6 +125,8 @@ type ArbitrageScannerProps = {
   navScannerHref?: string;
   navSonarHref?: string;
 };
+
+const ACTIVE_TICKER_STRATEGY = "arbitrage" as const;
 
 export default function ArbitrageScanner({
   initialPrimaryPanel = "scanner",
@@ -482,6 +498,9 @@ export default function ArbitrageScanner({
     excludeETF,
     setExcludeETF,
     excludeCrap,
+    excludeItb, setExcludeItb,
+    excludeHard, setExcludeHard,
+    excludeCorr, setExcludeCorr,
     setExcludeCrap,
     includeUSA,
     setIncludeUSA,
@@ -2071,6 +2090,51 @@ export default function ArbitrageScanner({
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
+  // Which session a row's report marker is judged against. The marker carries only day/month, so
+  // it only means anything relative to a date: for the Scanner that is the tape day the row came
+  // from, never "today". Rows carry their own `dateNy`; the selected day is the fallback for any
+  // row that predates the server projecting it.
+  const fallbackSessionDay = useMemo(
+    () => parseSessionDay(dateMode === "day" ? dateNy : dateTo || dateFrom || dateNy),
+    [dateMode, dateNy, dateFrom, dateTo]
+  );
+  const reportSessionForRow = useCallback(
+    (row: any) => parseSessionDay(row?.dateNy ?? row?.date ?? row?.tradeDateNy) ?? fallbackSessionDay,
+    [fallbackSessionDay]
+  );
+
+  // CORR: drop names correlated with today's reporting tickers. Seeds are the whole sample this
+  // surface knows about — episodes plus the live active set — evaluated with the same report rule
+  // the REP button uses. The correlation table itself lives on the bridge (86 MB).
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
+  const corrThreshold = useMemo(
+    () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
+    [corrThresholdInput]
+  );
+  // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
+  const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
+  const activeCardStats = useMemo(() => {
+    const f = activeSnapshot.fields ?? {};
+    const pick = (key: string) => {
+      const v = (f as any)[key];
+      return v == null || String(v).trim() === "" ? "-" : String(v);
+    };
+    return [
+      { label: "Exchange", value: pick("Exchange") },
+      { label: "Bench", value: pick("Bench") },
+      { label: "Beta", value: pick("Beta") },
+      { label: "Sig", value: pick("Sig") },
+      { label: "SpreadBid%", value: pick("SpreadBid%") },
+    ];
+  }, [activeSnapshot.fields]);
+
+  const corrSeedRows = useMemo(
+    () => [...(episodesRows as any[]), ...(activeRows as any[])],
+    [episodesRows, activeRows]
+  );
+  const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr, corrThreshold, reportSessionForRow);
+
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
     const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
       min: rangeValueOrNull(key, minRaw),
@@ -2140,6 +2204,10 @@ export default function ArbitrageScanner({
       excludeReport: excludeHasReport,
       excludeETF: excludeETF,
       excludeCrap: excludeCrap,
+      excludeItb: excludeItb,
+      excludeHard: excludeHard,
+      excludeCorr: excludeCorr,
+      corrExcluded: sectorCorr.excluded,
       activeMode: "off",
       includeUSA: includeUSA,
       includeChina: includeChina,
@@ -2175,6 +2243,10 @@ export default function ArbitrageScanner({
       endAbs,
       excludeDividend,
       excludeCrap,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      sectorCorr.excluded,
       excludeETF,
       excludeHasNews,
       excludeHasReport,
@@ -3811,15 +3883,21 @@ export default function ArbitrageScanner({
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
-    // Report gate: same rule as Sonar and Stream (rowReportAffectsTodaySession over the raw vendor
-    // marker), so one toggle behaves identically on every surface. Deliberately NOT the server's
-    // HasReport boolean — the tape collapses the marker to "any marker means yes" at write time,
-    // which discards the date and the release time the rule is built on.
+    // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
+    // against the TAPE DAY this row belongs to rather than against today. The marker carries only
+    // day/month ("10/08 BMO"), so comparing a replayed day's rows to today's date made every one
+    // of them read as stale — the toggle looked wired and rejected nothing.
+    // Deliberately NOT the server's HasReport boolean: the tape collapses the marker to "any
+    // marker means yes", discarding the date and release time the rule is built on.
     if (requireHasReport || excludeHasReport) {
-      const affectsToday = rowReportAffectsTodaySession(row);
-      if (excludeHasReport && affectsToday) return false;
-      if (requireHasReport && !affectsToday) return false;
+      const affectsSession = rowReportAffectsSession(row, reportSessionForRow(row));
+      if (excludeHasReport && affectsSession) return false;
+      if (requireHasReport && !affectsSession) return false;
     }
+    // Borrow availability (B5ETB), written to the tape so it exists on a Scanner row at all.
+    if (rowExcludedByBorrow(row, excludeItb, excludeHard)) return false;
+    // CORR: not "this ticker reports" but "this ticker moves with one that does".
+    if (excludeCorr && rowExcludedByCorr(row, sectorCorr.excluded)) return false;
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 
@@ -3933,7 +4011,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4010,7 +4088,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -5198,6 +5276,17 @@ export default function ArbitrageScanner({
           </div>
         )}
 
+        {/* Active ticker, shared with Sonar and Stream. The Sonar owns the selection; this reads
+            its per-strategy localStorage key so the same ticker is active on every surface. */}
+        {activeSelection.ticker && (
+          <ActiveTickerCard
+            ticker={activeSelection.ticker}
+            stats={activeCardStats}
+            loading={activeSnapshot.loading}
+            error={activeSnapshot.error}
+          />
+        )}
+
         {(showIgnore || showApply || showPin) && (
           <TickerListDrawers
             showIgnore={showIgnore}
@@ -5630,7 +5719,7 @@ export default function ArbitrageScanner({
           </div>
         )}
 
-        <div className="scanner-glass-card flex flex-wrap gap-4 items-center rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
             <div className="flex h-7 items-center gap-2">
               {[
@@ -5670,10 +5759,10 @@ export default function ArbitrageScanner({
                     if (nextBand === "POST") setSession("POST");
                   }}
                   className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                    TOOLBAR_BUTTON_BASE,
                     ruleBand === b.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
                   )}
                 >
                   {b.label}
@@ -5697,10 +5786,10 @@ export default function ArbitrageScanner({
                     if (next === "ALL") setTopN(1000);
                   }}
                   className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                    TOOLBAR_BUTTON_BASE,
                     scopeMode === m.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
                   )}
                 >
                   {m.label}
@@ -5721,10 +5810,10 @@ export default function ArbitrageScanner({
                   type="button"
                   onClick={() => setRatingType(rt.key as PaperArbRatingType)}
                   className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                    TOOLBAR_BUTTON_BASE,
                     ratingType === rt.key
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300 bg-transparent"
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
                   )}
                   title={`RatingType = ${rt.key}`}
                 >
@@ -5810,7 +5899,7 @@ export default function ArbitrageScanner({
                   scannerPresetBusy
                     ? "border-transparent text-zinc-600"
                     : scannerPresetSaveMode
-                      ? "accent-soft"
+                      ? TOOLBAR_BUTTON_ACTIVE
                       : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                 )}
               >
@@ -5915,150 +6004,70 @@ export default function ArbitrageScanner({
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
         />
 
-        <div className="order-1 flex flex-wrap items-center gap-4">
-            <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-900/30 bg-rose-900/10 p-1.5">
-              {[
-                {
-                  label: "Div",
-                  disabled: false,
-                  title: "Exclude dividend=true",
-                  active: excludeDividend,
-                  onClick: () => setExcludeDividend((v) => !v),
-                },
-                {
-                  label: "News",
-                  disabled: false,
-                  title: "Exclude news=true",
-                  active: excludeHasNews,
-                  onClick: () => {
-                    setExcludeHasNews((v) => !v);
-                    setRequireHasNews(false);
-                  },
-                },
-                {
-                  label: "PTP",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludePTP,
-                  onClick: () => {
-                    setExcludePTP((v) => !v);
-                    setRequireIsPTP(false);
-                  },
-                },
-                {
-                  label: "SSR",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeSSR,
-                  onClick: () => {
-                    setExcludeSSR((v) => !v);
-                    setRequireIsSSR(false);
-                  },
-                },
-                {
-                  label: "Rep",
-                  disabled: false,
-                  title: "Exclude report=true",
-                  active: excludeHasReport,
-                  onClick: () => {
-                    setExcludeHasReport((v) => !v);
-                    setRequireHasReport(false);
-                  },
-                },
-                {
-                  label: "ETF",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeETF,
-                  onClick: () => {
-                    setExcludeETF((v) => !v);
-                    setRequireIsETF(false);
-                  },
-                },
-                {
-                  label: "CRAP",
-                  disabled: false,
-                  title: "Toggle",
-                  active: excludeCrap,
-                  onClick: () => {
-                    setExcludeCrap((v) => !v);
-                    setRequireIsCrap(false);
-                  },
-                },
-              ].map((b) => (
-                <button
-                  key={b.label}
-                  type="button"
-                  onClick={b.onClick}
-                  title={b.title}
-                  disabled={b.disabled}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
-                    b.disabled
-                      ? "bg-transparent text-zinc-600 border border-zinc-800 cursor-not-allowed"
-                      : b.active
-                        ? "bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.6)]"
-                        : "bg-transparent text-rose-500 hover:bg-rose-500/10"
-                  )}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="inline-flex items-center gap-2 rounded-xl border border-[rgba(6,78,59,0.55)] bg-[rgba(6,78,59,0.18)] p-1.5">
-              {[
-                { label: "USA", active: includeUSA, onClick: () => setIncludeUSA((v) => !v) },
-                { label: "CHINA", active: includeChina, onClick: () => setIncludeChina((v) => !v) },
-              ].map((b) => (
-                <button
-                  key={b.label}
-                  type="button"
-                  onClick={b.onClick}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
-                    b.active
-                      ? "bg-[rgba(16,185,129,0.95)] text-white shadow-[0_0_15px_rgba(16,185,129,0.6)]"
-                      : "bg-transparent text-[#34d399] hover:bg-[rgba(16,185,129,0.10)]"
-                  )}
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="inline-flex items-center gap-1 rounded-xl border border-yellow-200/20 bg-yellow-200/[0.06] p-1.5">
-              <MultiSelectFilter
-                label="COUNTRY"
-                options={streamCountries}
-                selected={selCountries}
-                setSelected={setSelCountries}
-                enabled={countryEnabled}
-                toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-              />
-              <MultiSelectFilter
-                label="EXCHANGE"
-                options={streamExchanges}
-                selected={selExchanges}
-                setSelected={setSelExchanges}
-                enabled={exchangeEnabled}
-                toggleEnabled={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-              />
-              <MultiSelectFilter
-                label="SECTOR"
-                options={streamSectors}
-                selected={selSectors}
-                setSelected={setSelSectors}
-                enabled={sectorEnabled}
-                toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
-                color="amber"
-                panelWidth={220}
-              />
-            </div>
-
-            <div className="inline-flex items-center gap-1 rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-1.5">
+          {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
+              Adding a filter is now one edit here plus the rule in lib/filters, instead of the
+              same edit in four files. Each exclusion also clears its paired `require*` flag, so
+              the two halves of a tri-state can never both be on. */}
+          <FilterFlagsRow
+              className="order-1"
+            exclusions={[
+              { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
+              { label: "HARD", value: excludeHard, set: setExcludeHard, title: "B5ETB = NO (hard to borrow)" },
+              { label: "Div", value: excludeDividend, set: setExcludeDividend, title: "Exclude dividend=true" },
+              { label: "News", value: excludeHasNews, set: (v) => { setExcludeHasNews(v); setRequireHasNews(false); }, title: "Exclude news=true" },
+              { label: "PTP", value: excludePTP, set: (v) => { setExcludePTP(v); setRequireIsPTP(false); } },
+              { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); } },
+              { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); } },
+              { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); } },
+            ]}
+            report={{
+              label: "REP",
+              value: excludeHasReport,
+              set: (v) => { setExcludeHasReport(v); setRequireHasReport(false); },
+              title: "Exclude report=true",
+            }}
+            corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}
+            corrThresholdInput={corrThresholdInput}
+            setCorrThresholdInput={setCorrThresholdInput}
+            corrThreshold={corrThreshold}
+            corrStatus={sectorCorr}
+            regions={[
+              { label: "USA", value: includeUSA, set: setIncludeUSA },
+              { label: "CHINA", value: includeChina, set: setIncludeChina },
+            ]}
+            selectsSlot={
+              <>
+                <MultiSelectFilter
+                  label="COUNTRY"
+                  options={streamCountries}
+                  selected={selCountries}
+                  setSelected={setSelCountries}
+                  enabled={countryEnabled}
+                  toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                />
+                <MultiSelectFilter
+                  label="EXCHANGE"
+                  options={streamExchanges}
+                  selected={selExchanges}
+                  setSelected={setSelExchanges}
+                  enabled={exchangeEnabled}
+                  toggleEnabled={() => setExchangeEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                />
+                <MultiSelectFilter
+                  label="SECTOR"
+                  options={streamSectors}
+                  selected={selSectors}
+                  setSelected={setSelSectors}
+                  enabled={sectorEnabled}
+                  toggleEnabled={() => setSectorEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
+                  color="amber"
+                  panelWidth={220}
+                />
+              </>
+            }
+            sortSlot={
               <div className="relative flex h-7 items-center rounded-full border border-sky-400/25 bg-[#0a1520]/85">
                 <GlassSelect
                   value={streamSortKey}
@@ -6067,174 +6076,178 @@ export default function ArbitrageScanner({
                   className="!h-7 !min-w-[74px] !w-[74px] !py-0 !px-2 !bg-transparent !border-0 !focus:border-0 text-right rounded-full"
                 />
               </div>
-            </div>
+            }
+            zapSlot={
+              <>
 
-            <div className="ml-auto inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 p-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "zap") {
-                    setZapMode("off");
-                    setMetric("SigmaZap");
-                  } else {
-                    setZapMode("zap");
-                    setMetric("ZapPct");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "zap"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
-              </button>
+              <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "zap") {
+                      setZapMode("off");
+                      setMetric("SigmaZap");
+                    } else {
+                      setZapMode("zap");
+                      setMetric("ZapPct");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "zap"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "sigma") {
-                    setZapMode("off");
-                  } else {
-                    setZapMode("sigma");
-                    setMetric("SigmaZap");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "sigma"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "sigma") {
+                      setZapMode("off");
+                    } else {
+                      setZapMode("sigma");
+                      setMetric("SigmaZap");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "sigma"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (zapMode === "delta") {
-                    setZapMode("off");
-                  } else {
-                    setZapMode("delta");
-                    setMetric("SigmaZap");
-                  }
-                }}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-lg border px-3 text-[10px] font-mono font-bold leading-none transition-all active:scale-[0.98]",
-                  zapMode === "delta"
-                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                )}
-                title="Require start sigma to be above direction-specific print median plus the first input delta"
-              >
-                <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "delta") {
+                      setZapMode("off");
+                    } else {
+                      setZapMode("delta");
+                      setMetric("SigmaZap");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "delta"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                  title="Require start sigma to be above direction-specific print median plus the first input delta"
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+                </button>
 
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={startAbs}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={startAbs}
                     disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase start abs"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease start abs"
-                  >
-                    ▼
-                  </button>
+                    onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase start abs"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease start abs"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.1}
-                  min={0}
-                  value={startAbsMax}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setStartAbsMax(e.target.value)}
-                  placeholder="start max"
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={startAbsMax}
                     disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpStartAbsMax(0.1)}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase start max"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => bumpStartAbsMax(-0.1)}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease start max"
-                  >
-                    ▼
-                  </button>
+                    onChange={(e) => setStartAbsMax(e.target.value)}
+                    placeholder="start max"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpStartAbsMax(0.1)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase start max"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpStartAbsMax(-0.1)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease start max"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                <input
-                  type="number"
-                  step={0.05}
-                  min={0}
-                  value={endAbs}
-                  disabled={zapMode === "off"}
-                  onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
-                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                />
-                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                  <button
-                    type="button"
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.05}
+                    min={0}
+                    value={endAbs}
                     disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-                    aria-label="Increase end abs"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={zapMode === "off"}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
-                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
-                    aria-label="Decrease end abs"
-                  >
-                    ▼
-                  </button>
+                    onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase end abs"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease end abs"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-            </div>
-        </div>
+              </div>
+              </>
+            }
+          />
         </div>
 
         {/* Error */}

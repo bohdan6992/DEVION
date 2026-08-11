@@ -10,6 +10,8 @@ import { useStreamExecutionSnapshot } from "./streamExecutionStore";
 import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrderIntentStore";
 import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
 import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
+import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
 import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
 import { useStreamStores } from "./streamStoreRegistry";
@@ -35,6 +37,7 @@ type StreamDecisionTableRow = {
   spread: number | null;
   spreadBidPct: number | null;
   netEdge: number | null;
+  report?: string | null;
   entrySignal?: number | null;
   addBaseSignal?: number | null;
   confirmedAddSignal?: number | null;
@@ -449,6 +452,7 @@ function StreamDecisionVirtualRow({
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
@@ -485,6 +489,7 @@ function StreamDecisionStoreVirtualRow({
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
       <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
       <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
@@ -508,8 +513,8 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
   const gridStyle: React.CSSProperties = {
     display: "grid",
     gridTemplateColumns: hasDismiss
-      ? "120px 96px 88px 74px 78px 78px 74px 74px 86px 108px 132px 36px"
-      : "120px 96px 88px 74px 78px 78px 74px 74px 86px 108px 132px",
+      ? "120px 96px 88px 74px 78px 78px 96px 74px 74px 86px 108px 132px 36px"
+      : "120px 96px 88px 74px 78px 78px 96px 74px 74px 86px 108px 132px",
   };
 
   return (
@@ -547,6 +552,7 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
             <div className="p-2.5 text-right">Signal</div>
             <div className="p-2.5 text-right">SpreadBid%</div>
             <div className="p-2.5 text-right">Net Edge</div>
+            <div className="p-2.5 text-left">REP</div>
             <div className="p-2.5 text-right">Entryσ</div>
             <div className="p-2.5 text-right">Baseσ</div>
             <div className="p-2.5 text-right">Confσ</div>
@@ -593,6 +599,7 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                  <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
                   <div className="px-2.5 py-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
@@ -655,6 +662,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
             <div className="p-2.5 text-right">Signal</div>
             <div className="p-2.5 text-right">SpreadBid%</div>
             <div className="p-2.5 text-right">Net Edge</div>
+            <div className="p-2.5 text-left">REP</div>
             <div className="p-2.5 text-left">Status</div>
           </div>
 
@@ -697,6 +705,8 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
                     <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                    <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+                  <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
                     <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   </div>
                 );
@@ -1212,6 +1222,8 @@ export function StreamSimLog() {
   );
 }
 
+const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
+
 export default function OpenDoorStreamView({
   tab,
   streamSignalsCount,
@@ -1252,6 +1264,31 @@ export default function OpenDoorStreamView({
   const executionSnapshot = useStreamExecutionSnapshot();
   const streamPositions = useStreamPositionRows();
   const activeDecisionRows = useStreamActiveDecisionRows();
+  // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
+  const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
+  const activeStreamRow = useMemo(
+    () => activeDecisionRows.find((row) => row.ticker === activeSelection.ticker) ?? null,
+    [activeDecisionRows, activeSelection.ticker]
+  );
+  const activeCardStats = useMemo(() => {
+    const f = activeSnapshot.fields ?? {};
+    const pick = (key: string) => {
+      const v = (f as any)[key];
+      return v == null || String(v).trim() === "" ? "-" : String(v);
+    };
+    return [
+      { label: "Exchange", value: pick("Exchange") },
+      { label: "Bench", value: activeStreamRow?.benchmark ?? pick("Bench") },
+      { label: "Beta", value: pick("Beta") },
+      { label: "Sig", value: activeStreamRow?.signal != null ? activeStreamRow.signal.toFixed(2) : pick("Sig") },
+      { label: "Side", value: activeStreamRow?.side ?? "-" },
+      { label: "Status", value: activeStreamRow?.status ?? "-", accent: true },
+      { label: "Spread", value: activeStreamRow?.spread != null ? activeStreamRow.spread.toFixed(2) : pick("SpreadBid%") },
+      { label: "Report", value: activeStreamRow?.report ?? "-" },
+    ];
+  }, [activeSnapshot.fields, activeStreamRow]);
+
   const streamPositionMeta = useStreamPositionMeta();
   const bookSnapshotState = useStreamBookSnapshotState();
   const mainWindowSnapshotState = useStreamMainWindowSnapshotState();
@@ -1548,6 +1585,19 @@ export default function OpenDoorStreamView({
           <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />
           <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
       </div>
+
+      {/* Active ticker, shared with Sonar and Scanner. The selection itself is owned by the Sonar
+          and read from its per-strategy localStorage key, so "active" means the same ticker on
+          every surface without inventing a second selection UI here. */}
+      {activeSelection.ticker && (
+        <ActiveTickerCard
+          ticker={activeSelection.ticker}
+          stats={activeCardStats}
+          loading={activeSnapshot.loading}
+          error={activeSnapshot.error}
+          accentTextClass={accentActiveTextClass}
+        />
+      )}
 
       <div className="scanner-panel-surface rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] p-3">
         <div className="flex items-center justify-between gap-3">

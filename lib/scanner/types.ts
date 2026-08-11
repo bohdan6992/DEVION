@@ -215,6 +215,12 @@ export type PaperArbClosedDto = {
   imbExch1555?: number | null;
   printMedianPos?: number | null;
   printMedianNeg?: number | null;
+  // Raw vendor markers, carried verbatim so the Scanner can apply the same REP/ITB/HARD rules the
+  // Sonar and Stream use instead of a coarse boolean. `b5Etb` is how C#'s `B5Etb` camel-cases;
+  // read it through `readBorrowStatus` rather than by property, since the live surfaces spell the
+  // same field `B5ETB`.
+  report?: string | null;
+  b5Etb?: string | null;
   country?: string | null;
   exchange?: string | null;
   sectorL3?: string | null;

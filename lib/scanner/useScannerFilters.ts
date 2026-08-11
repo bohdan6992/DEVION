@@ -224,6 +224,13 @@ export function useScannerFilters(
   const [excludeSSR, setExcludeSSR] = useState<boolean>(false);
   const [excludeETF, setExcludeETF] = useState<boolean>(false);
   const [excludeCrap, setExcludeCrap] = useState<boolean>(false);
+  // Borrow availability, from the B5ETB column. Three observed values: YES (available),
+  // ITB, and NO (hard to borrow). ITB drops the "ITB" rows, HARD drops the "NO" rows;
+  // "YES" is untouched by either.
+  const [excludeItb, setExcludeItb] = useState<boolean>(false);
+  const [excludeHard, setExcludeHard] = useState<boolean>(false);
+  // Toggle only for now — no filter rule is wired to it yet, by request.
+  const [excludeCorr, setExcludeCorr] = useState<boolean>(false);
   const [includeUSA, setIncludeUSA] = useState<boolean>(false);
   const [includeChina, setIncludeChina] = useState<boolean>(false);
   const [minMdnPreMhVol90, setMinMdnPreMhVol90] = useState<string>("");
@@ -470,6 +477,9 @@ export function useScannerFilters(
     excludeSSR, setExcludeSSR,
     excludeETF, setExcludeETF,
     excludeCrap, setExcludeCrap,
+    excludeItb, setExcludeItb,
+    excludeHard, setExcludeHard,
+    excludeCorr, setExcludeCorr,
     includeUSA, setIncludeUSA,
     includeChina, setIncludeChina,
     minMdnPreMhVol90, setMinMdnPreMhVol90,

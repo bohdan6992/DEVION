@@ -8,7 +8,8 @@
     "clean": "node scripts/clean-cache.mjs",
     "build": "node scripts/build-stable.mjs",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "node scripts/check-shared-ui.mjs && next lint",
+    "check:ui": "node scripts/check-shared-ui.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

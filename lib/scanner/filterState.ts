@@ -39,6 +39,12 @@ export type ScannerFilterState = {
   err: string | null;
   exchangeEnabled: TriMode;
   excludeCrap: boolean;
+  excludeItb: boolean;
+  setExcludeItb: (v: boolean | ((p: boolean) => boolean)) => void;
+  excludeHard: boolean;
+  setExcludeHard: (v: boolean | ((p: boolean) => boolean)) => void;
+  excludeCorr: boolean;
+  setExcludeCorr: (v: boolean | ((p: boolean) => boolean)) => void;
   excludeDividend: boolean;
   excludeETF: boolean;
   excludeHasNews: boolean;

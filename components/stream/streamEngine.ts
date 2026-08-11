@@ -36,6 +36,8 @@ export type StreamDecisionRow = {
   safePrice: number | null;
   netEdge: number | null;
   positionBp: number | null;
+  /** Raw B5-style Report value: "NO", "10/08 BMO", or a MMDDHHMM-ish code. Display only. */
+  report: string | null;
   status: StreamDecisionStatus;
   reason: string;
   updatedAt: number;
@@ -532,6 +534,15 @@ function isActiveByPositionBp(row: ArbitrageSignal | null | undefined): boolean 
   const bp = numPositionBp(row);
   // Stream engine uses strict position activity: only PositionBp != 0 means active.
   return bp != null && bp !== 0;
+}
+
+// Report is a display passthrough — the value shape varies ("NO", "10/08 BMO", "10080700"), so
+// it is deliberately NOT parsed here; the column shows exactly what the feed sent.
+function signalReport(row: ArbitrageSignal | null | undefined): string | null {
+  if (!row) return null;
+  const raw = (row as any).Report ?? (row as any).report ?? (row as any).meta?.Report ?? (row as any).meta?.report;
+  const text = String(raw ?? "").trim();
+  return text ? text : null;
 }
 
 function signalSpread(row: ArbitrageSignal | null | undefined): number | null {
@@ -1273,6 +1284,7 @@ export function computeStreamDecisionRows(
       safePrice,
       netEdge,
       positionBp,
+      report: signalReport(row),
       status,
       reason,
       updatedAt: Date.now(),

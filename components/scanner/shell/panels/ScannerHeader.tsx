@@ -5,9 +5,13 @@ import { GlitchTitle } from "../../../ui/GlitchTitle";
 import type { PaperListMode, PrimaryPanelKey } from "../../../../lib/scanner/types";
 
 /**
- * The scanner header: title, STREAM/SCANNER/SONAR nav, the IGN/APP/PIN list-mode
- * group and the RUN button. Identical for every strategy, so prop names match the
+ * The header shared by Scanner AND Sonar: title, STREAM/SCANNER/SONAR nav, the IGN/APP/PIN
+ * list-mode group and the RUN button. Identical for every strategy, so prop names match the
  * identifiers the scanner components already use and the markup is unchanged.
+ *
+ * The Sonars carried their own 215-line copy of this, which had drifted: no icons beside the nav
+ * labels, and a boxed refresh button instead of the bare one. `primaryPanel` accepts "sonar" so
+ * the third link can be the current page.
  */
 export type ScannerHeaderProps = {
   scannerShellTitle: string;
@@ -16,7 +20,8 @@ export type ScannerHeaderProps = {
   navStreamHref: string;
   navScannerHref: string;
   navSonarHref: string;
-  primaryPanel: PrimaryPanelKey;
+  /** "sonar" marks the third link as the current page; the Scanner never passes it. */
+  primaryPanel: PrimaryPanelKey | "sonar";
   listMode: PaperListMode;
   ignCount: number;
   appCount: number;
@@ -34,6 +39,8 @@ export type ScannerHeaderProps = {
   canRun: boolean;
   run: () => void;
   variantString: string;
+  /** Spins the RUN icon while a fetch is in flight. The Sonar uses it for its reconnect. */
+  busy?: boolean;
 };
 
 export default function ScannerHeader({
@@ -61,6 +68,7 @@ export default function ScannerHeader({
   canRun,
   run,
   variantString,
+  busy = false,
 }: ScannerHeaderProps) {
   return (
     <header className="scanner-header-surface bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
@@ -104,9 +112,9 @@ export default function ScannerHeader({
             href={navSonarHref}
             className={clsx(
               "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
-              headerNavInactiveClass
+              primaryPanel === "sonar" ? "accent-soft" : headerNavInactiveClass
             )}
-            title="Open SONAR"
+            title={primaryPanel === "sonar" ? "SONAR (current)" : "Open SONAR"}
           >
             <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="2"/>
@@ -269,7 +277,7 @@ export default function ScannerHeader({
           )}
           title={variantString}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={busy ? "animate-spin" : ""}>
             <path d="M21 12a9 9 0 1 1-2.64-6.36" />
             <polyline points="21 3 21 9 15 9" />
           </svg>
