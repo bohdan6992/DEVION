@@ -282,6 +282,17 @@ export const OPTIMIZER_RANK_METRIC_OPTIONS: GlassSelectOption[] = [
   { value: "tailDamage", label: "Tail Dmg ↓" },
 ];
 
+/**
+ * How the SCOPE optimizer cuts a parameter's range. See ScopeOptimizerBinMode and the bridge's
+ * BuildBinCuts — harm and gain are the two halves of one question, so they sit next to each other.
+ */
+export const SCOPE_BIN_MODE_OPTIONS: GlassSelectOption[] = [
+  { value: "trades", label: "Trades" },
+  { value: "harm", label: "Harm ↓" },
+  { value: "gain", label: "Gain ↑" },
+  { value: "width", label: "Width" },
+];
+
 export const SCOPE_THRESHOLD_MODE_OPTIONS: GlassSelectOption[] = [
   { value: "more_than", label: ">= x" },
   { value: "less_than", label: "<= x" },

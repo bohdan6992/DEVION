@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { bridgeUrl } from "@/lib/bridgeBase";
+import { LIVE_STRATEGY_LIST } from "@/lib/strategies/registry";
 
 /**
  * The active ticker, shared across Sonar, Scanner and Stream.
@@ -17,12 +18,18 @@ import { bridgeUrl } from "@/lib/bridgeBase";
  * tab is covered by polling, since `storage` does not fire in the tab that wrote the value.
  */
 
-export type ActiveTickerStrategy = "arbitrage" | "opendoor";
+/**
+ * Any strategy key from the registry. Deliberately `string` and not a union: this hook used to
+ * declare `"arbitrage" | "opendoor"` alongside a hand-written key map, so a third strategy meant
+ * editing a filter utility that has nothing to do with strategies. An unknown key simply has no
+ * selection, which is the truthful answer.
+ */
+export type ActiveTickerStrategy = string;
 
-const STORAGE_KEYS: Record<ActiveTickerStrategy, string> = {
-  arbitrage: "bridge.arb.activePanel.v1",
-  opendoor: "bridge.opendoor.activePanel.v1",
-};
+/** Derived from each strategy's own Sonar storage namespace — never written out a second time. */
+const STORAGE_KEYS: Record<string, string> = Object.fromEntries(
+  LIVE_STRATEGY_LIST.map((s) => [s.key, `${s.storage.sonarPrefix}.activePanel.v1`])
+);
 
 export type ActiveTickerSelection = {
   ticker: string | null;
@@ -36,7 +43,9 @@ const EMPTY: ActiveTickerSelection = { ticker: null, visible: false, collapsed: 
 function readSelection(strategy: ActiveTickerStrategy): ActiveTickerSelection {
   if (typeof window === "undefined") return EMPTY;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEYS[strategy]);
+    const key = STORAGE_KEYS[strategy];
+    if (!key) return EMPTY;
+    const raw = window.localStorage.getItem(key);
     if (!raw) return EMPTY;
     const parsed = JSON.parse(raw);
     const ticker =

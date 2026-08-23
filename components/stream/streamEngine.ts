@@ -4,7 +4,9 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import { bridgeUrl } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { applyExactSonarClientFilters, buildSignalsStreamUrl, normalizeSignal, type ArbitrageSignal, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { applyExactSonarClientFilters, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import { normalizeSignal, type ArbitrageSignal } from "@/lib/signals/signal";
+import { buildSignalsStreamUrl } from "@/lib/signals/url";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamExecutionStore } from "./streamExecutionStore";
 import { useStreamInstance, type StreamInstance } from "./streamInstance";

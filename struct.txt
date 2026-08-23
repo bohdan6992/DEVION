@@ -1,0 +1,11 @@
+   5857  CARD  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+   5900  CARD  <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+   5949  ctrl  { key: "stack", label: "STACK", on: openDoorUseStack, set: setOpenDoorUseStack },
+   5950  ctrl  { key: "bench", label: "BENCH", on: openDoorUseBench, set: setOpenDoorUseBench },
+   5951  ctrl  { key: "dev", label: "DEV", on: openDoorUseDevSig, set: setOpenDoorUseDevSig },
+   5981  ctrl  label: "MINRATE", value: openDoorUpMinRate, step: 0.1, integer: false,
+   5985  ctrl  label: "MINTOTAL", value: openDoorUpMinTotal, step: 1, integer: true,
+   5989  ctrl  label: "MINMOVE", value: openDoorUpMinMove, step: 0.05, integer: false,
+   6100  CARD  <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a
+   6104  ctrl  { key: "10m", label: "10m" },
+   6126  ctrl  <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wi

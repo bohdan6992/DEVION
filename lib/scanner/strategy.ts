@@ -1,6 +1,9 @@
 import { createDefaultScopeResearchDrafts, createScannerScopeCatalog } from "./scopeParameters";
+import type { RatingBinSource } from "./scopeOptimizer";
 import type { ScannerScopeCatalog } from "./scopeParameters";
 import type { ScopePanelKey, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey } from "./types";
+import { getLiveStrategy } from "@/lib/strategies/registry";
+import { STRATEGY_BY_KEY } from "@/lib/strategyCatalog";
 
 /**
  * How a strategy contributes its own knobs to the shared scanner shell.
@@ -42,6 +45,8 @@ export type ScannerStrategyParams<TParams = unknown> = {
 export type ScannerStrategy = {
   /** Stable id, also used as the default localStorage namespace. */
   id: string;
+  /** Where the RATING GATES bins read rate/total from — see ScannerStrategyInit.ratingBinSource. */
+  ratingBinSource: RatingBinSource;
   /** Human label for headers and log lines. */
   label: string;
 
@@ -115,25 +120,44 @@ export type ScannerStrategy = {
 };
 
 export type ScannerStrategyInit = {
-  id: string;
-  label: string;
-  apiBase: string;
+  /**
+   * Registry key. Identity, routes, API bases, storage namespaces, trading window and rating
+   * classes all come from `lib/strategies/registry.ts` — the same entry Caesar, the nav and the
+   * active-ticker hook read. Those used to be re-declared at every call site, which is how
+   * Arbitrage ended up with two different trading windows and a SONAR link to another page.
+   *
+   * What stays here is what only the SCANNER knows: which research axes this strategy can
+   * populate, and its own toolbar knobs.
+   */
+  key: string;
+  /** Override only if the days endpoint is not `${paperBase}/days`. */
   daysEndpoint?: string;
-  lsKeyPrefix?: string;
-  nav: ScannerStrategy["nav"];
-  tradingWindow: ScannerStrategy["tradingWindow"];
-  ratingClasses: ScannerStrategy["ratingClasses"];
   /** Axes this strategy never populates — dropped from every research dropdown. */
   excludeScopeParameters?: Iterable<ScopeResearchParameterKey>;
   /** Result metrics this strategy always leaves null (e.g. no hedge leg). */
   excludeScopeResults?: Iterable<ScopeResearchResultKey>;
   /** Starting axis per panel. Must be an axis that survives `excludeScopeParameters`. */
   defaultScopeAxes?: Partial<Record<ScopePanelKey, ScopeResearchParameterKey>>;
+  /**
+   * Where the RATING GATES bins read their rate/total from. Defaults to "sigma-bin", which needs the
+   * episode to carry |sigma| — a strategy without it (OpenDoor) must say "episode" or the MINRATE and
+   * MINTOTAL axes come out empty.
+   */
+  ratingBinSource?: RatingBinSource;
   /** The strategy's own knobs; omit for a strategy that adds none. */
   params?: ScannerStrategyParams<any>;
 };
 
 export function defineScannerStrategy(init: ScannerStrategyInit): ScannerStrategy {
+  const live = getLiveStrategy(init.key);
+  if (!live) {
+    // A scanner for a strategy the registry does not know would silently get no routes, no bridge
+    // id and no window — and Caesar would be able to schedule it but never reach it.
+    throw new Error(
+      `[scanner:${init.key}] no entry in lib/strategies/registry.ts — add the strategy there first`
+    );
+  }
+
   const scope = createScannerScopeCatalog({
     excludeParameters: init.excludeScopeParameters,
     excludeResults: init.excludeScopeResults,
@@ -146,23 +170,24 @@ export function defineScannerStrategy(init: ScannerStrategyInit): ScannerStrateg
     const key = defaultScopeDrafts[panel].parameterKey;
     if (!scope.parameterOptions.some((option) => option.value === key)) {
       throw new Error(
-        `[scanner:${init.id}] default ${panel} axis "${key}" is excluded from this strategy's scope catalog`
+        `[scanner:${init.key}] default ${panel} axis "${key}" is excluded from this strategy's scope catalog`
       );
     }
   }
 
   return {
-    id: init.id,
-    label: init.label,
+    id: live.key,
+    label: STRATEGY_BY_KEY[live.key]?.name ?? live.key,
+    ratingBinSource: init.ratingBinSource ?? "sigma-bin",
     api: {
-      base: init.apiBase,
-      daysEndpoint: init.daysEndpoint ?? `${init.apiBase}/days`,
+      base: live.api.paperBase,
+      daysEndpoint: init.daysEndpoint ?? `${live.api.paperBase}/days`,
     },
-    lsKeyPrefix: init.lsKeyPrefix ?? init.id,
+    lsKeyPrefix: live.storage.scannerPrefix,
     params: init.params,
-    nav: init.nav,
-    tradingWindow: init.tradingWindow,
-    ratingClasses: init.ratingClasses,
+    nav: live.nav,
+    tradingWindow: live.tradingWindow,
+    ratingClasses: live.ratingClasses,
     scope,
     defaultScopeDrafts,
   };

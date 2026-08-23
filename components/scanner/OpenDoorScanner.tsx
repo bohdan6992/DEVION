@@ -59,10 +59,11 @@ import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
-import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
-import { OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
-import { SCANNER_CONTROL_SURFACE, SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
+import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
+import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
+import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
@@ -74,26 +75,12 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import OpenDoorGatesRow from "./shell/panels/OpenDoorGatesRow";
 // OpenDoor tracks no sigma metric and no peak (the mapper leaves those slots null and
 // MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
 // metrics are excluded rather than rendering empty charts that look like a bug.
 const STRATEGY = defineScannerStrategy({
-  id: "opendoor",
-  label: "OpenDoor",
-  apiBase: "/api/paper/opendoor",
-  lsKeyPrefix: "paper.opendoor",
-  nav: { stream: "/opendoor/stream", scanner: "/opendoor/scanner", sonar: "/opendoor/sonar" },
-  // One entry at 09:20 (±5min) and one exit at 09:40 ("10m") or 10:00 ("30m"), per
-  // TapeOpenDoorEngine. Nothing outside 09:00–10:00 is of any use to this strategy.
-  tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
-  // OpenDoor's own rating classes: the two exit horizons from ExitTargetMinByClass. They play
-  // exactly the role Arbitrage's session bands play — class x direction -> {rate, total} gated by
-  // minRate/minTotal — and are read from /api/opendoor/summary, not from sigma_peak_bins.
-  ratingClasses: {
-    dimension: "EXIT",
-    keys: ["10m", "30m"],
-    labels: { "10m": "10M", "30m": "30M" },
-  },
+  key: "opendoor",
   excludeScopeParameters: [
     "startMetricAbs", "peakMetricAbs", "endMetricAbs",
     "reversionAbs", "reversionPct",
@@ -102,6 +89,10 @@ const STRATEGY = defineScannerStrategy({
   ],
   excludeScopeResults: ["benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs"],
   defaultScopeAxes: { left: "rating", right: "spread" },
+  // OpenDoor has no |sigma| to look a bin up by, so the RATING GATES axes read the rate/total the
+  // gate already resolved onto the episode — which is the traded side's, so long and short share
+  // one field. With the default "sigma-bin" source those two axes were silently empty.
+  ratingBinSource: "episode",
 });
 
 // =========================
@@ -171,9 +162,10 @@ export default function OpenDoorScanner({
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
   lsKeyPrefix = "paper.opendoor",
-  navStreamHref = "/opendoor/stream",
-  navScannerHref = "/opendoor/scanner",
-  navSonarHref = "/opendoor/sonar",
+  // Routes come from the registry entry, not from literals repeated per component.
+  navStreamHref = STRATEGY.nav.stream,
+  navScannerHref = STRATEGY.nav.scanner,
+  navSonarHref = STRATEGY.nav.sonar,
 }: ArbitrageScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
@@ -603,8 +595,6 @@ export default function OpenDoorScanner({
     setScanProgress,
     optimizerRows,
     setOptimizerRows,
-    optimizerComboRows,
-    setOptimizerComboRows,
     optimizerLoading,
     setOptimizerLoading,
     optimizerErr,
@@ -627,14 +617,14 @@ export default function OpenDoorScanner({
     setScopeSelectedParameterKeys,
     scopeParameterGroupExpanded,
     setScopeParameterGroupExpanded,
-    scopeOverlayParameterKeys,
-    setScopeOverlayParameterKeys,
     optimizerRangeRankMetric,
     setOptimizerRangeRankMetric,
     optimizerRangeMinTrades,
     setOptimizerRangeMinTrades,
     optimizerBucketCount,
     setOptimizerBucketCount,
+    optimizerBinMode,
+    setOptimizerBinMode,
     scopeResearchDrafts,
     setScopeResearchDrafts,
     scopeResearchSelections,
@@ -1208,7 +1198,8 @@ export default function OpenDoorScanner({
   }, [episodesRows, sharedRangeFilterModes]);
   const filtersHydratedRef = useRef(false);
   const filtersRestoringRef = useRef(false);
-  const optimizerBucketReloadRef = useRef<number | null>(null);
+  // Keyed on count AND split mode: both change what the bridge returns, so both must re-fetch.
+  const optimizerBucketReloadRef = useRef<string | null>(null);
 
 
 
@@ -1701,7 +1692,8 @@ export default function OpenDoorScanner({
           setOptimizerRangeRankMetric(s.optimizerRangeRankMetric);
         }
         if (typeof s.optimizerRangeMinTrades === "number") setOptimizerRangeMinTrades(Math.max(0, Math.trunc(s.optimizerRangeMinTrades)));
-        if (typeof s.optimizerBucketCount === "number") setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(s.optimizerBucketCount))));
+        if (typeof s.optimizerBucketCount === "number") setOptimizerBucketCount(Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, Math.trunc(s.optimizerBucketCount))));
+        if (s.optimizerBinMode === "trades" || s.optimizerBinMode === "harm" || s.optimizerBinMode === "gain" || s.optimizerBinMode === "width") setOptimizerBinMode(s.optimizerBinMode);
 
         if (typeof s.includeEquityCurve === "boolean") setIncludeEquityCurve(s.includeEquityCurve);
         if (s.equityCurveMode === "Daily" || s.equityCurveMode === "Trade") setEquityCurveMode(s.equityCurveMode);
@@ -1909,6 +1901,7 @@ export default function OpenDoorScanner({
       optimizerRangeRankMetric,
       optimizerRangeMinTrades,
       optimizerBucketCount,
+      optimizerBinMode,
       includeEquityCurve,
       equityCurveMode,
       sharedRangeFilterModes,
@@ -2069,7 +2062,7 @@ export default function OpenDoorScanner({
       // they reached localStorage only by accident, whenever some other field changed next. On
       // OpenDoor sizeValue also goes to the server and is part of its cache variant key.
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
-      optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount,
+      optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
@@ -4019,7 +4012,8 @@ export default function OpenDoorScanner({
         const { group, parameterKeys, timeoutMs, bucketCount } = task;
         const groupReq = buildPostRequest(from, to);
         applyOptimizerRatingRule(groupReq);
-        groupReq.optimizerBucketCount = bucketCount ?? Math.max(3, Math.min(16, Math.trunc(optimizerBucketCount)));
+        groupReq.optimizerBucketCount = bucketCount ?? Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, Math.trunc(optimizerBucketCount)));
+        groupReq.optimizerBinMode = optimizerBinMode;
         groupReq.optimizerGroups = [group];
         groupReq.optimizerParameterKeys = parameterKeys ?? null;
         try {
@@ -4155,7 +4149,6 @@ export default function OpenDoorScanner({
 
       setOptimizerRows(rows);
       // Pair overlay compares two parameters at once; it has no client-side equivalent yet.
-      setOptimizerComboRows([]);
       setOptimizerErr(
         rows.length <= 1
           ? "No episodes on screen to optimize over — run a date with results first."
@@ -4187,7 +4180,6 @@ export default function OpenDoorScanner({
 
     setOptimizerLoading(true);
     setOptimizerErr(null);
-    setOptimizerComboRows([]);
     setScopeResearchSelections({
       left: null,
       right: null,
@@ -4220,49 +4212,8 @@ export default function OpenDoorScanner({
         return scopeSelectedScenarioParameterLabels.includes(scenario.parameter);
       });
 
-      const overlayParameters = scopeOverlayParameterKeys.map((value) => value.trim()).filter(Boolean);
-      const uniqueOverlayParameters = Array.from(new Set(overlayParameters));
-      const scenariosByParameter = scopeScenarioRows.reduce<Map<string, OptimizerScenario[]>>((acc, scenario) => {
-        if (scenario.id === "baseline" || scenario.id === "current-stack" || scenario.parameter === "BASE" || scenario.parameter === "STACK") return acc;
-        const list = acc.get(scenario.parameter) ?? [];
-        list.push(scenario);
-        acc.set(scenario.parameter, list);
-        return acc;
-      }, new Map());
-
-      let overlayCombos: Array<Array<OptimizerScenario | null>> = [];
-      if (overlayParameters.length > 0) {
-        if (overlayParameters.length !== 2 || uniqueOverlayParameters.length !== 2) {
-          setOptimizerErr("Select exactly 2 unique parameters for overlay research.");
-          setOptimizerLoading(false);
-          return;
-        }
-
-        const selectedScenarioGroups = uniqueOverlayParameters.map((parameter) => ({
-          parameter,
-          scenarios: scenariosByParameter.get(parameter) ?? [],
-        }));
-        const missingParameter = selectedScenarioGroups.find((group) => group.scenarios.length === 0);
-        if (missingParameter) {
-          setOptimizerErr(`No SCOPE scenarios available for ${missingParameter.parameter}. Enter a value for that parameter first.`);
-          setOptimizerLoading(false);
-          return;
-        }
-
-        overlayCombos = [[]];
-        for (const group of selectedScenarioGroups) {
-          const next: Array<Array<OptimizerScenario | null>> = [];
-          const scenarioChoices: Array<OptimizerScenario | null> = [null, ...group.scenarios];
-          for (const combo of overlayCombos) {
-            for (const scenario of scenarioChoices) next.push([...combo, scenario]);
-          }
-          overlayCombos = next;
-        }
-      }
-
       const singleScenarioCount = scopeScenarioRows.length;
-      const comboWorkEstimate = overlayCombos.length;
-      setOptimizerProgress({ done: 0, total: singleScenarioCount + comboWorkEstimate });
+      setOptimizerProgress({ done: 0, total: singleScenarioCount });
 
       const baseRequest = buildPostRequest(from, to);
       clearOptimizerFields(baseRequest);
@@ -4270,32 +4221,11 @@ export default function OpenDoorScanner({
       const rowRequests = scopeScenarioRows.map((scenario) =>
         buildScopeScenarioRequest(scenario.id, scenario.parameter, scenario.variant, scenario.summary, scenario.apply)
       );
-      const comboRequests = overlayCombos.map((combo) => {
-        const scenarios = combo.filter((scenario): scenario is OptimizerScenario => scenario != null);
-        const comboId = combo.map((scenario) => scenario?.id ?? "off").join("|");
-        const parameter = uniqueOverlayParameters
-          .map((parameter, index) => `${parameter}:${combo[index] ? combo[index]!.variant : "OFF"}`)
-          .join(" | ");
-        const summary = combo
-          .map((scenario, index) => `${uniqueOverlayParameters[index]} => ${scenario?.summary ?? "OFF"}`)
-          .join(" | ");
-        return buildScopeScenarioRequest(
-          `combo:${comboId}`,
-          parameter,
-          "PAIR",
-          summary,
-          (req) => {
-            scenarios.forEach((scenario) => scenario.apply(req));
-          }
-        );
-      });
-
       const resp = await apiPostWithTimeout<ScopeBatchResponse>(
         "/api/paper/arbitrage/scope/evaluate",
         {
           baseRequest,
           rows: rowRequests,
-          comboRows: comboRequests,
         },
         180_000
       );
@@ -4305,15 +4235,8 @@ export default function OpenDoorScanner({
         if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
         return b.trades - a.trades;
       });
-      const comboRows = [...(resp?.comboRows ?? [])].sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        if (b.totalPnlUsd !== a.totalPnlUsd) return b.totalPnlUsd - a.totalPnlUsd;
-        return b.trades - a.trades;
-      });
-
       setOptimizerRows(out);
-      setOptimizerComboRows(comboRows);
-      setOptimizerProgress({ done: singleScenarioCount + comboWorkEstimate, total: singleScenarioCount + comboWorkEstimate });
+      setOptimizerProgress({ done: singleScenarioCount, total: singleScenarioCount });
       void loadOptimizerRangesByGroup(from, to);
     } catch (e: any) {
       setOptimizerErr(e?.message ?? String(e));
@@ -4323,21 +4246,22 @@ export default function OpenDoorScanner({
   }
 
   useEffect(() => {
+    const reloadKey = `${optimizerBucketCount}|${optimizerBinMode}`;
     if (optimizerBucketReloadRef.current == null) {
-      optimizerBucketReloadRef.current = optimizerBucketCount;
+      optimizerBucketReloadRef.current = reloadKey;
       return;
     }
-    if (optimizerBucketReloadRef.current === optimizerBucketCount) return;
-    optimizerBucketReloadRef.current = optimizerBucketCount;
-    if (!optimizerRows.length && !optimizerComboRows.length && !optimizerRanges?.parameters?.length) return;
+    if (optimizerBucketReloadRef.current === reloadKey) return;
+    optimizerBucketReloadRef.current = reloadKey;
+    if (!optimizerRows.length && !optimizerRanges?.parameters?.length) return;
     const from = dateMode === "day" ? dateNy : dateFrom;
     const to = dateMode === "day" ? dateNy : dateTo;
     if (!toYmd(from) || !toYmd(to) || from > to) return;
     void loadOptimizerRangesByGroup(from, to);
   }, [
     optimizerBucketCount,
+    optimizerBinMode,
     optimizerRows.length,
-    optimizerComboRows.length,
     optimizerRanges?.parameters?.length,
     dateMode,
     dateNy,
@@ -5050,7 +4974,6 @@ export default function OpenDoorScanner({
   const scopeResearchComputed = scopeResearchComputedByPanel.left;
 
   const optimizerBestRow = useMemo(() => optimizerRows[0] ?? null, [optimizerRows]);
-  const optimizerBestComboRow = useMemo(() => optimizerComboRows[0] ?? null, [optimizerComboRows]);
   const scopeSelectedParameters = useMemo(
     () => scopeSelectedParameterKeys.map((key) => SCOPE_PARAMETER_BY_KEY.get(key)).filter(Boolean) as ScopeParameterDefinition[],
     [scopeSelectedParameterKeys]
@@ -5058,10 +4981,6 @@ export default function OpenDoorScanner({
   const scopeSelectedScenarioParameterLabels = useMemo(
     () => scopeSelectedParameters.map((item) => item.scenarioParameter ?? null).filter(Boolean) as string[],
     [scopeSelectedParameters]
-  );
-  const scopeOverlayScenarioOptions = useMemo(
-    () => Array.from(new Set(scopeSelectedScenarioParameterLabels)).sort((left, right) => left.localeCompare(right)),
-    [scopeSelectedScenarioParameterLabels]
   );
   const scopeRequestedRangeGroups = useMemo(() => {
     if (!scopeSelectedParameters.length || scopeSelectedParameters.length >= SCOPE_PARAMETER_DEFINITIONS.length) {
@@ -5092,7 +5011,18 @@ export default function OpenDoorScanner({
     );
     const maxAbsDeltaScore = Math.max(0.000001, ...source.map((row) => Math.abs(row.score - baseScore)));
 
+    // The same parameter range can arrive twice (a server-returned parameter and its locally
+    // rebuilt twin), and a duplicate row is pure height: identical numbers, no new information.
+    // Deduped on identity here rather than at the source, so a genuine second range with the same
+    // label would still be visible as its own variant.
+    const seen = new Set<string>();
     return source
+      .filter((row) => {
+        const identity = `${row.parameter}|${row.variant}`;
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      })
       .map((row) => {
         const deltaScore = row.score - baseScore;
         const impactPct = Math.min(1, Math.abs(deltaScore) / maxAbsDeltaScore);
@@ -5159,10 +5089,12 @@ export default function OpenDoorScanner({
               definition.label,
               definition.group,
               optimizerBucketCount,
-              session
+              session,
+              STRATEGY.ratingBinSource,
+              optimizerBinMode
             );
           }
-          return buildFallbackScopeOptimizerParameter(filteredEpisodes, definition, optimizerBucketCount);
+          return buildFallbackScopeOptimizerParameter(filteredEpisodes, definition, optimizerBucketCount, optimizerBinMode);
         })
         .filter((parameter): parameter is PaperArbOptimizerParameterDto => parameter != null);
       return [...numericResults, ...catResults];
@@ -5210,6 +5142,23 @@ export default function OpenDoorScanner({
         continue;
       }
 
+      // MINRATE / MINTOTAL need the bin builder, not the generic one: the generic path goes through
+      // optimizerKeyToScopeResearchParameterKey, which has no case for these two and so returns
+      // null. Mirrors the client-side branch above and reads the same episode rate/total.
+      if (definition.key === "minrate" || definition.key === "mintotal") {
+        const ratingParameter = buildFallbackBinRatingOptimizerParameter(
+          filteredEpisodes,
+          definition.key as "minrate" | "mintotal",
+          definition.label,
+          definition.group,
+          optimizerBucketCount,
+          session,
+          STRATEGY.ratingBinSource
+        );
+        if (ratingParameter) parameterMap.set(definition.key, ratingParameter);
+        continue;
+      }
+
       // corr/beta/sigma get the dedicated builder because it can also fall back to the ticker-meta
       // map when the episode row itself carries no value.
       if (["corr", "beta", "sigma"].includes(definition.key)) {
@@ -5219,7 +5168,8 @@ export default function OpenDoorScanner({
           definition.label,
           definition.group,
           optimizerBucketCount,
-          arbitrageTickerMetaByTicker
+          arbitrageTickerMetaByTicker,
+          optimizerBinMode
         );
         if (metaParameter) parameterMap.set(definition.key, metaParameter);
         continue;
@@ -5242,7 +5192,7 @@ export default function OpenDoorScanner({
     }
 
     return [...parameterMap.values()];
-  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
+  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, optimizerBinMode, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
   const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
     optimizerRangeRankMetric === "winRate"
       ? bucket.winRate
@@ -5815,17 +5765,6 @@ export default function OpenDoorScanner({
           </div>
         )}
 
-        {/* Active ticker, shared with Sonar and Stream. The Sonar owns the selection; this reads
-            its per-strategy localStorage key so the same ticker is active on every surface. */}
-        {activeSelection.ticker && (
-          <ActiveTickerCard
-            ticker={activeSelection.ticker}
-            stats={activeCardStats}
-            loading={activeSnapshot.loading}
-            error={activeSnapshot.error}
-          />
-        )}
-
         {(showIgnore || showApply || showPin) && (
           <TickerListDrawers
             showIgnore={showIgnore}
@@ -5936,27 +5875,17 @@ export default function OpenDoorScanner({
             )}
           </div>
 
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {[
-              { key: "stack", label: "STACK", on: openDoorUseStack, set: setOpenDoorUseStack },
-              { key: "bench", label: "BENCH", on: openDoorUseBench, set: setOpenDoorUseBench },
-              { key: "dev", label: "DEV", on: openDoorUseDevSig, set: setOpenDoorUseDevSig },
-            ].map((p) => (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => p.set((v) => !v)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  p.on
-                    ? "accent-soft"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
+          <OpenDoorGatesRow
+            useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
+            useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
+            useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}
+            upMinRate={openDoorUpMinRate} setUpMinRate={setOpenDoorUpMinRate}
+            downMinRate={openDoorDownMinRate} setDownMinRate={setOpenDoorDownMinRate}
+            upMinTotal={openDoorUpMinTotal} setUpMinTotal={setOpenDoorUpMinTotal}
+            downMinTotal={openDoorDownMinTotal} setDownMinTotal={setOpenDoorDownMinTotal}
+            upMinMove={openDoorUpMinMove} setUpMinMove={setOpenDoorUpMinMove}
+            downMinMove={openDoorDownMinMove} setDownMinMove={setOpenDoorDownMinMove}
+          />
 
         </div>
 
@@ -6053,65 +5982,6 @@ export default function OpenDoorScanner({
                 </button>
                 ))}
             </div>
-
-            {[
-              {
-                dir: "UP", accent: "text-emerald-400",
-                minRate: openDoorUpMinRate, setMinRate: setOpenDoorUpMinRate,
-                minTotal: openDoorUpMinTotal, setMinTotal: setOpenDoorUpMinTotal,
-                minMove: openDoorUpMinMove, setMinMove: setOpenDoorUpMinMove,
-              },
-              {
-                dir: "DOWN", accent: "text-rose-400",
-                minRate: openDoorDownMinRate, setMinRate: setOpenDoorDownMinRate,
-                minTotal: openDoorDownMinTotal, setMinTotal: setOpenDoorDownMinTotal,
-                minMove: openDoorDownMinMove, setMinMove: setOpenDoorDownMinMove,
-              },
-            ].map((grp) => (
-              <div key={grp.dir} className="flex h-7 items-center gap-2 rounded-lg bg-black/20 pl-2">
-                <span className={clsx("flex h-7 items-center text-[10px] font-mono font-bold uppercase tracking-wide", grp.accent)}>{grp.dir}</span>
-                {[
-                  { label: "MINRATE", value: grp.minRate, set: grp.setMinRate, step: 0.1, integer: false },
-                  { label: "MINTOTAL", value: grp.minTotal, set: grp.setMinTotal, step: 1, integer: true },
-                  { label: "MINMOVE", value: grp.minMove, set: grp.setMinMove, step: 0.05, integer: false },
-                ].map((field) => (
-                  <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-                    <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-                    <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                      <input
-                        type="number"
-                        inputMode={field.integer ? "numeric" : "decimal"}
-                        step={field.step}
-                        min={0}
-                        value={field.value}
-                        onChange={(e) => field.set(Math.max(0, field.integer ? clampInt(e.target.value, 0) : clampNumber(e.target.value, 0)))}
-                        className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
-                      />
-                      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => field.set(Math.max(0, +((field.value ?? 0) + field.step).toFixed(4)))}
-                          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                          aria-label={`Increase ${field.label}`}
-                        >
-                          ▲
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => field.set(Math.max(0, +((field.value ?? 0) - field.step).toFixed(4)))}
-                          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                          aria-label={`Decrease ${field.label}`}
-                        >
-                          ▼
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
 
             <div className="flex-1" />
 
@@ -6337,6 +6207,7 @@ export default function OpenDoorScanner({
                   toggleEnabled={() => setCountryEnabled((m) => m === "off" ? "include" : m === "include" ? "exclude" : "off")}
                   color="amber"
                 />
+
                 <MultiSelectFilter
                   label="EXCHANGE"
                   options={streamExchanges}
@@ -6369,6 +6240,18 @@ export default function OpenDoorScanner({
               </div>
             }
           />
+
+          {/* Active ticker, shared with the Sonars and Stream. The Sonar owns the selection; this
+              reads its per-strategy localStorage key so the same ticker is active on every surface.
+              Rendered unconditionally, like the Sonars: the strip shows its dashes when nothing is
+              selected. It used to be gated on `activeSelection.ticker`, so the row was simply
+              absent here while it was visible there — one panel, two behaviours. */}
+        <ActiveTickerCard
+          ticker={activeSelection.ticker ?? null}
+          stats={activeCardStats}
+          loading={activeSnapshot.loading}
+          error={activeSnapshot.error}
+        />
         </div>
 
         {/* Error */}
@@ -6836,7 +6719,6 @@ export default function OpenDoorScanner({
                       type="button"
                       onClick={() => {
                         setScopeSelectedParameterKeys([]);
-                        setScopeOverlayParameterKeys(["", ""]);
                       }}
                       className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
                     >
@@ -6844,8 +6726,8 @@ export default function OpenDoorScanner({
                     </button>
                   </div>
                 </div>
-                <div className="min-w-0 flex-1 flex items-center justify-center">
-                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 w-fit max-w-full">
+                <div className="min-w-0 flex-1 flex items-center justify-start">
+                  <div className="flex flex-wrap items-center justify-start gap-x-3 gap-y-2 max-w-full">
                     {SCOPE_PARAMETER_SELECT_GROUPS.map((group) => (
                       <div key={`scope-select-group-${group.label}`} className="min-w-0">
                         {(() => {
@@ -6853,31 +6735,42 @@ export default function OpenDoorScanner({
                           const isExpanded = Boolean(scopeParameterGroupExpanded[group.label]);
                           return (
                             <>
-                        <div className={clsx("flex items-center gap-3", isExpanded && selectedOptions.length > 0 && "mb-2")}>
-                          <div className="shrink-0 text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">{group.label}</div>
-                          <div className={clsx("inline-flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit max-w-full", SCANNER_CONTROL_SURFACE)}>
-                            <GlassSelect
-                              key={`scope-add-${group.label}-${selectedOptions.length}`}
-                              value=""
-                              onChange={(e) => {
-                                const nextValue = e.target.value;
-                                if (!nextValue) return;
-                                setScopeSelectedParameterKeys((prev) => (prev.includes(nextValue) ? prev : [...prev, nextValue]));
-                              }}
-                              options={[
-                                { value: "", label: "Add parameter" },
-                                ...group.options.map((option) => ({
-                                  value: option.value,
-                                  label: option.label,
-                                  disabled: scopeSelectedParameterKeys.includes(option.value),
-                                })),
-                              ]}
-                              compact
-                              className="w-[116px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                            />
-                          </div>
+                        <div
+                          className={clsx(
+                            // One chip per group: label, picker and count read as a single unit.
+                            // They used to be three loose pieces at gap-3, so neighbouring groups
+                            // ran together and the count looked like a stray number.
+                            "flex h-8 items-center gap-2 rounded-lg pl-3 pr-1 transition-colors",
+                            selectedOptions.length
+                              ? "bg-black/30 ring-1 ring-inset ring-white/[0.07]"
+                              : "bg-black/20 ring-1 ring-inset ring-transparent",
+                            isExpanded && selectedOptions.length > 0 && "mb-2"
+                          )}
+                        >
+                          <span className="shrink-0 text-[10px] uppercase tracking-[0.18em] font-mono text-zinc-500">{group.label}</span>
+                          <span aria-hidden className="h-3.5 w-px shrink-0 bg-white/10" />
+                          <GlassSelect
+                            key={`scope-add-${group.label}-${selectedOptions.length}`}
+                            value=""
+                            onChange={(e) => {
+                              const nextValue = e.target.value;
+                              if (!nextValue) return;
+                              setScopeSelectedParameterKeys((prev) => (prev.includes(nextValue) ? prev : [...prev, nextValue]));
+                            }}
+                            options={[
+                              { value: "", label: "Add parameter" },
+                              ...group.options.map((option) => ({
+                                value: option.value,
+                                label: option.label,
+                                disabled: scopeSelectedParameterKeys.includes(option.value),
+                              })),
+                            ]}
+                            compact
+                            className="w-[116px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
+                          />
                           <button
                             type="button"
+                            disabled={selectedOptions.length === 0}
                             onClick={() =>
                               setScopeParameterGroupExpanded((prev) => ({
                                 ...prev,
@@ -6885,12 +6778,29 @@ export default function OpenDoorScanner({
                               }))
                             }
                             className={clsx(
-                              "shrink-0 min-w-[22px] text-right text-[10px] font-mono transition-colors",
-                              selectedOptions.length ? "text-zinc-300 hover:text-white" : "text-zinc-600 hover:text-zinc-400"
+                              // The count was a button that looked like plain text, so nothing said
+                              // the selected filters could be opened from here. Now it reads as one.
+                              "shrink-0 inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[10px] font-mono tabular-nums transition-colors",
+                              selectedOptions.length ? "accent-soft" : "text-zinc-600 cursor-default"
                             )}
                             title={selectedOptions.length ? `${isExpanded ? "Hide" : "Show"} selected filters` : "No selected filters"}
                           >
                             {intn(selectedOptions.length)}
+                            {selectedOptions.length > 0 ? (
+                              <svg
+                                width="8"
+                                height="8"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className={clsx("transition-transform", isExpanded && "rotate-180")}
+                              >
+                                <polyline points="6 9 12 15 18 9" />
+                              </svg>
+                            ) : null}
                           </button>
                         </div>
                         {isExpanded && selectedOptions.length > 0 ? (
@@ -6918,43 +6828,6 @@ export default function OpenDoorScanner({
                         })()}
                       </div>
                     ))}
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-3">
-                        <div className="shrink-0 text-[10px] uppercase tracking-widest font-mono text-zinc-500">Pair Overlay</div>
-                        <div className="flex items-center gap-3 min-w-0">
-                            {[0, 1].map((index) => (
-                              <div key={`scope-overlay-${index}`} className="min-w-0 flex items-center gap-2">
-                                <div className="shrink-0 text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                                  {index === 0 ? "Primary" : "Secondary"}
-                                </div>
-                                <div className={clsx("inline-flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit max-w-full", SCANNER_CONTROL_SURFACE)}>
-                                  <GlassSelect
-                                    value={scopeOverlayParameterKeys[index]}
-                                    onChange={(e) =>
-                                      setScopeOverlayParameterKeys((prev) => {
-                                        const next: [string, string] = [...prev] as [string, string];
-                                        next[index] = e.target.value;
-                                        return next;
-                                      })
-                                    }
-                                    options={[
-                                      { value: "", label: "Select" },
-                                      ...scopeOverlayScenarioOptions.map((parameter) => ({ value: parameter, label: parameter })),
-                                    ]}
-                                    compact
-                                    className="w-[72px] !h-[14px] !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                                  />
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                        <div className="text-[10px] font-mono text-zinc-600">
-                          {intn(optimizerComboRows.length)}
-                        </div>
-                      </div>
-                    </div>
-
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2 text-[10px] font-mono text-zinc-600 shrink-0 self-center">
@@ -6985,66 +6858,6 @@ export default function OpenDoorScanner({
             </GlassCard>
             )}
 
-            {optimizerComboRows.length > 0 && (
-            <GlassCard className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono">
-                  PAIR OVERLAY RESULTS
-                </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  top pairs {intn(optimizerComboRows.length)} | best {optimizerBestComboRow ? num(optimizerBestComboRow.score, 2) : "-"} score
-                </div>
-              </div>
-
-              <div className="overflow-auto rounded-xl border border-white/[0.08] bg-[#070707]/95">
-                <table className="min-w-[1180px] w-full text-xs font-mono">
-                  <thead className="sticky top-0 z-10 bg-[#090a0f]/90 text-zinc-400 border-b border-white/[0.08]">
-                    <tr>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">#</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Set</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Variant</th>
-                      <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Applied</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Score</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">W/L</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
-                      <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">AvgPnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {optimizerComboRows.map((r, i) => (
-                      <tr key={`${r.id}|combo|${i}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                        <td className="p-2.5 text-zinc-500">{i + 1}</td>
-                        <td className="p-2.5 text-zinc-100 font-semibold">{r.parameter}</td>
-                        <td className="p-2.5 text-zinc-300">{r.variant}</td>
-                        <td className="p-2.5 text-zinc-400">{r.summary}</td>
-                        <td className={clsx("p-2.5 text-right tabular-nums font-bold", r.score > 0 ? "text-emerald-300" : r.score < 0 ? "text-rose-300" : "text-zinc-200")}>
-                          {Number.isFinite(r.score) ? num(r.score, 2) : "-"}
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.trades)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(r.wins)} / {intn(r.losses)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.winRate * 100, 1)}%</td>
-                        <td className={clsx("p-2.5 text-right tabular-nums", r.totalPnlUsd > 0 ? "text-emerald-300" : r.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(r.totalPnlUsd, 2)}
-                        </td>
-                        <td className={clsx("p-2.5 text-right tabular-nums", r.avgPnlUsd > 0 ? "text-emerald-300" : r.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
-                          {num(r.avgPnlUsd, 2)}
-                        </td>
-                      </tr>
-                    ))}
-                    {!optimizerComboRows.length && (
-                      <tr>
-                        <td colSpan={10} className="p-6 text-center text-zinc-500">
-                          Pick two SCOPE parameters to see pair overlays, not only isolated filters.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </GlassCard>
-            )}
 
             <div className="space-y-3">
               {optimizerRangesErr && <div className="text-xs font-mono text-amber-300 mb-3">range maps: {optimizerRangesErr}</div>}
@@ -7110,23 +6923,32 @@ export default function OpenDoorScanner({
                             className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                           />
                         </div>
+                        <div className="inline-flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 w-fit">
+                          <span className="shrink-0 text-[10px] font-mono text-zinc-500 uppercase">Split</span>
+                          <GlassSelect
+                            value={optimizerBinMode}
+                            onChange={(e) => setOptimizerBinMode(e.target.value as ScopeOptimizerBinMode)}
+                            options={SCOPE_BIN_MODE_OPTIONS}
+                            className="min-w-0 w-[96px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
+                          />
+                        </div>
                         <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
                           <span className="text-[10px] font-mono text-zinc-500 uppercase">Buckets</span>
                           <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
                             <input
                               type="number"
-                              min={3}
-                              max={16}
+                              min={SCOPE_OPTIMIZER_MIN_BINS}
+                              max={SCOPE_OPTIMIZER_MAX_BINS}
                               step={1}
                               value={optimizerBucketCount}
-                              onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
+                              onChange={(e) => setOptimizerBucketCount(Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, Math.trunc(Number(e.target.value) || 8))))}
                               className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
                             />
                             <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                               <button
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v + 1)))}
+                                onClick={() => setOptimizerBucketCount((v) => Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, v + 1)))}
                                 className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                                 aria-label="Increase buckets"
                               >
@@ -7135,7 +6957,7 @@ export default function OpenDoorScanner({
                               <button
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v - 1)))}
+                                onClick={() => setOptimizerBucketCount((v) => Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, v - 1)))}
                                 className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                                 aria-label="Decrease buckets"
                               >
@@ -7232,24 +7054,24 @@ export default function OpenDoorScanner({
                     <table className="min-w-[1080px] w-full text-xs font-mono">
                       <thead className="sticky top-0 z-10 bg-[#0a0a0a]/50 text-zinc-400 border-b border-white/[0.07] backdrop-blur-sm">
                         <tr>
-                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Parameter</th>
-                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Impact</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaScore</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">DeltaPnL</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Trades</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">WinRate</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">TotalPnL</th>
-                          <th className="text-right p-2.5 uppercase tracking-widest text-[10px]">Avg/Trade</th>
-                          <th className="text-left p-2.5 uppercase tracking-widest text-[10px]">Applied</th>
+                          <th className="text-left px-2.5 py-1 uppercase tracking-widest text-[10px]">Parameter</th>
+                          <th className="text-left px-2.5 py-1 uppercase tracking-widest text-[10px]">Impact</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">DeltaScore</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">DeltaPnL</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">Trades</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">WinRate</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">TotalPnL</th>
+                          <th className="text-right px-2.5 py-1 uppercase tracking-widest text-[10px]">Avg/Trade</th>
+                          <th className="text-left px-2.5 py-1 uppercase tracking-widest text-[10px]">Applied</th>
                         </tr>
                       </thead>
                       <tbody>
                         {optimizerImpactRows.map((row) => (
                           <tr key={`impact-${row.id}`} className="border-t border-white/[0.06] hover:bg-white/[0.03] transition-colors">
-                            <td className="p-2.5 text-zinc-100 font-semibold">
+                            <td className="px-2.5 py-1 text-zinc-100 font-semibold">
                               {row.parameter} <span className="text-zinc-500 font-normal">{row.variant}</span>
                             </td>
-                            <td className="p-2.5">
+                            <td className="px-2.5 py-1">
                               <div className="flex items-center gap-2">
                                 <span
                                   className={clsx(
@@ -7274,21 +7096,21 @@ export default function OpenDoorScanner({
                                 </div>
                               </div>
                             </td>
-                            <td className={clsx("p-2.5 text-right tabular-nums font-bold", row.deltaScore > 0 ? "text-emerald-300" : row.deltaScore < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            <td className={clsx("px-2.5 py-1 text-right tabular-nums font-bold", row.deltaScore > 0 ? "text-emerald-300" : row.deltaScore < 0 ? "text-rose-300" : "text-zinc-300")}>
                               {num(row.deltaScore, 2)}
                             </td>
-                            <td className={clsx("p-2.5 text-right tabular-nums", row.deltaPnlUsd > 0 ? "text-emerald-300" : row.deltaPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            <td className={clsx("px-2.5 py-1 text-right tabular-nums", row.deltaPnlUsd > 0 ? "text-emerald-300" : row.deltaPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
                               {num(row.deltaPnlUsd, 2)}
                             </td>
-                            <td className="p-2.5 text-right tabular-nums text-zinc-300">{intn(row.trades)}</td>
-                            <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(row.winRate * 100, 1)}%</td>
-                            <td className={clsx("p-2.5 text-right tabular-nums", row.totalPnlUsd > 0 ? "text-emerald-300" : row.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            <td className="px-2.5 py-1 text-right tabular-nums text-zinc-300">{intn(row.trades)}</td>
+                            <td className="px-2.5 py-1 text-right tabular-nums text-zinc-300">{num(row.winRate * 100, 1)}%</td>
+                            <td className={clsx("px-2.5 py-1 text-right tabular-nums", row.totalPnlUsd > 0 ? "text-emerald-300" : row.totalPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
                               {num(row.totalPnlUsd, 2)}
                             </td>
-                            <td className={clsx("p-2.5 text-right tabular-nums", row.avgPnlUsd > 0 ? "text-emerald-300" : row.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
+                            <td className={clsx("px-2.5 py-1 text-right tabular-nums", row.avgPnlUsd > 0 ? "text-emerald-300" : row.avgPnlUsd < 0 ? "text-rose-300" : "text-zinc-300")}>
                               {num(row.avgPnlUsd, 2)}
                             </td>
-                            <td className="p-2.5 text-zinc-400">{row.summary}</td>
+                            <td className="px-2.5 py-1 text-zinc-400">{row.summary}</td>
                           </tr>
                         ))}
                         {!optimizerImpactRows.length && (
@@ -7332,23 +7154,32 @@ export default function OpenDoorScanner({
                                 className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                               />
                             </div>
+                            <div className="inline-flex h-7 items-center gap-2 px-3 rounded-lg bg-black/20 w-fit">
+                              <span className="shrink-0 text-[10px] font-mono text-zinc-500 uppercase">Split</span>
+                              <GlassSelect
+                                value={optimizerBinMode}
+                                onChange={(e) => setOptimizerBinMode(e.target.value as ScopeOptimizerBinMode)}
+                                options={SCOPE_BIN_MODE_OPTIONS}
+                                className="min-w-0 w-[96px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
+                              />
+                            </div>
                             <div className="inline-flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20 w-fit">
                               <span className="text-[10px] font-mono text-zinc-500 uppercase">Buckets</span>
                               <div className="group relative h-7 w-[52px] overflow-hidden rounded-md">
                                 <input
                                   type="number"
-                                  min={3}
-                                  max={16}
+                                  min={SCOPE_OPTIMIZER_MIN_BINS}
+                                  max={SCOPE_OPTIMIZER_MAX_BINS}
                                   step={1}
                                   value={optimizerBucketCount}
-                                  onChange={(e) => setOptimizerBucketCount(Math.max(3, Math.min(16, Math.trunc(Number(e.target.value) || 8))))}
+                                  onChange={(e) => setOptimizerBucketCount(Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, Math.trunc(Number(e.target.value) || 8))))}
                                   className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
                                 />
                                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                                   <button
                                     type="button"
                                     onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v + 1)))}
+                                    onClick={() => setOptimizerBucketCount((v) => Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, v + 1)))}
                                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                                     aria-label="Increase buckets"
                                   >
@@ -7357,7 +7188,7 @@ export default function OpenDoorScanner({
                                   <button
                                     type="button"
                                     onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => setOptimizerBucketCount((v) => Math.max(3, Math.min(16, v - 1)))}
+                                    onClick={() => setOptimizerBucketCount((v) => Math.max(SCOPE_OPTIMIZER_MIN_BINS, Math.min(SCOPE_OPTIMIZER_MAX_BINS, v - 1)))}
                                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                                     aria-label="Decrease buckets"
                                   >
@@ -8434,6 +8265,27 @@ export default function OpenDoorScanner({
                 valueClassName={openDoorSnapshotStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
+
+            {/* Equity curve, the one Arbitrage chart that carries over to this strategy.
+              *
+              * Arbitrage renders four more here (START VS END BY TIME, START EVENTS BY TIME, PEAK
+              * STRENGTH, PEAK REVERSION 2/3). None of them can say anything about an OpenDoor trade:
+              * measured over 21 days / 13,958 episodes the entry is ALWAYS minuteIdx 560 (09:20) and
+              * the exit always 580/581 (10m) or 600 (30m), so both time charts collapse to a single
+              * bar, and startMetricAbs/peakMetricAbs are null on every row, which is why this
+              * strategy already excludes those research axes in its descriptor.
+              */}
+            {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
+              <div className="grid grid-cols-1 gap-3">
+                <div className="p-0">
+                  <EquityChart
+                    points={analyticsSummary.equityCurve}
+                    title={`EQUITY CURVE | ${equityCurveMode}`}
+                    meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)} | situations ${intn(analyticsSummary.situations)} | trades ${intn(analyticsSummary.trades)}`}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">

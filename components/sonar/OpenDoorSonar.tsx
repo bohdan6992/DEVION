@@ -17,6 +17,8 @@ import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import ScannerHeader from "../scanner/shell/panels/ScannerHeader";
+import OpenDoorGatesRow from "../scanner/shell/panels/OpenDoorGatesRow";
+import SharedMinMaxPanel from "../scanner/shell/panels/SharedMinMaxPanel";
 // The min/max card lives with the rest of the shared UI kit under components/scanner/shared —
 // one implementation for Sonar and Scanner, so the grid cannot drift apart again.
 import { MinMaxRow, MultiSelectFilter } from "../scanner/shared/ui";
@@ -36,102 +38,66 @@ import {
 /* =========================
    TYPES
 ========================= */
-export type ArbitrageSignal = {
-  strategy?: string;
-  ticker: string;
+// The signal shape, its normaliser and the field getters now live in one module,
+// lib/signals/signal.ts — shared by both Sonars, streamEngine, streamSseHub and
+// tapeMetaStore. Re-exported so existing importers keep working unchanged.
+import {
+  type ArbitrageSignal,
+  getBestObj,
+  getBoolAny,
+  getMeta,
+  getNumAny,
+  getStrAny,
+  hasValue,
+  normalizeSignal,
+  normalizeTicker,
+  numADV20,
+  numADV20NF,
+  numADV90,
+  numADV90NF,
+  numAvPostMhVol90NF,
+  numAvPreMh,
+  numAvPreMhValue20NF,
+  numAvPreMhValue90NF,
+  numAvPreMhVol90NF,
+  numAvgDailyValue20,
+  numAvgDailyValue90,
+  numClsToClsPct,
+  numImbExch1555,
+  numImbExch925,
+  numLastClose,
+  numLo,
+  numLstClsNewsCnt,
+  numLstPrcL,
+  numLstPrcLstClsPctSafe,
+  numMarketCapM,
+  numPreMhBidLstPrcPct,
+  numPreMhHiLstClsPct,
+  numPreMhLoLstClsPct,
+  numPreMhLoLstPrcPct,
+  numPreMhMDV20NF,
+  numPreMhMDV90NF,
+  numPreMktVolNF,
+  numRoundLot,
+  numSpreadBidPct,
+  numTCls,
+  numVWAP,
+  numVolNFfromLstCls,
+  numVolRel,
+  numVolatility20,
+  numVolatility90,
+  numYCls,
+  pickAny,
+  toBool,
+  toNum,
+} from "@/lib/signals/signal";
+import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
+import { getLiveStrategy } from "@/lib/strategies/registry";
 
-  benchmark?: string;
-  betaBucket?: string | null;
-  direction?: "up" | "down" | "none";
-  sig?: number | null;
-
-  "BidLstClsΔ%"?: number | string | null;
-  "AskLstClsΔ%"?: number | string | null;
-  BidLstClsDeltaPct?: number | string | null;
-  AskLstClsDeltaPct?: number | string | null;
-  Bid?: number | string | null;
-  Ask?: number | string | null;
-
-  zapS?: number | null;
-  zapSsigma?: number | null;
-  zapL?: number | null;
-  zapLsigma?: number | null;
-
-  shortCandidate?: boolean;
-  longCandidate?: boolean;
-
-  bidStock?: number | null;
-  askStock?: number | null;
-  bidBench?: number | null;
-  askBench?: number | null;
-
-  account?: string;
-  Account?: string;
-
-  country?: string;
-  Country?: string;
-  exchange?: string;
-  Exchange?: string;
-  sector?: string;
-  Sector?: string;
-
-  company?: string;
-  Company?: string;
-  SectorL3?: string;
-
-  vol?: number | string;
-  Vol?: number | string;
-  spread?: number | string;
-  Spread?: number | string;
-  lstClose?: number | string;
-  lastClose?: number | string;
-  close?: number | string;
-
-  isPTP?: any;
-  IsPTP?: any;
-  ptp?: any;
-  PTP?: any;
-  isSSR?: any;
-  IsSSR?: any;
-  ssr?: any;
-  SSR?: any;
-
-  report?: any;
-  Report?: any;
-
-  isStaticFallback?: boolean;
-  IsStaticFallback?: boolean;
-
-  active?: any;
-  Active?: any;
-  isActive?: any;
-  IsActive?: any;
-
-  avg90?: number | string;
-  Avg90?: number | string;
-  avPreMh?: number | string;
-  AvPreMh?: number | string;
-
-  news?: number | string;
-  News?: number | string;
-  newsCount?: number | string;
-  NewsCount?: number | string;
-
-  kind?: "hard" | "soft" | "any";
-
-  // normalized helpers (internal)
-  _bestRating?: number | null;
-  _bestTotal?: number | null;
-  _bestHard?: number | null;
-  _bestSoft?: number | null;
-  _reportBool?: boolean | null;
-  _newsCount?: number;
-  _isPTP?: boolean | null;
-  _isSSR?: boolean | null;
-  _isActive?: boolean | null;
-
-  [k: string]: any;
-};
+/** Routes for this strategy, from the one registry Caesar and the scanner also read. */
+const SONAR_NAV = getLiveStrategy("opendoor")!.nav;
+export { normalizeSignal };
+export type { ArbitrageSignal };
 
 type Mode = "top" | "all";
 type RatingMode = "SESSION" | "BIN" | "BINS";
@@ -217,43 +183,6 @@ const fmtBpInt = (v: number) => {
 /* =========================
    HELPERS
 ========================= */
-const toNum = (v: any): number | null => {
-  if (v == null) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  const s = String(v).trim();
-  if (!s) return null;
-  const cleaned = s
-    .replace(/\u2212/g, "-")
-    .replace(/[%\s]/g, "")
-    .replace(/,/g, "");
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
-};
-
-const toBool = (v: any): boolean | null => {
-  if (v == null) return null;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  const s = String(v).toLowerCase().trim();
-  if (["true", "1", "yes", "y"].includes(s)) return true;
-  if (["false", "0", "no", "n"].includes(s)) return false;
-  return null;
-};
-
-const hasValue = (v: any): boolean => {
-  if (v == null) return false;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  const s = String(v).toLowerCase().trim();
-  return s.length > 0 && !["false", "0", "no", "null", "undefined"].includes(s);
-};
-
-function normalizeTicker(raw: string): string | null {
-  const tk = (raw || "").trim().toUpperCase().replace(/"/g, "");
-  if (!tk) return null;
-  if (!/^[A-Z0-9.\-]+$/.test(tk)) return null;
-  return tk;
-}
 
 function parseTickersFromFreeText(text: string): string[] {
   if (!text) return [];
@@ -310,66 +239,6 @@ const slug = (s: string) =>
 /* =========================
    Robust pickers
 ========================= */
-const getMeta = (d: any) => d?.meta ?? d?.Meta ?? null;
-const getBestObj = (d: any) => d?.best ?? d?.Best ?? null;
-
-const pick = (obj: any, keys: string[]) => {
-  if (!obj || typeof obj !== "object") return undefined;
-  const isUsableValue = (value: any) => {
-    if (value === undefined || value === null) return false;
-    if (typeof value !== "string") return true;
-    const trimmed = value.trim();
-    if (!trimmed) return false;
-    if (trimmed === "-" || trimmed === "—") return false;
-    return true;
-  };
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (isUsableValue(v)) return v;
-  }
-  const normalizeFieldKey = (value: string) =>
-    value
-      .normalize("NFKD")
-      .replaceAll("Δ", " delta ")
-      .replace(/Δ|∆/g, " delta ")
-      .replace(/%/g, " percent ")
-      .replace(/[^a-zA-Z0-9]+/g, " ")
-      .trim()
-      .toLowerCase()
-      .split(/\s+/)
-      .map((token) => {
-        if (token === "delta" || token === "percent" || token === "pct" || token === "pcnt") return "pct";
-        return token;
-      })
-      .filter((token, index, arr) => !(token === "pct" && arr[index - 1] === "pct"))
-      .join("");
-
-  const keyMap = new Map<string, any>();
-  for (const [rawKey, rawValue] of Object.entries(obj)) {
-    if (!isUsableValue(rawValue)) continue;
-    const normalized = normalizeFieldKey(String(rawKey));
-    if (!keyMap.has(normalized)) keyMap.set(normalized, rawValue);
-  }
-
-  for (const k of keys) {
-    const normalized = normalizeFieldKey(k);
-    if (keyMap.has(normalized)) return keyMap.get(normalized);
-  }
-  return undefined;
-};
-
-const pickAny = (d: any, keys: string[]) => {
-  const meta = getMeta(d);
-  const v1 = pick(d, keys);
-  if (v1 !== undefined) return v1;
-  const v2 = pick(meta, keys);
-  if (v2 !== undefined) return v2;
-  return undefined;
-};
-
-const getStrAny = (d: any, keys: string[], fallback = "") => String(pickAny(d, keys) ?? fallback).trim();
-const getNumAny = (d: any, keys: string[]) => toNum(pickAny(d, keys));
-const getBoolAny = (d: any, keys: string[]) => toBool(pickAny(d, keys));
 
 const getBestRating = (d: any) =>
   toNum(getBestObj(d)?.rating ?? getBestObj(d)?.Rating ?? getBestObj(d)?.rate ?? getBestObj(d)?.Rate ?? null);
@@ -429,77 +298,6 @@ const makeCmpAccountThenTicker = (nonEmptyFirst: boolean) => {
 /* =========================
    Numeric field getters (centralized)
 ========================= */
-const numSpreadBidPct = (s: any) => getNumAny(s, ["SpreadBid%", "spreadBidPct", "SpreadBidPct", "Spread", "spread"]);
-const numLastClose = (s: any) =>
-  getNumAny(s, ["LstCls", "lstCls", "lstclose", "lstClose", "lastClose", "LastClose", "lastclose", "YCls", "yCls", "YClose", "yClose", "TCls", "tCls", "TClose", "tClose", "close", "Close"]);
-
-const numAvPreMh = (s: any) => getNumAny(s, ["avPreMh", "AvPreMh", "avPreMhv", "AvPreMhv", "PreMhVol", "preMhVol"]);
-const numMarketCapM = (s: any) => getNumAny(s, ["marketCapM", "MarketCapM", "market_cap_m", "market_cap", "MarketCap"]);
-const PRE_MH_VOL_NF_KEYS = ["preMktVolNF", "PreMktVolNF", "preMhVolNF", "PreMhVolNF", "pre_mkt_vol_nf", "premktVolNF", "PremktVolNF"];
-const VOL_NF_FROM_LST_CLS_KEYS = ["VolNFFromLstCls", "volNFFromLstCls", "volnffromlstcls", "VolNFfromLstCls", "volNFfromLstCls", "vol_nf_from_lst_cls"];
-const numPreMktVolNF = (s: any) =>
-  getNumAny(s, PRE_MH_VOL_NF_KEYS);
-const numVWAP = (s: any) => getNumAny(s, ["vwap", "VWAP"]);
-const numRoundLot = (s: any) => getNumAny(s, ["roundLot", "RoundLot"]);
-const numADV20 = (s: any) => getNumAny(s, ["adv20", "ADV20", "Adv20"]);
-const numADV20NF = (s: any) => getNumAny(s, ["adv20NF", "ADV20NF", "Adv20NF"]);
-const numADV90 = (s: any) => getNumAny(s, ["adv90", "ADV90", "Adv90", "avg90", "Avg90"]);
-const numADV90NF = (s: any) => getNumAny(s, ["adv90NF", "ADV90NF", "Adv90NF"]);
-const numLstPrcL = (s: any) => getNumAny(s, ["lstPrcL", "LstPrcL", "lastPriceL", "LastPriceL", "lstPrc", "LstPrc"]);
-const numYCls = (s: any) => getNumAny(s, ["yCls", "YCls", "yClose", "YClose"]);
-const numTCls = (s: any) => getNumAny(s, ["tCls", "TCls", "tClose", "TClose"]);
-const numClsToClsPct = (s: any) =>
-  getNumAny(s, ["ClsToCls%", "clsToCls%", "clsToClsPct", "ClsToClsPct", "ClsToClsPcnt", "clsToClsPcnt"]);
-const numLo = (s: any) => getNumAny(s, ["lo", "Lo", "low", "Low"]);
-const numLstClsNewsCnt = (s: any) => getNumAny(s, ["LstClsNewsCnt", "lstClsNewsCnt", "lstClsNewsCount", "LstClsNewsCount"]);
-const numVolRel = (s: any) => getNumAny(s, ["VolRel", "volRel", "vol_rel"]);
-const AV_PRE_MH_VOL_90_NF_KEYS = ["AvPreMhVol90NF", "avPreMhVol90NF", "avpremhvol90nf", "av_pre_mh_vol_90_nf"];
-const AV_PRE_MH_VALUE_20_NF_KEYS = ["AvPreMhValue20NF", "avPreMhValue20NF", "avpremhvalue20nf", "av_pre_mh_value_20_nf"];
-const AV_PRE_MH_VALUE_90_NF_KEYS = ["AvPreMhValue90NF", "avPreMhValue90NF", "avpremhvalue90nf", "av_pre_mh_value_90_nf"];
-const AVG_DAILY_VALUE_20_KEYS = ["AvgDailyValue20", "avgDailyValue20", "avgdailyvalue20", "avg_daily_value_20"];
-const AVG_DAILY_VALUE_90_KEYS = ["AvgDailyValue90", "avgDailyValue90", "avgdailyvalue90", "avg_daily_value_90"];
-const VOLATILITY_20_KEYS = ["Volatility20", "volatility20", "volatility_20", "Volatility20%", "volatility20%", "Volatility20Pct", "volatility20Pct", "volatility20pct"];
-const VOLATILITY_90_KEYS = ["Volatility90", "volatility90", "volatility_90", "Volatility90%", "volatility90%", "Volatility90Pct", "volatility90Pct", "volatility90pct"];
-const PRE_MH_MDV_20_NF_KEYS = ["PreMhMDV20NF", "preMhMDV20NF", "premhmdv20nf", "pre_mh_mdv_20_nf", "PreMktMDV20NF", "preMktMDV20NF"];
-const PRE_MH_MDV_90_NF_KEYS = ["PreMhMDV90NF", "preMhMDV90NF", "premhmdv90nf", "pre_mh_mdv_90_nf", "PreMktMDV90NF", "preMktMDV90NF"];
-const numPreMhBidLstPrcPct = (s: any) =>
-  getNumAny(s, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
-const numPreMhLoLstPrcPct = (s: any) =>
-  getNumAny(s, ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcÎ”%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"]);
-const numPreMhHiLstClsPct = (s: any) =>
-  getNumAny(s, ["PreMhHiLstClsΔ%", "PreMhHiLstClsÎ”%", "PreMhHiLstClsPct", "preMhHiLstClsPct"]);
-const numPreMhLoLstClsPct = (s: any) =>
-  getNumAny(s, ["PreMhLoLstClsΔ%", "PreMhLoLstClsÎ”%", "PreMhLoLstClsPct", "preMhLoLstClsPct"]);
-const numLstPrcLstClsPct = (s: any) =>
-  getNumAny(s, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "lstPrcLstClsPct"]);
-const numImbExch925 = (s: any) => getNumAny(s, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
-const numImbExch1555 = (s: any) => getNumAny(s, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
-const numLstPrcLstClsPctSafe = (s: any) =>
-  getNumAny(s, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsÃŽâ€%", "LstPrcLstClsPct", "LstPrcLstClsDeltaPct", "lstPrcLstClsPct"]);
-const numAvPostMhVol90NF = (s: any) =>
-  getNumAny(s, ["AvPostMhVol90NF", "avPostMhVol90NF"]);
-const deriveValueFromPrice = (volumeLike: number | null, priceLike: number | null) =>
-  volumeLike != null && priceLike != null ? volumeLike * priceLike : null;
-const numAvPreMhVol90NF = (s: any) =>
-  getNumAny(s, AV_PRE_MH_VOL_90_NF_KEYS) ?? numAvPreMh(s);
-const numAvPreMhValue20NF = (s: any) =>
-  getNumAny(s, AV_PRE_MH_VALUE_20_NF_KEYS);
-const numAvPreMhValue90NF = (s: any) =>
-  getNumAny(s, AV_PRE_MH_VALUE_90_NF_KEYS) ?? deriveValueFromPrice(numAvPreMhVol90NF(s), numLastClose(s));
-const numAvgDailyValue20 = (s: any) =>
-  getNumAny(s, AVG_DAILY_VALUE_20_KEYS) ?? deriveValueFromPrice(numADV20NF(s), numLastClose(s));
-const numAvgDailyValue90 = (s: any) =>
-  getNumAny(s, AVG_DAILY_VALUE_90_KEYS) ?? deriveValueFromPrice(numADV90NF(s), numLastClose(s));
-const numVolatility20 = (s: any) =>
-  getNumAny(s, VOLATILITY_20_KEYS);
-const numVolatility90 = (s: any) =>
-  getNumAny(s, VOLATILITY_90_KEYS);
-const numPreMhMDV20NF = (s: any) =>
-  getNumAny(s, PRE_MH_MDV_20_NF_KEYS);
-const numPreMhMDV90NF = (s: any) =>
-  getNumAny(s, PRE_MH_MDV_90_NF_KEYS);
-
-const numVolNFfromLstCls = (s: any) => getNumAny(s, VOL_NF_FROM_LST_CLS_KEYS);
 const RANGE_VALUE_GETTERS = {
   ADV20: numADV20,
   ADV20NF: numADV20NF,
@@ -685,8 +483,6 @@ const sortBenchmarks = (a: string, b: string) => {
   return ua.localeCompare(ub);
 };
 
-const BIN_SERVER_MIN_RATE = 0.3;
-const BIN_SERVER_MIN_TOTAL = 1;
 
 function safeRecord(value: any): Record<string, any> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -879,274 +675,15 @@ function passesTopWindowFilter(
 /* =========================
    URL builder
 ========================= */
-export function buildSignalsUrl(args: {
-  cls: ArbClass;
-  type: ArbType;
-  mode: Mode;
-  ratingMode: RatingMode;
-  zapMode: "zap" | "sigma" | "delta" | "off";
-  minRate: number;
-  minTotal: number;
-  startAbs?: number | null;
-  limit?: number;
-  tickers?: string;
-  minCorr?: number | null;
-  maxCorr?: number | null;
-  minBeta?: number | null;
-  maxBeta?: number | null;
-  minSigma?: number | null;
-  maxSigma?: number | null;
-  includeAll?: boolean;
-}) {
-  const {
-    cls,
-    type,
-    mode,
-    ratingMode,
-    zapMode,
-    minRate,
-    minTotal,
-    startAbs,
-    limit,
-    tickers,
-    minCorr,
-    maxCorr,
-    minBeta,
-    maxBeta,
-    minSigma,
-    maxSigma,
-    includeAll,
-  } = args;
-
-  const u = new URL(`${BRIDGE_BASE}/api/arbitrage/signals/${cls}/${type}/${mode}`);
-
-  const useBinRatingFilter = (ratingMode === "BIN" || ratingMode === "BINS") && zapMode === "sigma";
-  const safeMinRate = useBinRatingFilter
-    ? BIN_SERVER_MIN_RATE
-    : Number.isFinite(minRate) ? Math.max(0, minRate) : BIN_SERVER_MIN_RATE;
-  const safeMinTotal = useBinRatingFilter
-    ? BIN_SERVER_MIN_TOTAL
-    : Number.isFinite(minTotal) ? Math.max(1, Math.trunc(minTotal)) : BIN_SERVER_MIN_TOTAL;
-
-  u.searchParams.set("minRate", String(safeMinRate));
-  u.searchParams.set("minTotal", String(safeMinTotal));
-  u.searchParams.set("limit", String(Number.isFinite(limit as number) ? Math.max(1, Math.trunc(limit as number)) : 5000));
-
-  const t = (tickers ?? "").trim();
-  if (t) u.searchParams.set("tickers", t);
-
-  const setOptional = (key: string, value: number | null | undefined) => {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      u.searchParams.set(key, String(value));
-    }
-  };
-
-  setOptional("startAbs", startAbs);
-  setOptional("minCorr", minCorr);
-  setOptional("maxCorr", maxCorr);
-  setOptional("minBeta", minBeta);
-  setOptional("maxBeta", maxBeta);
-  setOptional("minSigma", minSigma);
-  setOptional("maxSigma", maxSigma);
-  if (includeAll) {
-    u.searchParams.set("includeAll", "true");
-  }
-
-  return u.toString();
-}
-
-export function buildSignalsStreamUrl(args: Parameters<typeof buildSignalsUrl>[0]) {
-  const snapshotUrl = new URL(buildSignalsUrl(args));
-  snapshotUrl.pathname = snapshotUrl.pathname.replace("/api/arbitrage/signals/", "/api/arbitrage/signals-stream/");
-  // Stream payloads stay intentionally smaller than one-shot snapshots.
-  snapshotUrl.searchParams.set("limit", String(Number.isFinite(args.limit as number) ? Math.max(1, Math.trunc(args.limit as number)) : 5000));
-  return snapshotUrl.toString();
-}
+// The signals feed URL now has ONE implementation, shared by both Sonars, streamEngine and
+// tapeMetaStore. Re-exported here so the existing importers keep working unchanged.
+// See lib/signals/url.ts for the minTotal clamp that differed between the two old copies.
+import { buildSignalsUrl, buildSignalsStreamUrl } from "@/lib/signals/url";
+export { buildSignalsUrl, buildSignalsStreamUrl };
 
 /* =========================
    API NORMALIZER
 ========================= */
-export function normalizeSignal(raw: any): ArbitrageSignal | null {
-  if (!raw) return null;
-
-  const ticker = normalizeTicker(String(raw.ticker ?? raw.Ticker ?? ""));
-  if (!ticker) return null;
-
-  const meta = raw?.meta ?? raw?.Meta ?? null;
-
-  const benchmark = String(raw.benchmark ?? raw.Benchmark ?? raw.bench ?? raw.Bench ?? meta?.bench ?? meta?.benchmark ?? "UNKNOWN").toUpperCase();
-  const betaBucket =
-    raw.betaBucket ?? raw.BetaBucket ?? raw.beta_bucket ?? raw.beta_bucket_str ?? meta?.betaBucket ?? meta?.BetaBucket ?? null;
-
-  const sideStr = String(raw.side ?? raw.Side ?? raw.dir ?? raw.Dir ?? raw.direction ?? raw.Direction ?? "")
-    .toLowerCase()
-    .trim();
-
-  let direction: "up" | "down" | "none" = "none";
-  if (sideStr.includes("short") || sideStr === "s" || sideStr === "sell" || sideStr === "down") direction = "down";
-  else if (sideStr.includes("long") || sideStr === "l" || sideStr === "buy" || sideStr === "up") direction = "up";
-  else {
-    const dirRaw = String(raw.direction ?? raw.Direction ?? meta?.direction ?? meta?.Direction ?? "")
-      .trim()
-      .toLowerCase();
-    if (dirRaw === "up" || dirRaw === "long" || dirRaw === "buy") direction = "up";
-    else if (dirRaw === "down" || dirRaw === "short" || dirRaw === "sell") direction = "down";
-  }
-
-  const sig =
-    (typeof raw.sig === "number" ? raw.sig : null) ??
-    (typeof raw.sigma === "number" ? raw.sigma : null) ??
-    (typeof raw.devSigma === "number" ? raw.devSigma : null) ??
-    (typeof raw.dev_sigma === "number" ? raw.dev_sigma : null) ??
-    null;
-
-  const zapS = typeof raw.zapS === "number" ? raw.zapS : typeof raw.zap_s === "number" ? raw.zap_s : null;
-  const zapL = typeof raw.zapL === "number" ? raw.zapL : typeof raw.zap_l === "number" ? raw.zap_l : null;
-
-  const kindStr = String(raw.type ?? raw.Type ?? raw.kind ?? raw.Kind ?? raw.normType ?? "")
-    .toLowerCase()
-    .trim();
-  const kind: "hard" | "soft" | "any" = kindStr.includes("hard") ? "hard" : kindStr.includes("soft") ? "soft" : "any";
-
-  const shortCandidate = !!(raw.shortCandidate ?? raw.ShortCandidate ?? raw.isShort ?? raw.short ?? false);
-  const longCandidate = !!(raw.longCandidate ?? raw.LongCandidate ?? raw.isLong ?? raw.long ?? false);
-  if (direction === "none") {
-    if (shortCandidate && !longCandidate) direction = "down";
-    else if (longCandidate && !shortCandidate) direction = "up";
-  }
-
-  const bidStock = toNum(raw.bidStock ?? meta?.bidStock);
-  const askStock = toNum(raw.askStock ?? meta?.askStock);
-  const bidBench = toNum(raw.bidBench ?? meta?.bidBench);
-  const askBench = toNum(raw.askBench ?? meta?.askBench);
-
-  const zapSsigma = toNum(raw.zapSsigma ?? meta?.zapSsigma);
-  const zapLsigma = toNum(raw.zapLsigma ?? meta?.zapLsigma);
-
-  const best = raw?.best ?? raw?.Best ?? null;
-
-  const _bestRating = toNum(best?.rating ?? best?.Rating);
-  const _bestTotal = toNum(best?.total ?? best?.Total);
-  const _bestHard = toNum(best?.hard ?? best?.Hard);
-  const _bestSoft = toNum(best?.soft ?? best?.Soft);
-
-  const _reportBool = (() => {
-    const s = String(meta?.report ?? raw?.report ?? raw?.Report ?? "").trim().toLowerCase();
-    if (["yes", "y", "true", "1"].includes(s)) return true;
-    if (["no", "n", "false", "0"].includes(s)) return false;
-    return null;
-  })();
-
-  const _newsCount =
-    toNum(meta?.newsCnt ?? meta?.newsCount ?? meta?.news ?? raw?.newsCnt ?? raw?.news ?? raw?.newsCount ?? raw?.NewsCount) ?? 0;
-
-  const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
-  const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);
-  const _isActive = toBool(raw?.active ?? raw?.isActive ?? raw?.IsActive ?? meta?.active ?? meta?.isActive ?? meta?.IsActive);
-  const _positionBp = toNum(
-    raw?.PositionBp ??
-    raw?.positionBp ??
-    raw?.position_bp ??
-    raw?.posBp ??
-    raw?.PosBp ??
-    meta?.PositionBp ??
-    meta?.positionBp ??
-    meta?.position_bp ??
-    meta?.posBp ??
-    meta?.PosBp ??
-    raw?.PositionBpAbs ??
-    raw?.positionBpAbs ??
-    meta?.PositionBpAbs ??
-    meta?.positionBpAbs
-  );
-
-  const canonical = { ...raw, meta };
-  const volRel = numVolRel(canonical);
-  const preMhVolNF = numPreMktVolNF(canonical);
-  const volNFfromLstCls = numVolNFfromLstCls(canonical);
-  const avPostMhVol90NF = numAvPostMhVol90NF(canonical);
-  const avPreMhVol90NF = numAvPreMhVol90NF(canonical);
-  const avPreMhValue20NF = numAvPreMhValue20NF(canonical);
-  const avPreMhValue90NF = numAvPreMhValue90NF(canonical);
-  const avgDailyValue20 = numAvgDailyValue20(canonical);
-  const avgDailyValue90 = numAvgDailyValue90(canonical);
-  const volatility20 = numVolatility20(canonical);
-  const volatility90 = numVolatility90(canonical);
-  const preMhMDV20NF = numPreMhMDV20NF(canonical);
-  const preMhMDV90NF = numPreMhMDV90NF(canonical);
-  const preMhBidLstPrcPct = getNumAny(canonical, ["PreMhHiLstPrcΔ%", "PreMhHiLstPrcÎ”%", "PreMhHiLstPrcPct", "preMhHiLstPrcPct", "PreMhBidLstPrcΔ%", "PreMhBidLstPrcÎ”%", "PreMhBidLstPrcPct", "preMhBidLstPrcPct"]);
-  const preMhLoLstPrcPct = getNumAny(canonical, ["PreMhLoLstPrcΔ%", "PreMhLoLstPrcÎ”%", "PreMhLoLstPrcPct", "preMhLoLstPrcPct"]);
-  const preMhHiLstClsPct = getNumAny(canonical, ["PreMhHiLstClsΔ%", "PreMhHiLstClsÎ”%", "PreMhHiLstClsPct", "preMhHiLstClsPct"]);
-  const preMhLoLstClsPct = getNumAny(canonical, ["PreMhLoLstClsΔ%", "PreMhLoLstClsÎ”%", "PreMhLoLstClsPct", "preMhLoLstClsPct"]);
-  const lstPrcLstClsPct = getNumAny(canonical, ["LstPrcLstClsΔ%", "LstPrcLstClsÎ”%", "LstPrcLstClsPct", "LstPrcLstClsDeltaPct", "lstPrcLstClsPct"]);
-  const imbExch925 = getNumAny(canonical, ["ImbExch9:25", "ImbExch925", "imbExch925"]);
-  const imbExch1555 = getNumAny(canonical, ["ImbExch15:55", "ImbExch1555", "imbExch1555"]);
-
-  // make sure these exist at top-level for filters/options
-  const country = raw?.country ?? raw?.Country ?? meta?.country ?? meta?.Country ?? undefined;
-  const exchange = raw?.exchange ?? raw?.Exchange ?? meta?.exchange ?? meta?.Exchange ?? undefined;
-  const sector = raw?.sector ?? raw?.Sector ?? meta?.sector ?? meta?.Sector ?? meta?.sectorL3 ?? meta?.SectorL3 ?? undefined;
-
-  return {
-    ...raw,
-    meta,
-
-    ticker,
-    benchmark,
-    betaBucket: betaBucket == null ? null : String(betaBucket),
-    direction,
-    sig,
-    zapS,
-    zapSsigma,
-    zapL,
-    zapLsigma,
-    shortCandidate,
-    longCandidate,
-    kind,
-    bidStock,
-    askStock,
-    bidBench,
-    askBench,
-    PositionBp: _positionBp,
-    positionBp: _positionBp,
-
-    country,
-    exchange,
-    sector,
-    PreMktVolNF: preMhVolNF,
-    PreMhVolNF: preMhVolNF,
-    VolNFfromLstCls: volNFfromLstCls,
-    VolRel: volRel,
-    AvPostMhVol90NF: avPostMhVol90NF,
-    AvPreMhVol90NF: avPreMhVol90NF,
-    AvPreMhValue20NF: avPreMhValue20NF,
-    AvPreMhValue90NF: avPreMhValue90NF,
-    AvgDailyValue20: avgDailyValue20,
-    AvgDailyValue90: avgDailyValue90,
-    Volatility20: volatility20,
-    Volatility90: volatility90,
-    PreMhMDV20NF: preMhMDV20NF,
-    PreMhMDV90NF: preMhMDV90NF,
-    PreMhBidLstPrcPct: preMhBidLstPrcPct,
-    PreMhLoLstPrcPct: preMhLoLstPrcPct,
-    PreMhHiLstClsPct: preMhHiLstClsPct,
-    PreMhLoLstClsPct: preMhLoLstClsPct,
-    LstPrcLstClsPct: lstPrcLstClsPct,
-    ImbExch925: imbExch925,
-    ImbExch1555: imbExch1555,
-
-    _bestRating,
-    _bestTotal,
-    _bestHard,
-    _bestSoft,
-    _reportBool,
-    _newsCount,
-    _isPTP,
-    _isSSR,
-    _isActive,
-    isStaticFallback: !!(raw.isStaticFallback ?? raw.IsStaticFallback ?? false),
-  };
-}
 
 
 /* =========================
@@ -3996,64 +3533,7 @@ export default function OpenDoorSonar() {
   }, []);
   const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
-  const applySignalsPayload = useCallback((payload: any, f: typeof snapshot) => {
-    const rawItems: any[] = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
 
-    const normalized = rawItems
-      .map(normalizeSignal)
-      .filter(Boolean) as ArbitrageSignal[];
-
-    startTransition(() => {
-      setAllItems(normalized);
-      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
-    });
-  }, [applyAllClientFilters]);
-
-  const applySignalsDiff = useCallback((payload: any, f: typeof snapshot) => {
-    const added = Array.isArray(payload?.added) ? payload.added : [];
-    const updated = Array.isArray(payload?.updated) ? payload.updated : [];
-    const removed = Array.isArray(payload?.removed) ? payload.removed : [];
-
-    const normalizedAdded = added
-      .map(normalizeSignal)
-      .filter(Boolean) as ArbitrageSignal[];
-
-    const normalizedUpdated = updated
-      .map(normalizeSignal)
-      .filter(Boolean) as ArbitrageSignal[];
-
-    const removedTickers = new Set<string>(
-      removed
-        .map((ticker: any) => normalizeTicker(String(ticker ?? "")))
-        .filter((ticker): ticker is string => Boolean(ticker))
-    );
-
-    startTransition(() => {
-      setAllItems((prev) => {
-        const nextMap = new Map(prev.map((item) => [item.ticker, item] as const));
-
-        for (const ticker of removedTickers) {
-          nextMap.delete(ticker);
-        }
-
-        for (const item of normalizedAdded) {
-          nextMap.set(item.ticker, item);
-        }
-
-        for (const item of normalizedUpdated) {
-          nextMap.set(item.ticker, item);
-        }
-
-        return Array.from(nextMap.values());
-      });
-
-      setUpdatedAt(typeof payload?.generatedAt === "number" ? payload.generatedAt : Date.now());
-    });
-  }, [applyAllClientFilters]);
 
   const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
     cls: snapshot.cls,
@@ -4091,63 +3571,39 @@ export default function OpenDoorSonar() {
     snapshot.zapMode,
   ]);
 
+  // Subscribes through the SHARED SSE hub instead of owning an EventSource.
+  //
+  // Three things this buys, beyond one connection per URL instead of one per surface:
+  //   * the snapshot/diff merge (byTicker map, add/update/remove, fresh array identity) now has a
+  //     single implementation — this component had its own byte-equivalent copy;
+  //   * a Sonar open next to a Stream on the same URL costs one connection and one JSON parse,
+  //     not two;
+  //   * DISCONNECTS BECOME VISIBLE. The old `source.onerror` only cleared the spinner, so a
+  //     dropped feed left the last snapshot frozen on screen with nothing to say so. EventSource
+  //     reconnects on its own; what matters is that the gap is not silent.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    let cancelled = false;
 
     setLoading(true);
     setError(null);
 
-    const source = new EventSource(streamSignalsUrl);
+    let wasConnected = false;
 
-    const handlePayload = (event: MessageEvent<string>) => {
-      if (cancelled) return;
-      try {
-        const payload = JSON.parse(String(event.data));
-        applySignalsPayload(payload, filtersRef.current);
+    return subscribeToStreamSse(streamSignalsUrl, (state) => {
+      if (wasConnected && !state.connected) {
+        setError("Live feed disconnected — values below are the last received snapshot.");
+      } else if (state.connected) {
         setError(null);
-      } catch (error: any) {
-        if (!cancelled) {
-          setError(error?.message ?? "Failed to parse stream payload");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
       }
-    };
+      wasConnected = state.connected;
 
-    const handleDiff = (event: MessageEvent<string>) => {
-      if (cancelled) return;
-      try {
-        const payload = JSON.parse(String(event.data));
-        applySignalsDiff(payload, filtersRef.current);
-        setError(null);
-      } catch (error: any) {
-        if (!cancelled) {
-          setError(error?.message ?? "Failed to parse stream diff payload");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    source.onmessage = handlePayload;
-    source.addEventListener("snapshot", handlePayload as EventListener);
-    source.addEventListener("diff", handleDiff as EventListener);
-    source.onerror = () => {
-      if (!cancelled) {
-        setLoading(false);
-      }
-    };
-
-    return () => {
-      cancelled = true;
-      source.close();
-    };
-  }, [applySignalsPayload, streamReconnectVersion, streamSignalsUrl]);
+      startTransition(() => {
+        setAllItems(state.signals);
+        setUpdatedAt(state.generatedAt || state.lastMessageAt || Date.now());
+      });
+      setLoading(false);
+    });
+  }, [streamReconnectVersion, streamSignalsUrl]);
 
   // Re-apply client filters immediately on any local filter change.
   useEffect(() => {
@@ -4623,6 +4079,135 @@ export default function OpenDoorSonar() {
   const activeWindowRatings = useMemo(() => getWindowRatings(activeData), [activeData]);
 
 
+  /**
+   * The Sonar's thresholds, shaped as SharedMinMaxPanel expects.
+   *
+   * The Sonar keeps each bound in its own useState while the Scanners keep them in a
+   * ScannerFilterBag. Mapping here lets both render the SAME panel instead of the Sonar carrying
+   * its own 36 copied MinMaxRow lines — which is how the two drifted apart in the first place —
+   * without migrating the Sonar's state or its persistence.
+   */
+  const sharedMinMaxFilters = useMemo(() => ({
+    minAdv20: adv20Min, maxAdv20: adv20Max,
+    setMinAdv20: setAdv20Min, setMaxAdv20: setAdv20Max,
+    minAdv20NF: adv20NFMin, maxAdv20NF: adv20NFMax,
+    setMinAdv20NF: setAdv20NFMin, setMaxAdv20NF: setAdv20NFMax,
+    minAdv90: adv90Min, maxAdv90: adv90Max,
+    setMinAdv90: setAdv90Min, setMaxAdv90: setAdv90Max,
+    minAdv90NF: adv90NFMin, maxAdv90NF: adv90NFMax,
+    setMinAdv90NF: setAdv90NFMin, setMaxAdv90NF: setAdv90NFMax,
+    minAvPreMhv: avPreMhvMin, maxAvPreMhv: avPreMhvMax,
+    setMinAvPreMhv: setAvPreMhvMin, setMaxAvPreMhv: setAvPreMhvMax,
+    minRoundLot: roundLotMin, maxRoundLot: roundLotMax,
+    setMinRoundLot: setRoundLotMin, setMaxRoundLot: setRoundLotMax,
+    minVWAP: vwapMin, maxVWAP: vwapMax,
+    setMinVWAP: setVwapMin, setMaxVWAP: setVwapMax,
+    minSpread: spreadMin, maxSpread: spreadMax,
+    setMinSpread: setSpreadMin, setMaxSpread: setSpreadMax,
+    minLstPrcL: lstPrcLMin, maxLstPrcL: lstPrcLMax,
+    setMinLstPrcL: setLstPrcLMin, setMaxLstPrcL: setLstPrcLMax,
+    minLstCls: lstClsMin, maxLstCls: lstClsMax,
+    setMinLstCls: setLstClsMin, setMaxLstCls: setLstClsMax,
+    minYCls: yClsMin, maxYCls: yClsMax,
+    setMinYCls: setYClsMin, setMaxYCls: setYClsMax,
+    minTCls: tClsMin, maxTCls: tClsMax,
+    setMinTCls: setTClsMin, setMaxTCls: setTClsMax,
+    minClsToClsPct: clsToClsPctMin, maxClsToClsPct: clsToClsPctMax,
+    setMinClsToClsPct: setClsToClsPctMin, setMaxClsToClsPct: setClsToClsPctMax,
+    minLo: loMin, maxLo: loMax,
+    setMinLo: setLoMin, setMaxLo: setLoMax,
+    minLstClsNewsCnt: lstClsNewsCntMin, maxLstClsNewsCnt: lstClsNewsCntMax,
+    setMinLstClsNewsCnt: setLstClsNewsCntMin, setMaxLstClsNewsCnt: setLstClsNewsCntMax,
+    minMarketCapM: marketCapMMin, maxMarketCapM: marketCapMMax,
+    setMinMarketCapM: setMarketCapMMin, setMaxMarketCapM: setMarketCapMMax,
+    minPreMktVolNF: preMhVolNFMin, maxPreMktVolNF: preMhVolNFMax,
+    setMinPreMktVolNF: setPreMhVolNFMin, setMaxPreMktVolNF: setPreMhVolNFMax,
+    minVolNFfromLstCls: volNFfromLstClsMin, maxVolNFfromLstCls: volNFfromLstClsMax,
+    setMinVolNFfromLstCls: setVolNFfromLstClsMin, setMaxVolNFfromLstCls: setVolNFfromLstClsMax,
+    minAvPostMhVol90NF: avPostMhVol90NFMin, maxAvPostMhVol90NF: avPostMhVol90NFMax,
+    setMinAvPostMhVol90NF: setAvPostMhVol90NFMin, setMaxAvPostMhVol90NF: setAvPostMhVol90NFMax,
+    minAvPreMhVol90NF: avPreMhVol90NFMin, maxAvPreMhVol90NF: avPreMhVol90NFMax,
+    setMinAvPreMhVol90NF: setAvPreMhVol90NFMin, setMaxAvPreMhVol90NF: setAvPreMhVol90NFMax,
+    minAvPreMhValue20NF: avPreMhValue20NFMin, maxAvPreMhValue20NF: avPreMhValue20NFMax,
+    setMinAvPreMhValue20NF: setAvPreMhValue20NFMin, setMaxAvPreMhValue20NF: setAvPreMhValue20NFMax,
+    minAvPreMhValue90NF: avPreMhValue90NFMin, maxAvPreMhValue90NF: avPreMhValue90NFMax,
+    setMinAvPreMhValue90NF: setAvPreMhValue90NFMin, setMaxAvPreMhValue90NF: setAvPreMhValue90NFMax,
+    minAvgDailyValue20: avgDailyValue20Min, maxAvgDailyValue20: avgDailyValue20Max,
+    setMinAvgDailyValue20: setAvgDailyValue20Min, setMaxAvgDailyValue20: setAvgDailyValue20Max,
+    minAvgDailyValue90: avgDailyValue90Min, maxAvgDailyValue90: avgDailyValue90Max,
+    setMinAvgDailyValue90: setAvgDailyValue90Min, setMaxAvgDailyValue90: setAvgDailyValue90Max,
+    minVolatility20: volatility20Min, maxVolatility20: volatility20Max,
+    setMinVolatility20: setVolatility20Min, setMaxVolatility20: setVolatility20Max,
+    minVolatility90: volatility90Min, maxVolatility90: volatility90Max,
+    setMinVolatility90: setVolatility90Min, setMaxVolatility90: setVolatility90Max,
+    minPreMhMDV20NF: preMhMDV20NFMin, maxPreMhMDV20NF: preMhMDV20NFMax,
+    setMinPreMhMDV20NF: setPreMhMDV20NFMin, setMaxPreMhMDV20NF: setPreMhMDV20NFMax,
+    minPreMhMDV90NF: preMhMDV90NFMin, maxPreMhMDV90NF: preMhMDV90NFMax,
+    setMinPreMhMDV90NF: setPreMhMDV90NFMin, setMaxPreMhMDV90NF: setPreMhMDV90NFMax,
+    minVolRel: volRelMin, maxVolRel: volRelMax,
+    setMinVolRel: setVolRelMin, setMaxVolRel: setVolRelMax,
+    minPreMhBidLstPrcPct: preMhBidLstPrcPctMin, maxPreMhBidLstPrcPct: preMhBidLstPrcPctMax,
+    setMinPreMhBidLstPrcPct: setPreMhBidLstPrcPctMin, setMaxPreMhBidLstPrcPct: setPreMhBidLstPrcPctMax,
+    minPreMhLoLstPrcPct: preMhLoLstPrcPctMin, maxPreMhLoLstPrcPct: preMhLoLstPrcPctMax,
+    setMinPreMhLoLstPrcPct: setPreMhLoLstPrcPctMin, setMaxPreMhLoLstPrcPct: setPreMhLoLstPrcPctMax,
+    minPreMhHiLstClsPct: preMhHiLstClsPctMin, maxPreMhHiLstClsPct: preMhHiLstClsPctMax,
+    setMinPreMhHiLstClsPct: setPreMhHiLstClsPctMin, setMaxPreMhHiLstClsPct: setPreMhHiLstClsPctMax,
+    minPreMhLoLstClsPct: preMhLoLstClsPctMin, maxPreMhLoLstClsPct: preMhLoLstClsPctMax,
+    setMinPreMhLoLstClsPct: setPreMhLoLstClsPctMin, setMaxPreMhLoLstClsPct: setPreMhLoLstClsPctMax,
+    minLstPrcLstClsPct: lstPrcLstClsPctMin, maxLstPrcLstClsPct: lstPrcLstClsPctMax,
+    setMinLstPrcLstClsPct: setLstPrcLstClsPctMin, setMaxLstPrcLstClsPct: setLstPrcLstClsPctMax,
+    minImbExch925: imbExch925Min, maxImbExch925: imbExch925Max,
+    setMinImbExch925: setImbExch925Min, setMaxImbExch925: setImbExch925Max,
+    minImbExch1555: imbExch1555Min, maxImbExch1555: imbExch1555Max,
+    setMinImbExch1555: setImbExch1555Min, setMaxImbExch1555: setImbExch1555Max,
+    sharedRangeFilterModes: {
+      // corr/beta/sigma are part of the shared key union but SharedMinMaxPanel renders no row for
+      // them — the Sonar shows those three through FilterRatingRow instead. "on" is the same
+      // default the Scanners start from (DEFAULT_SHARED_RANGE_FILTER_MODES), so nothing is filtered
+      // out by supplying it here.
+      corr: "on" as const, beta: "on" as const, sigma: "on" as const,
+      adv20: rangeModes.ADV20,
+      adv20nf: rangeModes.ADV20NF,
+      adv90: rangeModes.ADV90,
+      adv90nf: rangeModes.ADV90NF,
+      avpremhv: rangeModes.AvPreMhv,
+      roundlot: rangeModes.RoundLot,
+      vwap: rangeModes.VWAP,
+      spread: rangeModes.SpreadBidPct,
+      lstprcl: rangeModes.LstPrcL,
+      lstcls: rangeModes.LstCls,
+      ycls: rangeModes.YCls,
+      tcls: rangeModes.TCls,
+      clstocls: rangeModes.ClsToClsPct,
+      lo: rangeModes.Lo,
+      lstclsnewscnt: rangeModes.LstClsNewsCnt,
+      marketcapm: rangeModes.MarketCapM,
+      premhvolnf: rangeModes.PreMhVolNF,
+      volnffromlstcls: rangeModes.VolNFfromLstCls,
+      avpostmhvol90nf: rangeModes.AvPostMhVol90NF,
+      avpremhvol90nf: rangeModes.AvPreMhVol90NF,
+      avpremhvalue20nf: rangeModes.AvPreMhValue20NF,
+      avpremhvalue90nf: rangeModes.AvPreMhValue90NF,
+      avgdailyvalue20: rangeModes.AvgDailyValue20,
+      avgdailyvalue90: rangeModes.AvgDailyValue90,
+      volatility20: rangeModes.Volatility20,
+      volatility90: rangeModes.Volatility90,
+      premhmdv20nf: rangeModes.PreMhMDV20NF,
+      premhmdv90nf: rangeModes.PreMhMDV90NF,
+      volrel: rangeModes.VolRel,
+      premhbidlstprc: rangeModes.PreMhBidLstPrcPct,
+      premhlolstprc: rangeModes.PreMhLoLstPrcPct,
+      premhhilstcls: rangeModes.PreMhHiLstClsPct,
+      premhlolstcls: rangeModes.PreMhLoLstClsPct,
+      lstprclstcls: rangeModes.LstPrcLstClsPct,
+      imbexch925: rangeModes.ImbExch925,
+      imbexch1555: rangeModes.ImbExch1555,
+    },
+  }), [
+    adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax, avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax, lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax, clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax, marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax, avPostMhVol90NFMin, avPostMhVol90NFMax, avPreMhVol90NFMin, avPreMhVol90NFMax, avPreMhValue20NFMin, avPreMhValue20NFMax, avPreMhValue90NFMin, avPreMhValue90NFMax, avgDailyValue20Min, avgDailyValue20Max, avgDailyValue90Min, avgDailyValue90Max, volatility20Min, volatility20Max, volatility90Min, volatility90Max, preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax, preMhBidLstPrcPctMin, preMhBidLstPrcPctMax, preMhLoLstPrcPctMin, preMhLoLstPrcPctMax, preMhHiLstClsPctMin, preMhHiLstClsPctMax, preMhLoLstClsPctMin, preMhLoLstClsPctMax, lstPrcLstClsPctMin, lstPrcLstClsPctMax, imbExch925Min, imbExch925Max, imbExch1555Min, imbExch1555Max,
+    rangeModes,
+  ]);
+
   return (
       <div className={`sonar-borderless relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden ${isLightTheme ? "sonar-light-theme" : ""}`}>
 
@@ -4633,9 +4218,9 @@ export default function OpenDoorSonar() {
           scannerShellTitle="OPENDOOR SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
-          navStreamHref="/opendoor/stream"
-          navScannerHref="/opendoor/scanner"
-          navSonarHref="/opendoor/sonar"
+          navStreamHref={SONAR_NAV.stream}
+          navScannerHref={SONAR_NAV.scanner}
+          navSonarHref={SONAR_NAV.sonar}
           primaryPanel="sonar"
           listMode={listMode}
           ignCount={ignoreSet.size}
@@ -4707,29 +4292,19 @@ export default function OpenDoorSonar() {
                 </button>
               </div>
 
-              {!openDoorAdvancedMode && (
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {[
-                  { key: "stack", label: "STACK", on: openDoorUseStack, set: setOpenDoorUseStack },
-                  { key: "bench", label: "BENCH", on: openDoorUseBench, set: setOpenDoorUseBench },
-                  { key: "dev", label: "DEV", on: openDoorUseDevSig, set: setOpenDoorUseDevSig },
-                ].map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => p.set((v) => !v)}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      p.on
-                        ? secondaryButtonSoftActiveClass
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              )}
+                <OpenDoorGatesRow
+                  useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
+                  useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
+                  useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}
+                  upMinRate={openDoorUpMinRate} setUpMinRate={setOpenDoorUpMinRate}
+                  downMinRate={openDoorDownMinRate} setDownMinRate={setOpenDoorDownMinRate}
+                  upMinTotal={openDoorUpMinTotal} setUpMinTotal={setOpenDoorUpMinTotal}
+                  downMinTotal={openDoorDownMinTotal} setDownMinTotal={setOpenDoorDownMinTotal}
+                  upMinMove={openDoorUpMinMove} setUpMinMove={setOpenDoorUpMinMove}
+                  downMinMove={openDoorDownMinMove} setDownMinMove={setOpenDoorDownMinMove}
+                  activeClassName={secondaryButtonSoftActiveClass}
+                  showParamToggles={!openDoorAdvancedMode}
+                />
             </>
           }
           ranges={[
@@ -4751,53 +4326,6 @@ export default function OpenDoorSonar() {
               />
             ))}
           </div>
-
-          {[
-            {
-              dir: "UP", accent: "text-emerald-400",
-              minRate: openDoorUpMinRate, setMinRate: setOpenDoorUpMinRate,
-              minTotal: openDoorUpMinTotal, setMinTotal: setOpenDoorUpMinTotal,
-              minMove: openDoorUpMinMove, setMinMove: setOpenDoorUpMinMove,
-            },
-            {
-              dir: "DOWN", accent: "text-rose-400",
-              minRate: openDoorDownMinRate, setMinRate: setOpenDoorDownMinRate,
-              minTotal: openDoorDownMinTotal, setMinTotal: setOpenDoorDownMinTotal,
-              minMove: openDoorDownMinMove, setMinMove: setOpenDoorDownMinMove,
-            },
-          ].map((grp) => (
-            <div key={grp.dir} className="flex h-7 items-center gap-2 rounded-lg bg-black/20 pl-2">
-              <span className={clsx("flex h-7 items-center text-[10px] font-mono font-bold uppercase tracking-wide", grp.accent)}>{grp.dir}</span>
-              {[
-                { label: "MINRATE", value: grp.minRate, set: grp.setMinRate, step: 0.1, integer: false },
-                { label: "MINTOTAL", value: grp.minTotal, set: grp.setMinTotal, step: 1, integer: true },
-                { label: "MINMOVE", value: grp.minMove, set: grp.setMinMove, step: 0.05, integer: false },
-              ].map((field) => (
-                <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
-                  <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
-                  <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-                    <input
-                      type="number"
-                      inputMode={field.integer ? "numeric" : "decimal"}
-                      step={field.step}
-                      min={0}
-                      value={field.value}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        field.set(Math.max(0, field.integer ? Math.trunc(next) : +next.toFixed(4)));
-                      }}
-                      className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-                    />
-                    <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.set(Math.max(0, +((field.value ?? 0) + field.step).toFixed(4)))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▲</button>
-                      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => field.set(Math.max(0, +((field.value ?? 0) - field.step).toFixed(4)))} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors">▼</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
 
           <div className="flex-1" />
 
@@ -4980,45 +4508,13 @@ export default function OpenDoorSonar() {
 
         {/* ========================= THRESHOLDS GRID ========================= */}
         {showSharedMinMax && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
-            <MinMaxRow card clearable label="ADV20" filterKey="ADV20" mode={rangeModes.ADV20} onToggleMode={toggleRangeMode} minValue={adv20Min} maxValue={adv20Max} setMin={setAdv20Min} setMax={setAdv20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ADV20NF" filterKey="ADV20NF" mode={rangeModes.ADV20NF} onToggleMode={toggleRangeMode} minValue={adv20NFMin} maxValue={adv20NFMax} setMin={setAdv20NFMin} setMax={setAdv20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ADV90" filterKey="ADV90" mode={rangeModes.ADV90} onToggleMode={toggleRangeMode} minValue={adv90Min} maxValue={adv90Max} setMin={setAdv90Min} setMax={setAdv90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ADV90NF" filterKey="ADV90NF" mode={rangeModes.ADV90NF} onToggleMode={toggleRangeMode} minValue={adv90NFMin} maxValue={adv90NFMax} setMin={setAdv90NFMin} setMax={setAdv90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvPreMhv" filterKey="AvPreMhv" mode={rangeModes.AvPreMhv} onToggleMode={toggleRangeMode} minValue={avPreMhvMin} maxValue={avPreMhvMax} setMin={setAvPreMhvMin} setMax={setAvPreMhvMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="RoundLot" filterKey="RoundLot" mode={rangeModes.RoundLot} onToggleMode={toggleRangeMode} minValue={roundLotMin} maxValue={roundLotMax} setMin={setRoundLotMin} setMax={setRoundLotMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="VWAP" filterKey="VWAP" mode={rangeModes.VWAP} onToggleMode={toggleRangeMode} minValue={vwapMin} maxValue={vwapMax} setMin={setVwapMin} setMax={setVwapMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="SpreadBid%" filterKey="SpreadBidPct" mode={rangeModes.SpreadBidPct} onToggleMode={toggleRangeMode} minValue={spreadMin} maxValue={spreadMax} setMin={setSpreadMin} setMax={setSpreadMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="LstPrcL" filterKey="LstPrcL" mode={rangeModes.LstPrcL} onToggleMode={toggleRangeMode} minValue={lstPrcLMin} maxValue={lstPrcLMax} setMin={setLstPrcLMin} setMax={setLstPrcLMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-
-            <MinMaxRow card clearable label="LstCls" filterKey="LstCls" mode={rangeModes.LstCls} onToggleMode={toggleRangeMode} minValue={lstClsMin} maxValue={lstClsMax} setMin={setLstClsMin} setMax={setLstClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="YCls" filterKey="YCls" mode={rangeModes.YCls} onToggleMode={toggleRangeMode} minValue={yClsMin} maxValue={yClsMax} setMin={setYClsMin} setMax={setYClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="TCls" filterKey="TCls" mode={rangeModes.TCls} onToggleMode={toggleRangeMode} minValue={tClsMin} maxValue={tClsMax} setMin={setTClsMin} setMax={setTClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ClsToCls%" filterKey="ClsToClsPct" mode={rangeModes.ClsToClsPct} onToggleMode={toggleRangeMode} minValue={clsToClsPctMin} maxValue={clsToClsPctMax} setMin={setClsToClsPctMin} setMax={setClsToClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="Lo" filterKey="Lo" mode={rangeModes.Lo} onToggleMode={toggleRangeMode} minValue={loMin} maxValue={loMax} setMin={setLoMin} setMax={setLoMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="LstClsNewsCnt" filterKey="LstClsNewsCnt" mode={rangeModes.LstClsNewsCnt} onToggleMode={toggleRangeMode} minValue={lstClsNewsCntMin} maxValue={lstClsNewsCntMax} setMin={setLstClsNewsCntMin} setMax={setLstClsNewsCntMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="MarketCapM" filterKey="MarketCapM" mode={rangeModes.MarketCapM} onToggleMode={toggleRangeMode} minValue={marketCapMMin} maxValue={marketCapMMax} setMin={setMarketCapMMin} setMax={setMarketCapMMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhVolNF" filterKey="PreMhVolNF" mode={rangeModes.PreMhVolNF} onToggleMode={toggleRangeMode} minValue={preMhVolNFMin} maxValue={preMhVolNFMax} setMin={setPreMhVolNFMin} setMax={setPreMhVolNFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="VolNFfromLstCls" filterKey="VolNFfromLstCls" mode={rangeModes.VolNFfromLstCls} onToggleMode={toggleRangeMode} minValue={volNFfromLstClsMin} maxValue={volNFfromLstClsMax} setMin={setVolNFfromLstClsMin} setMax={setVolNFfromLstClsMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvPostMhVol90NF" filterKey="AvPostMhVol90NF" mode={rangeModes.AvPostMhVol90NF} onToggleMode={toggleRangeMode} minValue={avPostMhVol90NFMin} maxValue={avPostMhVol90NFMax} setMin={setAvPostMhVol90NFMin} setMax={setAvPostMhVol90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvPreMhVol90NF" filterKey="AvPreMhVol90NF" mode={rangeModes.AvPreMhVol90NF} onToggleMode={toggleRangeMode} minValue={avPreMhVol90NFMin} maxValue={avPreMhVol90NFMax} setMin={setAvPreMhVol90NFMin} setMax={setAvPreMhVol90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvPreMhValue20NF" filterKey="AvPreMhValue20NF" mode={rangeModes.AvPreMhValue20NF} onToggleMode={toggleRangeMode} minValue={avPreMhValue20NFMin} maxValue={avPreMhValue20NFMax} setMin={setAvPreMhValue20NFMin} setMax={setAvPreMhValue20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvPreMhValue90NF" filterKey="AvPreMhValue90NF" mode={rangeModes.AvPreMhValue90NF} onToggleMode={toggleRangeMode} minValue={avPreMhValue90NFMin} maxValue={avPreMhValue90NFMax} setMin={setAvPreMhValue90NFMin} setMax={setAvPreMhValue90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvgDailyValue20" filterKey="AvgDailyValue20" mode={rangeModes.AvgDailyValue20} onToggleMode={toggleRangeMode} minValue={avgDailyValue20Min} maxValue={avgDailyValue20Max} setMin={setAvgDailyValue20Min} setMax={setAvgDailyValue20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="AvgDailyValue90" filterKey="AvgDailyValue90" mode={rangeModes.AvgDailyValue90} onToggleMode={toggleRangeMode} minValue={avgDailyValue90Min} maxValue={avgDailyValue90Max} setMin={setAvgDailyValue90Min} setMax={setAvgDailyValue90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="Volatility20" filterKey="Volatility20" mode={rangeModes.Volatility20} onToggleMode={toggleRangeMode} minValue={volatility20Min} maxValue={volatility20Max} setMin={setVolatility20Min} setMax={setVolatility20Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="Volatility90" filterKey="Volatility90" mode={rangeModes.Volatility90} onToggleMode={toggleRangeMode} minValue={volatility90Min} maxValue={volatility90Max} setMin={setVolatility90Min} setMax={setVolatility90Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhMDV20NF" filterKey="PreMhMDV20NF" mode={rangeModes.PreMhMDV20NF} onToggleMode={toggleRangeMode} minValue={preMhMDV20NFMin} maxValue={preMhMDV20NFMax} setMin={setPreMhMDV20NFMin} setMax={setPreMhMDV20NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhMDV90NF" filterKey="PreMhMDV90NF" mode={rangeModes.PreMhMDV90NF} onToggleMode={toggleRangeMode} minValue={preMhMDV90NFMin} maxValue={preMhMDV90NFMax} setMin={setPreMhMDV90NFMin} setMax={setPreMhMDV90NFMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="VolRel" filterKey="VolRel" mode={rangeModes.VolRel} onToggleMode={toggleRangeMode} minValue={volRelMin} maxValue={volRelMax} setMin={setVolRelMin} setMax={setVolRelMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhHiLstPrc%" filterKey="PreMhBidLstPrcPct" mode={rangeModes.PreMhBidLstPrcPct} onToggleMode={toggleRangeMode} minValue={preMhBidLstPrcPctMin} maxValue={preMhBidLstPrcPctMax} setMin={setPreMhBidLstPrcPctMin} setMax={setPreMhBidLstPrcPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhLoLstPrc%" filterKey="PreMhLoLstPrcPct" mode={rangeModes.PreMhLoLstPrcPct} onToggleMode={toggleRangeMode} minValue={preMhLoLstPrcPctMin} maxValue={preMhLoLstPrcPctMax} setMin={setPreMhLoLstPrcPctMin} setMax={setPreMhLoLstPrcPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhHiLstCls%" filterKey="PreMhHiLstClsPct" mode={rangeModes.PreMhHiLstClsPct} onToggleMode={toggleRangeMode} minValue={preMhHiLstClsPctMin} maxValue={preMhHiLstClsPctMax} setMin={setPreMhHiLstClsPctMin} setMax={setPreMhHiLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="PreMhLoLstCls%" filterKey="PreMhLoLstClsPct" mode={rangeModes.PreMhLoLstClsPct} onToggleMode={toggleRangeMode} minValue={preMhLoLstClsPctMin} maxValue={preMhLoLstClsPctMax} setMin={setPreMhLoLstClsPctMin} setMax={setPreMhLoLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="LstPrcLstCls%" filterKey="LstPrcLstClsPct" mode={rangeModes.LstPrcLstClsPct} onToggleMode={toggleRangeMode} minValue={lstPrcLstClsPctMin} maxValue={lstPrcLstClsPctMax} setMin={setLstPrcLstClsPctMin} setMax={setLstPrcLstClsPctMax} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ImbExch9:25" filterKey="ImbExch925" mode={rangeModes.ImbExch925} onToggleMode={toggleRangeMode} minValue={imbExch925Min} maxValue={imbExch925Max} setMin={setImbExch925Min} setMax={setImbExch925Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-            <MinMaxRow card clearable label="ImbExch15:55" filterKey="ImbExch1555" mode={rangeModes.ImbExch1555} onToggleMode={toggleRangeMode} minValue={imbExch1555Min} maxValue={imbExch1555Max} setMin={setImbExch1555Min} setMax={setImbExch1555Max} onStartEditing={startEditing} onStopEditing={stopEditing} />
-          </div>
+          <SharedMinMaxPanel
+            filters={sharedMinMaxFilters}
+            zeroCoverageFilterKeys={new Set()}
+            toggleSharedRangeFilterMode={toggleRangeMode as any}
+            onStartEditing={startEditing}
+            onStopEditing={stopEditing}
+          />
         )}
 
 

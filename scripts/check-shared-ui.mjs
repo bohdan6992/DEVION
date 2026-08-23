@@ -42,6 +42,10 @@ const OWNED_COMPONENTS = {
   FilterRatingRow: "components/shared/filters/FilterRatingRow.tsx",
   ActiveTickerCard: "components/shared/filters/ActiveTickerCard.tsx",
   ScannerHeader: "components/scanner/shell/panels/ScannerHeader.tsx",
+  SharedMinMaxPanel: "components/scanner/shell/panels/SharedMinMaxPanel.tsx",
+  OpenDoorGatesRow: "components/scanner/shell/panels/OpenDoorGatesRow.tsx",
+  ExecutionSettingsPanel: "components/scanner/shell/panels/ExecutionSettingsPanel.tsx",
+  TickerListDrawers: "components/scanner/shell/panels/TickerListDrawers.tsx",
   MinMaxRow: "components/scanner/shared/ui.tsx",
   MultiSelectFilter: "components/scanner/shared/ui.tsx",
   MinMax: "components/scanner/shared/ui.tsx",
@@ -107,11 +111,75 @@ for (const file of [...SURFACES, ...STREAMS]) {
   }
 }
 
-// ---- 2. Every toolbar surface actually uses the shared row -----------------------------------
-for (const file of SURFACES) {
-  const source = read(file);
-  if (!/from\s+["'][^"']*shared\/filters\/FilterFlagsRow["']/.test(source)) {
-    errors.push(`${file}: does not import FilterFlagsRow. The filter row must not be hand-rolled.`);
+/**
+ * Which shared panels each surface MUST import.
+ *
+ * This is the rule that catches the failure the others miss: a control added to the Scanner and
+ * forgotten on the Sonar. Re-declaration checks cannot see it — the Sonar simply renders nothing,
+ * which looks fine until the two are put side by side. Both screenshots that started this were
+ * exactly that: the Sonar still had the two-row UP/DOWN gates after the Scanner had merged them,
+ * and its own 36 MinMaxRow copies after the Scanner had moved to the panel.
+ *
+ * The Streams are not listed: they are rendered by their Scanner's own component, above the
+ * primaryPanel switch, so they inherit whatever it imports.
+ *
+ * Add a surface to a panel's list the moment that panel becomes shared with it — that is what
+ * makes the Sonar fail loudly instead of quietly lagging.
+ */
+const REQUIRED_PANELS = {
+  FilterFlagsRow: {
+    from: "shared/filters/FilterFlagsRow",
+    surfaces: SURFACES,
+    why: "The filter row must not be hand-rolled.",
+  },
+  ActiveTickerCard: {
+    from: "shared/filters/ActiveTickerCard",
+    surfaces: SURFACES,
+    why: "The active-ticker strip is one card, rendered last on every surface.",
+  },
+  SharedMinMaxPanel: {
+    from: "shell/panels/SharedMinMaxPanel",
+    surfaces: SURFACES,
+    why: "The min/max grid is one panel. All four surfaces render it; none may hand-roll the rows again.",
+  },
+  OpenDoorGatesRow: {
+    from: "shell/panels/OpenDoorGatesRow",
+    surfaces: [
+      "components/sonar/OpenDoorSonar.tsx",
+      "components/scanner/OpenDoorScanner.tsx",
+    ],
+    why: "STACK/BENCH/DEV and MINRATE/MINTOTAL/MINMOVE are one row for both OpenDoor surfaces.",
+  },
+  ExecutionSettingsPanel: {
+    from: "shell/panels/ExecutionSettingsPanel",
+    surfaces: [
+      "components/scanner/ArbitrageScanner.tsx",
+      "components/scanner/OpenDoorScanner.tsx",
+    ],
+    why: "Execution settings are shared by both Scanners.",
+  },
+  TickerListDrawers: {
+    from: "shell/panels/TickerListDrawers",
+    surfaces: [
+      "components/scanner/ArbitrageScanner.tsx",
+      "components/scanner/OpenDoorScanner.tsx",
+    ],
+    why: "IGN/APP/PIN drawers are shared by both Scanners.",
+  },
+};
+
+// ---- 2. Every surface that shares a panel actually imports it --------------------------------
+for (const [name, { from, surfaces, why }] of Object.entries(REQUIRED_PANELS)) {
+  for (const file of surfaces) {
+    if (!existsSync(join(ROOT, file))) continue;
+    const source = read(file);
+    // A substring test, not a RegExp: inside a template literal a lone backslash
+    // collapses (`\s` -> `s`) and the pattern then matches nothing, which reads as
+    // "every surface is missing this panel". Learned the hard way.
+    const imported = source.includes(`/${from}"`) || source.includes(`/${from}'`);
+    if (!imported) {
+      errors.push(`${file}: does not import ${name}. ${why}`);
+    }
   }
 }
 

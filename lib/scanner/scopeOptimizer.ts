@@ -1,7 +1,8 @@
 import { num, numOrNull } from "./format";
 import { scannerBinRatingSnapshot } from "./rating";
 import { scopeResearchParameterValue } from "./scopeCompute";
-import type { OptimizerRangeGroupKey, PaperArbClosedDto, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbSession, ScopeParameterDefinition, ScopeResearchParameterKey } from "./types";
+import { SCOPE_OPTIMIZER_MAX_BINS } from "./types";
+import type { OptimizerRangeGroupKey, PaperArbClosedDto, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbSession, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchParameterKey } from "./types";
 
 export function getOptimizerFallbackValue(
   row: PaperArbClosedDto,
@@ -63,6 +64,106 @@ export function getOptimizerFallbackValue(
 // ---------------------------------------------------------------------------
 export type OptimizerValueEntry = { value: number; pnl: number };
 
+/**
+ * Bin boundaries as INDICES into a list already sorted ascending by parameter value. Returns
+ * binCount+1 non-decreasing cuts with cuts[0]=0 and cuts[binCount]=length.
+ *
+ * Mirrors PaperArbitrageController.BuildBinCuts on the bridge — the bridge computes these for the
+ * real request and this stands in only when a group fails or is answered locally, so the two must
+ * agree or the same parameter reads differently depending on which side produced it.
+ *
+ * "trades" equal count; "harm"/"gain" size the EDGE bins to the worst/best run of edge trades and
+ * split the middle evenly; "width" cuts on equal spans of parameter value. See the bridge's copy
+ * for why only edges are actionable.
+ */
+export function buildBinCuts(
+  sorted: ReadonlyArray<OptimizerValueEntry>,
+  binCount: number,
+  binMode: ScopeOptimizerBinMode
+): number[] {
+  const n = sorted.length;
+  const cuts = new Array<number>(binCount + 1).fill(0);
+  if (binCount <= 0 || n <= 0) return cuts;
+
+  const evenByCount = (lo: number, hi: number, firstCut: number, cutCount: number) => {
+    const span = hi - lo;
+    for (let i = 0; i < cutCount; i += 1) cuts[firstCut + i] = lo + Math.trunc((i * span) / cutCount);
+  };
+  const finishEven = () => {
+    evenByCount(0, n, 0, binCount);
+    cuts[binCount] = n;
+    return cuts;
+  };
+  const clampMonotonic = () => {
+    for (let i = 1; i <= binCount; i += 1) if (cuts[i]! < cuts[i - 1]!) cuts[i] = cuts[i - 1]!;
+    return cuts;
+  };
+
+  if (binMode === "width") {
+    const min = sorted[0]!.value;
+    const max = sorted[n - 1]!.value;
+    if (!(max > min)) return finishEven();
+    const lowerBound = (target: number) => {
+      let lo = 0;
+      let hi = n;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (sorted[mid]!.value < target) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
+    cuts[0] = 0;
+    for (let i = 1; i < binCount; i += 1) cuts[i] = lowerBound(min + ((max - min) * i) / binCount);
+    cuts[binCount] = n;
+    return clampMonotonic();
+  }
+
+  if (binMode !== "harm" && binMode !== "gain") return finishEven();
+
+  // gain is harm with the sign flipped: the best run instead of the worst one.
+  const sign = binMode === "harm" ? 1 : -1;
+
+  let headK = 0;
+  {
+    let run = 0;
+    let worst = 0;
+    for (let i = 0; i < n; i += 1) {
+      run += sign * sorted[i]!.pnl;
+      if (run < worst) { worst = run; headK = i + 1; }
+    }
+  }
+
+  let tailK = 0;
+  {
+    let run = 0;
+    let worst = 0;
+    for (let i = n - 1; i >= 0; i -= 1) {
+      run += sign * sorted[i]!.pnl;
+      if (run < worst) { worst = run; tailK = n - i; }
+    }
+  }
+
+  const maxEdge = Math.max(1, Math.trunc(n / 3));
+  headK = Math.min(headK, maxEdge);
+  tailK = Math.min(tailK, maxEdge);
+
+  const useHead = headK > 0 && binCount >= 2;
+  const useTail = tailK > 0 && binCount >= (useHead ? 3 : 2) && headK + tailK < n;
+  const middleBins = binCount - (useHead ? 1 : 0) - (useTail ? 1 : 0);
+  if (middleBins < 1) return finishEven();
+
+  const lo = useHead ? headK : 0;
+  const hi = useTail ? n - tailK : n;
+  let next = 0;
+  cuts[next++] = 0;
+  if (useHead) cuts[next++] = headK;
+  for (let i = 1; i < middleBins; i += 1) cuts[next++] = lo + Math.trunc((i * (hi - lo)) / middleBins);
+  if (useTail) cuts[next++] = hi;
+  cuts[binCount] = n;
+  return clampMonotonic();
+}
+
 export function buildNumericOptimizerParameter(args: {
   key: string;
   label: string;
@@ -70,8 +171,9 @@ export function buildNumericOptimizerParameter(args: {
   bucketCount: number;
   entries: OptimizerValueEntry[];
   valueDigits?: number;
+  binMode?: ScopeOptimizerBinMode;
 }): PaperArbOptimizerParameterDto | null {
-  const { key, label, group, bucketCount, entries, valueDigits = 2 } = args;
+  const { key, label, group, bucketCount, entries, valueDigits = 2, binMode = "trades" } = args;
   if (!entries.length) return null;
 
   const sorted = entries.slice().sort((a, b) => a.value - b.value);
@@ -142,7 +244,7 @@ export function buildNumericOptimizerParameter(args: {
 
   const observedMin = sorted[0]!.value;
   const observedMax = sorted[total - 1]!.value;
-  const safeBucketCount = Math.max(1, Math.min(24, Math.trunc(bucketCount) || 1));
+  const safeBucketCount = Math.max(1, Math.min(SCOPE_OPTIMIZER_MAX_BINS, Math.trunc(bucketCount) || 1));
   const span = observedMax - observedMin;
 
   const buckets: PaperArbOptimizerRangeBucketDto[] = [];
@@ -158,14 +260,17 @@ export function buildNumericOptimizerParameter(args: {
       )
     );
   } else {
-    const step = span / safeBucketCount;
+    // Cuts are INDICES into the value-sorted rows, which is how the bridge cuts them
+    // (PaperArbitrageController.BuildBinCuts). This fallback used to cut by equal VALUE WIDTH
+    // instead, so whenever it stood in for the server the same parameter came back with different
+    // bins — and neither answer said which one you were looking at.
+    const cuts = buildBinCuts(sorted, safeBucketCount, binMode);
     for (let index = 0; index < safeBucketCount; index += 1) {
-      const isLast = index === safeBucketCount - 1;
-      const fromValue = observedMin + step * index;
-      const toValue = isLast ? observedMax : observedMin + step * (index + 1);
-      const lo = lowerBound(fromValue);
-      const hi = isLast ? upperBound(toValue) : lowerBound(toValue);
+      const lo = cuts[index] ?? 0;
+      const hi = cuts[index + 1] ?? total;
       if (hi <= lo) continue;
+      const fromValue = sorted[lo]!.value;
+      const toValue = sorted[hi - 1]!.value;
       buckets.push(
         buildBucket(
           `${key}-bucket-${index}`,
@@ -226,7 +331,8 @@ export function buildFallbackOptimizerParameter(
   label: string,
   group: OptimizerRangeGroupKey,
   bucketCount: number,
-  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>
+  tickerMetaByTicker?: Record<string, { corr?: number | null; beta?: number | null; sigma?: number | null }>,
+  binMode: ScopeOptimizerBinMode = "trades"
 ): PaperArbOptimizerParameterDto | null {
   const entries: OptimizerValueEntry[] = [];
   for (const row of rows) {
@@ -238,8 +344,22 @@ export function buildFallbackOptimizerParameter(
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
     entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
   }
-  return buildNumericOptimizerParameter({ key, label, group, bucketCount, entries });
+  return buildNumericOptimizerParameter({ key, label, group, bucketCount, entries, binMode });
 }
+
+/**
+ * Where a strategy's rating bin values come from.
+ *
+ * `"sigma-bin"` looks the bin up in best_params by the episode's own |sigma|, which is how
+ * Arbitrage rates a trade — its bins are indexed by deviation size.
+ *
+ * `"episode"` reads the rate/total the backend already resolved onto the row. OpenDoor needs this:
+ * it has no sigma and no peak (the mapper leaves both null), so the sigma-bin lookup returns null
+ * for every row and the RATING GATES bins came out empty. Its gate resolves the bin at entry from
+ * stack/bench/devsig and reports the rate/total OF THE SIDE THAT TRADED, so long and short already
+ * share one field — no per-direction split is needed on this axis.
+ */
+export type RatingBinSource = "sigma-bin" | "episode";
 
 export function buildFallbackBinRatingOptimizerParameter(
   rows: PaperArbClosedDto[],
@@ -247,17 +367,24 @@ export function buildFallbackBinRatingOptimizerParameter(
   label: string,
   group: OptimizerRangeGroupKey,
   bucketCount: number,
-  session: PaperArbSession
+  session: PaperArbSession,
+  source: RatingBinSource = "sigma-bin",
+  binMode: ScopeOptimizerBinMode = "trades"
 ): PaperArbOptimizerParameterDto | null {
   const entries: OptimizerValueEntry[] = [];
   for (const row of rows) {
-    const snapshot = scannerBinRatingSnapshot({
-      row,
-      session,
-      side: row.side,
-      sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
-    });
-    const value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
+    let value: number | null;
+    if (source === "episode") {
+      value = key === "minrate" ? row.rating ?? null : row.ratingTotal ?? null;
+    } else {
+      const snapshot = scannerBinRatingSnapshot({
+        row,
+        session,
+        side: row.side,
+        sigmaAbs: row.peakMetricAbs ?? row.startMetricAbs,
+      });
+      value = key === "minrate" ? snapshot?.rate ?? null : snapshot?.total ?? null;
+    }
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
     entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
   }
@@ -267,6 +394,7 @@ export function buildFallbackBinRatingOptimizerParameter(
     group,
     bucketCount,
     entries,
+    binMode,
     valueDigits: key === "minrate" ? 2 : 0,
   });
 }
@@ -363,7 +491,8 @@ export function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResea
 export function buildFallbackScopeOptimizerParameter(
   rows: PaperArbClosedDto[],
   definition: ScopeParameterDefinition,
-  bucketCount: number
+  bucketCount: number,
+  binMode: ScopeOptimizerBinMode = "trades"
 ): PaperArbOptimizerParameterDto | null {
   const parameterKey = optimizerKeyToScopeResearchParameterKey(definition.key);
   if (!parameterKey) return null;
@@ -380,6 +509,7 @@ export function buildFallbackScopeOptimizerParameter(
     group: definition.group,
     bucketCount,
     entries,
+    binMode,
   });
 }
 

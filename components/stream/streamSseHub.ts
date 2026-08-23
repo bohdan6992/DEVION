@@ -1,6 +1,6 @@
 "use client";
 
-import { normalizeSignal, type ArbitrageSignal } from "../sonar/ArbitrageSonar";
+import { normalizeSignal, type ArbitrageSignal } from "@/lib/signals/signal";
 
 /**
  * Refcounted SSE fan-out.
@@ -26,6 +26,12 @@ export type StreamSseState = {
   signals: ArbitrageSignal[];
   connected: boolean;
   lastMessageAt: number;
+  /**
+   * `generatedAt` from the last SNAPSHOT payload — the bridge's own clock, not the browser's.
+   * Kept across diffs (a diff carries no timestamp of its own). 0 until the first snapshot.
+   * The Sonar shows this as its "updated" readout, so it must survive the move onto this hub.
+   */
+  generatedAt: number;
 };
 
 type StreamSseListener = (state: StreamSseState) => void;
@@ -37,6 +43,7 @@ type StreamSseChannel = {
   byTicker: Map<string, ArbitrageSignal>;
   connected: boolean;
   lastMessageAt: number;
+  generatedAt: number;
   listeners: Set<StreamSseListener>;
 };
 
@@ -47,6 +54,7 @@ function emit(channel: StreamSseChannel): void {
     signals: channel.signals,
     connected: channel.connected,
     lastMessageAt: channel.lastMessageAt,
+    generatedAt: channel.generatedAt,
   };
   channel.listeners.forEach((listener) => {
     try {
@@ -67,6 +75,7 @@ function applySnapshotPayload(channel: StreamSseChannel, payload: any): void {
   channel.byTicker = new Map(normalized.map((row) => [row.ticker, row] as const));
   channel.signals = normalized;
   channel.lastMessageAt = Date.now();
+  if (typeof payload?.generatedAt === "number") channel.generatedAt = payload.generatedAt;
   emit(channel);
 }
 
@@ -83,6 +92,15 @@ function applyDiffPayload(channel: StreamSseChannel, payload: any): void {
     channel.byTicker.set(row.ticker, row);
   }
   for (const row of updated.map(normalizeSignal).filter(Boolean) as ArbitrageSignal[]) {
+    // best_params is per-ticker static and the bridge stopped repeating it in every update — it
+    // arrives once, in the snapshot or in `added`, and is carried forward here. It was 88.5% of a
+    // row, which made a 3232-row diff weigh 46 MB and froze the page on JSON.parse.
+    //
+    // Written as a carry-forward rather than a required field so this stays correct against a
+    // bridge that still sends the blob on every row: if the incoming row has it, it wins.
+    const prev = channel.byTicker.get(row.ticker) as any;
+    const next = row as any;
+    if (next.best_params == null && prev?.best_params != null) next.best_params = prev.best_params;
     channel.byTicker.set(row.ticker, row);
   }
 
@@ -151,6 +169,7 @@ export function subscribeToStreamSse(url: string, listener: StreamSseListener): 
       byTicker: new Map(),
       connected: false,
       lastMessageAt: 0,
+      generatedAt: 0,
       listeners: new Set(),
     };
     channels.set(url, channel);
@@ -170,6 +189,7 @@ export function subscribeToStreamSse(url: string, listener: StreamSseListener): 
       signals: target.signals,
       connected: target.connected,
       lastMessageAt: target.lastMessageAt,
+      generatedAt: target.generatedAt,
     });
   }
 
@@ -188,6 +208,7 @@ export function getStreamSseState(url: string): StreamSseState | null {
     signals: channel.signals,
     connected: channel.connected,
     lastMessageAt: channel.lastMessageAt,
+    generatedAt: channel.generatedAt,
   };
 }
 

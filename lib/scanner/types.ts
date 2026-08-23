@@ -51,6 +51,27 @@ export type PaperArbRatingType = "any" | "hard" | "soft";
 
 export type PaperArbRatingMode = "SESSION" | "BIN" | "BINS";
 
+/**
+ * How the SCOPE optimizer cuts a parameter's observed range into bins.
+ *
+ * "trades" — equal NUMBER OF TRADES per bin. Every bin carries the same weight of evidence, so one
+ * bin's result is comparable to its neighbour's. The cost: a region where the damage is
+ * concentrated gets no more resolution than a quiet one, and a sharp cut point averages out inside
+ * a wide bucket.
+ *
+ * "harm" — equal LOSS per bin: each bin absorbs ~1/N of the sample's total negative P&L no matter
+ * how many situations that takes. Bins go narrow where losses cluster and wide where trades are
+ * harmless, which is what makes the cut point visible.
+ *
+ * Either way only the tail views (<= x and >= x) are actionable: the filters are min/max cutoffs,
+ * so a slice out of the MIDDLE of a range cannot be expressed as a filter.
+ */
+export type ScopeOptimizerBinMode = "trades" | "harm" | "gain" | "width";
+
+/** Hard ceiling on optimizer bins, shared by every scanner and the bridge. */
+export const SCOPE_OPTIMIZER_MAX_BINS = 24;
+export const SCOPE_OPTIMIZER_MIN_BINS = 3;
+
 export type TriMode = "off" | "include" | "exclude";
 
 export type PaperArbRatingRule = {
@@ -439,6 +460,8 @@ export type PaperArbAnalyticsRequest = {
   includeEquityCurve?: boolean;
   equityCurveMode?: "Daily" | "Trade";
   optimizerBucketCount?: number | null;
+  /** How the optimizer cuts a parameter's range. See ScopeOptimizerBinMode. */
+  optimizerBinMode?: ScopeOptimizerBinMode | null;
   optimizerGroups?: string[] | null;
   optimizerParameterKeys?: string[] | null;
 
@@ -572,7 +595,6 @@ export type ScopeBatchScenarioRequest = {
 
 export type ScopeBatchResponse = {
   rows?: OptimizerResultRow[] | null;
-  comboRows?: OptimizerResultRow[] | null;
 };
 
 export type OptimizerImpactRow = {

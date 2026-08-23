@@ -1,7 +1,9 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { normalizeSignal, buildSignalsStreamUrl } from "../sonar/ArbitrageSonar";
+import { normalizeSignal } from "@/lib/signals/signal";
+import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
+import { buildSignalsStreamUrl } from "@/lib/signals/url";
 
 export type TapeMeta = {
   countries: string[];
@@ -23,8 +25,9 @@ function extractMeta(signal: ReturnType<typeof normalizeSignal>): { country: str
 
 class TapeMetaStore {
   private meta: TapeMeta = EMPTY;
+  private seenTickers = new Set<string>();
   private listeners = new Set<() => void>();
-  private source: EventSource | null = null;
+  private unsubscribe: (() => void) | null = null;
 
   getMeta(): TapeMeta {
     return this.meta;
@@ -39,19 +42,32 @@ class TapeMetaStore {
     };
   };
 
-  private applyPayload(payload: any) {
-    const rawItems: any[] = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.items)
-        ? payload.items
-        : [];
+  private applySignals(signals: Array<ReturnType<typeof normalizeSignal>>) {
+    // This runs on EVERY hub message, which since the SSE-hub consolidation means every diff —
+    // several times a minute rather than once per snapshot, which is all this store used to see.
+    // The full extraction below is ~8 string operations per signal over 5000 signals plus three
+    // sorts, and it ran on the Scanner's main thread every time.
+    //
+    // Country, exchange and sector are STATIC per ticker, so as long as the ticker set is
+    // unchanged the answer cannot have changed and none of that work is needed.
+    let sameSet = signals.length === this.seenTickers.size;
+    if (sameSet) {
+      for (const signal of signals) {
+        const t = (signal as any)?.ticker;
+        if (!t || !this.seenTickers.has(t)) { sameSet = false; break; }
+      }
+    }
+    if (sameSet) return;
+
+    this.seenTickers = new Set(
+      signals.map((signal) => (signal as any)?.ticker).filter(Boolean) as string[]
+    );
 
     const c = new Set<string>();
     const e = new Set<string>();
     const s = new Set<string>();
 
-    for (const raw of rawItems) {
-      const signal = normalizeSignal(raw);
+    for (const signal of signals) {
       if (!signal) continue;
       const { country, exchange, sector } = extractMeta(signal);
       if (country) c.add(country);
@@ -91,22 +107,20 @@ class TapeMetaStore {
       includeAll: true,
     });
 
-    this.source = new EventSource(url);
-
-    const handle = (event: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(String(event.data));
-        this.applyPayload(payload);
-      } catch {}
-    };
-
-    this.source.onmessage = handle;
-    this.source.addEventListener("snapshot", handle as EventListener);
+    // Through the shared hub, not a private EventSource. This store lives inside the Scanner,
+    // which the Stream page renders — so a stream tab used to hold this connection PLUS the
+    // engine's, to the same endpoint. The hub also merges diffs, which this store never did: it
+    // only ever listened to "snapshot", so between snapshots its country/exchange/sector lists
+    // went stale even though the feed was sending updates.
+    this.unsubscribe = subscribeToStreamSse(url, (state) => {
+      this.applySignals(state.signals);
+    });
   }
 
   private disconnect() {
-    this.source?.close();
-    this.source = null;
+    this.seenTickers = new Set();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
   }
 }
 

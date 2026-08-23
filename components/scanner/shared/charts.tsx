@@ -336,6 +336,33 @@ export function OptimizerBarChartImpl({
 
 export const OptimizerBarChart = React.memo(OptimizerBarChartImpl);
 
+type OptimizerMetricKey = "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
+
+const OPTIMIZER_METRIC_HEADS: Record<OptimizerMetricKey, string> = {
+  score: "score",
+  totalPnlUsd: "pnl",
+  avgPnlUsd: "avg/tr",
+  trades: "trades",
+  winRate: "win",
+};
+
+function formatOptimizerMetric(key: OptimizerMetricKey, value: number): string {
+  if (key === "trades") return intn(value);
+  if (key === "winRate") return `${num(value * 100, 0)}%`;
+  return num(value, 2);
+}
+
+/**
+ * One row per parameter range: two measured bars plus every remaining metric as a number.
+ *
+ * Density is the point. The earlier version spent a 24px pitch and two huge tracks on TWO of the
+ * five numbers it already had in hand, so a 22-parameter group ran past 550px and still made you
+ * hover a truncated label to find out which parameter you were looking at. This shows all five in
+ * 15px per row, which fits the same group in roughly half the height with nothing scrolled away.
+ *
+ * Sign is carried by COLOUR, not by opacity. A -79 bar previously looked like a slightly faded
+ * positive one, which is the one distinction in this chart you cannot afford to miss.
+ */
 export function OptimizerDualMetricChartImpl({
   rows,
   leftKey,
@@ -346,8 +373,8 @@ export function OptimizerDualMetricChartImpl({
   rightLabel,
 }: {
   rows: OptimizerResultRow[];
-  leftKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
-  rightKey: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate";
+  leftKey: OptimizerMetricKey;
+  rightKey: OptimizerMetricKey;
   title: string;
   meta?: string;
   leftLabel: string;
@@ -355,64 +382,110 @@ export function OptimizerDualMetricChartImpl({
 }) {
   if (!rows.length) {
     return (
-      <div className="w-full h-[300px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4 text-xs font-mono text-zinc-500 flex items-center justify-center">
+      <div className="w-full h-[140px] rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-3 text-xs font-mono text-zinc-500 flex items-center justify-center">
         No optimizer results yet.
       </div>
     );
   }
 
+  // Whatever the two bars are not already showing is worth a column — the data is in the row
+  // either way, and a number costs 52px where a third bar would cost a whole track.
+  const extraKeys = (["winRate", "avgPnlUsd", "trades", "totalPnlUsd", "score"] as OptimizerMetricKey[])
+    .filter((key) => key !== leftKey && key !== rightKey)
+    .slice(0, 3);
+
+  const template = `minmax(0,232px) minmax(0,1fr) 70px minmax(0,1fr) 60px${extraKeys.map(() => " 60px").join("")}`;
+
   const leftValues = rows.map((row) => Number(row[leftKey] ?? 0));
   const rightValues = rows.map((row) => Number(row[rightKey] ?? 0));
   const leftMaxAbs = Math.max(1, ...leftValues.map((value) => Math.abs(value)));
   const rightMaxAbs = Math.max(1, ...rightValues.map((value) => Math.abs(value)));
-  const formatValue = (key: "score" | "totalPnlUsd" | "avgPnlUsd" | "trades" | "winRate", value: number) =>
-    key === "trades" ? intn(value) : key === "winRate" ? `${num(value * 100, 1)}%` : num(value, 2);
 
   return (
-    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-4">
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-xl border border-white/[0.07] bg-[#0a0a0a]/40 p-3">
+      <div className="flex items-center justify-between mb-1.5">
         <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
         <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
       </div>
-      <div className="mb-2 grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center text-[9px] uppercase tracking-[0.16em] font-mono text-zinc-500">
-        <div />
-        <div>{leftLabel}</div>
-        <div />
-        <div>{rightLabel}</div>
-        <div />
-      </div>
-      <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-        {rows.map((row) => {
-          const left = Number(row[leftKey] ?? 0);
-          const right = Number(row[rightKey] ?? 0);
-          const leftWidthPct = Math.max(2, (Math.abs(left) / leftMaxAbs) * 100);
-          const rightWidthPct = Math.max(2, (Math.abs(right) / rightMaxAbs) * 100);
-          return (
-            <div key={`dual-${row.id}`} className="grid grid-cols-[160px_1fr_72px_1fr_64px] gap-2 items-center">
-              <div className="text-[10px] font-mono text-zinc-400 truncate" title={`${row.parameter} | ${row.variant}`}>
-                {row.parameter} {row.variant}
-              </div>
-              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+      <div className="max-h-[420px] overflow-y-auto pr-1">
+        <div
+          className="sticky top-0 z-10 grid gap-2 items-center bg-[#0a0a0a] pb-1 text-[9px] uppercase tracking-[0.14em] font-mono text-zinc-600"
+          style={{ gridTemplateColumns: template }}
+        >
+          <div />
+          <div>{leftLabel}</div>
+          <div className="text-right">{OPTIMIZER_METRIC_HEADS[leftKey]}</div>
+          <div>{rightLabel}</div>
+          <div className="text-right">{OPTIMIZER_METRIC_HEADS[rightKey]}</div>
+          {extraKeys.map((key) => (
+            <div key={`head-${key}`} className="text-right">{OPTIMIZER_METRIC_HEADS[key]}</div>
+          ))}
+        </div>
+        <div className="space-y-[3px] pt-1">
+          {rows.map((row) => {
+            const left = Number(row[leftKey] ?? 0);
+            const right = Number(row[rightKey] ?? 0);
+            const leftWidthPct = Math.max(2, (Math.abs(left) / leftMaxAbs) * 100);
+            const rightWidthPct = Math.max(2, (Math.abs(right) / rightMaxAbs) * 100);
+            return (
+              <div
+                key={`dual-${row.id}`}
+                className="grid gap-2 items-center"
+                style={{ gridTemplateColumns: template }}
+              >
                 <div
-                  className="h-full bg-emerald-400/80"
-                  style={{ width: `${leftWidthPct}%`, opacity: left < 0 ? 0.45 : 1 }}
-                />
-              </div>
-              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
-                {formatValue(leftKey, left)}
-              </div>
-              <div className="h-4 rounded bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                  className="text-[10px] font-mono text-zinc-400 truncate"
+                  title={`${row.parameter} | ${row.variant}`}
+                >
+                  <span className="text-zinc-300">{row.parameter}</span>{" "}
+                  <span className="text-zinc-500">{row.variant}</span>
+                </div>
+                <div className="h-3 rounded-sm bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                  <div
+                    className={clsx("h-full", left < 0 ? "bg-rose-400/70" : "bg-emerald-400/80")}
+                    style={{ width: `${leftWidthPct}%` }}
+                  />
+                </div>
                 <div
-                  className="h-full bg-sky-400/80"
-                  style={{ width: `${rightWidthPct}%`, opacity: right < 0 ? 0.45 : 1 }}
-                />
+                  className={clsx(
+                    "text-right text-[10px] font-mono tabular-nums",
+                    left < 0 ? "text-rose-300/90" : "text-zinc-300"
+                  )}
+                >
+                  {formatOptimizerMetric(leftKey, left)}
+                </div>
+                <div className="h-3 rounded-sm bg-white/[0.04] border border-white/[0.06] overflow-hidden">
+                  <div
+                    className={clsx("h-full", right < 0 ? "bg-rose-400/70" : "bg-sky-400/80")}
+                    style={{ width: `${rightWidthPct}%` }}
+                  />
+                </div>
+                <div
+                  className={clsx(
+                    "text-right text-[10px] font-mono tabular-nums",
+                    right < 0 ? "text-rose-300/90" : "text-zinc-300"
+                  )}
+                >
+                  {formatOptimizerMetric(rightKey, right)}
+                </div>
+                {extraKeys.map((key) => {
+                  const value = Number(row[key] ?? 0);
+                  return (
+                    <div
+                      key={`cell-${row.id}-${key}`}
+                      className={clsx(
+                        "text-right text-[10px] font-mono tabular-nums",
+                        value < 0 ? "text-rose-300/80" : "text-zinc-500"
+                      )}
+                    >
+                      {formatOptimizerMetric(key, value)}
+                    </div>
+                  );
+                })}
               </div>
-              <div className="text-right text-[10px] font-mono text-zinc-300 tabular-nums">
-                {formatValue(rightKey, right)}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

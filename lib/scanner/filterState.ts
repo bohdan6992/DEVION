@@ -1,5 +1,5 @@
 import type { PresetDto } from "../../types/presets";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, PaperArbActiveRow, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbMetric, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, ScopePanelKey, ScopeResearchDraft, ScopeResearchSelection, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "./types";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, PaperArbActiveRow, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbMetric, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, ScopePanelKey, ScopeOptimizerBinMode, ScopeResearchDraft, ScopeResearchSelection, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "./types";
 
 /**
  * Every piece of filter/view state a scanner holds, and the one thing that is genuinely shared
@@ -164,7 +164,7 @@ export type ScannerFilterState = {
   minYCls: string;
   offset: number;
   optimizerBucketCount: number;
-  optimizerComboRows: OptimizerResultRow[];
+  optimizerBinMode: ScopeOptimizerBinMode;
   optimizerErr: string | null;
   optimizerLoading: boolean;
   optimizerProgress: { done: number; total: number };
@@ -213,7 +213,6 @@ export type ScannerFilterState = {
   scopeBenchText: string;
   scopeFullscreenPanel: ScopePanelKey | null;
   scopeMode: "ALL" | "TOP";
-  scopeOverlayParameterKeys: [string, string];
   scopeParameterGroupExpanded: Record<string, boolean>;
   scopeResearchDrafts: Record<ScopePanelKey, ScopeResearchDraft>;
   scopeResearchFiltersHidden: 
@@ -398,7 +397,7 @@ export type ScannerFilterSetters = {
   setMinYCls: React.Dispatch<React.SetStateAction<string>>;
   setOffset: React.Dispatch<React.SetStateAction<number>>;
   setOptimizerBucketCount: React.Dispatch<React.SetStateAction<number>>;
-  setOptimizerComboRows: React.Dispatch<React.SetStateAction<OptimizerResultRow[]>>;
+  setOptimizerBinMode: React.Dispatch<React.SetStateAction<ScopeOptimizerBinMode>>;
   setOptimizerErr: React.Dispatch<React.SetStateAction<string | null>>;
   setOptimizerLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setOptimizerProgress: React.Dispatch<React.SetStateAction<{ done: number; total: number }>>;
@@ -447,7 +446,6 @@ export type ScannerFilterSetters = {
   setScopeBenchText: React.Dispatch<React.SetStateAction<string>>;
   setScopeFullscreenPanel: React.Dispatch<React.SetStateAction<ScopePanelKey | null>>;
   setScopeMode: React.Dispatch<React.SetStateAction<"ALL" | "TOP">>;
-  setScopeOverlayParameterKeys: React.Dispatch<React.SetStateAction<[string, string]>>;
   setScopeParameterGroupExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setScopeResearchDrafts: React.Dispatch<React.SetStateAction<Record<ScopePanelKey, ScopeResearchDraft>>>;
   setScopeResearchFiltersHidden: React.Dispatch<React.SetStateAction<

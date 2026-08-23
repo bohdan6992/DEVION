@@ -1131,7 +1131,11 @@ export function StreamSimLog() {
             <tr>
               <th className="text-left text-violet-400">Date</th>
               <th className="text-left">Time</th>
+              <th className="text-left text-orange-400" title="Unique intent ID — same ID twice = duplication bug">IntentID</th>
+              <th className="text-right text-rose-400" title="Signal drop/recovery (ремонт) count before dispatch">Bnc</th>
+              <th className="text-left text-zinc-500" title="Latch origin: new/hist/primed/cont">Orig</th>
               <th className="text-left">Event</th>
+              <th className="text-left text-amber-300" title="Hedge leg">Hdg</th>
               <th className="text-left">Ticker</th>
               <th className="text-left">Bench</th>
               <th className="text-left">Side</th>
@@ -1139,6 +1143,7 @@ export function StreamSimLog() {
               <th className="text-right text-violet-400">σZap</th>
               <th className="text-right text-violet-300">ZAPL</th>
               <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right text-rose-300" title="Opposite-side σ at EXIT — cover trigger value">ExitσAbs</th>
               <th className="text-right">Tick%</th>
               <th className="text-right">Bench%</th>
               <th className="text-right text-sky-400">Corr</th>
@@ -1173,11 +1178,17 @@ export function StreamSimLog() {
               const gateCtx = buildGateContext(e, tickPct, benchPct);
               const scaleCtx = buildScaleContext(e);
               const execCtx = buildExecContext(e);
+              const intentIdShort = e.intentId ? e.intentId.slice(-8) : "—";
+              const bounces = e.latchBounces ?? 0;
               return (
                 <tr key={e.seq} className={rowCls}>
                   <td className="text-zinc-600 whitespace-nowrap">{fmtDate(e.ts)}</td>
                   <td className="text-zinc-500 whitespace-nowrap">{e.timeStr}</td>
+                  <td className="text-orange-300/80 whitespace-nowrap font-mono text-[9px]" title={e.intentId ?? ""}>{intentIdShort}</td>
+                  <td className={clsx("text-right tabular-nums font-semibold", bounces > 0 ? "text-rose-400" : "text-zinc-700")}>{bounces > 0 ? bounces : "·"}</td>
+                  <td className={clsx("text-[9px]", e.latchOrigin === "hist" ? "text-amber-400" : e.latchOrigin === "primed" ? "text-sky-400" : "text-zinc-600")}>{e.latchOrigin ?? "—"}</td>
                   <td><SimEventBadge event={e.event} betaMode={isBeta} /></td>
+                  <td className="text-center">{e.isHedge ? <span className="text-amber-400 text-[9px] font-bold">H</span> : <span className="text-zinc-700">·</span>}</td>
                   <td className="text-zinc-100 font-semibold">{e.ticker}</td>
                   <td className="text-zinc-400">{e.benchmark}</td>
                   <td><SideBadge side={e.side} /></td>
@@ -1185,6 +1196,7 @@ export function StreamSimLog() {
                   <td className="text-right tabular-nums text-violet-300">{fmt2(e.sigmaZap)}</td>
                   <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapLsigma)}</td>
                   <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapSsigma)}</td>
+                  <td className={clsx("text-right tabular-nums", isExit && e.exitSigmaAbs != null ? "text-rose-300 font-semibold" : "text-zinc-700")}>{isExit && e.exitSigmaAbs != null ? e.exitSigmaAbs.toFixed(2) : "·"}</td>
                   <td className={clsx("text-right tabular-nums", tickPct != null && tickPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(tickPct)}</td>
                   <td className={clsx("text-right tabular-nums", benchPct != null && benchPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(benchPct)}</td>
                   <td className="text-right tabular-nums text-sky-300">{fmt2(e.corr)}</td>
@@ -1210,7 +1222,7 @@ export function StreamSimLog() {
             })}
             {!entries.length && (
               <tr>
-                <td colSpan={25} className="px-4 py-10 text-center text-zinc-600">
+                <td colSpan={30} className="px-4 py-10 text-center text-zinc-600">
                   No entries yet. Enable AUTO (or BETA mode) and let STREAM run.
                 </td>
               </tr>
@@ -1696,6 +1708,11 @@ export default function OpenDoorStreamView({
                 ? `${executionCurrent.ticker} | ${executionCurrent.status}${executionCurrent.appliedDelayMs ? ` | ${num(executionCurrent.appliedDelayMs / 1000, 2)}s` : ""}`
                 : `No active execution | delay ${delayRangeLabel}`}
             </div>
+            {executionCurrent?.note && (
+              <div className="mt-1 text-[10px] font-mono text-amber-300">
+                {executionCurrent.note}
+              </div>
+            )}
           </div>
           <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
             <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Live Book</div>
@@ -1863,7 +1880,6 @@ export default function OpenDoorStreamView({
               className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
             >
               <option value="normalize">Normalize</option>
-              <option value="print">Print</option>
             </select>
           </div>
         </div>

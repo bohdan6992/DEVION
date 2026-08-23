@@ -14,6 +14,7 @@
 // The offset between them is exactly DAY_START_HOUR * 60 - 1440 = -180.
 
 import { STRATEGY_CATALOG, STRATEGY_BY_KEY } from "@/lib/strategyCatalog";
+import { LIVE_STRATEGY_LIST } from "@/lib/strategies/registry";
 
 export const DAY_START_HOUR = 21;
 export const DAY_MINUTES = 24 * 60;
@@ -186,12 +187,15 @@ export type CaesarStrategy = {
 };
 
 /**
- * Strategies with a live engine. Everything else in STRATEGY_CATALOG is still assignable here —
- * planning the day ahead of the implementation is the point — but has no stream to link into.
+ * Live-surface strategies, read from the single registry in lib/strategies/registry.ts.
  *
- * Keep `nav`, `window` and `defaultPriority` in sync with the strategy's own definition:
- *   arbitrage -> components/scanner/ArbitrageScanner.tsx + pages/stream/arbitrage.tsx
- *   opendoor  -> components/scanner/OpenDoorScanner.tsx + pages/opendoor/stream.tsx
+ * This used to be a hand-maintained LIVE_STRATEGIES map here, with a comment asking whoever edited
+ * a strategy to keep nav, window and priority in sync with the scanner descriptor and the stream
+ * page. It did not stay in sync: Arbitrage's window was 1200 here and 1199 in the descriptor, and
+ * `nav.sonar` pointed at `/sonar` — BridgeSonarSignals, not the Arbitrage Sonar.
+ *
+ * Caesar is the surface that will launch the streams of several strategies at once, so it must not
+ * be reading a second-hand copy of what a strategy is.
  */
 const LIVE_STRATEGIES: Record<
   string,
@@ -201,21 +205,18 @@ const LIVE_STRATEGIES: Record<
     window: { fromMinuteIdx: number; toMinuteIdx: number };
     defaultPriority: number;
   }
-> = {
-  arbitrage: {
-    nav: { stream: "/stream/arbitrage", scanner: "/paper/arbitrage", sonar: "/sonar" },
-    bridgeStrategyId: "stream.arbitrage",
-    // Source says 1199 inclusive (POST ends at 19:59); 1200 exclusive is the same window.
-    window: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
-    defaultPriority: 100,
-  },
-  opendoor: {
-    nav: { stream: "/opendoor/stream", scanner: "/opendoor/scanner", sonar: "/opendoor/sonar" },
-    bridgeStrategyId: "stream.opendoor",
-    window: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
-    defaultPriority: 50,
-  },
-};
+> = Object.fromEntries(
+  LIVE_STRATEGY_LIST.map((s) => [
+    s.key,
+    {
+      nav: s.nav,
+      bridgeStrategyId: s.bridgeStrategyId,
+      // Already half-open in the registry — no per-strategy normalisation left to get wrong.
+      window: s.tradingWindow,
+      defaultPriority: s.priority,
+    },
+  ])
+);
 
 export const CAESAR_STRATEGIES: readonly CaesarStrategy[] = STRATEGY_CATALOG.map((meta) => {
   const live = LIVE_STRATEGIES[meta.key];

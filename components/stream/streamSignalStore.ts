@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { useStreamStores } from "./streamStoreRegistry";
-import type { ArbitrageSignal } from "../sonar/ArbitrageSonar";
+import type { ArbitrageSignal } from "@/lib/signals/signal";
 
 export type StreamSignalMeta = {
   totalCount: number;

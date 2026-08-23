@@ -346,6 +346,7 @@ function StreamPageContainerInner({
         // eslint-disable-next-line no-console
         console.warn(`[stream-remote-sync] streamAutoEnabled ${prev} -> ${remoteAutoEnabled} (remote state overwrote local)`, {
           at: new Date().toISOString(),
+          strategyId,
           source: document.visibilityState === "visible" ? "focus/visibility/mount" : "background",
         });
         return remoteAutoEnabled;
@@ -359,6 +360,7 @@ function StreamPageContainerInner({
           // eslint-disable-next-line no-console
           console.warn(`[stream-remote-sync] strategyModeEnabled ${prev.strategyModeEnabled} -> ${remoteStrategyModeEnabled} (remote state overwrote local)`, {
             at: new Date().toISOString(),
+            strategyId,
           });
         }
         return sameStreamAutomationConfig(prev, next) ? prev : next;

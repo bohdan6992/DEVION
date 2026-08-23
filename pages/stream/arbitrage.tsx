@@ -1,4 +1,7 @@
 ﻿import dynamic from "next/dynamic";
+import { getLiveStrategy } from "@/lib/strategies/registry";
+
+const STRATEGY = getLiveStrategy("arbitrage")!;
 
 const ArbitrageStream = dynamic(
   () => import("@/components/stream/ArbitrageStream"),
@@ -7,7 +10,8 @@ const ArbitrageStream = dynamic(
 
 export default function Page() {
   // strategyPriority is the tie-breaker the bridge uses when this strategy and another one want
-  // the same ticker at the same minute boundary — HIGHER WINS. Keep it distinct from every other
-  // stream page (OpenDoor is 50).
-  return <ArbitrageStream strategyPriority={100} />;
+  // the same ticker at the same minute boundary — HIGHER WINS. It comes from the registry, which
+  // rejects duplicate priorities at module load, so distinctness is enforced rather than asked for
+  // in a comment.
+  return <ArbitrageStream strategyPriority={STRATEGY.priority} />;
 }

@@ -9,11 +9,597 @@
   - Environments: .env.local
 
  ✓ Starting...
- ✓ Ready in 2.4s
- ○ Compiling /stream/arbitrage ...
- ✓ Compiled /stream/arbitrage in 3.4s (525 modules)
- GET /stream/arbitrage 200 in 3728ms
- GET /stream/arbitrage 200 in 8ms
- GET /stream/arbitrage 200 in 118ms
- GET /stream/arbitrage 200 in 14ms
- GET /stream/arbitrage 200 in 62ms
+ ✓ Ready in 2.2s
+ ○ Compiling /opendoor/scanner ...
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+Browserslist: browsers data (caniuse-lite) is 11 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ ✓ Compiled /opendoor/scanner in 3.8s (607 modules)
+ GET /opendoor/scanner 200 in 3968ms
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 983ms (1003 modules)
+ GET /scanner 404 in 1151ms
+ GET /opendoor 404 in 80ms
+ ✓ Compiled /scaner in 251ms (1027 modules)
+ GET /scaner 200 in 281ms
+ ○ Compiling /main ...
+ ✓ Compiled /main in 615ms (1372 modules)
+ GET /main 200 in 747ms
+ ✓ Compiled / in 230ms (998 modules)
+ GET / 200 in 298ms
+ ✓ Compiled /api/market-pulse in 95ms (212 modules)
+ ✓ Compiled (216 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 213ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 2ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1040ms
+ GET /api/market-pulse 200 in 1027ms
+ GET /api/market-pulse 200 in 59ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1036ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 169ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 169ms
+ ○ Compiling /opendoor/sonar ...
+ ✓ Compiled /opendoor/sonar in 804ms (1075 modules)
+ ✓ Compiled /opendoor/scanner in 185ms (1169 modules)
+ GET /opendoor/scanner 200 in 41ms
+ ✓ Compiled in 1000ms (797 modules)
+ ⨯ ./components/scanner/OpenDoorScanner.tsx
+Error: 
+  [31mx[0m Unexpected token `div`. Expected jsx identifier
+      ,-[[36;1;4mC:\Users\wsu\Desktop\CenturiON\TradingTool\components\scanner\OpenDoorScanner.tsx[0m:5774:1]
+ [2m5774[0m | 
+ [2m5775[0m |   // ========= UI
+ [2m5776[0m |   return (
+ [2m5777[0m |     <div className={clsx("scanner-borderless relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-clip", "accent-selection", isLightTheme && "scanner-light-theme")}>
+      : [31;1m     ^^^[0m
+ [2m5778[0m | 
+ [2m5779[0m |       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
+ [2m5779[0m |         {/* Header */}
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./components/scanner/OpenDoorScanner.tsx
+ ✓ Compiled in 455ms (797 modules)
+ GET /opendoor/scanner 200 in 34ms
+ ✓ Compiled /scaner in 204ms (821 modules)
+ GET /scaner 200 in 241ms
+ ✓ Compiled in 379ms (821 modules)
+ GET /opendoor/scanner 200 in 18ms
+ ○ Compiling /main ...
+ ✓ Compiled /main in 824ms (1142 modules)
+ ✓ Compiled /api/yahoo-quotes in 106ms (283 modules)
+ ✓ Compiled (288 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 173ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 2ms
+ GET /api/market-pulse 200 in 1078ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1059ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1011ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 63ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 179ms
+ GET /api/market-pulse 200 in 223ms
+ ✓ Compiled /signals/[strategy] in 314ms (1167 modules)
+ GET /signals/arbitrage 200 in 54ms
+ GET /signals/arbitrage 200 in 7ms
+ ✓ Compiled in 812ms (1102 modules)
+ ✓ Compiled /api/yahoo-quotes in 57ms (287 modules)
+ ✓ Compiled (291 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 163ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 3ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 927ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1115ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 169ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 213ms
+ ✓ Compiled /opendoor/sonar in 280ms (1125 modules)
+ ✓ Compiled in 422ms (1125 modules)
+ GET /api/market-pulse 200 in 3986ms
+ GET /api/market-pulse 200 in 3531ms
+ ○ Compiling /opendoor/scanner ...
+ ✓ Compiled /opendoor/scanner in 590ms (1171 modules)
+ GET /opendoor/scanner 200 in 643ms
+ GET /opendoor/scanner 200 in 8ms
+ ✓ Compiled in 588ms (805 modules)
+ ✓ Compiled in 501ms (805 modules)
+ GET /opendoor/scanner 200 in 28ms
+ ○ Compiling /opendoor/stream ...
+ ✓ Compiled /opendoor/stream in 585ms (811 modules)
+ ✓ Compiled in 669ms (806 modules)
+ ✓ Compiled in 371ms (806 modules)
+ GET /opendoor/scanner 200 in 29ms
+ ✓ Compiled in 198ms (554 modules)
+ ⨯ ./components/scanner/OpenDoorScanner.tsx
+Error: 
+  [31mx[0m Unexpected token `div`. Expected jsx identifier
+      ,-[[36;1;4mC:\Users\wsu\Desktop\CenturiON\TradingTool\components\scanner\OpenDoorScanner.tsx[0m:5775:1]
+ [2m5775[0m | 
+ [2m5776[0m |   // ========= UI
+ [2m5777[0m |   return (
+ [2m5778[0m |     <div className={clsx("scanner-borderless relative min-h-screen w-full bg-transparent text-zinc-200 font-sans selection:text-white p-4 overflow-x-clip", "accent-selection", isLightTheme && "scanner-light-theme")}>
+      : [31;1m     ^^^[0m
+ [2m5779[0m | 
+ [2m5780[0m |       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
+ [2m5780[0m |         {/* Header */}
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./components/scanner/OpenDoorScanner.tsx
+ ✓ Compiled in 1078ms (808 modules)
+ ⨯ ./components/sonar/OpenDoorSonar.tsx
+Error: 
+  [31mx[0m Unexpected token `div`. Expected jsx identifier
+      ,-[[36;1;4mC:\Users\wsu\Desktop\CenturiON\TradingTool\components\sonar\OpenDoorSonar.tsx[0m:4079:1]
+ [2m4079[0m | 
+ [2m4080[0m | 
+ [2m4081[0m |   return (
+ [2m4082[0m |       <div className={`sonar-borderless relative min-h-screen w-full text-zinc-200 font-sans ${accentSelectionClass} selection:text-white p-4 overflow-x-hidden ${isLightTheme ? "sonar-light-theme" : ""}`}>
+      : [31;1m       ^^^[0m
+ [2m4083[0m | 
+ [2m4084[0m |       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
+ [2m4084[0m |         {/* ========================= HEADER ========================= */}
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./components/sonar/OpenDoorSonar.tsx
+ ✓ Compiled in 423ms (808 modules)
+ ✓ Compiled in 458ms (808 modules)
+ GET /opendoor/scanner 200 in 31ms
+ GET /opendoor/sonar 200 in 8ms
+ ✓ Compiled in 681ms (808 modules)
+ ✓ Compiled in 197ms (808 modules)
+ ✓ Compiled in 164ms (808 modules)
+ ✓ Compiled in 517ms (808 modules)
+ ✓ Compiled in 500ms (808 modules)
+ ✓ Compiled in 401ms (808 modules)
+ ✓ Compiled in 414ms (808 modules)
+ ✓ Compiled in 656ms (808 modules)
+ GET /opendoor/sonar 200 in 27ms
+ GET /opendoor/scanner 200 in 7ms
+ ✓ Compiled /scaner in 153ms (832 modules)
+ GET /scaner 200 in 187ms
+ GET /opendoor/sonar 200 in 15ms
+ ✓ Compiled in 501ms (808 modules)
+ ✓ Compiled in 300ms (808 modules)
+ GET /opendoor/sonar 200 in 24ms
+ GET /opendoor/scanner 200 in 8ms
+ ✓ Compiled in 562ms (808 modules)
+ ✓ Compiled in 341ms (808 modules)
+ GET /opendoor/sonar 200 in 25ms
+ GET /opendoor/scanner 200 in 8ms
+ ✓ Compiled /scaner in 124ms (832 modules)
+ GET /scaner 200 in 146ms
+ ✓ Compiled in 689ms (808 modules)
+ ✓ Compiled in 281ms (808 modules)
+ ✓ Compiled /signals/[strategy] in 120ms (812 modules)
+ GET /signals/arbitrage 200 in 171ms
+ GET /opendoor/sonar 200 in 7ms
+ ✓ Compiled /scaner in 89ms (836 modules)
+ GET /scaner 200 in 141ms
+ GET /opendoor/scanner 200 in 29ms
+ ✓ Compiled in 353ms (836 modules)
+ ✓ Compiled in 392ms (836 modules)
+ ✓ Compiled in 620ms (808 modules)
+ ✓ Compiled in 485ms (808 modules)
+ GET /opendoor/scanner 200 in 27ms
+ ✓ Compiled /scaner in 49ms (832 modules)
+ GET /scaner 200 in 70ms
+ GET /opendoor/sonar 200 in 6ms
+ ✓ Compiled /signals/[strategy] in 58ms (836 modules)
+ GET /signals/arbitrage 200 in 91ms
+ ○ Compiling /main ...
+ ✓ Compiled /main in 687ms (1181 modules)
+ ✓ Compiled /api/market-pulse in 113ms (305 modules)
+ ✓ Compiled (309 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 212ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 3ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1090ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1009ms
+ GET /api/market-pulse 200 in 1150ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 56ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 166ms
+ GET /api/market-pulse 200 in 200ms
+ ○ Compiling /paper/arbitrage ...
+ ✓ Compiled /paper/arbitrage in 802ms (1183 modules)
+ ✓ Compiled /stream/arbitrage in 459ms (836 modules)
+ ✓ Compiled in 787ms (808 modules)
+ ✓ Compiled in 483ms (808 modules)
+ ✓ Compiled in 453ms (808 modules)
+ ✓ Compiled in 354ms (808 modules)
+ ✓ Compiled /scaner in 127ms (832 modules)
+ GET /scaner 200 in 157ms
+ ○ Compiling /opendoor/scanner ...
+ ✓ Compiled /opendoor/scanner in 710ms (844 modules)
+ GET /opendoor/scanner 200 in 737ms
+ ✓ Compiled /signals/[strategy] in 114ms (847 modules)
+ GET /signals/arbitrage 200 in 136ms
+ ✓ Compiled /opendoor/sonar in 148ms (851 modules)
+ GET /opendoor/sonar 200 in 172ms
+ ○ Compiling / ...
+ ✓ Compiled / in 754ms (1155 modules)
+ GET / 200 in 804ms
+ ✓ Compiled /api/market-pulse in 66ms (293 modules)
+ ✓ Compiled (297 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 155ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 3ms
+ GET /api/market-pulse 200 in 998ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1084ms
+ GET /api/market-pulse 200 in 58ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 196ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1261ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 216ms
+ ✓ Compiled /signals/[strategy] in 130ms (1179 modules)
+ ✓ Compiled in 654ms (555 modules)
+ ✓ Compiled in 117ms (555 modules)
+ ✓ Compiled in 213ms (555 modules)
+ ✓ Compiled in 106ms (555 modules)
+ ✓ Compiled in 97ms (555 modules)
+ ✓ Compiled in 186ms (555 modules)
+ ✓ Compiled in 125ms (555 modules)
+ ✓ Compiled in 174ms (555 modules)
+ ✓ Compiled / in 425ms (1156 modules)
+ GET / 200 in 516ms
+ ✓ Compiled /api/yahoo-quotes in 35ms (293 modules)
+ ✓ Compiled /api/market-pulse in 0ms (295 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 114ms
+ ✓ Compiled in 1ms (297 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 92ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 864ms
+ GET /api/market-pulse 200 in 1091ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1173ms
+ GET /api/market-pulse 200 in 177ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 378ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 479ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 285ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 513ms
+ GET /api/market-pulse 200 in 291ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 296ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 289ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 299ms
+ GET /api/market-pulse 200 in 313ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 282ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 310ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 544ms
+ GET /api/market-pulse 200 in 317ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 312ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 346ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 332ms
+ GET /api/market-pulse 200 in 316ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 321ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 340ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 297ms
+ GET /api/market-pulse 200 in 315ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 4ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 4ms
+ GET /api/market-pulse 200 in 219ms
+ GET /api/market-pulse 200 in 61ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 310ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 359ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 57ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 200ms
+ ○ Compiling /opendoor/sonar ...
+ ✓ Compiled /opendoor/sonar in 910ms (1175 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 8ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 8ms
+ GET /api/market-pulse 200 in 925ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 915ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 979ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 68ms
+ GET /api/market-pulse 200 in 164ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 160ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 301ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 314ms
+ GET /api/market-pulse 200 in 497ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 305ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 314ms
+ GET /api/market-pulse 200 in 273ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 276ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 279ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 277ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 281ms
+ GET /api/market-pulse 200 in 309ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 271ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 287ms
+ ✓ Compiled in 296ms (832 modules)
+ GET /api/market-pulse 200 in 283ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 291ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 295ms
+ ✓ Compiled in 132ms (1079 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1002ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1069ms
+ ✓ Compiled in 401ms (832 modules)
+ GET /api/market-pulse 200 in 930ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 325ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 515ms
+ GET /api/market-pulse 200 in 303ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 318ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 334ms
+ ✓ Compiled in 267ms (832 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 353ms
+ ✓ Compiled in 112ms (832 modules)
+ ✓ Compiled in 98ms (832 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 458ms
+ GET /api/market-pulse 200 in 315ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 270ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 297ms
+ ✓ Compiled /api/onthisday in 437ms (1079 modules)
+ ✓ Compiled (1082 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 143ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 848ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 954ms
+ GET /api/market-pulse 200 in 967ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 176ms
+ GET /api/market-pulse 200 in 218ms
+ ○ Compiling /daytwo/sonar ...
+ ✓ Compiled /daytwo/sonar in 533ms (1088 modules)
+ ○ Compiling /daytwo/scanner ...
+ ✓ Compiled /daytwo/scanner in 1126ms (1174 modules)
+ GET /daytwo/scanner 200 in 83ms
+ GET /daytwo/sonar 200 in 50ms
+ ○ Compiling /daytwo/stream ...
+ ✓ Compiled /daytwo/stream in 1338ms (1182 modules)
+ GET /daytwo/stream 200 in 1391ms
+ ✓ Compiled /main in 191ms (1184 modules)
+ GET /main 200 in 280ms
+ ✓ Compiled /opendoor/scanner in 498ms (1188 modules)
+ GET /opendoor/scanner 200 in 573ms
+ ✓ Compiled /scaner in 221ms (1212 modules)
+ GET /scaner 200 in 287ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 19ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 12ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 884ms
+ GET /api/market-pulse 200 in 972ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 64ms
+ GET /api/market-pulse 200 in 58ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 7ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 5ms
+ GET /api/market-pulse 200 in 171ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 173ms
+ GET /api/market-pulse 200 in 61ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 69ms
+ ○ Compiling /opendoor/sonar ...
+ ✓ Compiled /opendoor/sonar in 847ms (1181 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 10140ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 5266ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 4523ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 5494ms
+ GET /opendoor/scanner 200 in 52ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 73ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 13ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 288ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 375ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 167ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 201ms
+ GET /api/market-pulse 200 in 734ms
+ GET /api/market-pulse 200 in 59ms
+ ○ Compiling /signals/[strategy] ...
+ ✓ Compiled /signals/[strategy] in 819ms (1173 modules)
+ ○ Compiling /paper/arbitrage ...
+ ✓ Compiled /paper/arbitrage in 507ms (1183 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 16ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 10ms
+ GET /api/market-pulse 200 in 825ms
+ GET /api/market-pulse 200 in 59ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1345ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 56ms
+ ○ Compiling /daytwo/sonar ...
+ ✓ Compiled /daytwo/sonar in 654ms (1185 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 10010ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 7832ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 9ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 4ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 333ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 346ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 63ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 64ms
+ GET /api/market-pulse 200 in 765ms
+ GET /api/market-pulse 200 in 56ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 313ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 324ms
+ GET /api/market-pulse 200 in 312ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 307ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 322ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 369ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 370ms
+ GET /api/market-pulse 200 in 385ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 280ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 308ms
+ GET /api/market-pulse 200 in 294ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 316ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 453ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 290ms
+ GET /api/market-pulse 200 in 320ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 343ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 278ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 281ms
+ GET /api/market-pulse 200 in 282ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 277ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 296ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 320ms
+ GET /api/market-pulse 200 in 323ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 339ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 7ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 6ms
+ GET /api/market-pulse 200 in 343ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 329ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 338ms
+ GET /api/market-pulse 200 in 62ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 62ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 60ms
+ ○ Compiling /daytwo/scanner ...
+ ✓ Compiled /daytwo/scanner in 852ms (1179 modules)
+ ○ Compiling / ...
+ ✓ Compiled / in 837ms (1153 modules)
+ GET / 200 in 989ms
+ ✓ Compiled /api/market-pulse in 66ms (290 modules)
+ ✓ Compiled (294 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 220ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 3ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1059ms
+ GET /api/market-pulse 200 in 1023ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 999ms
+ GET /api/market-pulse 200 in 57ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 65ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 195ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 338ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 299ms
+ GET /api/market-pulse 200 in 318ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 318ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 331ms
+ ✓ Compiled /signals/[strategy] in 495ms (1174 modules)
+ ○ Compiling /paper/arbitrage ...
+ ✓ Compiled /paper/arbitrage in 922ms (1176 modules)
+ GET / 200 in 67ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 9ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 2ms
+ GET /api/market-pulse 200 in 812ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 928ms
+ GET /api/market-pulse 200 in 198ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 991ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 215ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 207ms
+ ○ Compiling /main ...
+ ✓ Compiled /main in 685ms (1173 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 9ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 7ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 911ms
+ GET /api/market-pulse 200 in 925ms
+ GET /api/market-pulse 200 in 64ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 1002ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 217ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 211ms
+ ✓ Compiled /opendoor/sonar in 436ms (1173 modules)
+ ○ Compiling /opendoor/scanner ...
+ ✓ Compiled /opendoor/scanner in 1334ms (1183 modules)
+ ○ Compiling /opendoor/stream ...
+ ✓ Compiled /opendoor/stream in 877ms (834 modules)
+ ✓ Compiled /main in 420ms (1154 modules)
+ ✓ Compiled /api/market-pulse in 42ms (291 modules)
+ ✓ Compiled (295 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 128ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 2ms
+ GET /api/market-pulse 200 in 960ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 914ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 970ms
+ GET /api/market-pulse 200 in 60ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 58ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 173ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 284ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 294ms
+ GET /api/market-pulse 200 in 297ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 305ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 292ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 278ms
+ GET /api/market-pulse 200 in 295ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 315ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 280ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 289ms
+ GET /api/market-pulse 200 in 273ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 329ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 317ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 331ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 324ms
+ GET /api/market-pulse 200 in 375ms
+ ✓ Compiled in 860ms (1121 modules)
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 840ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1803ms
+ GET /api/market-pulse 200 in 767ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 323ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 281ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 278ms
+ GET /api/market-pulse 200 in 287ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 286ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 337ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 291ms
+ GET /api/market-pulse 200 in 295ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 281ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 282ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 300ms
+ GET /api/market-pulse 200 in 289ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 447ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 319ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 327ms
+ GET /api/market-pulse 200 in 302ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 321ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 303ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 277ms
+ GET /api/market-pulse 200 in 311ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 681ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 303ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 365ms
+ GET /api/market-pulse 200 in 273ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 283ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 261ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 281ms
+ GET /api/market-pulse 200 in 280ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 278ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 336ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 427ms
+ GET /api/market-pulse 200 in 290ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 271ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 287ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 266ms
+ GET /api/market-pulse 200 in 282ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 285ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 285ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 327ms
+ GET /api/market-pulse 200 in 289ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 284ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 426ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 298ms
+ GET /api/market-pulse 200 in 286ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 274ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 269ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 271ms
+ GET /api/market-pulse 200 in 269ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 317ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 327ms
+ GET /api/market-pulse 200 in 310ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 352ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 323ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 323ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 320ms
+ GET /api/market-pulse 200 in 303ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 273ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 281ms
+ GET /api/market-pulse 200 in 292ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 269ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 338ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 303ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 306ms
+ GET /api/market-pulse 200 in 423ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 278ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 295ms
+ GET /api/market-pulse 200 in 310ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 323ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 283ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 314ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 281ms
+ GET /api/market-pulse 200 in 273ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 313ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 285ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 287ms
+ GET /api/market-pulse 200 in 281ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 313ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 281ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 321ms
+ GET /api/market-pulse 200 in 280ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 276ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 278ms
+ GET /main 200 in 110ms
+ ✓ Compiled /api/onthisday in 90ms (293 modules)
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 239ms
+ GET /api/onthisday?lang=uk&tz=America/New_York 304 in 3ms
+ GET /api/market-pulse 200 in 853ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 795ms
+ GET /api/market-pulse 200 in 56ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 1057ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT,AMD,META,BTC-USD,ETH-USD 200 in 177ms
+ GET /api/yahoo-quotes?tickers=SPY,QQQ,NVDA,TSLA,BTC-USD,ETH-USD,MSFT,AMD 200 in 180ms
+ GET /opendoor/sonar 200 in 102ms

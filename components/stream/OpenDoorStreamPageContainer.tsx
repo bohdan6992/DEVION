@@ -339,8 +339,31 @@ function OpenDoorStreamPageContainerInner({
       ) {
         return;
       }
-      setStreamAutoEnabled((prev) => (prev === remoteAutoEnabled ? prev : remoteAutoEnabled));
+      setStreamAutoEnabled((prev) => {
+        if (prev === remoteAutoEnabled) return prev;
+        // Visible without needing the stream-gate-debug filter — this is a silent kill-switch
+        // if it fires unexpectedly (e.g. remote/server lost its "enabled" state after a backend
+        // restart, and this pullRemoteState call — triggered by mount or the tab regaining
+        // focus/visibility — just turned local automation off to match).
+        // `strategyId` is in the payload rather than the message so the message text stays
+        // identical to the Arbitrage container's: both are greppable as one tag, and telling the
+        // two apart matters once Caesar runs several streams side by side.
+        // eslint-disable-next-line no-console
+        console.warn(`[stream-remote-sync] streamAutoEnabled ${prev} -> ${remoteAutoEnabled} (remote state overwrote local)`, {
+          at: new Date().toISOString(),
+          strategyId,
+          source: document.visibilityState === "visible" ? "focus/visibility/mount" : "background",
+        });
+        return remoteAutoEnabled;
+      });
       setAutomationConfig((prev) => {
+        if (prev.strategyModeEnabled !== remoteStrategyModeEnabled) {
+          // eslint-disable-next-line no-console
+          console.warn(`[stream-remote-sync] strategyModeEnabled ${prev.strategyModeEnabled} -> ${remoteStrategyModeEnabled} (remote state overwrote local)`, {
+            at: new Date().toISOString(),
+            strategyId,
+          });
+        }
         const next = {
           ...prev,
           strategyModeEnabled: remoteStrategyModeEnabled,

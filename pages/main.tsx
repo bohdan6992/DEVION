@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getLiveStrategy } from "@/lib/strategies/registry";
 import { motion, AnimatePresence, useInView } from "framer-motion";
 import dynamic from "next/dynamic";
 import { useUi } from "@/components/UiProvider";
@@ -1049,11 +1050,19 @@ function TileCardContent({ tile, inView, isDragOverlay = false }: {
   tile: StrategyTile; inView: boolean; isDragOverlay?: boolean;
 }) {
   const col = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
+  // A strategy with live surfaces links to its own three; a catalog-only one keeps the generic
+  // signals/stats/perform pages. Read from the registry rather than a `tile.key === "..."` ternary:
+  // there used to be one of those per link, so adding Day Two would have meant three more, and the
+  // next strategy three more again.
+  const live = getLiveStrategy(tile.key);
+  const sgnHref = live ? live.nav.sonar : `/signals/${tile.key}`;
+  const stsHref = live ? live.nav.scanner : `/stats/${tile.key}`;
+  const prfHref = live ? live.nav.stream : `/perform/${tile.key}`;
   const pct = Math.round((tile.score / tile.maxScore) * 100);
   return (
     <>
       <div className="flex-1 flex flex-col p-5 relative min-w-0">
-        {!isDragOverlay && <Link href={tile.key === "opendoor" ? "/opendoor/sonar" : `/signals/${tile.key}`} className="absolute inset-0 z-0" />}
+        {!isDragOverlay && <Link href={sgnHref} className="absolute inset-0 z-0" />}
         <div className="flex items-start justify-between mb-3 relative z-10">
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-10 h-10 rounded-xl text-xl shrink-0"
@@ -1124,19 +1133,19 @@ function TileCardContent({ tile, inView, isDragOverlay = false }: {
       </div>
       <div className="w-[52px] shrink-0 flex flex-col border-l rounded-r-[20px] overflow-hidden"
         style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(13,13,15,0.9)" }}>
-        <Link href={tile.key === "opendoor" ? "/opendoor/sonar" : `/signals/${tile.key}`}
+        <Link href={sgnHref}
           className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
           style={{ borderColor: "rgba(255,255,255,0.05)" }}>
           <Zap size={14} className="text-zinc-600 group-hover/btn:text-orange-400 transition-colors" />
           <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>SGN</span>
         </Link>
-        <Link href={tile.key === "opendoor" ? "/opendoor/scanner" : `/stats/${tile.key}`}
+        <Link href={stsHref}
           className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
           style={{ borderColor: "rgba(255,255,255,0.05)" }}>
           <BarChart2 size={14} className="text-zinc-600 group-hover/btn:text-violet-400 transition-colors" />
           <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>STS</span>
         </Link>
-        <Link href={tile.key === "opendoor" ? "/opendoor/stream" : `/perform/${tile.key}`}
+        <Link href={prfHref}
           className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.06] transition-all group/btn">
           <Activity size={14} className="text-zinc-600 group-hover/btn:text-emerald-400 transition-colors" />
           <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>PRF</span>

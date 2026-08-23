@@ -6,6 +6,7 @@ import { todayNyYmd } from "../time";
 import { normalizeDilutionStepValue, normalizeMaxAddsValue } from "./format";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES } from "./scopeParameters";
 import type { ScannerStrategy } from "./strategy";
+import type { ScopeOptimizerBinMode } from "./types";
 import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, PaperArbActiveRow, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbMetric, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, ScopePanelKey, ScopeResearchDraft, ScopeResearchSelection, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "./types";
 import type { ScannerFilterSetters, ScannerFilterState } from "./filterState";
 
@@ -273,7 +274,6 @@ export function useScannerFilters(
   const [scanErr, setScanErr] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [optimizerRows, setOptimizerRows] = useState<OptimizerResultRow[]>([]);
-  const [optimizerComboRows, setOptimizerComboRows] = useState<OptimizerResultRow[]>([]);
   const [optimizerLoading, setOptimizerLoading] = useState<boolean>(false);
   const [optimizerErr, setOptimizerErr] = useState<string | null>(null);
   const [optimizerProgress, setOptimizerProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
@@ -293,10 +293,11 @@ export function useScannerFilters(
   const [optimizerStatsHidden, setOptimizerStatsHidden] = useState<boolean>(true);
   const [scopeSelectedParameterKeys, setScopeSelectedParameterKeys] = useState<string[]>([]);
   const [scopeParameterGroupExpanded, setScopeParameterGroupExpanded] = useState<Record<string, boolean>>({});
-  const [scopeOverlayParameterKeys, setScopeOverlayParameterKeys] = useState<[string, string]>(["", ""]);
   const [optimizerRangeRankMetric, setOptimizerRangeRankMetric] = useState<OptimizerRangeRankMetric>("avgPnlUsd");
   const [optimizerRangeMinTrades, setOptimizerRangeMinTrades] = useState<number>(25);
   const [optimizerBucketCount, setOptimizerBucketCount] = useState<number>(8);
+  // How those bins are cut — equal trades (default) or equal loss. See ScopeOptimizerBinMode.
+  const [optimizerBinMode, setOptimizerBinMode] = useState<ScopeOptimizerBinMode>("trades");
   const [scopeResearchDrafts, setScopeResearchDrafts] = useState<Record<ScopePanelKey, ScopeResearchDraft>>(options.strategy?.defaultScopeDrafts ?? ({} as Record<ScopePanelKey, ScopeResearchDraft>));
   const [scopeResearchSelections, setScopeResearchSelections] = useState<Record<ScopePanelKey, ScopeResearchSelection | null>>({
     left: null,
@@ -522,7 +523,6 @@ export function useScannerFilters(
     scanErr, setScanErr,
     scanProgress, setScanProgress,
     optimizerRows, setOptimizerRows,
-    optimizerComboRows, setOptimizerComboRows,
     optimizerLoading, setOptimizerLoading,
     optimizerErr, setOptimizerErr,
     optimizerProgress, setOptimizerProgress,
@@ -534,10 +534,10 @@ export function useScannerFilters(
     optimizerStatsHidden, setOptimizerStatsHidden,
     scopeSelectedParameterKeys, setScopeSelectedParameterKeys,
     scopeParameterGroupExpanded, setScopeParameterGroupExpanded,
-    scopeOverlayParameterKeys, setScopeOverlayParameterKeys,
     optimizerRangeRankMetric, setOptimizerRangeRankMetric,
     optimizerRangeMinTrades, setOptimizerRangeMinTrades,
     optimizerBucketCount, setOptimizerBucketCount,
+    optimizerBinMode, setOptimizerBinMode,
     scopeResearchDrafts, setScopeResearchDrafts,
     scopeResearchSelections, setScopeResearchSelections,
     scopeFullscreenPanel, setScopeFullscreenPanel,
