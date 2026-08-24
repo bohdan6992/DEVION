@@ -13,6 +13,17 @@ export function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string 
     return match?.[0] && toYmd(match[0]) ? match[0] : null;
   };
 
+  // THE ENTRY DAY, always. dateNy is the anchor day the engine built the trade on, which is the
+  // day the position was opened; it is checked before any timestamp because an exit can fall on
+  // the NEXT calendar day (Day Two's BLUE2 exits at 00:00 and BLUE3 at 04:00), and reading the day
+  // off an exit timestamp would book that P&L against a session the trade was not entered in.
+  //
+  // Today the timestamps happen to be clock-only ("16:00"), so the key fell through to episodeId,
+  // which embeds dateNy — the right answer for the wrong reason. Making it explicit means giving
+  // the wrap classes real dated timestamps later cannot silently move a day's P&L.
+  const entryDay = extractYmd(row.dateNy);
+  if (entryDay) return entryDay;
+
   const tsCandidates = [row.startTsNy, row.peakTsNy, row.endTsNy, row.episodeId];
   for (const candidate of tsCandidates) {
     const ymd = extractYmd(candidate);
@@ -20,7 +31,6 @@ export function getEpisodeDateKey(row: PaperArbClosedDto, fallbackDate?: string 
   }
 
   const candidates = [
-    row.dateNy,
     row.date,
     row.day,
     row.tradeDateNy,

@@ -48,7 +48,8 @@ export type OpenDoorLiveFilters = {
 };
 
 export type OpenDoorLiveParams = {
-  exitClass: "10m" | "30m";
+  /** Strategy-specific: OpenDoor rates 10m/30m, Day Two POST1..BLUE3. */
+  exitClass: string;
   useStack: boolean;
   useBench: boolean;
   useDevSig: boolean;

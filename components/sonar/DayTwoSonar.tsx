@@ -2078,6 +2078,19 @@ function HedgeHeaderMinimal({
 /* =========================
    COMPONENT
 ========================= */
+/**
+ * Day Two's exit classes, in the order the notebook rates them. These are the class keys present in
+ * signals/daytwo/best_params.jsonl and the same keys OpenDoorTiming.DayTwo maps to exit minutes
+ * (18:00 / 19:30 / 21:00 / 00:00 / 04:00).
+ */
+const DAYTWO_EXIT_CLASSES = [
+  { key: "POST1", label: "POST1" },
+  { key: "POST2", label: "POST2" },
+  { key: "BLUE1", label: "BLUE1" },
+  { key: "BLUE2", label: "BLUE2" },
+  { key: "BLUE3", label: "BLUE3" },
+] as const;
+
 export default function OpenDoorSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
@@ -2120,7 +2133,7 @@ export default function OpenDoorSonar() {
   // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
   // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from cls/mode/type, which
   // stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
-  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
+  const [openDoorExitClass, setOpenDoorExitClass] = useState<"POST1" | "POST2" | "BLUE1" | "BLUE2" | "BLUE3">("POST1");
   // ADVANCED: switches the bin data source from best_params.standard (09:20-entry-only) to
   // best_params.advanced (hourly-pooled, much larger sample — see OpenDoor.ipynb). ADVANCED
   // always checks all 3 parameters (the per-parameter STACK/BENCH/DEV toggles are hidden and
@@ -4317,7 +4330,7 @@ export default function OpenDoorSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {(["10m", "30m"] as const).map((c) => (
+            {DAYTWO_EXIT_CLASSES.map(({ key: c }) => (
               <FilterButton
                 key={c}
                 active={openDoorExitClass === c}

@@ -152,15 +152,14 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       scanner: "/daytwo/scanner",
       sonar: "/daytwo/sonar",
     },
-    // Copied from OpenDoor along with the surfaces themselves; narrow it once Day Two has its own
-    // entry/exit rule.
-    tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
+    // Day Two's own rule: orders go out 15:50-15:55 and the position opens at 16:00, so the
+    // surfaces are live across the afternoon rather than the OpenDoor hour they were copied from.
+    tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
     priority: 25,
-    // NOTE: paperBase still points at OpenDoor's endpoints. The Day Two surfaces are literal copies
-    // of the OpenDoor ones and the bridge has no /api/paper/daytwo yet, so pointing this at a route
-    // that does not exist would give three pages that load and then fail every request. Change it
-    // the moment the backend has its own controller — that is the one line to move.
-    api: { paperBase: "/api/paper/opendoor", signalsBase: "/api/arbitrage" },
+    // Its own endpoints now: /api/paper/daytwo reads signals/daytwo and rates the five Day Two
+    // exit classes. Pointing at OpenDoor's meant selecting tickers on bins measured for a 09:20
+    // entry, which describe nothing about a position opened at 16:00.
+    api: { paperBase: "/api/paper/daytwo", signalsBase: "/api/arbitrage" },
     // Storage IS separate from the start: sharing it would have Day Two and OpenDoor overwrite each
     // other's filters and presets the first time both are open.
     storage: { scannerPrefix: "paper.daytwo", sonarPrefix: "bridge.daytwo", streamPrefix: "stream.daytwo" },

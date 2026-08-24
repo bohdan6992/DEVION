@@ -136,6 +136,19 @@ type ArbitrageScannerProps = {
 
 const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
 
+/**
+ * Day Two's exit classes, in the order the notebook rates them. These are the class keys
+ * present in signals/daytwo/best_params.jsonl — verified against the published file — and the
+ * same keys OpenDoorTiming.DayTwo maps to exit minutes (18:00 / 19:30 / 21:00 / 00:00 / 04:00).
+ */
+const DAYTWO_EXIT_CLASSES = [
+  { key: "POST1", label: "POST1" },
+  { key: "POST2", label: "POST2" },
+  { key: "BLUE1", label: "BLUE1" },
+  { key: "BLUE2", label: "BLUE2" },
+  { key: "BLUE3", label: "BLUE3" },
+] as const;
+
 export default function OpenDoorScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
@@ -658,7 +671,7 @@ export default function OpenDoorScanner({
   // buckets client-side rather than calling /scope/evaluate.
   const OPEN_DOOR_SCENARIO_RUNNER_ENABLED = true;
 
-  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
+  const [openDoorExitClass, setOpenDoorExitClass] = useState<"POST1" | "POST2" | "BLUE1" | "BLUE2" | "BLUE3">("POST1");
   // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
   // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction, matching the
   // two-column UP/DOWN layout. Deliberately fresh state, not the shared Arbitrage `activeRule`.
@@ -1655,7 +1668,7 @@ export default function OpenDoorScanner({
         // OpenDoor gate settings. Restored here rather than left at their defaults so the toolbar
         // shows what is actually being traded after a reload — and so the copy pushed to the
         // bridge (see the effect below) is the operator's, not a fresh page's.
-        if (s.openDoorExitClass === "10m" || s.openDoorExitClass === "30m") setOpenDoorExitClass(s.openDoorExitClass);
+        if (DAYTWO_EXIT_CLASSES.some((c) => c.key === s.openDoorExitClass)) setOpenDoorExitClass(s.openDoorExitClass);
         if (typeof s.openDoorUseStack === "boolean") setOpenDoorUseStack(s.openDoorUseStack);
         if (typeof s.openDoorUseBench === "boolean") setOpenDoorUseBench(s.openDoorUseBench);
         if (typeof s.openDoorUseDevSig === "boolean") setOpenDoorUseDevSig(s.openDoorUseDevSig);
@@ -5964,13 +5977,12 @@ export default function OpenDoorScanner({
           
             <div className="flex h-7 items-center gap-2">
               {[
-                { key: "10m", label: "10m" },
-                { key: "30m", label: "30m" },
+                ...DAYTWO_EXIT_CLASSES,
               ].map((b) => (
                 <button
                   key={b.key}
                   type="button"
-                  onClick={() => setOpenDoorExitClass(b.key as "10m" | "30m")}
+                  onClick={() => setOpenDoorExitClass(b.key as "POST1" | "POST2" | "BLUE1" | "BLUE2" | "BLUE3")}
                   className={clsx(
                     TOOLBAR_BUTTON_BASE,
                     openDoorExitClass === b.key
