@@ -102,9 +102,19 @@ export function toOpenDoorLiveFilters(
   };
 }
 
-export async function pushOpenDoorLiveParams(params: OpenDoorLiveParams): Promise<boolean> {
+/**
+ * Which strategy's live params to write. The bridge keeps one set per strategy: OpenDoor trades on
+ * its set at 09:20 and Day Two on its own at 15:50, so a shared endpoint would let the afternoon
+ * toolbar silently redefine what the morning strategy trades.
+ */
+export type LiveParamsStrategy = "opendoor" | "daytwo";
+
+export async function pushOpenDoorLiveParams(
+  params: OpenDoorLiveParams,
+  strategy: LiveParamsStrategy = "opendoor"
+): Promise<boolean> {
   try {
-    const response = await fetch(bridgeUrl("/api/stream/opendoor/params"), {
+    const response = await fetch(bridgeUrl(`/api/stream/${strategy}/params`), {
       method: "PUT",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },

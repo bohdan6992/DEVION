@@ -3,15 +3,16 @@ import { getLiveStrategy } from "@/lib/strategies/registry";
 
 const STRATEGY = getLiveStrategy("daytwo")!;
 
-// Day Two has no stream container of its own yet: its Scanner is still a copy of OpenDoor's, and so
-// is the stream panel inside it. This page therefore drives the SAME container as OpenDoor, but with
-// Day Two's registry values — its own storage prefix, its own priority and its own nav — so the two
-// streams never share state or arbitrate tickers as one. Swap the import when Day Two gets a
-// container of its own; nothing else here changes.
+// The stream SHELL is shared with OpenDoor, but the scanner inside it is Day Two's: that is what
+// carries the rule — POST1..BLUE3 exit classes, the 15:50-15:55 entry window, and Day Two's own
+// ratings file. Before this the page drove OpenDoorScanner, so the Day Two stream traded OpenDoor's
+// rule under a Day Two title.
 const OpenDoorStreamPageContainer = dynamic(
   () => import("@/components/stream/OpenDoorStreamPageContainer"),
   { ssr: false }
 );
+
+const DayTwoScanner = dynamic(() => import("@/components/scanner/DayTwoScanner"), { ssr: false });
 
 export default function DayTwoStreamPage() {
   return (
@@ -22,6 +23,7 @@ export default function DayTwoStreamPage() {
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}
+      ScannerComponent={DayTwoScanner}
     />
   );
 }

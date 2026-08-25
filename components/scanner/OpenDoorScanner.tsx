@@ -75,7 +75,7 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
-import OpenDoorGatesRow from "./shell/panels/OpenDoorGatesRow";
+import OpenDoorGatesRow, { EMPTY_ENTRY_BOUNDS, type OpenDoorEntryBounds } from "./shell/panels/OpenDoorGatesRow";
 // OpenDoor tracks no sigma metric and no peak (the mapper leaves those slots null and
 // MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
 // metrics are excluded rather than rendering empty charts that look like a bug.
@@ -662,6 +662,13 @@ export default function OpenDoorScanner({
   // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
   // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction, matching the
   // two-column UP/DOWN layout. Deliberately fresh state, not the shared Arbitrage `activeRule`.
+  // Backtest escape hatch: best_params publishes no bin under rate 0.60 / total 10, so the region
+  // below the floor cannot be reached by lowering the thresholds — only by removing the gate.
+  const [openDoorIgnoreRatings, setOpenDoorIgnoreRatings] = useState(false);
+  // Explicit entry levels: with the gate off there is no bin to define the situation, so this is
+  // what replaces it; with the gate on it narrows the rated level instead of replacing it.
+  const [openDoorUseManualEntry, setOpenDoorUseManualEntry] = useState(false);
+  const [openDoorEntryBounds, setOpenDoorEntryBounds] = useState<OpenDoorEntryBounds>(EMPTY_ENTRY_BOUNDS);
   const [openDoorUpMinRate, setOpenDoorUpMinRate] = useState(0.6);
   const [openDoorUpMinTotal, setOpenDoorUpMinTotal] = useState(20);
   const [openDoorUpMinMove, setOpenDoorUpMinMove] = useState(0);
@@ -793,6 +800,7 @@ export default function OpenDoorScanner({
   }, [
     openDoorRatingByTicker, openDoorExitClass,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
   ]);
@@ -1499,6 +1507,7 @@ export default function OpenDoorScanner({
   }, [
     primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, openDoorExitClass,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     sizeValue,
@@ -1659,6 +1668,9 @@ export default function OpenDoorScanner({
         if (typeof s.openDoorUseStack === "boolean") setOpenDoorUseStack(s.openDoorUseStack);
         if (typeof s.openDoorUseBench === "boolean") setOpenDoorUseBench(s.openDoorUseBench);
         if (typeof s.openDoorUseDevSig === "boolean") setOpenDoorUseDevSig(s.openDoorUseDevSig);
+        if (typeof s.openDoorIgnoreRatings === "boolean") setOpenDoorIgnoreRatings(s.openDoorIgnoreRatings);
+        if (typeof s.openDoorUseManualEntry === "boolean") setOpenDoorUseManualEntry(s.openDoorUseManualEntry);
+        if (s.openDoorEntryBounds && typeof s.openDoorEntryBounds === "object") setOpenDoorEntryBounds({ ...EMPTY_ENTRY_BOUNDS, ...s.openDoorEntryBounds });
         if (typeof s.openDoorUpMinRate === "number") setOpenDoorUpMinRate(s.openDoorUpMinRate);
         if (typeof s.openDoorUpMinTotal === "number") setOpenDoorUpMinTotal(s.openDoorUpMinTotal);
         if (typeof s.openDoorUpMinMove === "number") setOpenDoorUpMinMove(s.openDoorUpMinMove);
@@ -1888,6 +1900,9 @@ export default function OpenDoorScanner({
       openDoorUseStack,
       openDoorUseBench,
       openDoorUseDevSig,
+      openDoorIgnoreRatings,
+      openDoorUseManualEntry,
+      openDoorEntryBounds,
       openDoorUpMinRate,
       openDoorUpMinTotal,
       openDoorUpMinMove,
@@ -2092,7 +2107,8 @@ export default function OpenDoorScanner({
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
       openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-      openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+      openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
       openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     ]
   );
@@ -2493,6 +2509,7 @@ export default function OpenDoorScanner({
     return () => window.clearTimeout(timer);
   }, [
     openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     sizingMode, sizeValue, streamFilterConfig,
@@ -2841,7 +2858,8 @@ export default function OpenDoorScanner({
       }
     ),
     [openDoorRatingByTicker, openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+     openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
      openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove]
   );
 
@@ -3065,6 +3083,14 @@ export default function OpenDoorScanner({
     const reqTickers = requestScopedTickers;
     return {
       exitClass: openDoorExitClass,
+      ignoreRatings: openDoorIgnoreRatings,
+      useManualEntry: openDoorUseManualEntry,
+      stackMin: openDoorEntryBounds.stackMin,
+      stackMax: openDoorEntryBounds.stackMax,
+      benchMin: openDoorEntryBounds.benchMin,
+      benchMax: openDoorEntryBounds.benchMax,
+      devSigMin: openDoorEntryBounds.devSigMin,
+      devSigMax: openDoorEntryBounds.devSigMax,
       useStack: openDoorUseStack,
       useBench: openDoorUseBench,
       useDevSig: openDoorUseDevSig,
@@ -5876,6 +5902,12 @@ export default function OpenDoorScanner({
           </div>
 
           <OpenDoorGatesRow
+            ignoreRatings={openDoorIgnoreRatings}
+            setIgnoreRatings={setOpenDoorIgnoreRatings}
+            useManualEntry={openDoorUseManualEntry}
+            setUseManualEntry={setOpenDoorUseManualEntry}
+            entryBounds={openDoorEntryBounds}
+            setEntryBounds={setOpenDoorEntryBounds}
             useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
             useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
             useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}

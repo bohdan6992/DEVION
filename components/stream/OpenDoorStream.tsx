@@ -47,6 +47,8 @@ type StreamDecisionTableRow = {
 };
 
 type ArbitrageStreamViewProps = {
+  /** Which strategy's active-ticker slot this view reads. Day Two passes its own. */
+  activeTickerStrategy?: string;
   tab: StreamTabKey;
   streamSignalsCount: number;
   streamAutoEnabled: boolean;
@@ -1234,9 +1236,11 @@ export function StreamSimLog() {
   );
 }
 
+/** Default slot. Day Two renders this same view and passes its own — see activeTickerStrategy. */
 const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
 
 export default function OpenDoorStreamView({
+  activeTickerStrategy = ACTIVE_TICKER_STRATEGY,
   tab,
   streamSignalsCount,
   streamAutoEnabled,
@@ -1277,7 +1281,7 @@ export default function OpenDoorStreamView({
   const streamPositions = useStreamPositionRows();
   const activeDecisionRows = useStreamActiveDecisionRows();
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
-  const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  const activeSelection = useActiveTickerSelection(activeTickerStrategy);
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeStreamRow = useMemo(
     () => activeDecisionRows.find((row) => row.ticker === activeSelection.ticker) ?? null,

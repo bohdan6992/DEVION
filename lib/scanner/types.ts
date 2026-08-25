@@ -459,6 +459,16 @@ export type PaperArbAnalyticsRequest = {
   // analytics-only output knobs
   includeEquityCurve?: boolean;
   equityCurveMode?: "Daily" | "Trade";
+  /** OpenDoor/DayTwo backtest: explicit entry levels for the enabled params. */
+  useManualEntry?: boolean | null;
+  stackMin?: number | null;
+  stackMax?: number | null;
+  benchMin?: number | null;
+  benchMax?: number | null;
+  devSigMin?: number | null;
+  devSigMax?: number | null;
+  /** OpenDoor/DayTwo backtest: drop the rating gate and simulate the whole universe. */
+  ignoreRatings?: boolean | null;
   optimizerBucketCount?: number | null;
   /** How the optimizer cuts a parameter's range. See ScopeOptimizerBinMode. */
   optimizerBinMode?: ScopeOptimizerBinMode | null;

@@ -575,6 +575,26 @@ export async function getOpendoorSummary(
   return fetchBridgeJson<OpendoorSummaryResponse>(`/api/opendoor/summary${qs}`);
 }
 
+/**
+ * /api/daytwo/summary — Day Two's OWN per-bin table.
+ *
+ * Its classes are POST1..BLUE3, and those columns live only in signals/daytwo/summary.csv. Reading
+ * OpenDoor's file here made the client gate look up stack_POST1_best_long_lo in a row that has no
+ * such column, which rejects every ticker on both directions.
+ */
+export async function getDayTwoSummary(
+  params?: { q?: string }
+): Promise<OpendoorSummaryResponse> {
+  const qs = buildQuery({ q: params?.q });
+  return fetchBridgeJson<OpendoorSummaryResponse>(`/api/daytwo/summary${qs}`);
+}
+
+export async function getDayTwoList(params?: { q?: string }): Promise<Record<string, string>[]> {
+  const json = await getDayTwoSummary(params);
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.map((r) => flattenWithExtras(r));
+}
+
 /** /api/opendoor/ticker/{ticker} (onefile.jsonl row) */
 export type OpendoorTickerResponse = {
   ok?: boolean;

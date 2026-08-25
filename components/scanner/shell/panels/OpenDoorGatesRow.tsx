@@ -46,6 +46,38 @@ export type OpenDoorGatesRowProps = {
   activeClassName?: string;
   /** The Sonar hides the parameter toggles in advanced mode. */
   showParamToggles?: boolean;
+  /**
+   * Backtest-only: drop the rating gate and simulate the whole universe. Omitted by the Sonars,
+   * which read live signals rather than replaying a day, so the button simply does not render
+   * there instead of appearing and doing nothing.
+   */
+  ignoreRatings?: boolean;
+  setIgnoreRatings?: (v: boolean) => void;
+  /**
+   * Explicit entry levels for the three params, instead of leaving the level to the rating bin.
+   * Omitted by the Sonars for the same reason as ignoreRatings — they read live signals, they do
+   * not replay a day.
+   */
+  useManualEntry?: boolean;
+  setUseManualEntry?: (v: boolean) => void;
+  entryBounds?: OpenDoorEntryBounds;
+  setEntryBounds?: (next: OpenDoorEntryBounds) => void;
+};
+
+/** Explicit entry window per param. null on either end means unbounded there. */
+export type OpenDoorEntryBounds = {
+  stackMin: number | null;
+  stackMax: number | null;
+  benchMin: number | null;
+  benchMax: number | null;
+  devSigMin: number | null;
+  devSigMax: number | null;
+};
+
+export const EMPTY_ENTRY_BOUNDS: OpenDoorEntryBounds = {
+  stackMin: null, stackMax: null,
+  benchMin: null, benchMax: null,
+  devSigMin: null, devSigMax: null,
 };
 
 export default function OpenDoorGatesRow({
@@ -57,7 +89,31 @@ export default function OpenDoorGatesRow({
   upMinMove, setUpMinMove, downMinMove, setDownMinMove,
   activeClassName = "accent-soft",
   showParamToggles = true,
+  ignoreRatings,
+  setIgnoreRatings,
+  useManualEntry,
+  setUseManualEntry,
+  entryBounds,
+  setEntryBounds,
 }: OpenDoorGatesRowProps) {
+  const gateOff = ignoreRatings === true;
+  const manualOn = useManualEntry === true;
+  const bounds = entryBounds ?? EMPTY_ENTRY_BOUNDS;
+
+  // Only enabled params get a level: bounding one the user switched off would be a filter they
+  // turned off still filtering.
+  const entryFields: Array<{ label: string; on: boolean; minKey: keyof OpenDoorEntryBounds; maxKey: keyof OpenDoorEntryBounds; step: number }> = [
+    { label: "STACK", on: useStack, minKey: "stackMin", maxKey: "stackMax", step: 0.1 },
+    { label: "BENCH", on: useBench, minKey: "benchMin", maxKey: "benchMax", step: 0.1 },
+    { label: "DEV", on: useDevSig, minKey: "devSigMin", maxKey: "devSigMax", step: 0.1 },
+  ];
+
+  const setBound = (key: keyof OpenDoorEntryBounds, raw: string) => {
+    if (!setEntryBounds) return;
+    const trimmed = raw.trim();
+    const next = trimmed === "" ? null : Number(trimmed);
+    setEntryBounds({ ...bounds, [key]: Number.isFinite(next as number) ? (next as number) : null });
+  };
   const fields = [
     {
       label: "MINRATE", value: upMinRate, step: 0.1, integer: false,
@@ -75,6 +131,26 @@ export default function OpenDoorGatesRow({
 
   return (
     <>
+      {setIgnoreRatings ? (
+        <button
+          type="button"
+          onClick={() => setIgnoreRatings(!gateOff)}
+          title={
+            gateOff
+              ? "Rating gate OFF — every ticker in the universe is simulated on both sides"
+              : "Ignore ratings: simulate the whole universe, with no bin gating at all"
+          }
+          className={clsx(
+            "h-7 shrink-0 px-3 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-all border",
+            gateOff
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              : "border-transparent bg-black/20 text-zinc-400 hover:text-white hover:bg-white/5"
+          )}
+        >
+          {gateOff ? "GATE OFF" : "GATE ON"}
+        </button>
+      ) : null}
+
       {showParamToggles && (
         <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
           {[
@@ -97,7 +173,52 @@ export default function OpenDoorGatesRow({
         </div>
       )}
 
-      {fields.map((field) => (
+      {setUseManualEntry ? (
+        <button
+          type="button"
+          onClick={() => setUseManualEntry(!manualOn)}
+          title={
+            manualOn
+              ? "Entry levels set by hand — the bin no longer decides where the situation starts"
+              : "Set entry levels by hand for the enabled params"
+          }
+          className={clsx(
+            "h-7 shrink-0 px-3 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition-all border",
+            manualOn
+              ? "border-violet-500/45 bg-violet-500/15 text-violet-300"
+              : "border-transparent bg-black/20 text-zinc-400 hover:text-violet-200 hover:bg-violet-500/10"
+          )}
+        >
+          ENTRY
+        </button>
+      ) : null}
+
+      {manualOn
+        ? entryFields.filter((f) => f.on).map((f) => (
+            <div key={`entry-${f.label}`} className="flex h-7 items-center gap-1.5 pl-3 pr-2 rounded-lg bg-violet-500/10 border border-violet-500/25">
+              <span className="text-[10px] font-mono uppercase tracking-wide text-violet-300/80">{f.label}</span>
+              <input
+                type="number"
+                step={f.step}
+                value={bounds[f.minKey] ?? ""}
+                placeholder="min"
+                onChange={(e) => setBound(f.minKey, e.target.value)}
+                className="center-spin h-7 w-14 bg-transparent border-0 px-1 text-[11px] font-mono tabular-nums text-center text-violet-200 placeholder-violet-300/30 focus:outline-none"
+              />
+              <span className="text-[10px] text-violet-300/40">|</span>
+              <input
+                type="number"
+                step={f.step}
+                value={bounds[f.maxKey] ?? ""}
+                placeholder="max"
+                onChange={(e) => setBound(f.maxKey, e.target.value)}
+                className="center-spin h-7 w-14 bg-transparent border-0 px-1 text-[11px] font-mono tabular-nums text-center text-violet-200 placeholder-violet-300/30 focus:outline-none"
+              />
+            </div>
+          ))
+        : null}
+
+      {gateOff ? null : fields.map((field) => (
         <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
           <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{field.label}</span>
           <div className="group relative h-7 w-14 overflow-hidden rounded-md">

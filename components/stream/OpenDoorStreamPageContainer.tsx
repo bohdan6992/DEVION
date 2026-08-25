@@ -242,6 +242,12 @@ type OpenDoorStreamPageContainerProps = {
   /** Arbitration priority, HIGHER WINS. See StreamPageContainer. */
   strategyPriority?: number;
   strategyLabel?: string;
+  /**
+   * Which scanner drives the stream tab. Day Two is the same shell with a different rule — its own
+   * exit classes, its own ratings file, its own entry minutes — so the component is a parameter
+   * rather than a second copy of this container. Defaults to OpenDoor.
+   */
+  ScannerComponent?: React.ComponentType<any>;
 };
 
 // Parallel counterpart to StreamPageContainer.tsx (which wraps ArbitrageScanner) — this wraps
@@ -255,6 +261,7 @@ function OpenDoorStreamPageContainerInner({
   navStreamHref,
   navScannerHref,
   navSonarHref,
+  ScannerComponent = OpenDoorScanner,
 }: OpenDoorStreamPageContainerProps = {}) {
   const tabLsKey = `${lsKeyPrefix}.tab`;
   const sessionLsKey = `${lsKeyPrefix}.session`;
@@ -466,7 +473,7 @@ function OpenDoorStreamPageContainerInner({
   }, []);
 
   return (
-    <OpenDoorScanner
+    <ScannerComponent
       initialPrimaryPanel="stream"
       shellMode="streamOnly"
       controlledTab={tab}

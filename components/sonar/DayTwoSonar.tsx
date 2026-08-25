@@ -2089,6 +2089,7 @@ const DAYTWO_EXIT_CLASSES = [
   { key: "BLUE1", label: "BLUE1" },
   { key: "BLUE2", label: "BLUE2" },
   { key: "BLUE3", label: "BLUE3" },
+  { key: "PRINT", label: "PRINT" },
 ] as const;
 
 export default function OpenDoorSonar() {
@@ -2133,7 +2134,7 @@ export default function OpenDoorSonar() {
   // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
   // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from cls/mode/type, which
   // stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
-  const [openDoorExitClass, setOpenDoorExitClass] = useState<"POST1" | "POST2" | "BLUE1" | "BLUE2" | "BLUE3">("POST1");
+  const [openDoorExitClass, setOpenDoorExitClass] = useState<"POST1" | "POST2" | "BLUE1" | "BLUE2" | "BLUE3" | "PRINT">("POST1");
   // ADVANCED: switches the bin data source from best_params.standard (09:20-entry-only) to
   // best_params.advanced (hourly-pooled, much larger sample — see OpenDoor.ipynb). ADVANCED
   // always checks all 3 parameters (the per-parameter STACK/BENCH/DEV toggles are hidden and
@@ -2163,8 +2164,8 @@ export default function OpenDoorSonar() {
     let cancelled = false;
     const load = async () => {
       try {
-        const { getOpendoorList } = await import("@/lib/trapClient");
-        const rows = await getOpendoorList();
+        const { getDayTwoList } = await import("@/lib/trapClient");
+        const rows = await getDayTwoList();
         if (cancelled) return;
         const byTicker: Record<string, Record<string, string>> = {};
         for (const row of rows) {
