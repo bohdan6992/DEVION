@@ -68,6 +68,52 @@ export function getNewYorkMonthDay(): { month: number; day: number } {
   return { month, day };
 }
 
+/** Minutes since NY midnight, for deciding which side of the closing bell we are on. */
+function getNewYorkMinuteOfDay(): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? NaN);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? NaN);
+    // Intl can render midnight as hour 24 in the h23/h24 pair; normalise so 24:xx is not "tomorrow".
+    if (Number.isFinite(hour) && Number.isFinite(minute)) return (hour % 24) * 60 + minute;
+  } catch {
+  }
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+/** Weekend-aware step forward. Holidays are not handled, exactly like the backward step below. */
+function nextTradingDay(from: ReportSessionDay): ReportSessionDay {
+  const d = new Date(Date.UTC(from.year, from.month - 1, from.day));
+  do {
+    d.setUTCDate(d.getUTCDate() + 1);
+  } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+/**
+ * The session a live REP verdict is judged against — and it is NOT the calendar day.
+ *
+ * A trading session here runs 04:00 -> 04:00 NY, and earnings land after the 16:00 close. Anchoring
+ * on the calendar date meant the verdict flipped at NY MIDNIGHT, in the middle of the night
+ * session: a "26/08 AMC" report read as "belongs to tomorrow, keep" from 16:00 to 23:59 and as
+ * "belongs to today, drop" from 00:01. Measured on 2026-08-26 — tickers that had just reported
+ * (VEEV 26/08 AMC, CRM 26/08 16:00) passed REP all evening and then vanished on their own after
+ * midnight, which is exactly what the desk saw.
+ *
+ * Rolling at the close instead makes the whole post-market and night read the same way the next
+ * morning will: once a name has reported, REP keeps dropping it until that session ends.
+ */
+export function getNewYorkReportSessionYmd(): ReportSessionDay {
+  const today = getNewYorkYmd();
+  return getNewYorkMinuteOfDay() < MARKET_CLOSE_MINUTE ? today : nextTradingDay(today);
+}
+
 /**
  * The session a report is judged against. Live surfaces leave it null and get today in New York;
  * the Scanner replays a past tape day and must pass THAT day, or every marker reads as stale and
@@ -204,12 +250,12 @@ export function parseReportDateAffectsSession(value: any, session?: ReportSessio
     day = d;
     month = mo;
     afterCloseOverride = hh * 60 + mi >= MARKET_CLOSE_MINUTE;
-    const today = session ?? getNewYorkMonthDay();
+    const anchor = session ?? getNewYorkReportSessionYmd();
     if (afterCloseOverride) {
-      const prev = getNewYorkPrevTradingMonthDay(session);
+      const prev = getNewYorkPrevTradingMonthDay(anchor);
       return month === prev.month && day === prev.day;
     }
-    return month === today.month && day === today.day;
+    return month === anchor.month && day === anchor.day;
   }
 
   const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
@@ -238,11 +284,11 @@ export function parseReportDateAffectsSession(value: any, session?: ReportSessio
     // An after-close release belongs to the next trading day, so it is relevant today only when
     // dated the previous trading day. Today's own after-close report lands after today's close and
     // cannot move today's session.
-    const prev = getNewYorkPrevTradingMonthDay(session);
+    const prev = getNewYorkPrevTradingMonthDay(session ?? getNewYorkReportSessionYmd());
     return month === prev.month && day === prev.day;
   }
 
   // BMO / intraday / unqualified: belongs to its own day.
-  const today = session ?? getNewYorkMonthDay();
-  return month === today.month && day === today.day;
+  const anchor = session ?? getNewYorkReportSessionYmd();
+  return month === anchor.month && day === anchor.day;
 }

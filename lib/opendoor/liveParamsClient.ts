@@ -107,7 +107,7 @@ export function toOpenDoorLiveFilters(
  * its set at 09:20 and Day Two on its own at 15:50, so a shared endpoint would let the afternoon
  * toolbar silently redefine what the morning strategy trades.
  */
-export type LiveParamsStrategy = "opendoor" | "daytwo";
+export type LiveParamsStrategy = "opendoor" | "daytwo" | "openfade" | "openride";
 
 export async function pushOpenDoorLiveParams(
   params: OpenDoorLiveParams,

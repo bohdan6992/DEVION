@@ -55,7 +55,7 @@ import type { DateMode, EpisodeScanResult, EpisodeSortKey, GlassSelectOption, Op
 import { ScannerAnalyticsLog } from "./shared/AnalyticsLog";
 import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, PeakReversionTwoThirdsChart, PeakStrengthByTimeChart, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
-import { CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SideBadge, SummaryMetricCard } from "./shared/ui";
+import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SideBadge, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
@@ -71,6 +71,10 @@ import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
 const STRATEGY = defineScannerStrategy({
   key: "arbitrage",
   defaultScopeAxes: { left: "peakMetricAbs", right: "startMetricAbs" },
+  // Arbitrage records no entry deviation in sigmas — its own ZAP metric already IS that reading,
+  // tracked through Start/Peak/End. The two DEV axes exist for the strategies whose entry is a
+  // single stack-vs-bench deviation (OpenFade, OpenDoor), and would be empty dropdowns here.
+  excludeScopeParameters: ["entryDevSig", "entryDevPct"],
 });
 
 // =========================
@@ -2393,6 +2397,9 @@ export default function ArbitrageScanner({
     streamManualExecutionBusy,
     bindStreamWindows,
     clearStreamBoundWindow,
+    streamBookReading,
+    setStreamBookReading,
+    refreshStreamBookReading,
     captureStreamTickerPoint,
     captureStreamTickerPointDelayed,
     clearStreamTickerPoint,
@@ -2604,6 +2611,27 @@ export default function ArbitrageScanner({
       }
     } finally {
       setStreamAutomationTogglePending(null);
+    }
+  };
+
+  const [streamBookToggleBusy, setStreamBookToggleBusy] = useState(false);
+
+  // The switch lives on the bridge, so a reloaded page must ask rather than assume it is off.
+  useEffect(() => {
+    void refreshStreamBookReading();
+  }, [refreshStreamBookReading]);
+
+  /** The crosshair binds the window; this decides whether its book is scraped. See streamEngine. */
+  const toggleStreamBookReadingFromHeader = async () => {
+    if (streamBookToggleBusy) return;
+    setStreamBookToggleBusy(true);
+    try {
+      setErr(null);
+      await setStreamBookReading(!streamBookReading);
+    } catch (error: any) {
+      setErr(error?.message ?? String(error));
+    } finally {
+      setStreamBookToggleBusy(false);
     }
   };
 
@@ -4779,12 +4807,24 @@ export default function ArbitrageScanner({
     let sumLossAbs = 0;
     let maxWinUsd = 0;
     let maxLossUsd = 0;
+    let longs = 0;
+    let shorts = 0;
+    // Every episode's P&L, kept for the medians and the concentration measures below. The running
+    // totals above cannot produce either: both need the whole distribution, not a sum.
+    const pnls: number[] = [];
+    const summaryFallbackDate = dateMode === "day" && toYmd(dateNy) ? dateNy : null;
+    const dayTotals = new Map<string, number>();
     for (let i = 0; i < situations; i += 1) {
       const row = filteredEpisodes[i]!;
       trades += episodeTradeCount(row);
       streamflowUsd += episodeStreamflowUsd(row);
       const x = row.totalPnlUsd ?? 0;
       totalPnlUsd += x;
+      pnls.push(x);
+      if (row.side === "Long") longs += 1;
+      else if (row.side === "Short") shorts += 1;
+      const dayKey = getEpisodeDateKey(row, summaryFallbackDate);
+      if (dayKey) dayTotals.set(dayKey, (dayTotals.get(dayKey) ?? 0) + x);
       if (x > 0) {
         wins += 1;
         sumWin += x;
@@ -4801,6 +4841,37 @@ export default function ArbitrageScanner({
     const avgWin = wins > 0 ? sumWin / wins : 0;
     const avgLoss = losses > 0 ? -(sumLossAbs / losses) : 0;
     const expectancyUsd = (winRate * avgWin) - ((1 - winRate) * avgLoss);
+
+    const median = (values: number[]) => {
+      if (values.length === 0) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const mid = sorted.length >> 1;
+      return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+    };
+
+    /**
+     * The median trade says what a TYPICAL trade did, which the average cannot: one +5,000 in a
+     * book of small losses drags the average positive while the median stays where the mass is.
+     * The median DAY asks the same question one level up, and only means anything over a range.
+     */
+    const medianTradeUsd = median(pnls);
+    const dayCount = dayTotals.size;
+    const medianDayUsd = dayCount > 0 ? median([...dayTotals.values()]) : 0;
+
+    /**
+     * How much of the result rests on one or two trades.
+     *
+     * Measured against the same-sign gross, not the net: the question is "did two winners make the
+     * profit", and netting losses into the denominator would make the share meaningless (or
+     * negative) on a losing set. Null below three trades of that sign — with two winners the top
+     * two ARE all of them, so 100% would describe the sample size, not concentration.
+     */
+    const winsDesc = pnls.filter((x) => x > 0).sort((a, b) => b - a);
+    const lossesDesc = pnls.filter((x) => x < 0).map((x) => -x).sort((a, b) => b - a);
+    const top2WinShare =
+      winsDesc.length >= 3 && sumWin > 0 ? (winsDesc[0]! + (winsDesc[1] ?? 0)) / sumWin : null;
+    const top2LossShare =
+      lossesDesc.length >= 3 && sumLossAbs > 0 ? (lossesDesc[0]! + (lossesDesc[1] ?? 0)) / sumLossAbs : null;
 
     let equity = 0;
     let peak = 0;
@@ -4872,6 +4943,13 @@ export default function ArbitrageScanner({
       expectancyUsd,
       maxDrawdownUsd,
       equityCurve,
+      longs,
+      shorts,
+      medianTradeUsd,
+      medianDayUsd,
+      dayCount,
+      top2WinShare,
+      top2LossShare,
     };
   }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
 
@@ -6180,18 +6258,20 @@ export default function ArbitrageScanner({
               </>
             }
           />
+        {/* Active ticker, shared with the Sonars and Stream. The Sonar owns the selection; this
+            reads its per-strategy localStorage key so the same ticker is active on every surface.
+            Wrapped at order-1 so it lands in the same band as the filter row above it: the column
+            lays out by `order`, not by source, and at the default order-0 this strip floated to
+            the top of the column, above the filters. */}
+        <div className="order-1">
+            <ActiveTickerCard
+              ticker={activeSelection.ticker ?? null}
+              stats={activeCardStats}
+              loading={activeSnapshot.loading}
+              error={activeSnapshot.error}
+            />
+        </div>
 
-          {/* Active ticker, shared with the Sonars and Stream. The Sonar owns the selection; this
-              reads its per-strategy localStorage key so the same ticker is active on every surface.
-              Rendered unconditionally, like the Sonars: the strip shows its dashes when nothing is
-              selected. It used to be gated on `activeSelection.ticker`, so the row was simply
-              absent here while it was visible there — one panel, two behaviours. */}
-        <ActiveTickerCard
-          ticker={activeSelection.ticker ?? null}
-          stats={activeCardStats}
-          loading={activeSnapshot.loading}
-          error={activeSnapshot.error}
-        />
         </div>
 
         {/* Error */}
@@ -6322,6 +6402,31 @@ export default function ArbitrageScanner({
                       !streamWindowsBound && "text-zinc-300 group-hover:text-white"
                     )}
                     style={streamWindowsBound ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void toggleStreamBookReadingFromHeader()}
+                  disabled={!streamWindowsBound || streamBookToggleBusy}
+                  className={clsx(
+                    SCANNER_EYE_BUTTON,
+                    (!streamWindowsBound || streamBookToggleBusy) && "cursor-not-allowed opacity-40"
+                  )}
+                  title={
+                    !streamWindowsBound
+                      ? "Bind the Market Maker window first"
+                      : streamBookReading
+                        ? "Stop reading the order book"
+                        : "Start reading the order book"
+                  }
+                  aria-label={streamBookReading ? "Stop reading the order book" : "Start reading the order book"}
+                >
+                  <BookLevelsIcon
+                    className={clsx(
+                      "transition-colors",
+                      !streamBookReading && "text-zinc-300 group-hover:text-white"
+                    )}
+                    style={streamBookReading ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
                   />
                 </button>
                 <button
@@ -6736,12 +6841,15 @@ export default function ArbitrageScanner({
 
         {primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell && (
           <div className="space-y-3">
-            <div className="grid gap-3 xl:grid-cols-2">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
+                the same track width. They used to live in two grids of three and seven columns,
+                which made the first four about twice as wide as the rest. */}
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+              <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
                   value={num(analyticsSummary.totalPnlUsd, 2)}
-                  className="xl:row-span-2 xl:min-h-[124px]"
+                  className="h-full xl:min-h-[124px]"
                   valueClassName={
                     clsx(
                       "text-4xl md:text-6xl font-bold",
@@ -6753,13 +6861,67 @@ export default function ArbitrageScanner({
                     )
                   }
                 />
-                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
-                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
-                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
-                <SummaryMetricCard label="STREAMFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {/* Eighteen cards in nine columns: exactly two rows, and the same height as the
+                  TOTAL PNL column beside them. */}
+              {/* Nine columns of two, filled COLUMN by column (grid-flow-col), so each pair sits
+                  one above the other: the green reading on top, its red counterpart underneath.
+                  Track widths are deliberately uneven — the counts are narrow because "31" needs
+                  no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
+                  enough to wrap at a normal width. */}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+                {/* 1 — counts */}
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
+
+                {/* 2 — counts */}
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="SHORTS" value={intn(analyticsSummary.shorts)} inline valueClassName={SOFT_LOSS_TEXT_CLASS} />
+
+                {/* 3 — the two long numbers */}
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+
+                {/* 4 */}
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
                 <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+
+                {/* 5 — extremes, green over red */}
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 6 — averages, green over red */}
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 7 — concentration, green over red. Share of the same-sign gross carried by the
+                    two biggest; amber past 60% is where the result is two trades, not a strategy. */}
+                <SummaryMetricCard
+                  label="TOP2 WIN %"
+                  value={analyticsSummary.top2WinShare == null ? "-" : `${num(analyticsSummary.top2WinShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2WinShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2WinShare >= 0.6
+                        ? "text-amber-300"
+                        : "text-[#6ee7b7]"
+                  }
+                />
+                <SummaryMetricCard
+                  label="TOP2 LOSS %"
+                  value={analyticsSummary.top2LossShare == null ? "-" : `${num(analyticsSummary.top2LossShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2LossShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2LossShare >= 0.6
+                        ? "text-amber-300"
+                        : SOFT_LOSS_TEXT_CLASS
+                  }
+                />
+
+                {/* 8 — the average against the median, the pair that exposes a skewed book */}
                 <SummaryMetricCard
                   label="AVG TRADE"
                   value={num(analyticsSummary.avgPnlUsd, 2)}
@@ -6772,12 +6934,35 @@ export default function ArbitrageScanner({
                         : "text-zinc-200"
                   }
                 />
-                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard
+                  label="MEDIAN TRADE"
+                  value={num(analyticsSummary.medianTradeUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.medianTradeUsd > 0
+                      ? "text-[#6ee7b7]"
+                      : analyticsSummary.medianTradeUsd < 0
+                        ? SOFT_LOSS_TEXT_CLASS
+                        : "text-zinc-200"
+                  }
+                />
+
+                {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
-                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
-                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+                <SummaryMetricCard
+                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
+                  inline
+                  valueClassName={
+                    analyticsSummary.dayCount <= 1
+                      ? "text-zinc-500"
+                      : analyticsSummary.medianDayUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.medianDayUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                  }
+                />
               </div>
             </div>
 
@@ -8306,12 +8491,15 @@ export default function ArbitrageScanner({
 
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
-            <div className="grid gap-3 xl:grid-cols-2">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
+                the same track width. They used to live in two grids of three and seven columns,
+                which made the first four about twice as wide as the rest. */}
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+              <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
                   value={num(analyticsSummary.totalPnlUsd, 2)}
-                  className="xl:row-span-2 xl:min-h-[124px]"
+                  className="h-full xl:min-h-[124px]"
                   valueClassName={
                     clsx(
                       "text-4xl md:text-6xl font-bold",
@@ -8323,13 +8511,67 @@ export default function ArbitrageScanner({
                     )
                   }
                 />
-                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
-                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
-                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
-                <SummaryMetricCard label="STREAMFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {/* Eighteen cards in nine columns: exactly two rows, and the same height as the
+                  TOTAL PNL column beside them. */}
+              {/* Nine columns of two, filled COLUMN by column (grid-flow-col), so each pair sits
+                  one above the other: the green reading on top, its red counterpart underneath.
+                  Track widths are deliberately uneven — the counts are narrow because "31" needs
+                  no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
+                  enough to wrap at a normal width. */}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+                {/* 1 — counts */}
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
+
+                {/* 2 — counts */}
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="SHORTS" value={intn(analyticsSummary.shorts)} inline valueClassName={SOFT_LOSS_TEXT_CLASS} />
+
+                {/* 3 — the two long numbers */}
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+
+                {/* 4 */}
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
                 <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+
+                {/* 5 — extremes, green over red */}
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 6 — averages, green over red */}
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 7 — concentration, green over red. Share of the same-sign gross carried by the
+                    two biggest; amber past 60% is where the result is two trades, not a strategy. */}
+                <SummaryMetricCard
+                  label="TOP2 WIN %"
+                  value={analyticsSummary.top2WinShare == null ? "-" : `${num(analyticsSummary.top2WinShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2WinShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2WinShare >= 0.6
+                        ? "text-amber-300"
+                        : "text-[#6ee7b7]"
+                  }
+                />
+                <SummaryMetricCard
+                  label="TOP2 LOSS %"
+                  value={analyticsSummary.top2LossShare == null ? "-" : `${num(analyticsSummary.top2LossShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2LossShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2LossShare >= 0.6
+                        ? "text-amber-300"
+                        : SOFT_LOSS_TEXT_CLASS
+                  }
+                />
+
+                {/* 8 — the average against the median, the pair that exposes a skewed book */}
                 <SummaryMetricCard
                   label="AVG TRADE"
                   value={num(analyticsSummary.avgPnlUsd, 2)}
@@ -8342,12 +8584,35 @@ export default function ArbitrageScanner({
                         : "text-zinc-200"
                   }
                 />
-                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard
+                  label="MEDIAN TRADE"
+                  value={num(analyticsSummary.medianTradeUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.medianTradeUsd > 0
+                      ? "text-[#6ee7b7]"
+                      : analyticsSummary.medianTradeUsd < 0
+                        ? SOFT_LOSS_TEXT_CLASS
+                        : "text-zinc-200"
+                  }
+                />
+
+                {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
-                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
-                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
-                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+                <SummaryMetricCard
+                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
+                  inline
+                  valueClassName={
+                    analyticsSummary.dayCount <= 1
+                      ? "text-zinc-500"
+                      : analyticsSummary.medianDayUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.medianDayUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                  }
+                />
               </div>
             </div>
 

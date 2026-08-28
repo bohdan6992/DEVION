@@ -12,10 +12,15 @@ import { LIVE_STRATEGY_LIST } from "@/lib/strategies/registry";
  * for the other two surfaces: "active" means the same ticker whichever page you are on, and no new
  * selection UX has to be invented for Scanner or Stream.
  *
- * This hook is deliberately READ-ONLY. The Sonar owns the writes, together with the hydration
- * guards and restore-race handling that go with them; a second writer would fight it. Scanner and
- * Stream observe, and follow the selection live — `storage` covers other tabs, and the Sonar's own
- * tab is covered by polling, since `storage` does not fire in the tab that wrote the value.
+ * Reading is the common case: Scanner and Stream follow the selection live — `storage` covers
+ * other tabs, and the writer's own tab is covered by polling plus the event below, since `storage`
+ * does not fire in the tab that wrote the value.
+ *
+ * Writing is available through setActiveTicker, so a click on any surface can make a ticker
+ * active, the way clicking a row in Arbitrage Sonar does. The Sonar keeps its own copy of the
+ * selection in component state and rewrites the key when that state changes, so while a Sonar is
+ * mounted IN ANOTHER TAB it can still win a race and restore its own ticker. That is pre-existing
+ * and only bites with two tabs open on the same strategy.
  */
 
 /**
@@ -67,6 +72,41 @@ function sameSelection(a: ActiveTickerSelection, b: ActiveTickerSelection): bool
   return a.ticker === b.ticker && a.visible === b.visible && a.collapsed === b.collapsed && a.mode === b.mode;
 }
 
+/**
+ * Same-tab notification. `storage` fires only in OTHER tabs, so without this a click would wait up
+ * to POLL_MS for the strip to catch up — long enough to read as "the click did nothing".
+ */
+const ACTIVE_TICKER_EVENT = "axion:active-ticker";
+
+/**
+ * Make `ticker` the active one for `strategy`, exactly as clicking a row in the Sonar does:
+ * the ticker is stored and the panel is made visible. Everything else in the stored object
+ * (collapsed, mode) is preserved — this sets a selection, it does not reset the panel's shape.
+ *
+ * A null or blank ticker clears the selection.
+ */
+export function setActiveTicker(strategy: ActiveTickerStrategy, ticker: string | null): void {
+  if (typeof window === "undefined") return;
+  const key = STORAGE_KEYS[strategy];
+  if (!key) return;
+
+  const next = (ticker ?? "").trim().toUpperCase() || null;
+  try {
+    let parsed: any = {};
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) parsed = JSON.parse(raw) ?? {};
+    } catch {
+      parsed = {};
+    }
+    window.localStorage.setItem(key, JSON.stringify({ ...parsed, activeTicker: next, visible: true }));
+  } catch {
+    // A full or blocked localStorage must not break the click; the strip simply will not follow.
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(ACTIVE_TICKER_EVENT, { detail: strategy }));
+}
+
 /** Poll interval for same-tab changes. Cheap: one localStorage read and a shallow compare. */
 const POLL_MS = 1000;
 
@@ -83,10 +123,16 @@ export function useActiveTickerSelection(strategy: ActiveTickerStrategy): Active
     const onStorage = (e: StorageEvent) => {
       if (e.key === null || e.key === STORAGE_KEYS[strategy]) sync();
     };
+    const onLocal = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail == null || detail === strategy) sync();
+    };
     window.addEventListener("storage", onStorage);
+    window.addEventListener(ACTIVE_TICKER_EVENT, onLocal);
     const timer = window.setInterval(sync, POLL_MS);
     return () => {
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener(ACTIVE_TICKER_EVENT, onLocal);
       window.clearInterval(timer);
     };
   }, [strategy]);

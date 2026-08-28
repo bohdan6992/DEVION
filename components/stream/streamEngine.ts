@@ -2198,6 +2198,13 @@ export type StreamSignalsRequestOverride = {
    * universe silently narrowed by one.
    */
   omitStartAbs?: boolean;
+  /**
+   * Ask the server for the WHOLE universe rather than only the rows it already considers
+   * candidates. A strategy that decides on a live reading — OpenFade fades a deviation band — has
+   * to see every ticker, because the ones the server pre-filtered away are exactly the ones whose
+   * deviation it wants to judge for itself.
+   */
+  includeAll?: boolean;
 };
 
 type UseStreamEngineArgs = {
@@ -2212,6 +2219,12 @@ type UseStreamEngineArgs = {
    */
   cutoffAction?: "print-close-pair" | "exit-all";
   /** Align the signals request with this strategy's Sonar. See StreamSignalsRequestOverride. */
+  /**
+   * Which order type an ENTRY fires, per side. The bridge derives the hotkey solely from this —
+   * see TradingAppActionResolver — so a strategy with its own key pair must say so here or its
+   * orders go out on OpenDoor's Ctrl+F1 / Ctrl+F2.
+   */
+  entryIntentTypes?: { long: string; short: string };
   signalsRequest?: StreamSignalsRequestOverride;
   /**
    * Identity of this strategy instance. Several instances run in parallel over the same live
@@ -2339,6 +2352,7 @@ export function useStreamEngine({
   instance,
   signalGate,
   cutoffAction = "print-close-pair",
+  entryIntentTypes,
   signalsRequest,
   enabled,
   ocrEnabled = false,
@@ -2660,7 +2674,9 @@ export function useStreamEngine({
     minSigma: minSigma ?? undefined,
     maxSigma: maxSigma ?? undefined,
     limit: 5000,
-    includeAll: false,
+    // A strategy that decides on a live reading needs the whole universe, not the server's own
+    // candidate set — see StreamSignalsRequestOverride.includeAll.
+    includeAll: signalsRequest?.includeAll ?? false,
   }), [
     exactSonarFilterSnapshot,
     maxBeta,
@@ -2907,6 +2923,37 @@ export function useStreamEngine({
     }
   }, [refreshExecutionStatus]);
 
+  /**
+   * Whether the bridge is scraping the market-maker BOOK from the bound window.
+   *
+   * Kept as its own switch rather than following the binding: binding is what order sending needs
+   * and costs nothing, while the book is a screen capture plus an OCR pass several times a second.
+   * The bridge defaults it to off, so binding a window no longer starts reading by itself.
+   */
+  const [streamBookReading, setStreamBookReadingState] = useState(false);
+
+  const refreshStreamBookReading = useCallback(async () => {
+    try {
+      const response = await fetch(tradingAppBridgeUrl("/book-reading"));
+      const json = await response.json().catch(() => ({}));
+      if (response.ok && json?.ok !== false) setStreamBookReadingState(Boolean(json?.bookReading));
+    } catch {
+      // Status is advisory here; a failed read leaves the toggle showing what it last knew.
+    }
+  }, []);
+
+  const setStreamBookReading = useCallback(async (enabled: boolean) => {
+    const response = await fetch(`${tradingAppBridgeUrl("/book-reading")}?enabled=${enabled ? "true" : "false"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.ok === false) {
+      throw new Error(json?.error || `Failed to switch book reading (${response.status})`);
+    }
+    setStreamBookReadingState(Boolean(json?.bookReading));
+  }, []);
+
   const clearStreamBoundWindow = useCallback(async () => {
     const response = await fetch(tradingAppBridgeUrl("/bound-window"), {
       method: "DELETE",
@@ -2914,6 +2961,8 @@ export function useStreamEngine({
     });
     const json = await response.json().catch(() => ({}));
     resetStreamOcrStores();
+    // The bridge turns book reading off when the window goes away; keep the button in step.
+    setStreamBookReadingState(false);
     await refreshExecutionStatus(true);
     if (!response.ok || json?.ok === false) {
       throw new Error(json?.error || `Failed to clear bound window (${response.status})`);
@@ -3061,8 +3110,8 @@ export function useStreamEngine({
     }
 
     const type =
-      action === "buy" ? "EnterLongAggressive"
-        : action === "sell" ? "EnterShortAggressive"
+      action === "buy" ? (entryIntentTypes?.long ?? "EnterLongAggressive")
+        : action === "sell" ? (entryIntentTypes?.short ?? "EnterShortAggressive")
           : "ExitActive";
 
     setStreamManualExecutionBusy(true);
@@ -4081,8 +4130,8 @@ export function useStreamEngine({
 
       for (const intent of queued) {
         const type =
-          intent.intent === "ENTER_LONG_AGGRESSIVE" ? "EnterLongAggressive"
-            : intent.intent === "ENTER_SHORT_AGGRESSIVE" ? "EnterShortAggressive"
+          intent.intent === "ENTER_LONG_AGGRESSIVE" ? (entryIntentTypes?.long ?? "EnterLongAggressive")
+            : intent.intent === "ENTER_SHORT_AGGRESSIVE" ? (entryIntentTypes?.short ?? "EnterShortAggressive")
               : intent.intent === "EXIT_LONG_AGGRESSIVE" || intent.intent === "EXIT_SHORT_AGGRESSIVE" ? "ExitActive"
                 : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT" ? "ExitPrint"
                   : null;
@@ -4741,6 +4790,9 @@ export function useStreamEngine({
     setStreamAutoEnabled,
     streamManualExecutionBusy,
     bindStreamWindows,
+    streamBookReading,
+    setStreamBookReading,
+    refreshStreamBookReading,
     bindStreamActiveWindow,
     bindStreamActiveWindowDelayed,
     clearStreamBoundWindow,

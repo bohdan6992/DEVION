@@ -595,6 +595,34 @@ export async function getDayTwoList(params?: { q?: string }): Promise<Record<str
   return items.map((r) => flattenWithExtras(r));
 }
 
+/** /api/openfade/summary — OpenFade's own per-bin table. */
+export async function getOpenFadeSummary(
+  params?: { q?: string }
+): Promise<OpendoorSummaryResponse> {
+  const qs = buildQuery({ q: params?.q });
+  return fetchBridgeJson<OpendoorSummaryResponse>(`/api/openfade/summary${qs}`);
+}
+
+export async function getOpenFadeList(params?: { q?: string }): Promise<Record<string, string>[]> {
+  const json = await getOpenFadeSummary(params);
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.map((r) => flattenWithExtras(r));
+}
+
+/** /api/openride/summary — OpenRide's own per-bin table. Same shape as OpenFade's, different file. */
+export async function getOpenRideSummary(
+  params?: { q?: string }
+): Promise<OpendoorSummaryResponse> {
+  const qs = buildQuery({ q: params?.q });
+  return fetchBridgeJson<OpendoorSummaryResponse>(`/api/openride/summary${qs}`);
+}
+
+export async function getOpenRideList(params?: { q?: string }): Promise<Record<string, string>[]> {
+  const json = await getOpenRideSummary(params);
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.map((r) => flattenWithExtras(r));
+}
+
 /** /api/opendoor/ticker/{ticker} (onefile.jsonl row) */
 export type OpendoorTickerResponse = {
   ok?: boolean;

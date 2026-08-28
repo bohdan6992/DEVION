@@ -802,17 +802,6 @@ export default function ExecutionSettingsPanel({
       </button>
     )}
 
-    {streamFilterPassLogCount > 0 && (
-      <button
-        type="button"
-        onClick={downloadStreamFilterPassLog}
-        className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
-        title={`Download ${streamFilterPassLogCount} stream filter-pass entries as CSV (tickers that first appeared as ENTRY_READY)`}
-      >
-        ↓ STREAM LOG ({streamFilterPassLogCount})
-      </button>
-    )}
-
   </div>
 </GlassCard>
   );

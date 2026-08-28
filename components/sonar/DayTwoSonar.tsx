@@ -25,6 +25,7 @@ import { MinMaxRow, MultiSelectFilter } from "../scanner/shared/ui";
 import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_INPUT, FILTER_PILL, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE, toolbarButtonClass } from "../shared/filters/styles";
 import FilterRatingRow from "../shared/filters/FilterRatingRow";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import { buildActiveTickerStats } from "@/lib/filters/activeTickerStats";
 import {
   SECTOR_CORR_DEFAULT,
   SECTOR_CORR_MAX,
@@ -4805,16 +4806,7 @@ export default function OpenDoorSonar() {
         {activePanelVisible && (
           <ActiveTickerCard
             ticker={activeTicker ?? null}
-            stats={[
-              { label: "Exchange", value: activeExchange2 !== "-" ? activeExchange2 : "-" },
-              { label: "Bench", value: activeBench !== "-" ? activeBench : "-" },
-              { label: "Beta", value: activeBeta == null ? "-" : fmtNum(activeBeta, 2) },
-              { label: "Sig", value: activeSigma == null ? "-" : fmtNum(activeSigma, 2) },
-              { label: "Rate", value: bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`, accent: true },
-              { label: "N", value: bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff) },
-              { label: "MD Print Pos", value: activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2) },
-              { label: "MD Print Neg", value: activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2) },
-            ]}
+            stats={buildActiveTickerStats(activeData, type)}
             loading={activeLoading}
             error={activeErr}
             accentLineClass={accentLineClass}

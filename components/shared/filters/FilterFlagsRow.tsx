@@ -81,6 +81,12 @@ export type FilterFlagsRowProps = {
   selectsSlot?: React.ReactNode;
   /** Sort control. */
   sortSlot?: React.ReactNode;
+  /**
+   * Rendered AFTER the sort group, as its own element rather than inside it. A strategy-specific
+   * control belongs next to the sort pill, not within its border — putting it in sortSlot wraps it
+   * in the sort group's own frame and the two read as one control.
+   */
+  trailingSlot?: React.ReactNode;
   /** ZAP group; Arbitrage only, absent on OpenDoor. */
   zapSlot?: React.ReactNode;
   /**
@@ -104,6 +110,7 @@ export default function FilterFlagsRow({
   regions,
   selectsSlot,
   sortSlot,
+  trailingSlot,
   zapSlot,
   className,
 }: FilterFlagsRowProps) {
@@ -176,6 +183,8 @@ export default function FilterFlagsRow({
       {sortSlot != null && (
         <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.sort.group}`}>{sortSlot}</div>
       )}
+
+      {trailingSlot}
 
       {zapSlot}
     </div>

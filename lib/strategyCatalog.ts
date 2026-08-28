@@ -20,6 +20,8 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "quartalDep", name: "Quartal Dep", icon: "📅", description: "Квартальні залежності й події." },
   { key: "dayTwo", name: "Day Two", icon: "2️⃣", description: "Другий день після події." },
   { key: "opendoor", name: "Open Door", icon: "🚪", description: "Відкриття ринку: сетапи та статистика." },
+  { key: "openfade", name: "Open Fade", icon: "🪞", description: "Фейд відхилення стака в сігмах на відкритті." },
+  { key: "openride", name: "Open Ride", icon: "🏄", description: "Те саме відхилення, але за рухом: мінус — сел, плюс — бай." },
   { key: "rLine", name: "R-Line", icon: "📏", description: "Рівні ризику/нагороди та відпрацювання." },
   { key: "intraDance", name: "Intra Dance", icon: "🩰", description: "Інтра-динаміка: рух/нормалізація." },
   { key: "morningLounch", name: "Morning Launch", icon: "🌅", description: "Ранковий імпульс після відкриття." },

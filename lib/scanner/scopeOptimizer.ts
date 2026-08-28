@@ -411,6 +411,10 @@ export function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResea
       return "startMetricAbs";
     case "endabs":
       return "endMetricAbs";
+    case "devsig":
+      return "entryDevSig";
+    case "devpct":
+      return "entryDevPct";
     case "adv20":
       return "adv20";
     case "adv20nf":

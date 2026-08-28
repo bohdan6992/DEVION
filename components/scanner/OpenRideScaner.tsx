@@ -10,7 +10,7 @@ import { useFilterRestore } from "../../lib/scanner/useFilterRestore";
 import { useEpisodesSearchCache } from "../../lib/scanner/useEpisodesSearchCache";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
-import { getArbitrageList, getOpendoorList } from "../../lib/trapClient";
+import { getArbitrageList, getOpenRideList } from "../../lib/trapClient";
 import { pushOpenDoorLiveParams, toOpenDoorLiveFilters } from "../../lib/opendoor/liveParamsClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
@@ -27,7 +27,7 @@ import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
-import { matchOpenDoorGate, readOpenDoorGateValues } from "@/lib/opendoor/gate";
+import { readOpenDoorGateValues } from "@/lib/opendoor/gate";
 
 // OpenDoor evaluates CLEAN data: no Arbitrage rating floor anywhere in the path. The only rating
 // that may reject a ticker is OpenDoor's own per-bin table from its summary.csv (lib/opendoor/gate).
@@ -76,11 +76,12 @@ import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
 import OpenDoorGatesRow, { EMPTY_ENTRY_BOUNDS, type OpenDoorEntryBounds } from "./shell/panels/OpenDoorGatesRow";
+import SigmaDevBand, { type FadeMetric } from "./shell/panels/SigmaDevBand";
 // OpenDoor tracks no sigma metric and no peak (the mapper leaves those slots null and
 // MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
 // metrics are excluded rather than rendering empty charts that look like a bug.
 const STRATEGY = defineScannerStrategy({
-  key: "opendoor",
+  key: "openride",
   excludeScopeParameters: [
     "startMetricAbs", "peakMetricAbs", "endMetricAbs",
     "reversionAbs", "reversionPct",
@@ -134,9 +135,9 @@ type ArbitrageScannerProps = {
   navSonarHref?: string;
 };
 
-const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
+const ACTIVE_TICKER_STRATEGY = "openride" as const;
 
-export default function OpenDoorScanner({
+export default function OpenRideScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
   controlledTab,
@@ -161,7 +162,7 @@ export default function OpenDoorScanner({
   analyticsTabLabelOverride,
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
-  lsKeyPrefix = "paper.opendoor",
+  lsKeyPrefix = "paper.openride",
   // Routes come from the registry entry, not from literals repeated per component.
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,
@@ -664,6 +665,13 @@ export default function OpenDoorScanner({
   // two-column UP/DOWN layout. Deliberately fresh state, not the shared Arbitrage `activeRule`.
   // Backtest escape hatch: best_params publishes no bin under rate 0.60 / total 10, so the region
   // below the floor cannot be reached by lowering the thresholds — only by removing the gate.
+  // OpenRide selects on the stack's sigma deviation, not on a rating bin: |sigma| must fall inside
+  // this band and the sign picks the side — negative buys, positive sells.
+  const [fadeMetric, setFadeMetric] = useState<FadeMetric>("sigma");
+  // Whole universe against the band, rather than the server's own candidate set.
+  const [fadeUniverseAll, setFadeUniverseAll] = useState(true);
+  const [fadeMinAbs, setFadeMinAbs] = useState(1.0);
+  const [fadeMaxAbs, setFadeMaxAbs] = useState<number | null>(null);
   const [openDoorIgnoreRatings, setOpenDoorIgnoreRatings] = useState(false);
   // Explicit entry levels: with the gate off there is no bin to define the situation, so this is
   // what replaces it; with the gate on it narrows the rated level instead of replacing it.
@@ -684,7 +692,7 @@ export default function OpenDoorScanner({
   // selected exit class, "would we have made money buying/selling EVERY historical candidate
   // whose entry-side bin cleared the MINRATE/MINTOTAL/MINMOVE bar?" rate/total/avg_move already
   // ARE that answer per {param}x{class}x{direction} bin, computed once by OpenDoor.ipynb — no
-  // per-day replay data is needed, just the existing best-bin columns from /api/opendoor/summary.
+  // per-day replay data is needed, just the existing best-bin columns from /api/openride/summary.
   const [openDoorRatingByTicker, setOpenDoorRatingByTicker] = useState<Record<string, Record<string, string>>>({});
   const [openDoorRatingLoading, setOpenDoorRatingLoading] = useState(false);
   const [openDoorRatingError, setOpenDoorRatingError] = useState<string | null>(null);
@@ -693,7 +701,7 @@ export default function OpenDoorScanner({
     const load = async () => {
       setOpenDoorRatingLoading(true);
       try {
-        const rows = await getOpendoorList();
+        const rows = await getOpenRideList();
         if (cancelled) return;
         const byTicker: Record<string, Record<string, string>> = {};
         for (const row of rows) {
@@ -800,6 +808,7 @@ export default function OpenDoorScanner({
   }, [
     openDoorRatingByTicker, openDoorExitClass,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    fadeMetric, fadeMinAbs, fadeMaxAbs,
     openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
@@ -1452,8 +1461,8 @@ export default function OpenDoorScanner({
 
   // ========= OpenDoor SNAPSHOT: live per-day tape replay (architecturally mirrors Arbitrage's
   // SNAPSHOT tab — POST .../episodes/search, per-day cache, day-range build — but hits
-  // /api/paper/opendoor/episodes/search, gated by OpenDoor's own summary.csv ratings and using
-  // TapeOpenDoorEngine's fixed 09:20-entry/09:40-or-10:00-exit rule instead of Arbitrage's
+  // /api/paper/openride/episodes/search, picking on OpenRide's signed band rather than on rating
+  // bins, and using TapeOpenDoorEngine's fixed 09:20-entry/09:40-or-10:00-exit rule instead of Arbitrage's
   // hedge engine. Real per-day accuracy: each row is an ACTUALLY realized trade, not a bin average.
   type OpenDoorPaperClosed = {
     ticker: string;
@@ -1466,6 +1475,8 @@ export default function OpenDoorScanner({
     move?: number | null;
     pnl?: number | null;
     entryDevSig?: number | null;
+    /** The ticker's sigma, kept only to convert entryDevSig into its percent twin. */
+    sigma?: number | null;
     entryBench?: number | null;
     gateRate?: number | null;
     gateTotal?: number | null;
@@ -1507,6 +1518,7 @@ export default function OpenDoorScanner({
   }, [
     primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, openDoorExitClass,
     openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    fadeMetric, fadeMinAbs, fadeMaxAbs,
     openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
@@ -1668,6 +1680,9 @@ export default function OpenDoorScanner({
         if (typeof s.openDoorUseStack === "boolean") setOpenDoorUseStack(s.openDoorUseStack);
         if (typeof s.openDoorUseBench === "boolean") setOpenDoorUseBench(s.openDoorUseBench);
         if (typeof s.openDoorUseDevSig === "boolean") setOpenDoorUseDevSig(s.openDoorUseDevSig);
+        if (s.fadeMetric === "sigma" || s.fadeMetric === "pct") setFadeMetric(s.fadeMetric);
+        if (typeof s.fadeMinAbs === "number") setFadeMinAbs(s.fadeMinAbs);
+        if (typeof s.fadeMaxAbs === "number" || s.fadeMaxAbs === null) setFadeMaxAbs(s.fadeMaxAbs);
         if (typeof s.openDoorIgnoreRatings === "boolean") setOpenDoorIgnoreRatings(s.openDoorIgnoreRatings);
         if (typeof s.openDoorUseManualEntry === "boolean") setOpenDoorUseManualEntry(s.openDoorUseManualEntry);
         if (s.openDoorEntryBounds && typeof s.openDoorEntryBounds === "object") setOpenDoorEntryBounds({ ...EMPTY_ENTRY_BOUNDS, ...s.openDoorEntryBounds });
@@ -2107,7 +2122,8 @@ export default function OpenDoorScanner({
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
       openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-      openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
+      fadeMetric, fadeMinAbs, fadeMaxAbs,
+    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
       openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     ]
@@ -2486,7 +2502,8 @@ export default function OpenDoorScanner({
   useEffect(() => {
     if (!filtersHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      void pushOpenDoorLiveParams({
+      void pushOpenDoorLiveParams(
+        {
         exitClass: openDoorExitClass,
         useStack: openDoorUseStack,
         useBench: openDoorUseBench,
@@ -2503,12 +2520,15 @@ export default function OpenDoorScanner({
           exchanges: exchangeEnabled,
           sectors: sectorEnabled,
         }),
-        source: "opendoor-scanner",
-      });
+        source: "openride-scanner",
+      },
+        "openride"
+      );
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
     openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    fadeMetric, fadeMinAbs, fadeMaxAbs,
     openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
@@ -2834,33 +2854,36 @@ export default function OpenDoorScanner({
     minRate: OPEN_DOOR_NO_ARB_RATE,
     minTotal: OPEN_DOOR_NO_ARB_TOTAL,
     omitStartAbs: true,
-  }), []);
+    includeAll: fadeUniverseAll,
+  }), [fadeUniverseAll]);
 
   // Same rule, same function, same rows as OpenDoor Sonar — see lib/opendoor/gate.ts for why it
   // is not duplicated here. The scanner has no ADVANCED toggle (that is a Sonar-only view), so
   // the standard 09:20 bin columns are always the ones read.
+  // OpenRide's rule, mirroring TapeOpenDoorEngine.FadePass under SigmaRide: the reading must sit
+  // inside the band and its SIGN picks the side — positive buys, negative sells, the opposite of
+  // OpenFade. Judging by rating bins here would have the stream send what OpenDoor would trade,
+  // not what this strategy backtests.
   const openDoorStreamGate = useCallback(
-    (signal: any) => matchOpenDoorGate(
-      openDoorRatingByTicker[String(signal?.ticker ?? "").toUpperCase().trim()],
-      readOpenDoorGateValues(signal),
-      {
-        exitClass: openDoorExitClass,
-        advancedMode: false,
-        useStack: openDoorUseStack,
-        useBench: openDoorUseBench,
-        useDevSig: openDoorUseDevSig,
-        upMinRate: openDoorUpMinRate,
-        upMinTotal: openDoorUpMinTotal,
-        upMinMove: openDoorUpMinMove,
-        downMinRate: openDoorDownMinRate,
-        downMinTotal: openDoorDownMinTotal,
-        downMinMove: openDoorDownMinMove,
-      }
-    ),
-    [openDoorRatingByTicker, openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-     openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
-    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
-     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove]
+    (signal: any) => {
+      const values = readOpenDoorGateValues(signal);
+      const rawUp = fadeMetric === "pct" ? Number((signal as any)?.zapL) : values.devUp;
+      const rawDown = fadeMetric === "pct" ? Number((signal as any)?.zapS) : values.devDown;
+      const inBand = (v: number | null, wantNegative: boolean) => {
+        if (v == null || !Number.isFinite(v)) return false;
+        if (wantNegative ? v >= 0 : v <= 0) return false;
+        const abs = Math.abs(v);
+        if (abs < fadeMinAbs) return false;
+        if (fadeMaxAbs != null && abs > fadeMaxAbs) return false;
+        return true;
+      };
+      // OpenRide takes the same band the other way round: it RIDES the deviation instead of
+      // fading it, so a positive reading is the buy and a negative one the sell. This mirrors
+      // TapeOpenDoorEngine.FadePass under SelectionMode.SigmaRide — the two must agree, because
+      // this verdict is what the Stream sends and the bridge is what the backtest measures.
+      return { up: inBand(rawUp, false), down: inBand(rawDown, true) };
+    },
+    [fadeMetric, fadeMinAbs, fadeMaxAbs]
   );
 
   const {
@@ -2894,6 +2917,9 @@ export default function OpenDoorScanner({
     signalGate: openDoorStreamGate,
     // OpenDoor ends its session with a single Ctrl+E at CUTOFF, not Arbitrage's Ctrl+Q -> Ctrl+O.
     cutoffAction: "exit-all" as const,
+    // OpenRide's own order types. They resolve to the same Ctrl+F1 / Ctrl+F2 as OpenDoor today,
+    // but through its own setting — so retuning one desk's keys cannot move the other's.
+    entryIntentTypes: { long: "OpenRideEnterLong", short: "OpenRideEnterShort" },
     signalsRequest: openDoorSignalsRequest,
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
@@ -3107,6 +3133,9 @@ export default function OpenDoorScanner({
     const reqTickers = requestScopedTickers;
     return {
       exitClass: openDoorExitClass,
+      fadeMetric,
+      fadeMinAbs,
+      fadeMaxAbs,
       ignoreRatings: openDoorIgnoreRatings,
       useManualEntry: openDoorUseManualEntry,
       stackMin: openDoorEntryBounds.stackMin,
@@ -4642,6 +4671,7 @@ export default function OpenDoorScanner({
           move: r?.move ?? null,
           pnl: r?.totalPnlUsd ?? null,
           entryDevSig: r?.entryDevSig ?? null,
+          sigma: r?.sigma ?? null,
           entryBench: r?.startBenchLstPrcLstClsPct ?? null,
           gateRate: r?.rating ?? null,
           gateTotal: r?.ratingTotal ?? null,
@@ -5721,12 +5751,12 @@ export default function OpenDoorScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "OPEN DOOR STREAM")
+    ? (headerTitleOverride ?? "OPENRIDE STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "OPEN DOOR STREAM"
-        : "OPEN DOOR SCANNER";
+        ? "OPENRIDE STREAM"
+        : "OPENRIDE SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -5990,13 +6020,12 @@ export default function OpenDoorScanner({
             )}
           </div>
 
+          {/* The rating gate applies ON TOP of the σ DEV band: the band says which deviation is
+              tradable, the gate says which ticker is worth trading it on. GATE OFF drops the gate
+              and leaves the band alone. */}
           <OpenDoorGatesRow
             ignoreRatings={openDoorIgnoreRatings}
             setIgnoreRatings={setOpenDoorIgnoreRatings}
-            useManualEntry={openDoorUseManualEntry}
-            setUseManualEntry={setOpenDoorUseManualEntry}
-            entryBounds={openDoorEntryBounds}
-            setEntryBounds={setOpenDoorEntryBounds}
             useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
             useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
             useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}
@@ -6360,6 +6389,16 @@ export default function OpenDoorScanner({
                 />
               </div>
             }
+            trailingSlot={
+              <SigmaDevBand
+                metric={fadeMetric}
+                setMetric={setFadeMetric}
+                minAbs={fadeMinAbs}
+                setMinAbs={setFadeMinAbs}
+                maxAbs={fadeMaxAbs}
+                setMaxAbs={setFadeMaxAbs}
+              />
+            }
           />
         {/* Active ticker, shared with the Sonars and Stream. The Sonar owns the selection; this
             reads its per-strategy localStorage key so the same ticker is active on every surface.
@@ -6697,7 +6736,7 @@ export default function OpenDoorScanner({
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  OPENDOOR CANDIDATES | rows {openDoorCombined.rows.length}
+                  OPENRIDE CANDIDATES | rows {openDoorCombined.rows.length}
                 </div>
                 <div className="text-[10px] font-mono text-zinc-600">
                   {openDoorExitClass} exit · entry 9:20 · {openDoorResearch.enabledParams.join(" + ") || "no params enabled"}
@@ -8531,7 +8570,14 @@ export default function OpenDoorScanner({
                       <th className="text-right p-2.5">Exit Fill</th>
                       <th className="text-right p-2.5">Move (pts)</th>
                       <th className="text-right p-2.5">P&amp;L ($)</th>
-                      <th className="text-right p-2.5 border-l border-white/10">DevSig</th>
+                      <th
+                        className="text-right p-2.5 border-l border-white/10"
+                        title={fadeMetric === "pct"
+                          ? "Entry deviation in percent — the reading the % DEV band judged. Derived as sigmas × the ticker's sigma."
+                          : "Entry deviation in sigmas — the reading the σ DEV band judged."}
+                      >
+                        {fadeMetric === "pct" ? "Dev %" : "DevSig"}
+                      </th>
                       <th className="text-right p-2.5">Bench</th>
                       <th className="text-right p-2.5 border-l border-white/10">Gate Rate×Total</th>
                     </tr>
@@ -8561,7 +8607,14 @@ export default function OpenDoorScanner({
                         >
                           {num(r.pnl ?? null, 2)}
                         </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{num(r.entryDevSig ?? null, 3)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">
+                          {num(
+                            fadeMetric === "pct"
+                              ? (r.entryDevSig != null && r.sigma != null ? r.entryDevSig * r.sigma : null)
+                              : (r.entryDevSig ?? null),
+                            3
+                          )}
+                        </td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.entryBench ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
                           {r.gateRate != null ? `${(r.gateRate * 100).toFixed(0)}%` : "—"}×{r.gateTotal ?? "—"}

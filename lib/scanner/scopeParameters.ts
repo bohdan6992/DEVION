@@ -57,6 +57,8 @@ export const SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL: Array<ScopeResearchOption<Sco
   { value: "reversionAbs", label: "Peak-End Abs", format: "number" },
   { value: "reversionPct", label: "Reversion %", format: "percent" },
   { value: "minHoldCandles", label: "Min Hold", format: "minutes" },
+  { value: "entryDevSig", label: "DEV σ", format: "number" },
+  { value: "entryDevPct", label: "DEV %", format: "number" },
   { value: "rating", label: "Rating", format: "number" },
   { value: "ratingTotal", label: "Rating Total", format: "number" },
   { value: "corr", label: "CORR", format: "number" },
@@ -119,6 +121,8 @@ function buildParameterSelectGroups(
         "reversionAbs",
         "reversionPct",
         "minHoldCandles",
+        "entryDevSig",
+        "entryDevPct",
       ].includes(option.value)
     ).map((option) => ({ value: option.value, label: option.label })),
   },
@@ -316,6 +320,11 @@ export const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "bench", label: "BENCH", group: "RATING GATES", kind: "categorical" },
   { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
   { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
+  // OpenFade picks its trades on nothing else, and OpenDoor gates on the same reading, so
+  // without these two the optimizer could rank every incidental tape field EXCEPT the one
+  // the strategy actually acts on. START/END above stay null for both (no peak tracking).
+  { key: "devsig", label: "DEV σ", group: "ZAP THRESHOLDS", scenarioParameter: null },
+  { key: "devpct", label: "DEV %", group: "ZAP THRESHOLDS", scenarioParameter: null },
   { key: "adv20", label: "ADV20", group: "TAPE FILTERS", scenarioParameter: "ADV20" },
   { key: "adv20nf", label: "ADV20NF", group: "TAPE FILTERS", scenarioParameter: "ADV20NF" },
   { key: "adv90", label: "ADV90", group: "TAPE FILTERS", scenarioParameter: "ADV90" },

@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import AutoSizer from "react-virtualized-auto-sizer";
 import { List, type RowComponentProps } from "react-window";
-import React, { memo, useDeferredValue, useMemo, useState } from "react";
+import React, { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { useStreamActionLogRows } from "./streamActionLogStore";
 import { useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
 import { useStreamExecutionSnapshot } from "./streamExecutionStore";
@@ -11,7 +11,7 @@ import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrde
 import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
 import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
-import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { setActiveTicker, useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
 import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
 import { useStreamStores } from "./streamStoreRegistry";
@@ -103,17 +103,67 @@ function BookLevelsCard({
   );
 }
 
+/**
+ * The fields of TradingApp's main window, in the order that window lists them.
+ *
+ * Two of these were spelled wrong and therefore never matched: "LongPosLtClsA%" and
+ * "ShortPosStClsA%" against the window's "LongPosLstClsA%" / "ShortPosLstClsA%". The matcher
+ * strips punctuation and tries a substring both ways, and "longposltclsa%" is not a substring of
+ * "longposlstclsa%" — so both rows sat at a permanent dash that looked like missing data rather
+ * than a typo.
+ */
 const MAIN_WINDOW_FIELD_ORDER = [
   "TotalBPUsed",
   "TotalShortBPUsed",
   "TotalLongBPUsed",
-  "TotalOpenPnL",
   "TotalClosedPnL",
-  "LongPosLtClsA%",
-  "ShortPosStClsA%",
+  "LongPosLstClsA%",
+  "ShortPosLstClsA%",
   "LstPrcTotalPnL",
   "BPLeft",
+  "LstPrcTotalPnLBP%",
+  "AccNetClosedPnL",
+  "OpenPositions",
 ];
+
+/**
+ * Colour by family, so the nine fields read as three groups instead of one list: buying power,
+ * P&L, and the per-side position percentages. Long is green and short is rose throughout the
+ * board — the same pair the OPEN LONG / OPEN SHORT cards and the side badges use.
+ */
+const MAIN_WINDOW_FIELD_TONE: Record<string, string> = {
+  TotalBPUsed: "text-violet-300/80",
+  TotalShortBPUsed: "text-rose-300/80",
+  TotalLongBPUsed: "text-emerald-300/80",
+  BPLeft: "text-sky-300/80",
+  TotalClosedPnL: "text-teal-300/80",
+  AccNetClosedPnL: "text-teal-300/80",
+  LstPrcTotalPnL: "text-amber-300/80",
+  "LstPrcTotalPnLBP%": "text-amber-300/80",
+  "LongPosLstClsA%": "text-emerald-300/80",
+  "ShortPosLstClsA%": "text-rose-300/80",
+  OpenPositions: "text-violet-300/80",
+};
+
+/** P&L fields also colour their VALUE by sign, the one place a number says good or bad by itself. */
+const MAIN_WINDOW_SIGNED_FIELDS = new Set([
+  "TotalClosedPnL",
+  "AccNetClosedPnL",
+  "LstPrcTotalPnL",
+  "LstPrcTotalPnLBP%",
+]);
+
+/**
+ * Sign of an OCR-read value. The snapshot hands over display strings ("-1,204.50", "(320)"),
+ * so this reads the text rather than assuming a number: anything it cannot parse stays neutral,
+ * which is the honest answer for a field that was misread.
+ */
+function mainWindowValueTone(heading: string, value: string | null): string {
+  if (!value || !MAIN_WINDOW_SIGNED_FIELDS.has(heading)) return "text-zinc-200";
+  const n = Number(value.replace(/[\s,$]/g, "").replace(/^\((.*)\)$/, "-$1"));
+  if (!Number.isFinite(n) || n === 0) return "text-zinc-200";
+  return n > 0 ? "text-emerald-300" : "text-rose-300";
+}
 const STREAM_BID_MINT = "#7ef7d4";
 const STREAM_BID_MINT_SOFT = "rgba(126, 247, 212, 0.10)";
 const STREAM_BID_MINT_PANEL = "rgba(126, 247, 212, 0.04)";
@@ -216,9 +266,11 @@ function MainWindowBookSplitCard({
 
   return (
     <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-      <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Main Window</div>
+      <div className="scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        {/* Same title bar as every other panel on the board: this one used to carry its own
+            border, padding and title weight, which read as a different kind of thing. */}
+        <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+          <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">Main Window</div>
           <div className="flex items-center gap-1.5">
             {mainWindowControls.map((control) => (
               <div
@@ -237,18 +289,25 @@ function MainWindowBookSplitCard({
             ))}
           </div>
         </div>
-        <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
-          <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
+        {/* One frame, not two — the inner box was a second border inside the panel. Each field now
+            reads like a MetricCard: muted label on the left, bright value on the right. */}
+        <div className="flex-1 overflow-y-auto p-3">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-3">
             {orderedFields.map((field, index) => (
               <div
                 key={`${field.heading}|${index}`}
-                className={clsx(
-                  "flex items-center justify-between gap-3 border-b border-white/5 py-1.5 font-mono",
-                  index % 2 === 0 ? "text-zinc-200" : "text-zinc-300",
-                )}
+                className="flex items-center justify-between gap-3 border-b border-white/5 py-2 font-mono"
               >
-                <div className="truncate text-[11px] leading-none text-emerald-300">{field.heading}</div>
-                <div className={clsx("shrink-0 text-right text-[14px] leading-none", field.value ? "text-zinc-100" : "text-zinc-600")}>
+                <div className={clsx(
+                  "truncate text-[10px] uppercase tracking-widest",
+                  MAIN_WINDOW_FIELD_TONE[field.heading] ?? "text-zinc-500",
+                )}>
+                  {field.heading}
+                </div>
+                <div className={clsx(
+                  "shrink-0 text-right text-sm font-semibold leading-none",
+                  field.value ? mainWindowValueTone(field.heading, field.value) : "text-zinc-600",
+                )}>
                   {field.value ?? "—"}
                 </div>
               </div>
@@ -381,7 +440,6 @@ function MetricCard({
   );
 }
 
-const STREAM_DECISION_TABLE_MIN_WIDTH = 1100;
 const STREAM_DECISION_ROW_HEIGHT = 57;
 const STREAM_DECISION_VIRTUAL_THRESHOLD = 240;
 
@@ -432,7 +490,8 @@ function StreamDecisionVirtualRow({
   index,
   style,
   rows,
-}: RowComponentProps<{ rows: StreamDecisionTableRow[] }>) {
+  onTickerClick,
+}: RowComponentProps<{ rows: StreamDecisionTableRow[]; onTickerClick?: (ticker: string) => void }>) {
   const row = rows[index];
   if (!row) return <div style={style} />;
 
@@ -440,25 +499,26 @@ function StreamDecisionVirtualRow({
     <div
       {...ariaAttributes}
       style={style}
+      onClick={() => onTickerClick?.(row.ticker)}
       className={clsx(
-        "grid grid-cols-[120px_96px_88px_74px_78px_78px_74px_74px_86px_108px_132px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        "grid grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,0.9fr)_minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.15fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
         index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-        "hover:bg-white/[0.03]"
+        onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
       )}
     >
-      <div className="px-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
-      <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
-      <div className="px-2.5"><SideBadge side={row.side} /></div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-      <div className="px-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
-      <div className="px-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
-      <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
+      <div className="px-2 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2"><SideBadge side={row.side} /></div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+      <div className="px-2 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
+      <div className="px-2"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
 }
@@ -468,7 +528,8 @@ function StreamDecisionStoreVirtualRow({
   index,
   style,
   rowIds,
-}: RowComponentProps<{ rowIds: string[] }>) {
+  onTickerClick,
+}: RowComponentProps<{ rowIds: string[]; onTickerClick?: (ticker: string) => void }>) {
   const rowId = rowIds[index];
   const row = useStreamDecisionRow(rowId);
   if (!row) return <div style={style} />;
@@ -477,23 +538,32 @@ function StreamDecisionStoreVirtualRow({
     <div
       {...ariaAttributes}
       style={style}
+      onClick={() => onTickerClick?.(row.ticker)}
       className={clsx(
-        "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
         index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-        "hover:bg-white/[0.03]"
+        onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
       )}
     >
-      <div className="px-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
-      <div className="px-2.5 text-zinc-400">{row.benchmark}</div>
-      <div className="px-2.5"><SideBadge side={row.side} /></div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-      <div className="px-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-      <div className="px-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-      <div className="px-2.5"><StreamStatusBadge status={row.status} /></div>
+      <div className="px-2 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2"><SideBadge side={row.side} /></div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+      <div className="px-2"><StreamStatusBadge status={row.status} /></div>
     </div>
   );
 }
+
+/**
+ * Height of every panel on the stream board. The four blocks sit in two rows of two and
+ * only line up if all four are told the same number — left to their content, the metric
+ * grid, the log and the two tables each settled on a different one.
+ * Panels are flex columns: the title bar is fixed, the body scrolls inside it.
+ */
+const STREAM_PANEL_HEIGHT = "h-[320px]";
 
 const StreamDecisionTable = memo(function StreamDecisionTable({
   title,
@@ -501,25 +571,27 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
   emptyMessage,
   onDismissTicker,
   onDismissAll,
+  onTickerClick,
 }: {
   title: string;
   rows: StreamDecisionTableRow[];
   emptyMessage: string;
   onDismissTicker?: (ticker: string) => void;
   onDismissAll?: () => void;
+  onTickerClick?: (ticker: string) => void;
 }) {
   const useVirtualRows = rows.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
   const hasDismiss = !!onDismissTicker;
   const gridStyle: React.CSSProperties = {
     display: "grid",
     gridTemplateColumns: hasDismiss
-      ? "120px 96px 88px 74px 78px 78px 96px 74px 74px 86px 108px 132px 36px"
-      : "120px 96px 88px 74px 78px 78px 96px 74px 74px 86px 108px 132px",
+      ? "minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,1.15fr) 36px"
+      : "minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,1.15fr)",
   };
 
   return (
-    <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
         <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
           {title}
         </div>
@@ -537,28 +609,25 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
           </div>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <div
-          className="min-w-[880px]"
-          style={{ minWidth: STREAM_DECISION_TABLE_MIN_WIDTH }}
-        >
+      <div className="flex-1 overflow-y-auto">
+        <div>
           <div
-            className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl"
+            className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap"
             style={gridStyle}
           >
-            <div className="p-2.5 text-left">Ticker</div>
-            <div className="p-2.5 text-left">Bench</div>
-            <div className="p-2.5 text-left">Side</div>
-            <div className="p-2.5 text-right">Signal</div>
-            <div className="p-2.5 text-right">SpreadBid%</div>
-            <div className="p-2.5 text-right">Net Edge</div>
-            <div className="p-2.5 text-left">REP</div>
-            <div className="p-2.5 text-right">Entryσ</div>
-            <div className="p-2.5 text-right">Baseσ</div>
-            <div className="p-2.5 text-right">Confσ</div>
-            <div className="p-2.5 text-right">NextAddσ</div>
-            <div className="p-2.5 text-left">Add</div>
-            <div className="p-2.5 text-left">Status</div>
+            <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+            <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
+            <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
+            <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
+            <div className="px-2 py-2.5 text-left text-pink-400/80">REP</div>
+            <div className="px-2 py-2.5 text-right text-zinc-300">Entryσ</div>
+            <div className="px-2 py-2.5 text-right text-zinc-300">Baseσ</div>
+            <div className="px-2 py-2.5 text-right text-sky-300/80">Confσ</div>
+            <div className="px-2 py-2.5 text-right text-amber-300/80">NextAddσ</div>
+            <div className="px-2 py-2.5 text-left text-emerald-300/80">Add</div>
+            <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
             {hasDismiss && <div className="p-2.5" />}
           </div>
 
@@ -567,16 +636,16 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
               {emptyMessage}
             </div>
           ) : useVirtualRows ? (
-            <div className="h-[540px]">
+            <div className="h-[248px]">
               <AutoSizer>
                 {({ height, width }) => (
                   <List
                     rowComponent={StreamDecisionVirtualRow}
                     rowCount={rows.length}
                     rowHeight={STREAM_DECISION_ROW_HEIGHT}
-                    rowProps={{ rows }}
+                    rowProps={{ rows, onTickerClick }}
                     overscanCount={8}
-                    style={{ width: Math.max(width, STREAM_DECISION_TABLE_MIN_WIDTH), height }}
+                    style={{ width, height }}
                   />
                 )}
               </AutoSizer>
@@ -586,26 +655,27 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
               {rows.map((row, i) => (
                 <div
                   key={`${title}|${row.ticker}|${i}`}
+                  onClick={() => onTickerClick?.(row.ticker)}
                   className={clsx(
-                    "items-center border-t border-white/5 transition-colors",
+                    "items-center border-t border-white/5 transition-colors [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap",
                     i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                    "hover:bg-white/[0.03]"
+                    onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
                   )}
                   style={gridStyle}
                 >
-                  <div className="px-2.5 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
-                  <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
-                  <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-                  <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
-                  <div className="px-2.5 py-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
-                  <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
+                  <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                  <div className="px-2 py-2.5 text-zinc-400">{row.benchmark}</div>
+                  <div className="px-2 py-2.5"><SideBadge side={row.side} /></div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                  <div className="px-2 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+                  <div className="px-2 py-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
+                  <div className="px-2 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   {hasDismiss && (
                     <div className="flex items-center justify-center px-1">
                       <button
@@ -631,18 +701,20 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   title,
   rowIds,
   emptyMessage,
+  onTickerClick,
 }: {
   title: string;
   rowIds: string[];
   emptyMessage: string;
+  onTickerClick?: (ticker: string) => void;
 }) {
   const deferredRowIds = useDeferredValue(rowIds);
   const decisionStore = useStreamStores().decision;
   const useVirtualRows = deferredRowIds.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
 
   return (
-    <div className="scanner-panel-surface overflow-auto rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
         <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
           {title}
         </div>
@@ -650,20 +722,17 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
           {intn(deferredRowIds.length)}
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <div
-          className="min-w-[880px]"
-          style={{ minWidth: STREAM_DECISION_TABLE_MIN_WIDTH }}
-        >
-          <div className="sticky top-0 z-10 grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
-            <div className="p-2.5 text-left">Ticker</div>
-            <div className="p-2.5 text-left">Bench</div>
-            <div className="p-2.5 text-left">Side</div>
-            <div className="p-2.5 text-right">Signal</div>
-            <div className="p-2.5 text-right">SpreadBid%</div>
-            <div className="p-2.5 text-right">Net Edge</div>
-            <div className="p-2.5 text-left">REP</div>
-            <div className="p-2.5 text-left">Status</div>
+      <div className="flex-1 overflow-y-auto">
+        <div>
+          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+            <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
+            <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
+            <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
+            <div className="px-2 py-2.5 text-left text-pink-400/80">REP</div>
+            <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
           </div>
 
           {!deferredRowIds.length ? (
@@ -671,16 +740,16 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
               {emptyMessage}
             </div>
           ) : useVirtualRows ? (
-            <div className="h-[540px]">
+            <div className="h-[248px]">
               <AutoSizer>
                 {({ height, width }) => (
                   <List
                     rowComponent={StreamDecisionStoreVirtualRow}
                     rowCount={deferredRowIds.length}
                     rowHeight={STREAM_DECISION_ROW_HEIGHT}
-                    rowProps={{ rowIds: deferredRowIds }}
+                    rowProps={{ rowIds: deferredRowIds, onTickerClick }}
                     overscanCount={8}
-                    style={{ width: Math.max(width, STREAM_DECISION_TABLE_MIN_WIDTH), height }}
+                    style={{ width, height }}
                   />
                 )}
               </AutoSizer>
@@ -693,21 +762,21 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
                 return (
                   <div
                     key={`${title}|${row.ticker}|${i}`}
+                    onClick={() => onTickerClick?.(row.ticker)}
                     className={clsx(
-                      "grid grid-cols-[148px_120px_116px_1fr_1fr_1fr_172px] items-center border-t border-white/5 transition-colors",
+                      "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center border-t border-white/5 transition-colors",
                       i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                      "hover:bg-white/[0.03]"
+                      onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
                     )}
                   >
-                    <div className="px-2.5 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
-                    <div className="px-2.5 py-2.5 text-zinc-400">{row.benchmark}</div>
-                    <div className="px-2.5 py-2.5"><SideBadge side={row.side} /></div>
-                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-                    <div className="px-2.5 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-                    <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-                  <div className="px-2.5 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-                    <div className="px-2.5 py-2.5"><StreamStatusBadge status={row.status} /></div>
+                    <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                    <div className="px-2 py-2.5 text-zinc-400">{row.benchmark}</div>
+                    <div className="px-2 py-2.5"><SideBadge side={row.side} /></div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                    <div className="px-2 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+                    <div className="px-2 py-2.5"><StreamStatusBadge status={row.status} /></div>
                   </div>
                 );
               })}
@@ -760,7 +829,7 @@ function actionLogTxtRow(row: StreamActionLogEntry): string {
   ].join(" | ");
 }
 
-const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows: StreamActionLogEntry[] }) {
+const StreamActionLogTable = memo(function StreamActionLogTable({ rows, onTickerClick }: { rows: StreamActionLogEntry[]; onTickerClick?: (ticker: string) => void }) {
   const structuredLogEntries = useStreamLogEntries();
   const logStore = useStreamStores().log;
 
@@ -796,18 +865,16 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
   };
 
   return (
-    <div className="scanner-panel-surface flex h-[320px] flex-col rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-      <div className="flex items-start justify-between gap-4 px-3 py-3">
-        <div>
-          <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
-            Order Log
-          </div>
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          Order Log
         </div>
         <div className="flex items-center gap-2">
           {structuredLogEntries.length > 0 && (
             <button
               onClick={handleDownloadCsv}
-              className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
+              className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-sky-400/80 hover:bg-white/10 hover:text-sky-200 transition-colors"
               title="Download detailed CSV log (sigma, zap%, hold time, filters)"
             >
               CSV
@@ -816,32 +883,31 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
           {rows.length > 0 && (
             <button
               onClick={handleDownload}
-              className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors"
+              className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors"
               title="Download log as text file"
             >
               TXT
             </button>
           )}
-          <div className="shrink-0 rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-[10px] font-mono uppercase text-zinc-400">
-            {intn(rows.length)} rows
+          <div className="text-[10px] font-mono uppercase text-zinc-500">
+            {intn(rows.length)}
           </div>
         </div>
       </div>
-      <div className="border-t border-white/[0.06]" />
-      <div className="flex-1 overflow-y-auto overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <table className="min-w-[1480px] w-full text-xs font-mono">
-          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/45 text-zinc-500 backdrop-blur-xl">
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full table-fixed text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
             <tr>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal">Time</th>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal">Ticker</th>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal">Bench</th>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal">Side</th>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal">Action</th>
-              <th className="text-right p-2.5 whitespace-nowrap font-normal text-violet-500">σ</th>
-              <th className="text-right p-2.5 whitespace-nowrap font-normal text-sky-600">Since / Hold</th>
-              <th className="text-right p-2.5 whitespace-nowrap font-normal text-sky-600">Threshold</th>
-              <th className="text-left p-2.5 whitespace-nowrap font-normal text-amber-600">Filters</th>
-              <th className="text-left p-2.5 w-full font-normal">Reason</th>
+              <th className="w-[9%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-zinc-400">Time</th>
+              <th className="w-[8%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-zinc-200">Ticker</th>
+              <th className="w-[7%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-sky-300/70">Bench</th>
+              <th className="w-[8%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-violet-300/80">Side</th>
+              <th className="w-[10%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-emerald-300/80">Action</th>
+              <th className="w-[9%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-violet-300">σ</th>
+              <th className="w-[11%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-teal-300/80">Since / Hold</th>
+              <th className="w-[10%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-sky-400/80">Threshold</th>
+              <th className="w-[13%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-amber-400/80">Filters</th>
+              <th className="text-left px-2 py-2.5 font-normal text-zinc-400">Reason</th>
             </tr>
           </thead>
           <tbody>
@@ -866,17 +932,18 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
               return (
                 <tr
                   key={row.id}
+                  onClick={() => onTickerClick?.(row.ticker)}
                   className={clsx(
                     "transition-colors",
-                    i % 2 === 0 ? "bg-white/[0.012]" : "bg-transparent",
-                    "hover:bg-white/[0.025]"
+                    i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                    onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
                   )}
                 >
-                  <td className="p-2.5 text-zinc-500 whitespace-nowrap tabular-nums">{formatActionLogTime(row.at)}</td>
-                  <td className="p-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
-                  <td className="p-2.5 text-zinc-500 whitespace-nowrap">{row.benchmark}</td>
-                  <td className="p-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
-                  <td className="p-2.5 whitespace-nowrap">
+                  <td className="px-2 py-2.5 text-zinc-500 whitespace-nowrap tabular-nums">{formatActionLogTime(row.at)}</td>
+                  <td className="px-2 py-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
+                  <td className="px-2 py-2.5 text-zinc-500 whitespace-nowrap">{row.benchmark}</td>
+                  <td className="px-2 py-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
+                  <td className="px-2 py-2.5 whitespace-nowrap">
                     <span className={clsx(
                       "inline-flex rounded-md px-2 py-0.5 text-[10px] font-mono font-bold uppercase border tracking-wide",
                       isClose
@@ -888,8 +955,8 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
                       {isAdd && addNum != null ? `ADD #${addNum}` : isClose && row.entryCount != null && row.entryCount > 1 ? `CLOSE ×${row.entryCount}` : row.kind}
                     </span>
                   </td>
-                  <td className="p-2.5 text-right tabular-nums text-violet-300 whitespace-nowrap">{num(row.deviation, 4)}</td>
-                  <td className="p-2.5 text-right whitespace-nowrap tabular-nums">
+                  <td className="px-2 py-2.5 text-right tabular-nums text-violet-300 whitespace-nowrap">{num(row.deviation, 4)}</td>
+                  <td className="px-2 py-2.5 text-right whitespace-nowrap tabular-nums">
                     {sinceCell.text !== "—" ? (
                       <span className="flex flex-col items-end leading-tight gap-px">
                         <span className={sinceCell.cls}>{sinceCell.text}</span>
@@ -897,17 +964,17 @@ const StreamActionLogTable = memo(function StreamActionLogTable({ rows }: { rows
                       </span>
                     ) : <span className="text-zinc-700">—</span>}
                   </td>
-                  <td className="p-2.5 text-right tabular-nums text-sky-400 whitespace-nowrap">
+                  <td className="px-2 py-2.5 text-right tabular-nums text-sky-400 whitespace-nowrap">
                     {isAdd && row.addThreshold != null ? `${row.addThreshold.toFixed(3)}σ` : <span className="text-zinc-700">—</span>}
                   </td>
-                  <td className="p-2.5 text-amber-600/80 max-w-[200px] truncate text-[10px]" title={row.filtersOk}>{row.filtersOk || <span className="text-zinc-700">—</span>}</td>
-                  <td className="p-2.5 text-zinc-500 w-full max-w-[200px] truncate" title={row.reason}>{row.reason ?? "—"}</td>
+                  <td className="px-2 py-2.5 text-amber-600/80 max-w-[200px] truncate text-[10px]" title={row.filtersOk}>{row.filtersOk || <span className="text-zinc-700">—</span>}</td>
+                  <td className="px-2 py-2.5 text-zinc-500 w-full max-w-[200px] truncate" title={row.reason}>{row.reason ?? "—"}</td>
                 </tr>
               );
             })}
             {!rows.length && (
               <tr>
-                <td colSpan={10} className="p-8 text-center text-zinc-600">
+                <td colSpan={10} className="p-8 text-center text-xs font-mono text-zinc-500">
                   No STREAM actions recorded for today yet.
                 </td>
               </tr>
@@ -1278,6 +1345,13 @@ export default function ArbitrageStreamView({
   const activeDecisionRows = useStreamActiveDecisionRows();
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
   const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  // Clicking a row anywhere on this page makes that ticker active, the way clicking a row in
+  // Arbitrage Sonar does. The tables get a callback rather than the strategy key: they have no
+  // business knowing which strategy they belong to.
+  const onTickerClick = useCallback(
+    (ticker: string) => setActiveTicker(ACTIVE_TICKER_STRATEGY, ticker),
+    []
+  );
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeStreamRow = useMemo(
     () => activeDecisionRows.find((row) => row.ticker === activeSelection.ticker) ?? null,
@@ -1311,6 +1385,9 @@ export default function ArbitrageStreamView({
   const executionQueueCount = executionSnapshot?.queue?.length ?? 0;
   const executionCurrent = executionSnapshot?.current ?? null;
   const panicOff = executionSnapshot?.panicOff ?? false;
+  // Both windows must be bound before anything can be sent: the order window takes the hotkeys,
+  // the main window is what the P&L panel reads. Either one missing means no orders leave.
+  const windowsBound = Boolean(executionSnapshot?.boundWindow?.isBound && executionSnapshot?.mainWindow?.isBound);
   const tickerPoint = boundWindow?.tickerPoint ?? null;
   const delayRangeLabel = automationConfig.queueDelayMinSeconds > 0 || automationConfig.queueDelayMaxSeconds > 0
     ? `${num(automationConfig.queueDelayMinSeconds, 0)}-${num(automationConfig.queueDelayMaxSeconds, 0)}s`
@@ -1369,6 +1446,27 @@ export default function ArbitrageStreamView({
     [streamDecisionVersion, signalDecisionIds]
   );
   const openCount = streamPositionMeta.openCount;
+  // Split of the same open set, so OPEN LONG + OPEN SHORT always equals OPEN POSITIONS.
+  const openLongCount = streamPositionMeta.openLongCount;
+  const openShortCount = streamPositionMeta.openShortCount;
+
+  /**
+   * The two position states that are neither counted as open nor finished, and today's actions
+   * broken out by kind. All derived from state already on screen — nothing new is fetched.
+   *
+   * PENDING ENTRY is the gap between SENT ORDERS and OPEN POSITIONS: the order went out and the
+   * fill has not come back. A number that sits there is the first sign the desk is not filling.
+   */
+  const positionPhaseCounts = useMemo(() => ({
+    pendingEntry: streamPositions.filter((p) => p.status === "PENDING_ENTRY").length,
+    printPending: streamPositions.filter((p) => p.status === "PRINT_PENDING").length,
+  }), [streamPositions]);
+
+  const actionLogCounts = useMemo(() => ({
+    entries: streamActionLog.filter((r) => r.kind === "ENTRY").length,
+    adds: streamActionLog.filter((r) => r.kind === "ADD").length,
+    exits: streamActionLog.filter((r) => r.kind === "CLOSE").length,
+  }), [streamActionLog]);
   const maxOpenPositions = Math.max(1, automationConfig.maxOpenPositions ?? 1);
   const openCapReached = openCount >= maxOpenPositions;
   const entryCapBlockingNewOrders =
@@ -1504,26 +1602,54 @@ export default function ArbitrageStreamView({
             bookSnapshot={bookSnapshot}
           />
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              <MetricCard label="ACTIVE SITUATIONS" value={intn(activeDecisionRows.length)} />
+            <div className={clsx("grid grid-cols-1 auto-rows-fr gap-3 sm:grid-cols-2 xl:grid-cols-4", STREAM_PANEL_HEIGHT)}>
+              {/* Four rows of three, grouped by what the numbers are ABOUT rather than by when they
+                  were added: an order's life, then the book, then the session, then what is stuck.
+                  Colour follows the same grouping — green/red for direction, amber/rose for the
+                  things that want attention, sky for what is in flight. */}
+
+              {/* 1 — the life of an order, left to right in the order it happens */}
               <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
-              <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
+              <MetricCard label="SENT ORDERS" value={intn(streamSentOrdersCount)} valueClassName="text-sky-300" />
+              <MetricCard label="PENDING ENTRY" value={intn(positionPhaseCounts.pendingEntry)} valueClassName="text-amber-300" />
+              <MetricCard label="CLOSED" value={intn(closedCount)} valueClassName="text-teal-300" />
+
+              {/* 2 — the book */}
+              <MetricCard label="OPEN POSITIONS" value={intn(openCount)} valueClassName="text-violet-300" />
+              <MetricCard label="OPEN LONG" value={intn(openLongCount)} valueClassName="text-emerald-300" />
+              <MetricCard label="OPEN SHORT" value={intn(openShortCount)} valueClassName="text-rose-300" />
+              <MetricCard label="PRINT PENDING" value={intn(positionPhaseCounts.printPending)} valueClassName="text-indigo-300" />
+
+              {/* 3 — the session */}
+              <MetricCard label="RUN TIME" value={runtimeLabel} valueClassName="text-zinc-300" />
               <MetricCard
                 label="OPEN CAP"
                 value={`${intn(openCount)}/${intn(maxOpenPositions)}`}
                 valueClassName={openCapReached ? "text-amber-200" : "text-zinc-300"}
               />
+              <MetricCard label="LIST MODE" value={listModeLabel} valueClassName="text-indigo-300" />
+              <MetricCard label="SIGNALS" value={intn(streamSignalsCount)} valueClassName="text-sky-300" />
+
+              {/* 4 — what actually happened today, from the order log */}
+              <MetricCard label="ENTRIES" value={intn(actionLogCounts.entries)} valueClassName="text-emerald-300" />
+              <MetricCard label="ADDS" value={intn(actionLogCounts.adds)} valueClassName="text-sky-300" />
+              <MetricCard label="EXITS" value={intn(actionLogCounts.exits)} valueClassName="text-teal-300" />
+              <MetricCard label="EXEC QUEUE" value={intn(executionQueueCount)} valueClassName="text-violet-300" />
+
+              {/* 5 — what is not flowing */}
               <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
-              <MetricCard label="LIST MODE" value={listModeLabel} />
-              <MetricCard label="UPDATED" value={updatedLabel ?? "-"} />
-              <MetricCard label="SENT ORDERS" value={intn(streamSentOrdersCount)} />
-              <MetricCard label="RUN TIME" value={runtimeLabel} />
-              <MetricCard label="AUTO MODE" value={automationRunning ? "ON" : "OFF"} valueClassName={automationRunning ? accentActiveTextClass : "text-zinc-400"} />
               <MetricCard label="BLOCKED EDGE" value={intn(blockedEdgeCount)} valueClassName="text-amber-200" />
-              <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-amber-200" />
-              <MetricCard label="CLOSED" value={intn(closedCount)} />
+              <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-rose-300" />
+              {/* Whether the bridge can reach TradingApp at all. It belongs in this row because an
+                  unbound terminal is the loudest possible "nothing is flowing": every other number
+                  here keeps counting normally while not one order can leave. */}
+              <MetricCard
+                label="TRADINGAPP"
+                value={panicOff ? "PANIC" : windowsBound ? "BOUND" : "NO WINDOW"}
+                valueClassName={panicOff ? "text-rose-300" : windowsBound ? "text-emerald-300" : "text-amber-200"}
+              />
             </div>
-            <StreamActionLogTable rows={streamActionLog} />
+            <StreamActionLogTable rows={streamActionLog} onTickerClick={onTickerClick} />
           </div>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <StreamDecisionTable
@@ -1532,11 +1658,13 @@ export default function ArbitrageStreamView({
               emptyMessage="No active STREAM situations yet."
               onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
               onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
+              onTickerClick={onTickerClick}
             />
             <StreamSignalsDecisionTable
               title="SIGNALS"
               rowIds={signalDecisionIds}
               emptyMessage="No filtered signals waiting in STREAM."
+              onTickerClick={onTickerClick}
             />
           </div>
           <StreamSimLog />
@@ -1949,15 +2077,15 @@ export default function ArbitrageStreamView({
           <tbody>
             {streamDecisionRowsSnapshot.map((row, i) => (
               <tr key={`${row.ticker}|stream|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
-                <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
-                <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
+                <td className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.benchmark}</td>
                 <td className="p-2.5"><SideBadge side={row.side} /></td>
-                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</td>
-                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</td>
-                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.safePrice, 3)}</td>
-                <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.safePrice, 3)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
                 <td className="p-2.5"><StreamStatusBadge status={row.status} /></td>
-                <td className="p-2.5 text-zinc-400">{row.reason}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.reason}</td>
               </tr>
             ))}
             {!streamDecisionRowsSnapshot.length && (
@@ -1987,11 +2115,11 @@ export default function ArbitrageStreamView({
           <tbody>
             {streamOrderIntents.map((row, i) => (
               <tr key={row.id ?? `${row.ticker}|intent|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
-                <td className="p-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
-                <td className="p-2.5 text-zinc-400">{row.benchmark}</td>
+                <td className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.benchmark}</td>
                 <td className="p-2.5"><SideBadge side={row.side} /></td>
-                <td className="p-2.5 text-zinc-200">{row.intent}</td>
-                <td className="p-2.5 text-zinc-300">{row.priceRef}</td>
+                <td className="px-2 py-2.5 text-zinc-200">{row.intent}</td>
+                <td className="px-2 py-2.5 text-zinc-300">{row.priceRef}</td>
                 <td className="p-2.5">
                   <span className={clsx(
                     "inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border",
@@ -2002,7 +2130,7 @@ export default function ArbitrageStreamView({
                     {row.status}
                   </span>
                 </td>
-                <td className="p-2.5 text-zinc-400">{row.reason}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.reason}</td>
               </tr>
             ))}
             {!streamOrderIntents.length && (

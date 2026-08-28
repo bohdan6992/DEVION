@@ -177,6 +177,18 @@ export type PaperArbClosedDto = {
   corr?: number | null;
   beta?: number | null;
   sigma?: number | null;
+  /**
+   * Deviation of the stack from its benchmark AT ENTRY, in sigmas. This is OpenFade's whole
+   * selection rule (the sign picks the side, |value| must fall inside the band) and OpenDoor's
+   * DevSig gate parameter. Null for Arbitrage, which never records one.
+   *
+   * Always sigmas, even when OpenFade's band was set to measure percent — the percent twin is
+   * this times `sigma`, which is why the research layer derives it rather than asking the wire
+   * for a second field.
+   */
+  entryDevSig?: number | null;
+  /** Entry-to-exit move in percent, on the traded side's prices. */
+  move?: number | null;
   tierBp?: number | null;
   positionNotionalUsd?: number | null;
   entryCount?: number | null;
@@ -459,6 +471,11 @@ export type PaperArbAnalyticsRequest = {
   // analytics-only output knobs
   includeEquityCurve?: boolean;
   equityCurveMode?: "Daily" | "Trade";
+  /** OpenFade: which reading the band measures — "sigma" or "pct". */
+  fadeMetric?: "sigma" | "pct" | null;
+  /** OpenFade: the |sigma| band a stack must fall inside; the sign picks the side. */
+  fadeMinAbs?: number | null;
+  fadeMaxAbs?: number | null;
   /** OpenDoor/DayTwo backtest: explicit entry levels for the enabled params. */
   useManualEntry?: boolean | null;
   stackMin?: number | null;
@@ -664,6 +681,8 @@ export type ScopeResearchParameterKey =
   | "reversionAbs"
   | "reversionPct"
   | "minHoldCandles"
+  | "entryDevSig"
+  | "entryDevPct"
   | "rating"
   | "ratingTotal"
   | "corr"

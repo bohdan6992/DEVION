@@ -169,6 +169,56 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       labels: { "10m": "10M", "30m": "30M" },
     },
   },
+
+  openfade: {
+    key: "openfade",
+    bridgeStrategyId: "stream.openfade",
+    nav: {
+      stream: "/openfade/stream",
+      scanner: "/openfade/scanner",
+      sonar: "/openfade/sonar",
+    },
+    // OpenDoor's clock: the band is evaluated 09:20-09:25 and the exits land 09:40 / 10:00. Written
+    // out here rather than shared so that changing it cannot move OpenDoor.
+    tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
+    priority: 20,
+    // Its own endpoints from the start. Day Two spent weeks reading OpenDoor's ratings because the
+    // copy pointed at OpenDoor's routes and nothing said so out loud.
+    api: { paperBase: "/api/paper/openfade", signalsBase: "/api/arbitrage" },
+    storage: { scannerPrefix: "paper.openfade", sonarPrefix: "bridge.openfade", streamPrefix: "stream.openfade" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["10m", "30m"],
+      labels: { "10m": "10M", "30m": "30M" },
+    },
+  },
+
+  // OpenRide: OpenFade's mirror. Identical clock, classes and band; the sign is read the other way,
+  // so a negative deviation sells here and buys there. Everything addressable is separate — routes,
+  // paper base, storage prefixes — because the two run on the same morning and a shared key would
+  // have one strategy restore the other's toolbar and read the other's cached days.
+  openride: {
+    key: "openride",
+    bridgeStrategyId: "stream.openride",
+    nav: {
+      stream: "/openride/stream",
+      scanner: "/openride/scanner",
+      sonar: "/openride/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
+    // Below OpenFade's 20, and this is the one pair where the number does real work: the two run
+    // the same minutes on the same universe and can name the same ticker on OPPOSITE sides, so
+    // whoever wins the claim decides which way the position goes. OpenFade is the established
+    // strategy and wins by default; swap the two numbers to hand a contested ticker to OpenRide.
+    priority: 15,
+    api: { paperBase: "/api/paper/openride", signalsBase: "/api/arbitrage" },
+    storage: { scannerPrefix: "paper.openride", sonarPrefix: "bridge.openride", streamPrefix: "stream.openride" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["10m", "30m"],
+      labels: { "10m": "10M", "30m": "30M" },
+    },
+  },
 };
 
 export type LiveStrategyKey = keyof typeof LIVE_STRATEGIES & string;

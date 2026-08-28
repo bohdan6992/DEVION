@@ -8,6 +8,13 @@ import { useStreamStores } from "./streamStoreRegistry";
 export type StreamPositionMeta = {
   activeCount: number;
   openCount: number;
+  /**
+   * The open count split by direction. Derived with the SAME countsAsOpen predicate as openCount,
+   * so the two always add up to it — a card showing 3 long and 1 short next to "OPEN POSITIONS 5"
+   * would be worse than no card at all.
+   */
+  openLongCount: number;
+  openShortCount: number;
   exitBlockedCount: number;
   closedCount: number;
 };
@@ -27,6 +34,8 @@ export type StreamActiveDecisionRow = {
 const EMPTY_META: StreamPositionMeta = {
   activeCount: 0,
   openCount: 0,
+  openLongCount: 0,
+  openShortCount: 0,
   exitBlockedCount: 0,
   closedCount: 0,
 };
@@ -99,6 +108,10 @@ function sameMeta(left: StreamPositionMeta, right: StreamPositionMeta): boolean 
   return (
     left.activeCount === right.activeCount &&
     left.openCount === right.openCount &&
+    // Compared, not just carried: a long closing as a short opens leaves openCount unchanged, and
+    // without these the store would report "nothing moved" and the cards would freeze.
+    left.openLongCount === right.openLongCount &&
+    left.openShortCount === right.openShortCount &&
     left.exitBlockedCount === right.exitBlockedCount &&
     left.closedCount === right.closedCount
   );
@@ -147,6 +160,8 @@ function buildMeta(positions: StreamPosition[], activeRows: StreamActiveDecision
   return {
     activeCount: activeRows.length,
     openCount: positions.filter((row) => countsAsOpen(row)).length,
+    openLongCount: positions.filter((row) => countsAsOpen(row) && row.side === "Long").length,
+    openShortCount: positions.filter((row) => countsAsOpen(row) && row.side === "Short").length,
     exitBlockedCount: positions.filter((row) => row.status === "EXIT_BLOCKED").length,
     closedCount: positions.filter((row) => row.status === "CLOSED").length,
   };

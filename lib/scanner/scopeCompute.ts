@@ -81,6 +81,18 @@ export function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeRe
     }
     case "minHoldCandles":
       return row.minHoldCandles ?? null;
+    case "entryDevSig":
+      return row.entryDevSig ?? null;
+    // The percent twin of the same deviation. The engine measures one deviation and reports it in
+    // sigmas; percent is that times the ticker's sigma, which is the exact relation the bridge's
+    // ZapPct/SigmaZap pair already has. Derived here rather than carried as a second wire field —
+    // and it is the reading OpenFade selected on whenever its band was set to % DEV, which the
+    // sigma column alone would misreport.
+    case "entryDevPct": {
+      const dev = row.entryDevSig ?? null;
+      const sigma = row.sigma ?? null;
+      return dev != null && sigma != null ? dev * sigma : null;
+    }
     case "rating":
       return row.rating ?? null;
     case "ratingTotal":
