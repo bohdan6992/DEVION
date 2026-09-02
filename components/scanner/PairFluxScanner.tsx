@@ -10,15 +10,14 @@ import { useFilterRestore } from "../../lib/scanner/useFilterRestore";
 import { useEpisodesSearchCache } from "../../lib/scanner/useEpisodesSearchCache";
 import { getToken } from "../../lib/authClient";
 import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
-import { getArbitrageList, getOpenFadeList } from "../../lib/trapClient";
-import { pushOpenDoorLiveParams, toOpenDoorLiveFilters } from "../../lib/opendoor/liveParamsClient";
+import { getArbitrageList } from "../../lib/trapClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import OpenDoorStreamView from "../stream/OpenDoorStream";
+import ArbitrageStreamView from "../stream/ArbitrageStreamView";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
@@ -27,16 +26,7 @@ import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
-import { getNumAny, toNum } from "@/lib/signals/signal";
-
-// OpenDoor evaluates CLEAN data: no Arbitrage rating floor anywhere in the path. The only rating
-// that may reject a ticker is OpenDoor's own per-bin table from its summary.csv (lib/opendoor/gate).
-// cls still selects which class the server attaches `best` values from, but with a zero floor it
-// cannot reject anything — it only labels.
-const OPEN_DOOR_CLS = "global";
-const OPEN_DOOR_NO_ARB_RATE = 0;
-const OPEN_DOOR_NO_ARB_TOTAL = 0;
-import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
+import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
@@ -54,52 +44,42 @@ import {
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
-import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
-import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, GlassSelectOption, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScannerLogContext, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import { ScannerAnalyticsLog } from "./shared/AnalyticsLog";
+import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, PeakReversionTwoThirdsChart, PeakStrengthByTimeChart, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
-import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
+import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SideBadge, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
-import { TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
+import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
 import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
-import OpenDoorGatesRow, { EMPTY_ENTRY_BOUNDS, type OpenDoorEntryBounds } from "./shell/panels/OpenDoorGatesRow";
-import SigmaDevBand, { type FadeMetric } from "./shell/panels/SigmaDevBand";
-// OpenDoor tracks no sigma metric and no peak (the mapper leaves those slots null and
-// MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
-// metrics are excluded rather than rendering empty charts that look like a bug.
+// Everything this scanner varies from the shared shell. Adding a strategy means adding one of
+// these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
-  key: "openfade",
-  excludeScopeParameters: [
-    "startMetricAbs", "peakMetricAbs", "endMetricAbs",
-    "reversionAbs", "reversionPct",
-    "peakMinuteIdx", "timeToPeak",
-    "minHoldCandles",
-  ],
-  excludeScopeResults: ["benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs"],
-  defaultScopeAxes: { left: "rating", right: "spread" },
-  // OpenDoor has no |sigma| to look a bin up by, so the RATING GATES axes read the rate/total the
-  // gate already resolved onto the episode — which is the traded side's, so long and short share
-  // one field. With the default "sigma-bin" source those two axes were silently empty.
-  ratingBinSource: "episode",
+  key: "pairflux",
+  defaultScopeAxes: { left: "peakMetricAbs", right: "startMetricAbs" },
+  // Unlike Arbitrage, PairFlux DOES have a single entry deviation: the pair spread at the moment
+  // the divergence is confirmed, in percentage points (entry_dev) and in units of the pair's own
+  // sigma (peak_z). Both DEV axes therefore stay — they are the strategy's primary parameter.
 });
 
 // =========================
 // MAIN PAGE
 // =========================
-type ArbitrageScannerProps = {
+type PairFluxScannerProps = {
   initialPrimaryPanel?: PrimaryPanelKey;
   shellMode?: "full" | "streamOnly";
   controlledTab?: TabKey;
@@ -135,9 +115,9 @@ type ArbitrageScannerProps = {
   navSonarHref?: string;
 };
 
-const ACTIVE_TICKER_STRATEGY = "openfade" as const;
+const ACTIVE_TICKER_STRATEGY = "pairflux" as const;
 
-export default function OpenFadeScanner({
+export default function PairFluxScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
   controlledTab,
@@ -162,12 +142,12 @@ export default function OpenFadeScanner({
   analyticsTabLabelOverride,
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
-  lsKeyPrefix = "paper.openfade",
+  lsKeyPrefix = "paper.arb",
   // Routes come from the registry entry, not from literals repeated per component.
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,
   navSonarHref = STRATEGY.nav.sonar,
-}: ArbitrageScannerProps) {
+}: PairFluxScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
   const { theme } = useUi();
@@ -182,13 +162,13 @@ export default function OpenFadeScanner({
       return "scanner";
     }
   });
-  // Shared with ArbitrageScanner and defined once in useScannerFilters. Destructured so the
-  // references throughout this file stay as they were. OpenDoor's own knobs (exit class, the
-  // three gates, up/down levels) stay declared below - they are this strategy's, not the shell's.
+  // Every filter/view field below used to be declared here AND, identically, in
+  // OpenDoorScanner - 226 of them. They now live in useScannerFilters; the bag is destructured
+  // so the several thousand references throughout this file stay exactly as they were.
   const scannerFilters = useScannerFilters({
     strategy: STRATEGY,
     streamAutomationConfigOverride,
-    startAbsDefault: 0,
+    startAbsDefault: 0.1,
   });
   const {
     internalTab,
@@ -646,226 +626,6 @@ export default function OpenFadeScanner({
     setStreamWindowCaptureBusy,
   } = scannerFilters;
 
-  // OpenDoor exit class — replaces the inherited Arbitrage session-band selector (GLOB/BLUE/
-  // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
-  // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from ruleBand/session,
-  // which stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
-  // Range analysis runs entirely client-side for OpenDoor: optimizerRangeParameters buckets the
-  // episodes already on screen, so no /optimizer/ranges call is needed (the Arbitrage endpoint
-  // buckets Arbitrage episodes by Arbitrage-only axes and is deliberately not used).
-  const OPEN_DOOR_OPTIMIZER_ENABLED = true;
-
-  // Scenario runs are on too — see runEpisodesOptimizer, which evaluates them off the range
-  // buckets client-side rather than calling /scope/evaluate.
-  const OPEN_DOOR_SCENARIO_RUNNER_ENABLED = true;
-
-  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
-  // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
-  // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction, matching the
-  // two-column UP/DOWN layout. Deliberately fresh state, not the shared Arbitrage `activeRule`.
-  // Backtest escape hatch: best_params publishes no bin under rate 0.60 / total 10, so the region
-  // below the floor cannot be reached by lowering the thresholds — only by removing the gate.
-  // OpenFade selects on the stack's sigma deviation, not on a rating bin: |sigma| must fall inside
-  // this band and the sign picks the side — negative buys, positive sells.
-  const [fadeMetric, setFadeMetric] = useState<FadeMetric>("sigma");
-  // Whole universe against the band, rather than the server's own candidate set.
-  const [fadeUniverseAll, setFadeUniverseAll] = useState(true);
-  const [fadeMinAbs, setFadeMinAbs] = useState(1.0);
-  const [fadeMaxAbs, setFadeMaxAbs] = useState<number | null>(null);
-  const [openDoorIgnoreRatings, setOpenDoorIgnoreRatings] = useState(false);
-  // Explicit entry levels: with the gate off there is no bin to define the situation, so this is
-  // what replaces it; with the gate on it narrows the rated level instead of replacing it.
-  const [openDoorUseManualEntry, setOpenDoorUseManualEntry] = useState(false);
-  const [openDoorEntryBounds, setOpenDoorEntryBounds] = useState<OpenDoorEntryBounds>(EMPTY_ENTRY_BOUNDS);
-  const [openDoorUpMinRate, setOpenDoorUpMinRate] = useState(0.6);
-  const [openDoorUpMinTotal, setOpenDoorUpMinTotal] = useState(20);
-  const [openDoorUpMinMove, setOpenDoorUpMinMove] = useState(0);
-  const [openDoorDownMinRate, setOpenDoorDownMinRate] = useState(0.6);
-  const [openDoorDownMinTotal, setOpenDoorDownMinTotal] = useState(20);
-  const [openDoorDownMinMove, setOpenDoorDownMinMove] = useState(0);
-  // Which of the 3 OpenDoor parameters (Stack%, Bench%, DevSig) to check against live data.
-  // Independently toggleable — if all 3 are on, all 3 are checked in real time (per spec).
-  const [openDoorUseStack, setOpenDoorUseStack] = useState(true);
-  const [openDoorUseBench, setOpenDoorUseBench] = useState(true);
-  const [openDoorUseDevSig, setOpenDoorUseDevSig] = useState(true);
-  // Historical P&L research (summary.csv only — no live paper-trading backend needed): for the
-  // selected exit class, "would we have made money buying/selling EVERY historical candidate
-  // whose entry-side bin cleared the MINRATE/MINTOTAL/MINMOVE bar?" rate/total/avg_move already
-  // ARE that answer per {param}x{class}x{direction} bin, computed once by OpenDoor.ipynb — no
-  // per-day replay data is needed, just the existing best-bin columns from /api/opendoor/summary.
-  const [openDoorRatingByTicker, setOpenDoorRatingByTicker] = useState<Record<string, Record<string, string>>>({});
-  const [openDoorRatingLoading, setOpenDoorRatingLoading] = useState(false);
-  const [openDoorRatingError, setOpenDoorRatingError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      setOpenDoorRatingLoading(true);
-      try {
-        const rows = await getOpenFadeList();
-        if (cancelled) return;
-        const byTicker: Record<string, Record<string, string>> = {};
-        for (const row of rows) {
-          const t = String(row.ticker ?? "").toUpperCase().trim();
-          if (t) byTicker[t] = row;
-        }
-        setOpenDoorRatingByTicker(byTicker);
-        setOpenDoorRatingError(null);
-      } catch (e: any) {
-        if (!cancelled) setOpenDoorRatingError(e?.message || "Failed to load OpenDoor ratings");
-      } finally {
-        if (!cancelled) setOpenDoorRatingLoading(false);
-      }
-    };
-    load();
-    const id = setInterval(load, 5 * 60_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  const openDoorResearch = useMemo(() => {
-    const odNum = (v: unknown): number | null => {
-      if (v == null) return null;
-      const n = parseFloat(String(v).replace(",", "."));
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const cls = openDoorExitClass;
-    const paramToggles: Array<{ param: "stack" | "bench" | "devsig"; on: boolean }> = [
-      { param: "stack", on: openDoorUseStack },
-      { param: "bench", on: openDoorUseBench },
-      { param: "devsig", on: openDoorUseDevSig },
-    ];
-    const enabledParams = paramToggles.filter((p) => p.on).map((p) => p.param);
-
-    type Candidate = {
-      ticker: string;
-      byParam: Record<string, { rate: number; total: number; avgMove: number | null }>;
-      avgMove: number | null; // simple average of the enabled params' avg_move (same underlying Stack%-move outcome)
-      minRate: number;
-      minTotal: number;
-    };
-
-    const buildSide = (
-      dir: "long" | "short",
-      minRateGate: number,
-      minTotalGate: number,
-      minMoveGate: number
-    ): { candidates: Candidate[]; totalObs: number; weightedRate: number | null; weightedAvgMove: number | null } => {
-      const candidates: Candidate[] = [];
-      if (enabledParams.length === 0) {
-        return { candidates, totalObs: 0, weightedRate: null, weightedAvgMove: null };
-      }
-
-      for (const [ticker, row] of Object.entries(openDoorRatingByTicker)) {
-        const byParam: Candidate["byParam"] = {};
-        let passesAll = true;
-
-        for (const param of enabledParams) {
-          const rate = odNum(row[`${param}_${cls}_best_${dir}_rate`]);
-          const total = odNum(row[`${param}_${cls}_best_${dir}_total`]);
-          const avgMove = odNum(row[`${param}_${cls}_best_${dir}_avg_move`]);
-
-          if (rate == null || total == null) { passesAll = false; break; }
-          if (rate < minRateGate) { passesAll = false; break; }
-          if (total < minTotalGate) { passesAll = false; break; }
-          if (avgMove != null && Math.abs(avgMove) < minMoveGate) { passesAll = false; break; }
-
-          byParam[param] = { rate, total, avgMove };
-        }
-
-        if (!passesAll) continue;
-
-        const moves = enabledParams.map((p) => byParam[p]?.avgMove).filter((v): v is number => v != null);
-        const avgMove = moves.length ? moves.reduce((a, b) => a + b, 0) / moves.length : null;
-        const minRate = Math.min(...enabledParams.map((p) => byParam[p].rate));
-        const minTotal = Math.min(...enabledParams.map((p) => byParam[p].total));
-
-        candidates.push({ ticker, byParam, avgMove, minRate, minTotal });
-      }
-
-      candidates.sort((a, b) => b.minRate - a.minRate || b.minTotal - a.minTotal);
-
-      const totalObs = candidates.reduce((sum, c) => sum + c.minTotal, 0);
-      const weightedRate = totalObs > 0
-        ? candidates.reduce((sum, c) => sum + c.minRate * c.minTotal, 0) / totalObs
-        : null;
-      const moveWeighted = candidates.filter((c) => c.avgMove != null);
-      const moveWeightedTotal = moveWeighted.reduce((sum, c) => sum + c.minTotal, 0);
-      const weightedAvgMove = moveWeightedTotal > 0
-        ? moveWeighted.reduce((sum, c) => sum + (c.avgMove as number) * c.minTotal, 0) / moveWeightedTotal
-        : null;
-
-      return { candidates, totalObs, weightedRate, weightedAvgMove };
-    };
-
-    return {
-      enabledParams,
-      long: buildSide("long", openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove),
-      short: buildSide("short", openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove),
-    };
-  }, [
-    openDoorRatingByTicker, openDoorExitClass,
-    openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-    fadeMetric, fadeMinAbs, fadeMaxAbs,
-    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
-    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
-    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
-  ]);
-
-  // Combined LONG+SHORT view for the ACTIVE-tab KPI row / table — the Arbitrage-scanner analog,
-  // but built purely from summary.csv best-bin stats (no live position engine exists for
-  // OpenDoor). P&L per candidate is sign-corrected: a SHORT profits when Stack% FALLS, so its
-  // avg_short_move (already negative, e.g. -0.68) is negated into a positive per-trade P&L.
-  // rate/total/avg_move are already "did the situation resolve in the traded direction" stats,
-  // so `rate` IS the win rate and no separate outcome classification is needed. There is no
-  // per-day trade sequence available (the notebook only persists bin aggregates), so sequence-
-  // dependent metrics like Max Drawdown / equity curve are not computable and are omitted
-  // rather than fabricated.
-  const openDoorCombined = useMemo(() => {
-    type Row = {
-      ticker: string;
-      side: "LONG" | "SHORT";
-      rate: number;
-      total: number;
-      avgMove: number | null; // raw Stack% move (signed, as recorded)
-      pnl: number | null;     // sign-corrected per-trade P&L (positive avgMove for both sides = profit)
-      byParam: Record<string, { rate: number; total: number; avgMove: number | null }>;
-    };
-
-    const rows: Row[] = [
-      ...openDoorResearch.long.candidates.map((c): Row => ({
-        ticker: c.ticker, side: "LONG", rate: c.minRate, total: c.minTotal,
-        avgMove: c.avgMove, pnl: c.avgMove, byParam: c.byParam,
-      })),
-      ...openDoorResearch.short.candidates.map((c): Row => ({
-        ticker: c.ticker, side: "SHORT", rate: c.minRate, total: c.minTotal,
-        avgMove: c.avgMove, pnl: c.avgMove != null ? -c.avgMove : null, byParam: c.byParam,
-      })),
-    ];
-    rows.sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
-
-    const withPnl = rows.filter((r) => r.pnl != null) as Array<Row & { pnl: number }>;
-    const wins = withPnl.filter((r) => r.pnl > 0);
-    const losses = withPnl.filter((r) => r.pnl < 0);
-
-    const totalObs = rows.reduce((s, r) => s + r.total, 0);
-    const totalPnl = withPnl.reduce((s, r) => s + r.pnl * r.total, 0);
-    const weightedRate = totalObs > 0 ? rows.reduce((s, r) => s + r.rate * r.total, 0) / totalObs : 0;
-    const avgTrade = totalObs > 0 ? totalPnl / totalObs : 0;
-    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl)) : 0;
-    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl)) : 0;
-    const avgWin = wins.length ? wins.reduce((s, r) => s + r.pnl, 0) / wins.length : 0;
-    const avgLoss = losses.length ? losses.reduce((s, r) => s + r.pnl, 0) / losses.length : 0;
-    const grossWin = wins.reduce((s, r) => s + r.pnl * r.total, 0);
-    const grossLoss = Math.abs(losses.reduce((s, r) => s + r.pnl * r.total, 0));
-    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
-    const expectancy = weightedRate * avgWin + (1 - weightedRate) * avgLoss;
-
-    return { rows, tickers: rows.length, totalObs, totalPnl, weightedRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
-  }, [openDoorResearch]);
-
 
 
 
@@ -912,9 +672,6 @@ export default function OpenFadeScanner({
   // global filters (variant)
 
 
-  // OpenDoor does not pre-gate its situation list on deviation — candidate selection is entirely
-  // STACK/BENCH/DEV plus the UP/DOWN MINRATE/MINTOTAL/MINMOVE gates, and any further narrowing is
-  // done in the UI on top of the full list. 0 is the backend's "no start-deviation gate" value.
 
 
 
@@ -929,10 +686,8 @@ export default function OpenFadeScanner({
 
 
 
+  const normalizedMinHoldCandles = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
 
-  // Every dilution/scale-in control must push its value into the stream automation engine, not
-  // just local state — otherwise the engine keeps running on streamAutomationConfigOverride's own
-  // defaults while the toolbar shows something else.
   const applyDilutionMode = useCallback((nextMode: PaperArbDilutionMode) => {
     setDilutionMode(nextMode);
     onStreamAutomationConfigChange?.({
@@ -1000,8 +755,7 @@ export default function OpenFadeScanner({
 
 
 
-  // episodes: advanced POST search toggle + advanced panel
-  const [episodesUseSearch, setEpisodesUseSearch] = useState<boolean>(false);
+  // episodes: advanced panel
 
 
   // ===== Advanced filters (ALL switches)
@@ -1196,9 +950,11 @@ export default function OpenFadeScanner({
       ["imbexch1555", "imbExch1555"],
     ];
 
+    // Only check ON filters — skip the rest immediately
     const active = fieldCoverageChecks.filter(([key]) => sharedRangeFilterModes[key] === "on");
     if (!active.length) return new Set<SharedRangeFilterKey>();
 
+    // Single pass: track fields still needing coverage, early-exit once all found
     const uncovered = new Set(active.map(([, field]) => field));
     for (const row of episodesRows) {
       for (const [, field] of active) {
@@ -1233,8 +989,6 @@ export default function OpenFadeScanner({
 
 
 
-  // Result of the last run-button press. Empty until then, so nothing is computed in the background.
-  const [optimizerRangeParameters, setOptimizerRangeParameters] = useState<PaperArbOptimizerParameterDto[]>([]);
 
 
 
@@ -1272,12 +1026,15 @@ export default function OpenFadeScanner({
     });
   }, []);
 
-  const toggleSharedRangeFilterMode = (key: SharedRangeFilterKey) => {
+  // Passed to all ~36 MinMaxRow instances. It only ever uses the functional setter form, so it has
+  // no dependencies — keeping the identity stable is what lets React.memo actually skip those rows
+  // (a fresh closure per render would invalidate every one of them on every parent render).
+  const toggleSharedRangeFilterMode = useCallback((key: SharedRangeFilterKey) => {
     setSharedRangeFilterModes((prev) => ({
       ...prev,
       [key]: prev[key] === "off" ? "on" : "off",
     }));
-  };
+  }, []);
 
   const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
     sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
@@ -1311,79 +1068,6 @@ export default function OpenFadeScanner({
     return `v${h.toString(16).slice(0, 8)}`;
   }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
-  const forceEpisodesSearch = useMemo(() => {
-    const has = (v: string) => String(v ?? "").trim().length > 0;
-    const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const hasValidStartAbsMax = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs);
-    return (
-      has(minCorr) || has(maxCorr) ||
-      has(minBeta) || has(maxBeta) ||
-      has(minSigma) || has(maxSigma) ||
-      has(minAdv20) || has(maxAdv20) ||
-      has(minAdv20NF) || has(maxAdv20NF) ||
-      has(minAdv90) || has(maxAdv90) ||
-      has(minAdv90NF) || has(maxAdv90NF) ||
-      has(minAvPreMhv) || has(maxAvPreMhv) ||
-      has(minRoundLot) || has(maxRoundLot) ||
-      has(minVWAP) || has(maxVWAP) ||
-      has(minSpread) || has(maxSpread) ||
-      has(minLstPrcL) || has(maxLstPrcL) ||
-      has(minLstCls) || has(maxLstCls) ||
-      has(minYCls) || has(maxYCls) ||
-      has(minTCls) || has(maxTCls) ||
-      has(minClsToClsPct) || has(maxClsToClsPct) ||
-      has(minLo) || has(maxLo) ||
-      has(minLstClsNewsCnt) || has(maxLstClsNewsCnt) ||
-      has(minMarketCapM) || has(maxMarketCapM) ||
-      has(minPreMktVolNF) || has(maxPreMktVolNF) ||
-      has(minVolNFfromLstCls) || has(maxVolNFfromLstCls) ||
-      has(minAvPostMhVol90NF) || has(maxAvPostMhVol90NF) ||
-      has(minAvPreMhVol90NF) || has(maxAvPreMhVol90NF) ||
-      has(minAvPreMhValue20NF) || has(maxAvPreMhValue20NF) ||
-      has(minAvPreMhValue90NF) || has(maxAvPreMhValue90NF) ||
-      has(minAvgDailyValue20) || has(maxAvgDailyValue20) ||
-      has(minAvgDailyValue90) || has(maxAvgDailyValue90) ||
-      has(minVolatility20) || has(maxVolatility20) ||
-      has(minVolatility90) || has(maxVolatility90) ||
-      has(minPreMhMDV20NF) || has(maxPreMhMDV20NF) ||
-      has(minPreMhMDV90NF) || has(maxPreMhMDV90NF) ||
-      has(minVolRel) || has(maxVolRel) ||
-      has(minPreMhBidLstPrcPct) || has(maxPreMhBidLstPrcPct) ||
-      has(minPreMhLoLstPrcPct) || has(maxPreMhLoLstPrcPct) ||
-      has(minPreMhHiLstClsPct) || has(maxPreMhHiLstClsPct) ||
-      has(minPreMhLoLstClsPct) || has(maxPreMhLoLstClsPct) ||
-      has(minLstPrcLstClsPct) || has(maxLstPrcLstClsPct) ||
-      has(minImbExch925) || has(maxImbExch925) ||
-      has(minImbExch1555) || has(maxImbExch1555) ||
-      hasValidStartAbsMax ||
-      has(minNewsCnt) || has(maxNewsCnt) ||
-      requireHasNews || excludeHasNews || requireHasReport || excludeHasReport ||
-      includeUSA || includeChina ||
-      requireIsPTP || requireIsSSR || requireIsETF || requireIsCrap ||
-      excludeDividend || excludePTP || excludeSSR || excludeETF || excludeCrap
-    );
-  }, [
-    minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
-    minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
-    minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
-    minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
-    minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt,
-    minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls,
-    minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF,
-    minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF,
-    minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
-    minVolatility20, maxVolatility20, minVolatility90, maxVolatility90,
-    minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel,
-    minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct,
-    minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
-    minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-    startAbsMax, startAbs, zapMode,
-    minNewsCnt, maxNewsCnt,
-    requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
-    requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
-    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap,
-  ]);
-
   // ========= Preflight validation
   const validationErrors = useMemo(() => {
     const e: string[] = [];
@@ -1398,10 +1082,9 @@ export default function OpenFadeScanner({
       if (toYmd(dateFrom) && toYmd(dateTo) && dateFrom > dateTo) e.push("dateFrom must be <= dateTo");
     }
 
-    if (!(startAbs >= 0)) e.push("startAbs must be >= 0");
+    if (!(startAbs > 0)) e.push("startAbs must be > 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    // With startAbs = 0 the start gate is off, so "close tighter than you entered" is vacuous.
-    if (zapMode !== "delta" && startAbs > 0 && endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    if (zapMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
@@ -1409,7 +1092,6 @@ export default function OpenFadeScanner({
   }, [dateMode, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
 
   const canRun = validationErrors.length === 0 && !loading;
-  const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
   const bumpStartAbsMax = (delta: number) => {
     setStartAbsMax((prev) => {
       const raw = String(prev ?? "").trim();
@@ -1431,106 +1113,27 @@ export default function OpenFadeScanner({
       return;
     }
 
-    // episodes:
-    // - legacy GET => day only
-    // - search POST => day/last/range are allowed
-    if (tab === "episodes") {
-      if (!(episodesUseSearch || forceEpisodesSearch)) {
-        if (dateMode !== "day") {
-          setDateMode("day");
-          setDateNy(dateFrom || dateNy);
-        }
-      } else {
-        if (dateMode === "day" && toYmd(dateNy)) {
-          setDateFrom(dateNy);
-          setDateTo(dateNy);
-        }
-      }
-      return;
-    }
-
-    // analytics allows day/last/range
-    if (tab === "analytics") {
+    // episodes and analytics both allow day/last/range, and both go through episodes/search — a
+    // single day is just the degenerate range [dateNy, dateNy]. They used to split: DAY fell back
+    // to GET /episodes, which accepts none of the list/side/exchange/rating filters and hardcodes
+    // addDelayMinutes/exitConfirmCandles to 0, so one day on its own simulated differently from the
+    // same day inside a range.
+    if (tab === "episodes" || tab === "analytics") {
       if (dateMode === "day" && toYmd(dateNy)) {
         setDateFrom(dateNy);
         setDateTo(dateNy);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom]);
-
-  // ========= OpenDoor SNAPSHOT: live per-day tape replay (architecturally mirrors Arbitrage's
-  // SNAPSHOT tab — POST .../episodes/search, per-day cache, day-range build — but hits
-  // /api/paper/opendoor/episodes/search, gated by OpenDoor's own summary.csv ratings and using
-  // TapeOpenDoorEngine's fixed 09:20-entry/09:40-or-10:00-exit rule instead of Arbitrage's
-  // hedge engine. Real per-day accuracy: each row is an ACTUALLY realized trade, not a bin average.
-  type OpenDoorPaperClosed = {
-    ticker: string;
-    benchTicker?: string | null;
-    side: "Long" | "Short";
-    entryMinuteIdx: number;
-    exitMinuteIdx: number;
-    entryStack?: number | null;
-    exitStack?: number | null;
-    move?: number | null;
-    pnl?: number | null;
-    entryDevSig?: number | null;
-    /** The ticker's sigma, kept only to convert entryDevSig into its percent twin. */
-    sigma?: number | null;
-    entryBench?: number | null;
-    gateRate?: number | null;
-    gateTotal?: number | null;
-  };
-  const [openDoorSnapshotLoading, setOpenDoorSnapshotLoading] = useState(false);
-  const [openDoorSnapshotError, setOpenDoorSnapshotError] = useState<string | null>(null);
-
-  // Entering the tab loads the day; the SNAPSHOT numbers are then derived from those very rows
-  // (openDoorSnapshotRows, defined after filteredEpisodes further down). This used to be a second,
-  // independent fetch whose body carried only the exit class, the three source toggles, the six
-  // gates and sizeValue - so the whole filter toolbar (the shared min/max ranges, IGN/APP/PIN, the
-  // flag row, the country/exchange/sector selects) changed nothing in the P&L, trade count and win
-  // rate on this screen, while the charts beside them, fed by filteredEpisodes, honoured all of it.
-  // One fetch, one set of rows, one answer.
-  useEffect(() => {
-    // Must mirror the SNAPSHOT block's own render condition exactly - in a streamOnly shell the
-    // table renders under the "episodes" tab, so gating the fetch on "analytics" alone left it
-    // permanently empty there.
-    if (!(primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")))) return;
-    if (!toYmd(dateFrom) || !toYmd(dateTo)) return;
-
-    let cancelled = false;
-    (async () => {
-      setOpenDoorSnapshotLoading(true);
-      try {
-        // Same call RUN makes on this tab, and episodesSearchCache keys on the request body, so
-        // the two no longer hit the bridge twice for the same day.
-        const rows = await fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo));
-        if (cancelled) return;
-        setEpisodesRows(rows);
-        setOpenDoorSnapshotError(null);
-      } catch (e: any) {
-        if (!cancelled) setOpenDoorSnapshotError(e?.message || "Failed to load OpenDoor snapshot");
-      } finally {
-        if (!cancelled) setOpenDoorSnapshotLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [
-    primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, openDoorExitClass,
-    openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-    fadeMetric, fadeMinAbs, fadeMaxAbs,
-    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
-    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
-    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
-    sizeValue,
-  ]);
+  }, [tab, dateMode, dateNy, dateFrom]);
 
   // ========= Drop loaded rows as soon as the selected date changes
   //
   // Rows answer for the date they were fetched with, and plenty is derived from them: the IGN
-  // ticker scope, the scope-research panels, the equity curve. Leaving the previous day's rows on
-  // screen while the header already shows a new date let that derived state answer for the wrong
-  // day.
+  // ticker scope, the scope-research panels, the equity curve. Leaving yesterday's rows on screen
+  // while the header already shows today's date let that derived state answer for the wrong day —
+  // the visible symptom was a day loaded after another day returning a different set than the same
+  // day loaded first on a fresh page.
   const loadedForDateKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const key = dateMode === "day" ? `day:${dateNy}` : `${dateMode}:${dateFrom}..${dateTo}`;
@@ -1561,7 +1164,7 @@ export default function OpenFadeScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDeleteDay = async (d: string) => {
+  const handleDeleteDay = useCallback(async (d: string) => {
     try {
       const res = await fetch(`/api/tape/day?dateNy=${encodeURIComponent(d)}`, { method: "DELETE" });
       if (!res.ok) return;
@@ -1576,7 +1179,7 @@ export default function OpenFadeScanner({
     } catch {
       // silently ignore
     }
-  };
+  }, [dateNy]);
 
   const sortedDaysAsc = useMemo(() => {
     return [...(days ?? [])].filter((d) => toYmd(d)).sort((a, b) => a.localeCompare(b));
@@ -1593,9 +1196,42 @@ export default function OpenFadeScanner({
     return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
   }, [sortedDaysDesc, dateFrom, dateTo]);
 
-  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  // These three feed always-visible header dropdowns. They used to be built inline in JSX, so the
+  // day list was re-mapped into fresh objects on every single render of the scanner.
+  const daySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d })),
+    [sortedDaysDesc, dateNy]
+  );
+  const fromDaySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]),
+    [fromDayOptions, dateFrom]
+  );
+  const toDaySelectOptions = useMemo<GlassSelectOption[]>(
+    () => (toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]),
+    [toDayOptions, dateTo]
+  );
+
+  // Stable handlers for the same header dropdowns — an inline arrow would invalidate GlassSelect's
+  // memo on every render regardless of how stable `options` is.
+  const handleDaySelectChange = useCallback((e: { target: { value: string } }) => {
+    const d = e.target.value;
+    setDateNy(d);
+    setDateFrom(d);
+    setDateTo(d);
+  }, []);
+  const handleDateFromSelectChange = useCallback((e: { target: { value: string } }) => {
+    const v = e.target.value;
+    setDateFrom(v);
+    if (toYmd(dateTo) && v > dateTo) setDateTo(v);
+  }, [dateTo]);
+  const handleDateToSelectChange = useCallback((e: { target: { value: string } }) => {
+    const v = e.target.value;
+    setDateTo(v);
+    if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
+  }, [dateFrom]);
+
+  const applyRangePreset = useCallback((preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
     setDateMode("last");
-    if (tab === "episodes") setEpisodesUseSearch(true);
     setRangePreset(preset);
     const n =
       preset === "3d" ? 3 :
@@ -1616,7 +1252,13 @@ export default function OpenFadeScanner({
     const to = slice[slice.length - 1] ?? src[src.length - 1];
     setDateFrom(from);
     setDateTo(to);
-  };
+  }, [sortedDaysAsc]);
+
+  const handleRangePresetSelectChange = useCallback(
+    (e: { target: { value: string } }) =>
+      applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d"),
+    [applyRangePreset]
+  );
 
   // ========= Persist/restore filters (like reference terminal)
   useFilterRestore(filtersLsKey, filtersHydratedRef, filtersRestoringRef, (s) => {
@@ -1624,11 +1266,7 @@ export default function OpenFadeScanner({
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
         if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
-        // zapMode is deliberately NOT restored, for the same reason as startAbs below: the %/σ/Δ ZAP
-        // toggle is an Arbitrage-only control and does not exist in the OpenDoor toolbar. A stale
-        // "delta" persisted by an older build would set UsePrintMedianDelta on the requests, and the
-        // engine then computes GetEffectiveStartAbs = printMedian + startAbs — reinstating a ~0.1
-        // deviation gate despite startAbs being 0, with nothing in the UI to reveal it.
+        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -1647,9 +1285,7 @@ export default function OpenFadeScanner({
         }
         if (s.metric === "SigmaZap" || s.metric === "ZapPct") setMetric(s.metric);
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
-        // startAbs is deliberately NOT restored: the control was removed from the OpenDoor toolbar,
-        // so a value persisted by an older build (0.1) would silently switch the start-deviation
-        // gate back on with no way to see or clear it.
+        if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
         if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
@@ -1661,6 +1297,7 @@ export default function OpenFadeScanner({
           onStreamAutomationConfigChange?.({ startCutoffTime: restoredCutoffTime });
         }
         if (typeof s.preStartMinuteIdx === "number" && s.preStartMinuteIdx >= -180 && s.preStartMinuteIdx <= 570) {
+          // Reverse of toPreRelativeMinutes: negative -> evening (add back the day length).
           const clock = s.preStartMinuteIdx < 0 ? s.preStartMinuteIdx + 1440 : s.preStartMinuteIdx;
           const h = Math.floor(clock / 60);
           const m = clock % 60;
@@ -1672,26 +1309,6 @@ export default function OpenFadeScanner({
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
-
-        // OpenDoor gate settings. Restored here rather than left at their defaults so the toolbar
-        // shows what is actually being traded after a reload — and so the copy pushed to the
-        // bridge (see the effect below) is the operator's, not a fresh page's.
-        if (s.openDoorExitClass === "10m" || s.openDoorExitClass === "30m") setOpenDoorExitClass(s.openDoorExitClass);
-        if (typeof s.openDoorUseStack === "boolean") setOpenDoorUseStack(s.openDoorUseStack);
-        if (typeof s.openDoorUseBench === "boolean") setOpenDoorUseBench(s.openDoorUseBench);
-        if (typeof s.openDoorUseDevSig === "boolean") setOpenDoorUseDevSig(s.openDoorUseDevSig);
-        if (s.fadeMetric === "sigma" || s.fadeMetric === "pct") setFadeMetric(s.fadeMetric);
-        if (typeof s.fadeMinAbs === "number") setFadeMinAbs(s.fadeMinAbs);
-        if (typeof s.fadeMaxAbs === "number" || s.fadeMaxAbs === null) setFadeMaxAbs(s.fadeMaxAbs);
-        if (typeof s.openDoorIgnoreRatings === "boolean") setOpenDoorIgnoreRatings(s.openDoorIgnoreRatings);
-        if (typeof s.openDoorUseManualEntry === "boolean") setOpenDoorUseManualEntry(s.openDoorUseManualEntry);
-        if (s.openDoorEntryBounds && typeof s.openDoorEntryBounds === "object") setOpenDoorEntryBounds({ ...EMPTY_ENTRY_BOUNDS, ...s.openDoorEntryBounds });
-        if (typeof s.openDoorUpMinRate === "number") setOpenDoorUpMinRate(s.openDoorUpMinRate);
-        if (typeof s.openDoorUpMinTotal === "number") setOpenDoorUpMinTotal(s.openDoorUpMinTotal);
-        if (typeof s.openDoorUpMinMove === "number") setOpenDoorUpMinMove(s.openDoorUpMinMove);
-        if (typeof s.openDoorDownMinRate === "number") setOpenDoorDownMinRate(s.openDoorDownMinRate);
-        if (typeof s.openDoorDownMinTotal === "number") setOpenDoorDownMinTotal(s.openDoorDownMinTotal);
-        if (typeof s.openDoorDownMinMove === "number") setOpenDoorDownMinMove(s.openDoorDownMinMove);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -1747,7 +1364,6 @@ export default function OpenFadeScanner({
         if (typeof s.showIgnore === "boolean") setShowIgnore(s.showIgnore);
         if (typeof s.showApply === "boolean") setShowApply(s.showApply);
         if (typeof s.showPin === "boolean") setShowPin(s.showPin);
-        if (typeof s.episodesUseSearch === "boolean") setEpisodesUseSearch(s.episodesUseSearch);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
         if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
@@ -1908,22 +1524,6 @@ export default function OpenFadeScanner({
       priceMode,
       sizingMode,
       sizeValue,
-      // OpenDoor's own gate settings. These used to be plain component state that reset on every
-      // reload, so "the filters I trade with" existed only until the tab was refreshed — and the
-      // server engine, which reads them from the bridge, had nothing to read.
-      openDoorExitClass,
-      openDoorUseStack,
-      openDoorUseBench,
-      openDoorUseDevSig,
-      openDoorIgnoreRatings,
-      openDoorUseManualEntry,
-      openDoorEntryBounds,
-      openDoorUpMinRate,
-      openDoorUpMinTotal,
-      openDoorUpMinMove,
-      openDoorDownMinRate,
-      openDoorDownMinTotal,
-      openDoorDownMinMove,
       dilutionMode,
       dilutionStep,
       maxAdds,
@@ -1944,7 +1544,6 @@ export default function OpenFadeScanner({
       showIgnore,
       showApply,
       showPin,
-      episodesUseSearch,
       showAdvanced,
       ratingMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
@@ -2089,13 +1688,13 @@ export default function OpenFadeScanner({
       session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
       // changing any of them left persistedFilters identical and the debounced write never fired —
-      // they reached localStorage only by accident, whenever some other field changed next. On
-      // OpenDoor sizeValue also goes to the server and is part of its cache variant key.
+      // they reached localStorage only by accident, whenever some other field changed next. All of
+      // them move the P&L, which is why a reload could return a different result for the same day.
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
-      qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
+      qTicker, qSide, listMode, showIgnore, showApply, showPin, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
@@ -2121,11 +1720,6 @@ export default function OpenFadeScanner({
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
-      openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-      fadeMetric, fadeMinAbs, fadeMaxAbs,
-    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
-    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
-      openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
     ]
   );
 
@@ -2367,9 +1961,10 @@ export default function OpenFadeScanner({
     }
   };
 
-  // Debounced write + unmount flush, shared with the other scanners. OpenDoor wrote
-  // synchronously on every change and never flushed on unmount - it never received the
-  // debounce Arbitrage got, so a ~200-field payload was serialised on each keystroke.
+  // persistedFilters is a ~200-field object, so serialising and writing it synchronously on every
+  // keystroke blocked the main thread. Debounce the write; the last state within the window wins,
+  // and the timer is flushed on unmount so nothing is lost when navigating away.
+  // Debounced write + unmount flush, shared with the other scanners.
   usePersistedFilters(filtersLsKey, persistedFilters, filtersHydratedRef, filtersRestoringRef);
 
   const derivedStreamSignalClass = useMemo(() => {
@@ -2486,60 +2081,6 @@ export default function OpenFadeScanner({
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
-  // Mirror the operator's saved filter state onto the bridge, which is where the server-side engine
-  // reads it at 09:20 — it has to gate on the tuned values, not on descriptor defaults, and it must
-  // keep doing so with no tab open. Both halves go in one PUT: the rating-gate values AND the rest
-  // of the toolbar (`streamFilterConfig`, the very config the browser engine filters live rows
-  // with), so the two can never drift apart on the server.
-  //
-  // Debounced because these are steppers and text boxes: typing a MINRATE or a bound would
-  // otherwise be one PUT per keystroke.
-  //
-  // Only the hydration guard, deliberately: unlike the localStorage write this must also fire ONCE
-  // on mount, or a bridge that has never been pushed to would keep running on defaults until the
-  // operator happened to touch a control. The debounce is what makes that safe — the restore's own
-  // re-render cancels the pending timer before it can send pre-restore values.
-  useEffect(() => {
-    if (!filtersHydratedRef.current) return;
-    const timer = window.setTimeout(() => {
-      void pushOpenDoorLiveParams(
-        {
-        exitClass: openDoorExitClass,
-        useStack: openDoorUseStack,
-        useBench: openDoorUseBench,
-        useDevSig: openDoorUseDevSig,
-        upMinRate: openDoorUpMinRate,
-        upMinTotal: openDoorUpMinTotal,
-        upMinMove: openDoorUpMinMove,
-        downMinRate: openDoorDownMinRate,
-        downMinTotal: openDoorDownMinTotal,
-        downMinMove: openDoorDownMinMove,
-        sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
-        fadeMetric,
-        fadeMinAbs,
-        fadeMaxAbs,
-        ignoreRatings: openDoorIgnoreRatings,
-        filters: toOpenDoorLiveFilters(streamFilterConfig, {
-          countries: countryEnabled,
-          exchanges: exchangeEnabled,
-          sectors: sectorEnabled,
-        }),
-        source: "openfade-scanner",
-      },
-        "openfade"
-      );
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [
-    openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
-    fadeMetric, fadeMinAbs, fadeMaxAbs,
-    openDoorIgnoreRatings, openDoorUseManualEntry, openDoorEntryBounds,
-    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
-    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
-    sizingMode, sizeValue, streamFilterConfig,
-    countryEnabled, exchangeEnabled, sectorEnabled,
-  ]);
-
   // Which session a row's report marker is judged against. The marker carries only day/month, so
   // it only means anything relative to a date: for the Scanner that is the tape day the row came
   // from, never "today". Rows carry their own `dateNy`; the selected day is the fallback for any
@@ -2595,16 +2136,12 @@ export default function OpenFadeScanner({
       const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
 
       return {
-        // No Arbitrage rating anywhere: zero floors so neither the server nor the client filter
-        // can reject on it, plus the explicit skip so the BIN/BINS lookups (which reject a ticker
-        // merely for having no Arbitrage bin data) never run either.
-        cls: OPEN_DOOR_CLS,
+        cls: streamSignalClass,
         type: ratingType ?? "any",
         mode: scopeModeForSnapshot,
         ratingMode,
-        skipArbitrageRating: true,
-        minRate: OPEN_DOOR_NO_ARB_RATE,
-        minTotal: OPEN_DOOR_NO_ARB_TOTAL,
+        minRate: streamRatingRule.minRate,
+        minTotal: streamRatingRule.minTotal,
         tickersFilterNorm: splitListUpper(tickersText).join(","),
         listMode,
         ignoreSet: new Set(splitListUpper(ignoreTickersText)),
@@ -2803,8 +2340,10 @@ export default function OpenFadeScanner({
     minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
     endSignalThreshold: streamAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
     maxOpenPositions: streamAutomationConfigOverride?.maxOpenPositions ?? 10,
-    // Unconditional — see ArbitrageScanner.tsx for why: maxAdds must always reflect the visible
-    // shared toolbar field, never streamAutomationConfigOverride's own isolated default.
+    // Unconditional, like sizeValue/dilutionStep/minHoldMinutes below: maxAdds must always come
+    // from the shared toolbar state (the visible MAXADD field), never from
+    // streamAutomationConfigOverride's own isolated default — otherwise Stream silently enforces
+    // a different limit than what the user sees and sets.
     maxAdds,
     queueDelayMinSeconds: streamAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
     queueDelayMaxSeconds: streamAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
@@ -2815,14 +2354,13 @@ export default function OpenFadeScanner({
     sizeValue,
     dilutionStep,
     addDelayMinutes,
-    minHoldMinutes: minHoldCandles,
+    minHoldMinutes: normalizedMinHoldCandles,
     exitMode: streamAutomationConfigOverride?.exitMode ?? "normalize",
     printStartTime: streamAutomationConfigOverride?.printStartTime ?? "09:20",
     printCloseTime: streamAutomationConfigOverride?.printCloseTime ?? "09:30",
     noSpreadExit: streamAutomationConfigOverride?.noSpreadExit ?? true,
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
     startCutoffTime,
-    entryStopTime: streamAutomationConfigOverride?.entryStopTime,
     preStartTime,
   }), [
     addDelayMinutes,
@@ -2848,60 +2386,6 @@ export default function OpenFadeScanner({
     Boolean(streamAutoStartEnabledOverride) ||
     Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
 
-  // The OpenDoor stream must receive the SAME universe OpenDoor Sonar does, or the shared gate
-  // still judges different sets of tickers. Sonar asks the server with cls="global", minRate=0.3,
-  // minTotal=1 and — critically — NO startAbs: its entry rule is the per-bin gate, not a sigma
-  // floor, so a server-side sigma threshold would silently narrow the universe before the gate
-  // ever sees it. These mirror OpenDoorSonar's own defaults and must be changed together with it.
-  const openDoorSignalsRequest = useMemo(() => ({
-    cls: OPEN_DOOR_CLS,
-    minRate: OPEN_DOOR_NO_ARB_RATE,
-    minTotal: OPEN_DOOR_NO_ARB_TOTAL,
-    omitStartAbs: true,
-    includeAll: fadeUniverseAll,
-  }), [fadeUniverseAll]);
-
-  // Same rule, same function, same rows as OpenDoor Sonar — see lib/opendoor/gate.ts for why it
-  // is not duplicated here. The scanner has no ADVANCED toggle (that is a Sonar-only view), so
-  // the standard 09:20 bin columns are always the ones read.
-  // OpenFade's rule, mirroring TapeOpenDoorEngine.FadePass: the reading must sit inside the band
-  // and its SIGN picks the side. Judging by rating bins here would have the stream send what
-  // OpenDoor would trade, not what this strategy backtests.
-  const openDoorStreamGate = useCallback(
-    (signal: any) => {
-      const referencePct = getNumAny(signal, ["RefPrcExchLstClsΔ%", "RefPrcExchLstClsPct", "RefPrcExchLstClsDeltaPct"]);
-      const benchmarkReferencePct = getNumAny(signal, ["BenchRefPrcExchLstClsΔ%", "bench.RefPrcExchLstClsΔ%", "BenchRefPrcExchLstClsPct"]);
-      const best = signal?.best ?? signal?.Best ?? signal?.best_params?.best ?? signal?.bestParams?.best ?? null;
-      const staticBest = signal?.best_params?.static ?? signal?.bestParams?.static ?? null;
-      const beta = toNum(signal?.beta ?? signal?.Beta ?? best?.beta ?? best?.Beta ?? staticBest?.beta ?? staticBest?.Beta);
-      const sigma = toNum(signal?.sigma ?? signal?.Sigma ?? best?.sigma ?? best?.Sigma ?? staticBest?.sigma ?? staticBest?.Sigma);
-      const rawReferenceDeviation =
-        referencePct != null && benchmarkReferencePct != null && beta != null
-          ? referencePct - benchmarkReferencePct * beta
-          : null;
-      const referenceSigma =
-        rawReferenceDeviation != null && sigma != null && sigma !== 0
-          // Match ArbitrageMath.DerivedPrecision (two decimals) on the bridge so a boundary
-          // value cannot pass the browser gate and fail the server strategy, or vice versa.
-          ? Math.round((rawReferenceDeviation / sigma) * 100) / 100
-          : null;
-      // RefPrcExchLstClsΔ% has one reference price per symbol, so one signed reading selects
-      // the side: negative fades into Long, positive fades into Short.
-      const rawUp = fadeMetric === "pct" ? rawReferenceDeviation : referenceSigma;
-      const rawDown = rawUp;
-      const inBand = (v: number | null, wantNegative: boolean) => {
-        if (v == null || !Number.isFinite(v)) return false;
-        if (wantNegative ? v >= 0 : v <= 0) return false;
-        const abs = Math.abs(v);
-        if (abs < fadeMinAbs) return false;
-        if (fadeMaxAbs != null && abs > fadeMaxAbs) return false;
-        return true;
-      };
-      return { up: inBand(rawUp, true), down: inBand(rawDown, false) };
-    },
-    [fadeMetric, fadeMinAbs, fadeMaxAbs]
-  );
-
   const {
     streamEntryReadyCount,
     streamAutoEnabled,
@@ -2926,17 +2410,6 @@ export default function OpenFadeScanner({
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
   } = useStreamEngine({
-    // OpenDoor's real gate is per-bin, per-direction, at the selected exit horizon — a rule the
-    // Arbitrage-shaped session rating cannot express, which is why the stream tab used to show
-    // hundreds of candidates where Sonar showed single digits. This runs the SAME function Sonar
-    // filters with (lib/opendoor/gate.ts) over the SAME SSE rows, so the two agree exactly.
-    signalGate: openDoorStreamGate,
-    // OpenDoor ends its session with a single Ctrl+E at CUTOFF, not Arbitrage's Ctrl+Q -> Ctrl+O.
-    cutoffAction: "exit-all" as const,
-    // OpenFade's own order types. They resolve to the same Ctrl+F1 / Ctrl+F2 as OpenDoor today,
-    // but through its own setting — so retuning one desk's keys cannot move the other's.
-    entryIntentTypes: { long: "OpenFadeEnterLong", short: "OpenFadeEnterShort" },
-    signalsRequest: openDoorSignalsRequest,
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     trackedSignalsEnabled: streamTrackedSignalsEnabled,
@@ -2972,7 +2445,8 @@ export default function OpenFadeScanner({
       side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
     })),
     onFetchActiveTickers: async () => {
-      const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
+      const params = buildGetParams(dateNy);
+      const qs = buildPaperQuery(params);
       const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
       const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
       return rows.map((r) => ({
@@ -3071,6 +2545,15 @@ export default function OpenFadeScanner({
         } catch {
           // best effort cleanup
         }
+        try {
+          await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: false, strategyId: streamInstance.strategyId }),
+          });
+        } catch {
+          // best-effort — a stale armed schedule is a minor annoyance, not a safety issue
+        }
         onStreamAutomationConfigChange?.({ strategyModeEnabled: false });
         applyStreamAutoEnabled(false);
         resetStreamAutomationState();
@@ -3096,6 +2579,35 @@ export default function OpenFadeScanner({
       }
       onStreamAutomationConfigChange?.({ strategyModeEnabled: true });
       applyStreamAutoEnabled(true);
+
+      // Arming while START is still in the future is what makes "press Start now, walk away"
+      // actually reliable: the server itself re-flips AutoEnabled/StrategyModeEnabled on at
+      // START, independent of whether this tab is still open/in-sync when that moment arrives.
+      // It complements (doesn't replace) the browser-side wait — the signal/dispatch engine
+      // that decides entries and adds still only runs while this tab is alive.
+      const startMinuteIdx = parseTimeToMinuteIdx(preStartTime);
+      if (startMinuteIdx != null) {
+        try {
+          const nowNyParts = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+          }).formatToParts(new Date());
+          const nowHh = Number(nowNyParts.find((p) => p.type === "hour")?.value ?? NaN);
+          const nowMm = Number(nowNyParts.find((p) => p.type === "minute")?.value ?? NaN);
+          const nowMinuteIdx = Number.isFinite(nowHh) && Number.isFinite(nowMm) ? nowHh * 60 + nowMm : null;
+          if (nowMinuteIdx != null && nowMinuteIdx < startMinuteIdx) {
+            await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: true, nyTime: preStartTime, strategyId: streamInstance.strategyId }),
+            });
+          }
+        } catch {
+          // best-effort resilience layer — the immediate /start above already covers this tab's own session
+        }
+      }
     } finally {
       setStreamAutomationTogglePending(null);
     }
@@ -3140,78 +2652,7 @@ export default function OpenFadeScanner({
   };
 
   // ========= Build query params for GET /active & /episodes
-  // ---- OpenDoor request shape ----
-  // The inherited buildGetParams/buildPostRequest below describe an Arbitrage episode search
-  // (deviation thresholds, hold windows, close modes). OpenDoor's engine takes none of that: entry
-  // and exit are fixed by the clock, so the only inputs are the exit class, which of the three
-  // parameters gate, the UP/DOWN gate levels and the per-trade notional.
-  function buildOpenDoorParams() {
-    const reqTickers = requestScopedTickers;
-    return {
-      exitClass: openDoorExitClass,
-      fadeMetric,
-      fadeMinAbs,
-      fadeMaxAbs,
-      ignoreRatings: openDoorIgnoreRatings,
-      useManualEntry: openDoorUseManualEntry,
-      stackMin: openDoorEntryBounds.stackMin,
-      stackMax: openDoorEntryBounds.stackMax,
-      benchMin: openDoorEntryBounds.benchMin,
-      benchMax: openDoorEntryBounds.benchMax,
-      devSigMin: openDoorEntryBounds.devSigMin,
-      devSigMax: openDoorEntryBounds.devSigMax,
-      useStack: openDoorUseStack,
-      useBench: openDoorUseBench,
-      useDevSig: openDoorUseDevSig,
-      upMinRate: openDoorUpMinRate,
-      upMinTotal: openDoorUpMinTotal,
-      upMinMove: openDoorUpMinMove,
-      downMinRate: openDoorDownMinRate,
-      downMinTotal: openDoorDownMinTotal,
-      downMinMove: openDoorDownMinMove,
-      tickers: reqTickers.length ? reqTickers : null,
-      excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
-      sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
-
-      // Toolbar flag/multi-select filters, mirroring what the Arbitrage scanner sends. Enforced
-      // server-side in PaperOpenDoorController.PassesToolbarFilters, after the per-day cache.
-      // REP is absent on purpose: it stays client-side, where the shared date/time report rule is.
-      requireHasNews: requireHasNews ? true : null,
-      excludeHasNews: excludeHasNews ? true : null,
-      requireIsPTP: requireIsPTP ? true : null,
-      requireIsSSR: requireIsSSR ? true : null,
-      requireIsETF: requireIsETF ? true : null,
-      requireIsCrap: requireIsCrap ? true : null,
-      excludePTP: excludePTP ? true : null,
-      excludeSSR: excludeSSR ? true : null,
-      excludeETF: excludeETF ? true : null,
-      excludeCrap: excludeCrap ? true : null,
-
-      // USA / CHINA. PaperFilters.PassesStaticMetaFilters has matched on these all along (it reads
-      // the country string, so "UNITED STATES"/"US" and CHINA/"HONG KONG" both land); they were
-      // simply never put in this body, which left both buttons inert on OpenDoor.
-      includeUSA: includeUSA ? true : null,
-      includeChina: includeChina ? true : null,
-
-      exchanges: exchangeEnabled === "include" && selExchanges.size ? Array.from(selExchanges) : null,
-      countries: countryEnabled === "include" && selCountries.size ? Array.from(selCountries) : null,
-      sectorsL3: sectorEnabled === "include" && selSectors.size ? Array.from(selSectors) : null,
-      excludeExchanges: exchangeEnabled === "exclude" && selExchanges.size ? Array.from(selExchanges) : null,
-      excludeCountries: countryEnabled === "exclude" && selCountries.size ? Array.from(selCountries) : null,
-      excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
-    };
-  }
-
-  function buildOpenDoorGetParams(d: string) {
-    return { dateNy: d, ...buildOpenDoorParams() };
-  }
-
-  function buildOpenDoorPostRequest(from: string, to: string) {
-    return { dateFrom: from, dateTo: to, ...buildOpenDoorParams() };
-  }
-
   function buildGetParams(d: string) {
-    const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const reqTickers = requestScopedTickers;
 
     return {
@@ -3223,7 +2664,7 @@ export default function OpenFadeScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: mh,
+      minHoldCandles: normalizedMinHoldCandles,
       priceMode,
       pnlMode,
       sizingMode,
@@ -3232,10 +2673,11 @@ export default function OpenFadeScanner({
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
       maxAdds,
       addDelayMinutes,
-      exitConfirmCandles: mh + 1,
+      exitConfirmCandles: normalizedMinHoldCandles + 1,
       ratingType: ratingType ?? "any",
 
       tickers: reqTickers.length ? reqTickers : null,
+      excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
       side: sideFilter ? sideFilter : null,
 
@@ -3374,7 +2816,6 @@ export default function OpenFadeScanner({
   }
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
-    const mh = Math.max(0, Math.min(180, clampInt(minHoldCandles, 0)));
     const startAbsMaxNum = optNumOrNull(startAbsMax);
     const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
     const reqTickers = requestScopedTickers;
@@ -3397,7 +2838,7 @@ export default function OpenFadeScanner({
       endAbs,
       session,
       closeMode,
-      minHoldCandles: mh,
+      minHoldCandles: normalizedMinHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       preStartMinuteIdx: preStartToMinuteIdx(),
       priceMode,
@@ -3408,7 +2849,7 @@ export default function OpenFadeScanner({
       dilutionStep: normalizeDilutionStepValue(dilutionStep),
       maxAdds,
       addDelayMinutes,
-      exitConfirmCandles: mh + 1,
+      exitConfirmCandles: normalizedMinHoldCandles + 1,
 
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
@@ -3564,15 +3005,12 @@ export default function OpenFadeScanner({
   }
 
   async function fetchEpisodesSearchRows(req: PaperArbAnalyticsRequest): Promise<PaperArbClosedDto[]> {
-    // Callers still hand over the inherited Arbitrage request object (it also drives the analytics
-    // endpoint), but the OpenDoor search takes an entirely different body - only the date range is
-    // shared. Translating here keeps every call site untouched.
-    const body = buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
-    const key = JSON.stringify(body);
+    const key = JSON.stringify(req);
     return episodesSearchCache.get(key, () =>
-      // See the same call in ArbitrageScanner: ask for best_params once per ticker rather than on
-      // every row, and reattach it as a shared reference.
-      apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
+      // includeBestParams:false asks the bridge to send each ticker's best_params once instead of on
+      // every row - ~86% of the payload. normalizeRowsWithBestParams puts it back as a shared
+      // reference, and falls through unchanged against a bridge that does not know the flag.
+      apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...req, includeBestParams: false })
         .then((j) => normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [])
     );
   }
@@ -3589,32 +3027,34 @@ export default function OpenFadeScanner({
         await refreshStreamSignals();
         return;
       }
+      // In day mode dateFrom/dateTo are mirrors of dateNy kept in sync by an effect, so reading
+      // them directly would run one render behind the day the header is showing.
+      const from = dateMode === "day" ? dateNy : dateFrom;
+      const to = dateMode === "day" ? dateNy : dateTo;
+
       if (tab === "active") {
         setAnalytics(null);
-        const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
+        const params = buildGetParams(dateNy);
+        const qs = buildPaperQuery(params);
         const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
         const rows = normalizeRows<PaperArbActiveRow>(j);
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
         setAnalytics(null);
-        if (!(episodesUseSearch || forceEpisodesSearch)) {
-          const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
-          const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
-          const rows = normalizeRows<PaperArbClosedDto>(j);
-          setEpisodesRows(rows ?? []);
-        } else {
-          const req = buildPostRequest(dateFrom, dateTo);
-          const rows = await fetchEpisodesSearchRows(req);
-          setEpisodesRows(rows);
-        }
-      } else {
-        // No /analytics call here on purpose. Its response was only ever rendered by the inherited
-        // Arbitrage ANALYTICS block, which OpenDoor does not use — every aggregate this scanner
-        // shows (analyticsSummary, the equity curve, scope-research) is derived client-side from
-        // filteredEpisodes. Calling the Arbitrage endpoint would have recomputed the same day with
-        // the hedge engine and reported numbers that contradict the rows underneath them.
-        const req = buildPostRequest(dateFrom, dateTo);
+        const req = buildPostRequest(from, to);
         const rows = await fetchEpisodesSearchRows(req);
+        setEpisodesRows(rows);
+      } else {
+        const req = buildPostRequest(from, to);
+        req.includeEquityCurve = includeEquityCurve;
+        req.equityCurveMode = equityCurveMode;
+        req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
+        const [analyticsResp, rows] = await Promise.all([
+          apiPost<PaperArbAnalyticsResponse>(`${STRATEGY.api.base}/analytics`, req),
+          fetchEpisodesSearchRows(req),
+        ]);
+
+        setAnalytics(analyticsResp ?? null);
         setEpisodesRows(rows);
       }
       setUpdatedAt(new Date());
@@ -3659,10 +3099,7 @@ export default function OpenFadeScanner({
         req.startAbs = c.s;
         req.startAbsMax = null;
         req.endAbs = c.e;
-        const j = await apiPost<any>(
-          `${STRATEGY.api.base}/episodes/search`,
-          buildOpenDoorPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom)
-        );
+        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, req);
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
         const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
         const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
@@ -3938,7 +3375,35 @@ export default function OpenFadeScanner({
     zapMode,
   ]);
 
-  const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
+  /**
+   * Prepares a SCOPE request.
+   *
+   * `keepUserFilters` decides what SCOPE models, and it is also the single biggest cost lever:
+   *
+   *  - false (the old behaviour) wipes every sweepable field, so each scenario is measured against
+   *    an EMPTY base. That answers "what does this one filter contribute on its own", but it means
+   *    the ranges the user set in the panel are stripped out of the request entirely, and the
+   *    bridge simulates every situation those filters were meant to exclude.
+   *  - true keeps them. The base becomes the user's own selection and each scenario sweeps one
+   *    parameter INSIDE it — which is what the panel visibly promises when those inputs are filled
+   *    in, and what makes the work proportional to the selection instead of to the universe.
+   *
+   * Each scenario's `apply` assigns its own parameter outright, so keeping the rest does not
+   * double-filter the swept one — it only constrains everything else.
+   *
+   * `keepRatingGate` is the same choice for the rating rule specifically:
+   *  - false -> minRate/minTotal 0/0, required when a MINRATE or MINTOTAL scenario is selected,
+   *    because showing what those gates contribute needs rows that FAIL them. On the bridge that
+   *    resolves to the full universe (measured: 7056 tickers).
+   *  - true  -> keep the user's rule; the bridge narrows the build to the eligible set (measured:
+   *    890 tickers on the same run, 8x less work).
+   */
+  const clearOptimizerFields = (
+    req: PaperArbAnalyticsRequest,
+    keepRatingGate = false,
+    keepUserFilters = true
+  ) => {
+    if (!keepUserFilters) {
     req.minCorr = null; req.maxCorr = null;
     req.minBeta = null; req.maxBeta = null;
     req.minSigma = null; req.maxSigma = null;
@@ -3980,20 +3445,23 @@ export default function OpenFadeScanner({
     req.minImbExch925 = null; req.maxImbExch925 = null;
     req.minImbExch1555 = null; req.maxImbExch1555 = null;
     req.startAbsMax = null;
-    req.ratingRules = scannerBinFilterEnabled({ ratingMode, metric }) ? null : [{ band: ruleBand, minRate: 0, minTotal: 0 }];
+    }
+
+    if (scannerBinFilterEnabled({ ratingMode, metric })) {
+      req.ratingRules = null;
+    } else if (keepRatingGate) {
+      const rule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+      req.ratingRules = [{
+        band: rule.band,
+        minRate: Math.max(0, Number(rule.minRate) || 0),
+        minTotal: Math.max(0, clampInt(rule.minTotal, 0)),
+      }];
+    } else {
+      req.ratingRules = [{ band: ruleBand, minRate: 0, minTotal: 0 }];
+    }
   };
 
   async function loadOptimizerRangesByGroup(from: string, to: string) {
-    // Same reason as runEpisodesOptimizer: /optimizer/ranges buckets ARBITRAGE episodes by
-    // Arbitrage-only parameters (sigma thresholds, rating gates), none of which describe a
-    // fixed 09:20 -> 09:40/10:00 trade. Left inert rather than feeding the panel wrong ranges.
-    setOptimizerRanges(null);
-    setOptimizerRangesErr(null);
-    setOptimizerRangesLoading(false);
-    return;
-  }
-
-  async function loadOptimizerRangesByGroupArbitrageLegacy(from: string, to: string) {
     if (scannerBinFilterEnabled({ ratingMode, metric })) {
       setOptimizerRanges(null);
       setOptimizerRangesErr(null);
@@ -4023,6 +3491,22 @@ export default function OpenFadeScanner({
       for (let i = 0; i < keys.length; i += size) chunks.push(keys.slice(i, i + size));
       return chunks;
     };
+    // Timeouts have to scale with the range, not sit at a flat 2-3 minutes.
+    //
+    // The FIRST request of a run pays for building every day; the rest reuse those days from the
+    // bridge's store and are far cheaper. A 4-day range builds in ~40s, so ~10s per day is the
+    // real unit, and the first request needs headroom for all of it. At 20 days a flat 120000
+    // aborted the run while the bridge was still working — the request was killed by the client,
+    // not failing on its own.
+    const rangeDays = (() => {
+      const a = Date.parse(`${from}T00:00:00Z`);
+      const b = Date.parse(`${to}T00:00:00Z`);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 1;
+      return Math.floor((b - a) / 86_400_000) + 1;
+    })();
+    // 30s of slack plus 25s per day, floored at the old value so short ranges are unchanged.
+    const groupTimeoutMs = Math.max(180_000, 30_000 + rangeDays * 25_000);
+
     const tasks: Array<{
       group: OptimizerRangeGroupKey;
       parameterKeys?: string[];
@@ -4044,7 +3528,7 @@ export default function OpenFadeScanner({
           tasks.push({
             group,
             parameterKeys,
-            timeoutMs: 120000,
+            timeoutMs: groupTimeoutMs,
           });
         }
         continue;
@@ -4053,7 +3537,7 @@ export default function OpenFadeScanner({
       tasks.push({
         group,
         parameterKeys: loadAllScopeKeys ? undefined : groupKeys,
-        timeoutMs: group === "ZAP THRESHOLDS" ? 180000 : 180000,
+        timeoutMs: groupTimeoutMs,
         bucketCount: group === "ZAP THRESHOLDS" ? 6 : undefined,
       });
     }
@@ -4113,7 +3597,7 @@ export default function OpenFadeScanner({
         groupReq.optimizerParameterKeys = parameterKeys ?? null;
         try {
           const resp = await apiPostWithTimeout<PaperArbOptimizerRangesResponse>(
-            "/api/paper/arbitrage/optimizer/ranges",
+            `${STRATEGY.api.base}/optimizer/ranges`,
             groupReq,
             timeoutMs
           );
@@ -4160,11 +3644,20 @@ export default function OpenFadeScanner({
         }
       };
 
-    const tapeTasks = tasks.filter((task) => task.group === "TAPE FILTERS");
-    const nonTapeTasks = tasks.filter((task) => task.group !== "TAPE FILTERS");
-
-    await Promise.all(nonTapeTasks.map((task) => executeTask(task)));
-    for (const task of tapeTasks) {
+    // Strictly sequential, including the two that used to share a Promise.all.
+    //
+    // All three groups build the SAME day variant on the bridge, so whichever runs first pays for
+    // the build and the rest reuse it from the day store. Running two at once did not overlap any
+    // work — it just doubled peak memory and made them evict each other's warmed tape, which the
+    // bridge only keeps two days of. On a long range that turns one build into three.
+    //
+    // TAPE FILTERS stays last: it is the widest group, so by the time it runs the days it needs
+    // are already built.
+    const orderedTasks = [
+      ...tasks.filter((task) => task.group !== "TAPE FILTERS"),
+      ...tasks.filter((task) => task.group === "TAPE FILTERS"),
+    ];
+    for (const task of orderedTasks) {
       await executeTask(task);
     }
 
@@ -4172,91 +3665,7 @@ export default function OpenFadeScanner({
     setOptimizerRangesLoading(false);
   }
 
-  // OpenDoor evaluates optimizer scenarios client-side instead of calling /scope/evaluate.
-  //
-  // Arbitrage needs the server because narrowing a filter there changes which EPISODES EXIST — the
-  // hedge engine has to replay the day under the new thresholds. OpenDoor has no such feedback
-  // loop: entry and exit are fixed by the clock, so a filter can only ever keep or drop trades that
-  // already happened. That makes "what if I restricted parameter X to range Y" a pure partition of
-  // the rows on screen — which optimizerRangeParameters has already computed, bucket by bucket.
-  // So the scenarios are read straight off those buckets rather than recomputed.
   async function runEpisodesOptimizer() {
-    if (optimizerLoading) return;
-    setOptimizerLoading(true);
-    setOptimizerErr(null);
-
-    try {
-      const rows: OptimizerResultRow[] = [];
-
-      const pnls = filteredEpisodes.map((r) => r.totalPnlUsd ?? 0);
-      const baseTrades = pnls.length;
-      const baseWins = pnls.filter((v) => v > 0).length;
-      const baseLosses = pnls.filter((v) => v < 0).length;
-      const baseTotal = pnls.reduce((sum, v) => sum + v, 0);
-      const baseAvg = baseTrades > 0 ? baseTotal / baseTrades : 0;
-
-      rows.push({
-        id: "baseline",
-        parameter: "BASE",
-        variant: "all",
-        summary: `all ${intn(baseTrades)} episodes`,
-        trades: baseTrades,
-        wins: baseWins,
-        losses: baseLosses,
-        winRate: baseTrades > 0 ? baseWins / baseTrades : 0,
-        totalPnlUsd: baseTotal,
-        avgPnlUsd: baseAvg,
-        score: baseAvg,
-      });
-
-      const parameters = buildOptimizerRangeParameters();
-      setOptimizerRangeParameters(parameters);
-
-      for (const parameter of parameters) {
-        const buckets = [
-          ...(parameter.buckets ?? []),
-          ...(parameter.lowerTailBuckets ?? []),
-          ...(parameter.upperTailBuckets ?? []),
-        ];
-        for (const bucket of buckets) {
-          if (!bucket || bucket.trades <= 0) continue;
-          rows.push({
-            id: `${parameter.key}|${bucket.bucketId}`,
-            parameter: parameter.label,
-            variant: bucket.label,
-            summary: `${parameter.label} in ${bucket.label}`,
-            trades: bucket.trades,
-            wins: bucket.wins,
-            losses: bucket.losses,
-            winRate: bucket.winRate,
-            totalPnlUsd: bucket.totalPnlUsd,
-            avgPnlUsd: bucket.avgPnlUsd,
-            score: bucket.score,
-          });
-        }
-      }
-
-      rows.sort((a, b) => {
-        if (a.id === "baseline") return -1;
-        if (b.id === "baseline") return 1;
-        return b.score - a.score;
-      });
-
-      setOptimizerRows(rows);
-      // Pair overlay compares two parameters at once; it has no client-side equivalent yet.
-      setOptimizerErr(
-        rows.length <= 1
-          ? "No episodes on screen to optimize over — run a date with results first."
-          : null
-      );
-    } catch (e: any) {
-      setOptimizerErr(e?.message ?? String(e));
-    } finally {
-      setOptimizerLoading(false);
-    }
-  }
-
-  async function runEpisodesOptimizerArbitrageLegacy() {
     if (optimizerLoading) return;
     const from = dateMode === "day" ? dateNy : dateFrom;
     const to = dateMode === "day" ? dateNy : dateTo;
@@ -4281,6 +3690,22 @@ export default function OpenFadeScanner({
     });
 
     try {
+      // SCOPE models INSIDE the user's selection. The base request therefore carries the rating
+      // gate they actually set, not 0/0.
+      //
+      // Clearing it to 0/0 made the bridge resolve "every ticker is eligible" and build the whole
+      // universe — measured on a live run: 7057 tickers against 890 for the real gate, and six of
+      // those builds took the 25-day run's peak to 13.5 GB against a 14.3 GB ceiling. Its only
+      // purpose was to give the MINRATE / MINTOTAL scenarios rows that FAIL the gate, so they could
+      // show what those thresholds exclude. Those two now compare against an already-gated base and
+      // will simply report no marginal effect; every other parameter is unaffected, because they
+      // were always measured within whatever the base was.
+      //
+      // Only the BASE request triggers a build: ScopeEvaluate builds baseRows once and each
+      // scenario filters that list in memory (EvaluateScopeSummaryAsync), so this single change
+      // removes the full-universe build outright rather than moving it.
+      const keepRatingGate = true;
+
       const buildScopeScenarioRequest = (
         id: string,
         parameter: string,
@@ -4289,7 +3714,7 @@ export default function OpenFadeScanner({
         apply: (req: PaperArbAnalyticsRequest) => void
       ): ScopeBatchScenarioRequest => {
         const req = buildPostRequest(from, to);
-        clearOptimizerFields(req);
+        clearOptimizerFields(req, keepRatingGate);
         apply(req);
         return {
           id,
@@ -4311,13 +3736,13 @@ export default function OpenFadeScanner({
       setOptimizerProgress({ done: 0, total: singleScenarioCount });
 
       const baseRequest = buildPostRequest(from, to);
-      clearOptimizerFields(baseRequest);
+      clearOptimizerFields(baseRequest, keepRatingGate);
 
       const rowRequests = scopeScenarioRows.map((scenario) =>
         buildScopeScenarioRequest(scenario.id, scenario.parameter, scenario.variant, scenario.summary, scenario.apply)
       );
       const resp = await apiPostWithTimeout<ScopeBatchResponse>(
-        "/api/paper/arbitrage/scope/evaluate",
+        `${STRATEGY.api.base}/scope/evaluate`,
         {
           baseRequest,
           rows: rowRequests,
@@ -4364,6 +3789,10 @@ export default function OpenFadeScanner({
     dateTo,
   ]);
 
+  // The ticker box drives a full re-filter of every row. Deferring it keeps the input responsive:
+  // React renders the typed character immediately and re-runs the filters at lower priority.
+  const deferredQTicker = React.useDeferredValue(qTicker);
+
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
   const pinSet = useMemo(() => new Set(splitListUpper(benchTickersText)), [benchTickersText]);
@@ -4375,8 +3804,8 @@ export default function OpenFadeScanner({
 
   // IGN travels to the server as a deny-list. It used to be inverted here into an allow-list built
   // out of the rows currently on screen, so every request was scoped to the PREVIOUS request's
-  // result set — and on OpenDoor that list also reached the engine, which cached the day it
-  // produced under a key that ignored tickers.
+  // result set: load day A, switch to day B, and day B came back restricted to day A's tickers,
+  // while the same day loaded on a fresh page came back whole.
   const requestExcludedTickers = useMemo(
     () => (listMode === "ignore" ? Array.from(ignoreSet) : ([] as string[])),
     [listMode, ignoreSet]
@@ -4400,69 +3829,7 @@ export default function OpenFadeScanner({
 
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
-  // Shared min/max filters used to be enforced only by the Arbitrage endpoint, which received them
-  // in the request body. OpenDoor talks to its own endpoint, whose request carries none of them, so
-  // without this they silently did nothing and the P&L never moved when a bound was set.
-  // Nothing needs to go back to the server: episode rows already carry the whole static block
-  // (TapeStaticMeta), and scopeResearchParameterValue is the same extractor the Visual Scope uses.
-  // corr/beta/sigma are absent here on purpose - they are checked below with a ticker-meta fallback.
-  const sharedRangeChecks: Array<[SharedRangeFilterKey, string, string]> = [
-    ["adv20", minAdv20, maxAdv20],
-    ["adv20nf", minAdv20NF, maxAdv20NF],
-    ["adv90", minAdv90, maxAdv90],
-    ["adv90nf", minAdv90NF, maxAdv90NF],
-    ["avpremhv", minAvPreMhv, maxAvPreMhv],
-    ["roundlot", minRoundLot, maxRoundLot],
-    ["vwap", minVWAP, maxVWAP],
-    ["spread", minSpread, maxSpread],
-    ["lstprcl", minLstPrcL, maxLstPrcL],
-    ["lstcls", minLstCls, maxLstCls],
-    ["ycls", minYCls, maxYCls],
-    ["tcls", minTCls, maxTCls],
-    ["clstocls", minClsToClsPct, maxClsToClsPct],
-    ["lo", minLo, maxLo],
-    ["lstclsnewscnt", minLstClsNewsCnt, maxLstClsNewsCnt],
-    ["marketcapm", minMarketCapM, maxMarketCapM],
-    ["premhvolnf", minPreMktVolNF, maxPreMktVolNF],
-    ["volnffromlstcls", minVolNFfromLstCls, maxVolNFfromLstCls],
-    ["avpostmhvol90nf", minAvPostMhVol90NF, maxAvPostMhVol90NF],
-    ["avpremhvol90nf", minAvPreMhVol90NF, maxAvPreMhVol90NF],
-    ["avpremhvalue20nf", minAvPreMhValue20NF, maxAvPreMhValue20NF],
-    ["avpremhvalue90nf", minAvPreMhValue90NF, maxAvPreMhValue90NF],
-    ["avgdailyvalue20", minAvgDailyValue20, maxAvgDailyValue20],
-    ["avgdailyvalue90", minAvgDailyValue90, maxAvgDailyValue90],
-    ["volatility20", minVolatility20, maxVolatility20],
-    ["volatility90", minVolatility90, maxVolatility90],
-    ["premhmdv20nf", minPreMhMDV20NF, maxPreMhMDV20NF],
-    ["premhmdv90nf", minPreMhMDV90NF, maxPreMhMDV90NF],
-    ["volrel", minVolRel, maxVolRel],
-    ["premhbidlstprc", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct],
-    ["premhlolstprc", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct],
-    ["premhhilstcls", minPreMhHiLstClsPct, maxPreMhHiLstClsPct],
-    ["premhlolstcls", minPreMhLoLstClsPct, maxPreMhLoLstClsPct],
-    ["lstprclstcls", minLstPrcLstClsPct, maxLstPrcLstClsPct],
-    ["imbexch925", minImbExch925, maxImbExch925],
-    ["imbexch1555", minImbExch1555, maxImbExch1555],
-  ];
-
-  const passesSharedRangeBounds = (row: PaperArbClosedDto) => {
-    for (const [key, minRaw, maxRaw] of sharedRangeChecks) {
-      const min = rangeValueOrNull(key, minRaw);
-      const max = rangeValueOrNull(key, maxRaw);
-      if (min == null && max == null) continue;
-
-      const parameterKey = optimizerKeyToScopeResearchParameterKey(key);
-      const value = parameterKey ? scopeResearchParameterValue(row, parameterKey) : null;
-      if (value == null) return false;
-      if (min != null && value < min) return false;
-      if (max != null && value > max) return false;
-    }
-    return true;
-  };
-
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
-    if (!passesSharedRangeBounds(row)) return false;
-
     // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
     // against the TAPE DAY this row belongs to rather than against today. The marker carries only
     // day/month ("10/08 BMO"), so comparing a replayed day's rows to today's date made every one
@@ -4484,6 +3851,7 @@ export default function OpenFadeScanner({
     if (_minCorrV != null || _maxCorrV != null) {
       const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
       if (value == null) {
+        // Meta not yet loaded — don't reject; filter will re-apply once meta arrives
         if (!_metaLoaded) { /* pass through */ } else return false;
       } else {
         if (_minCorrV != null && value < _minCorrV) return false;
@@ -4514,7 +3882,7 @@ export default function OpenFadeScanner({
 
   // ========= Client-side filters
   const filteredActive = useMemo(() => {
-    const tq = qTicker.trim().toUpperCase();
+    const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
@@ -4590,10 +3958,10 @@ export default function OpenFadeScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
-    const tq = qTicker.trim().toUpperCase();
+    const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
@@ -4667,57 +4035,7 @@ export default function OpenFadeScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, qTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
-
-  // The SNAPSHOT table predates the shared row shape and reads OpenDoor's own field names, so
-  // translate once here rather than in every cell. Entry/exit fills are side-dependent: Long buys
-  // the ask and sells the bid, Short the reverse.
-  const openDoorSnapshotRows = useMemo<OpenDoorPaperClosed[]>(
-    () =>
-      filteredEpisodes.map((r: any) => {
-        const isLong = String(r?.side ?? "") === "Long";
-        return {
-          ticker: String(r?.ticker ?? ""),
-          benchTicker: r?.benchTicker ?? null,
-          side: isLong ? "Long" : "Short",
-          entryMinuteIdx: Number(r?.startMinuteIdx),
-          exitMinuteIdx: Number(r?.endMinuteIdx),
-          entryStack: (isLong ? r?.startAskPct : r?.startBidPct) ?? null,
-          exitStack: (isLong ? r?.endBidPct : r?.endAskPct) ?? null,
-          move: r?.move ?? null,
-          pnl: r?.totalPnlUsd ?? null,
-          entryDevSig: r?.entryDevSig ?? null,
-          sigma: r?.sigma ?? null,
-          entryBench: r?.startBenchLstPrcLstClsPct ?? null,
-          gateRate: r?.rating ?? null,
-          gateTotal: r?.ratingTotal ?? null,
-        };
-      }),
-    [filteredEpisodes]
-  );
-
-  const openDoorSnapshotStats = useMemo(() => {
-    const rows = openDoorSnapshotRows.filter((r) => r.pnl != null);
-    const wins = rows.filter((r) => (r.pnl ?? 0) > 0);
-    const losses = rows.filter((r) => (r.pnl ?? 0) < 0);
-
-    const trades = rows.length;
-    const totalPnl = rows.reduce((s, r) => s + (r.pnl ?? 0), 0);
-    const winRate = trades > 0 ? wins.length / trades : 0;
-    const avgTrade = trades > 0 ? totalPnl / trades : 0;
-    const maxWin = wins.length ? Math.max(...wins.map((r) => r.pnl ?? 0)) : 0;
-    const maxLoss = losses.length ? Math.min(...losses.map((r) => r.pnl ?? 0)) : 0;
-    const avgWin = wins.length ? wins.reduce((s, r) => s + (r.pnl ?? 0), 0) / wins.length : 0;
-    const avgLoss = losses.length ? losses.reduce((s, r) => s + (r.pnl ?? 0), 0) / losses.length : 0;
-    const grossWin = wins.reduce((s, r) => s + (r.pnl ?? 0), 0);
-    const grossLoss = Math.abs(losses.reduce((s, r) => s + (r.pnl ?? 0), 0));
-    const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
-    const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
-
-    const sorted = [...openDoorSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
-
-    return { rows: sorted, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
-  }, [openDoorSnapshotRows]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -4780,6 +4098,19 @@ export default function OpenFadeScanner({
   };
   const dirMul = (dir: SortDir) => (dir === "asc" ? 1 : -1);
 
+  // Decorate-sort-undecorate: episodeSortValue used to run inside the comparator, i.e. 2 * n * log n
+  // times per sort (and localeCompare was re-created per comparison). Now each row's key is derived
+  // exactly once.
+  const sortRowsByKey = <T extends PaperArbClosedDto>(rows: T[], key: EpisodeSortKey, dir: SortDir): T[] => {
+    const mul = dirMul(dir);
+    const decorated = rows.map((row, index) => ({ row, index, value: episodeSortValue(row, key) }));
+    decorated.sort((a, b) => {
+      const delta = cmpVal(a.value, b.value);
+      return delta !== 0 ? delta * mul : a.index - b.index;
+    });
+    return decorated.map((entry) => entry.row);
+  };
+
   const episodeSortValue = (r: PaperArbClosedDto, key: EpisodeSortKey): string | number => {
     switch (key) {
       case "ticker":
@@ -4811,7 +4142,7 @@ export default function OpenFadeScanner({
       case "closeMode":
         return String(r.closeMode ?? closeMode);
       case "minHold":
-        return r.minHoldCandles ?? minHoldCandles;
+        return normalizedMinHoldCandles;
     }
   };
 
@@ -4846,9 +4177,7 @@ export default function OpenFadeScanner({
         closeMode: rowCloseMode,
         gapPct: rowGapPct,
         benchGapPct: row.benchGapPct ?? (row as any).BenchGapPct ?? null,
-        // OpenDoor rows carry no start class, so every Passive close marks against the gap —
-        // the behaviour this scanner has always had.
-        passiveGapExit: "always",
+        startClass: row.startClass ?? null,
       });
       const serverRawPnl = row.rawPnlUsd ?? (row as any).RawPnlUsd ?? null;
       const serverBenchPnl = row.benchPnlUsd ?? (row as any).BenchPnlUsd ?? null;
@@ -4876,7 +4205,7 @@ export default function OpenFadeScanner({
         endMetric: row.last?.metric ?? null,
         endMetricAbs: lastAbs,
         closeMode: row.closeMode ?? closeMode,
-        minHoldCandles: row.minHoldCandles ?? minHoldCandles,
+        minHoldCandles: normalizedMinHoldCandles,
         tierBp: row.tierBp ?? (row as any).TierBp ?? null,
         beta: row.beta ?? (row as any).Beta ?? null,
         positionNotionalUsd: row.positionNotionalUsd ?? (row as any).PositionNotionalUsd ?? null,
@@ -4890,25 +4219,37 @@ export default function OpenFadeScanner({
         yCls: row.yCls ?? (row as any).YCls ?? null,
       };
     });
-  }, [filteredActive, dateNy, closeMode, minHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
+  }, [filteredActive, dateNy, closeMode, normalizedMinHoldCandles, sizingMode, sizeValue, dilutionMode, pnlMode, priceMode]);
 
-  const activeRealtimeSorted = useMemo(() => {
-    const mul = dirMul(analyticsSort.dir);
-    return [...activeRealtimeRows].sort((a, b) => cmpVal(episodeSortValue(a, analyticsSort.key), episodeSortValue(b, analyticsSort.key)) * mul);
-  }, [activeRealtimeRows, analyticsSort, closeMode, minHoldCandles]);
+  const activeRealtimeSorted = useMemo(
+    () => sortRowsByKey(activeRealtimeRows, analyticsSort.key, analyticsSort.dir),
+    [activeRealtimeRows, analyticsSort, closeMode, minHoldCandles]
+  );
 
   const activeAnalyticsSummary = useMemo(() => {
-    const pnl = activeRealtimeRows.map((r) => r.totalPnlUsd ?? 0);
-    const trades = pnl.length;
-    const totalPnlUsd = pnl.reduce((s, x) => s + x, 0);
-    const wins = pnl.filter((x) => x > 0).length;
-    const losses = pnl.filter((x) => x < 0).length;
+    // Single pass instead of one map plus six filter/reduce scans and two spread-based extremes.
+    const trades = activeRealtimeRows.length;
+    let totalPnlUsd = 0;
+    let wins = 0;
+    let losses = 0;
+    let sumWin = 0;
+    let sumLossAbs = 0;
+    let maxWinUsd = 0;
+    let maxLossUsd = 0;
+    for (let i = 0; i < trades; i += 1) {
+      const x = activeRealtimeRows[i]!.totalPnlUsd ?? 0;
+      totalPnlUsd += x;
+      if (x > 0) {
+        wins += 1;
+        sumWin += x;
+      } else if (x < 0) {
+        losses += 1;
+        sumLossAbs -= x;
+      }
+      if (i === 0 || x > maxWinUsd) maxWinUsd = x;
+      if (i === 0 || x < maxLossUsd) maxLossUsd = x;
+    }
     const winRate = trades > 0 ? wins / trades : 0;
-    const maxWinUsd = pnl.length ? Math.max(...pnl) : 0;
-    const maxLossUsd = pnl.length ? Math.min(...pnl) : 0;
-
-    const sumWin = pnl.filter((x) => x > 0).reduce((s, x) => s + x, 0);
-    const sumLossAbs = -pnl.filter((x) => x < 0).reduce((s, x) => s + x, 0);
     const profitFactor = sumLossAbs <= 0 ? null : sumWin / sumLossAbs;
     const avgPnlUsd = trades > 0 ? totalPnlUsd / trades : 0;
     const avgWin = wins > 0 ? sumWin / wins : 0;
@@ -4983,15 +4324,20 @@ export default function OpenFadeScanner({
     };
   }, [activeRealtimeRows, equityCurveMode, dateNy]);
 
-  const episodesSorted = useMemo(() => {
-    const mul = dirMul(episodesSort.dir);
-    return [...filteredEpisodes].sort((a, b) => cmpVal(episodeSortValue(a, episodesSort.key), episodeSortValue(b, episodesSort.key)) * mul);
-  }, [filteredEpisodes, episodesSort, closeMode, minHoldCandles]);
+  const episodesSorted = useMemo(
+    () => sortRowsByKey(filteredEpisodes, episodesSort.key, episodesSort.dir),
+    [filteredEpisodes, episodesSort, closeMode, minHoldCandles]
+  );
 
-  const analyticsSorted = useMemo(() => {
-    const mul = dirMul(analyticsSort.dir);
-    return [...filteredEpisodes].sort((a, b) => cmpVal(episodeSortValue(a, analyticsSort.key), episodeSortValue(b, analyticsSort.key)) * mul);
-  }, [filteredEpisodes, analyticsSort, closeMode, minHoldCandles]);
+  const analyticsSorted = useMemo(
+    () =>
+      // Episodes and Analytics render the same filtered set; when the sort matches, reuse the array
+      // instead of sorting the same rows a second time.
+      episodesSort.key === analyticsSort.key && episodesSort.dir === analyticsSort.dir
+        ? episodesSorted
+        : sortRowsByKey(filteredEpisodes, analyticsSort.key, analyticsSort.dir),
+    [filteredEpisodes, episodesSorted, episodesSort, analyticsSort, closeMode, minHoldCandles]
+  );
 
   const episodesSummary = useMemo(() => {
     const rows = filteredEpisodes;
@@ -5006,7 +4352,16 @@ export default function OpenFadeScanner({
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
+  // The SCOPE / OPTIMIZER / VISUAL SCOPE panels live inside the EPISODES tab only. Their memos used
+  // to recompute over every filtered episode regardless of which tab was on screen, so a filter
+  // change on ACTIVE or ANALYTICS still paid for work nothing could see.
+  const scopePanelsMounted = primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell;
+
   const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
+    if (!scopePanelsMounted) {
+      const empty = { min: null as number | null, max: null as number | null, count: 0 };
+      return { left: empty, right: empty };
+    }
     const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
       let min = Infinity, max = -Infinity, count = 0;
       for (const row of filteredEpisodes) {
@@ -5025,14 +4380,17 @@ export default function OpenFadeScanner({
       left: buildBounds(scopeResearchDrafts.left.parameterKey),
       right: buildBounds(scopeResearchDrafts.right.parameterKey),
     };
-  }, [filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
+  }, [scopePanelsMounted, filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
 
   const scopeResearchComputedByPanel = useMemo<Record<ScopePanelKey, ScopeResearchComputed | null>>(
-    () => ({
-      left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
-      right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
-    }),
-    [dateFrom, filteredEpisodes, scopeResearchSelections]
+    () =>
+      scopePanelsMounted
+        ? {
+            left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
+            right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
+          }
+        : { left: null, right: null },
+    [scopePanelsMounted, dateFrom, filteredEpisodes, scopeResearchSelections]
   );
   const scopePanels: Array<{ key: ScopePanelKey; label: string }> = [
     { key: "left", label: "LEFT" },
@@ -5146,10 +4504,8 @@ export default function OpenFadeScanner({
         return b.trades - a.trades;
       });
   }, [optimizerRows, optimizerBaselineRow]);
-  // Deliberately NOT a memo over filteredEpisodes. Bucketing 47 axes is real work, and recomputing
-  // it on every data change would run the optimizer continuously in the background. It stays a
-  // builder invoked by the run button, so the panel behaves the way it always did: idle until asked.
-  const buildOptimizerRangeParameters = useCallback((): PaperArbOptimizerParameterDto[] => {
+  const optimizerRangeParameters = useMemo(() => {
+    if (!scopePanelsMounted) return [] as PaperArbOptimizerParameterDto[];
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     if (useBinRatingFilter) {
       const selectedKeySet = new Set(scopeSelectedParameterKeys);
@@ -5179,6 +4535,19 @@ export default function OpenFadeScanner({
             return null;
           }
           if (definition.key === "minrate" || definition.key === "mintotal") {
+            // This is the CLIENT-SIDE fallback, used only when the server's optimizer ranges are
+            // absent — normally the bridge supplies minrate/mintotal by re-running the real rating
+            // gate per threshold, which is the authoritative answer.
+            //
+            // The source has to follow the rating MODE, using the same predicate the rating filter
+            // uses so there is one definition of "BIN mode is on":
+            //   SESSION -> the episode's own rate/total, i.e. the ticker's rating for the SELECTED
+            //              session band (ARK etc.), which is what SESSION mode gates on.
+            //   BIN     -> the sigma bin, which is indexed by deviation size.
+            // It used to always take the sigma bin. Measured on 2026-07-10: that resolved a bin for
+            // 0.1% of episodes at StartAbs 0.5 and 0% at StartAbs >= 2, because sigma_peak_bins
+            // exists for only 10-31% of tickers per class/sign and its intervals stop at 2.7 —
+            // so in SESSION mode both axes were silently empty.
             return buildFallbackBinRatingOptimizerParameter(
               filteredEpisodes,
               definition.key as "minrate" | "mintotal",
@@ -5186,7 +4555,7 @@ export default function OpenFadeScanner({
               definition.group,
               optimizerBucketCount,
               session,
-              STRATEGY.ratingBinSource,
+              scannerBinFilterEnabled({ ratingMode, metric }) ? "sigma-bin" : "episode",
               optimizerBinMode
             );
           }
@@ -5238,48 +4607,16 @@ export default function OpenFadeScanner({
         continue;
       }
 
-      // MINRATE / MINTOTAL need the bin builder, not the generic one: the generic path goes through
-      // optimizerKeyToScopeResearchParameterKey, which has no case for these two and so returns
-      // null. Mirrors the client-side branch above and reads the same episode rate/total.
-      if (definition.key === "minrate" || definition.key === "mintotal") {
-        const ratingParameter = buildFallbackBinRatingOptimizerParameter(
-          filteredEpisodes,
-          definition.key as "minrate" | "mintotal",
-          definition.label,
-          definition.group,
-          optimizerBucketCount,
-          session,
-          STRATEGY.ratingBinSource
-        );
-        if (ratingParameter) parameterMap.set(definition.key, ratingParameter);
-        continue;
-      }
+      if (!["corr", "beta", "sigma"].includes(definition.key)) continue;
 
-      // corr/beta/sigma get the dedicated builder because it can also fall back to the ticker-meta
-      // map when the episode row itself carries no value.
-      if (["corr", "beta", "sigma"].includes(definition.key)) {
-        const metaParameter = buildFallbackOptimizerParameter(
-          filteredEpisodes,
-          definition.key as "corr" | "beta" | "sigma",
-          definition.label,
-          definition.group,
-          optimizerBucketCount,
-          arbitrageTickerMetaByTicker,
-          optimizerBinMode
-        );
-        if (metaParameter) parameterMap.set(definition.key, metaParameter);
-        continue;
-      }
-
-      // Every other numeric axis is bucketed client-side from the episodes already on screen.
-      // OpenDoor has no server-side /optimizer/ranges (the Arbitrage one buckets Arbitrage
-      // episodes by Arbitrage-only axes), but it does not need one: the buckets are a pure
-      // aggregation of totalPnlUsd over rows grouped by a parameter value, and every value comes
-      // from the same scopeResearchParameterValue extractor the Visual Scope already uses.
-      const fallbackParameter = buildFallbackScopeOptimizerParameter(
+      const fallbackParameter = buildFallbackOptimizerParameter(
         filteredEpisodes,
-        definition,
-        optimizerBucketCount
+        definition.key as "corr" | "beta" | "sigma",
+        definition.label,
+        definition.group,
+        optimizerBucketCount,
+        arbitrageTickerMetaByTicker,
+        optimizerBinMode
       );
 
       if (fallbackParameter) {
@@ -5288,7 +4625,7 @@ export default function OpenFadeScanner({
     }
 
     return [...parameterMap.values()];
-  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, optimizerBinMode, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
+  }, [scopePanelsMounted, optimizerRanges, filteredEpisodes, optimizerBucketCount, optimizerBinMode, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
   const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
     optimizerRangeRankMetric === "winRate"
       ? bucket.winRate
@@ -5615,6 +4952,37 @@ export default function OpenFadeScanner({
     };
   }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
 
+  // Hoisted out of JSX so the memoized ScannerAnalyticsLog gets a stable prop identity — an inline
+  // object literal would be a new reference on every render and defeat the memo entirely.
+  const scannerAnalyticsLogContext = useMemo<ScannerLogContext>(
+    () => ({
+      session,
+      ruleBand,
+      metric,
+      closeMode,
+      priceMode,
+      pnlMode,
+      scopeMode,
+      topN,
+      offset,
+      startAbs,
+      startAbsMax,
+      endAbs,
+      minHoldCandles,
+      startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+      preStartMinuteIdx: preStartToMinuteIdx(),
+      dilutionMode,
+      dilutionStep,
+      maxAdds,
+      zapMode,
+    }),
+    [
+      session, ruleBand, metric, closeMode, priceMode, pnlMode, scopeMode, topN, offset,
+      startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime,
+      dilutionMode, dilutionStep, maxAdds, zapMode,
+    ]
+  );
+
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
       string,
@@ -5652,6 +5020,7 @@ export default function OpenFadeScanner({
   const selectedRule = useMemo(() => {
     const bandMap: Partial<Record<PaperArbSession, PaperArbRatingBand>> = {
       BLUE: "BLUE",
+      PRE: "PRE",
       ARK: "ARK",
       OPEN: "OPEN",
       INTRA: "INTRA",
@@ -5767,12 +5136,12 @@ export default function OpenFadeScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "OPENFADE STREAM")
+    ? (headerTitleOverride ?? "PAIRFLUX STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "OPENFADE STREAM"
-        : "OPENFADE SCANNER";
+        ? "PAIRFLUX STREAM"
+        : "PAIRFLUX SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -6036,23 +5405,93 @@ export default function OpenFadeScanner({
             )}
           </div>
 
-          {/* The rating gate applies ON TOP of the σ DEV band: the band says which deviation is
-              tradable, the gate says which ticker is worth trading it on. GATE OFF drops the gate
-              and leaves the band alone. */}
-          <OpenDoorGatesRow
-            ignoreRatings={openDoorIgnoreRatings}
-            setIgnoreRatings={setOpenDoorIgnoreRatings}
-            useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
-            useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
-            useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}
-            upMinRate={openDoorUpMinRate} setUpMinRate={setOpenDoorUpMinRate}
-            downMinRate={openDoorDownMinRate} setDownMinRate={setOpenDoorDownMinRate}
-            upMinTotal={openDoorUpMinTotal} setUpMinTotal={setOpenDoorUpMinTotal}
-            downMinTotal={openDoorDownMinTotal} setDownMinTotal={setOpenDoorDownMinTotal}
-            upMinMove={openDoorUpMinMove} setUpMinMove={setOpenDoorUpMinMove}
-            downMinMove={openDoorDownMinMove} setDownMinMove={setOpenDoorDownMinMove}
-          />
+          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
+              <button
+                key={modeKey}
+                type="button"
+                onClick={() => setRatingMode(modeKey)}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  ratingMode === modeKey
+                    ? "accent-soft"
+                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                {modeKey}
+              </button>
+            ))}
+          </div>
 
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="decimal"
+                step={0.1}
+                min={0}
+                value={activeRule.minRate}
+                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min rate"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min rate"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={0}
+                value={activeRule.minTotal}
+                onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
+                className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min total"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min total"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
           {[
@@ -6126,25 +5565,267 @@ export default function OpenFadeScanner({
           ))}
         </div>
 
+        {false && tab === "analytics" && (
+          <div className="mb-3 flex flex-wrap justify-end gap-3">
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
+                <button
+                  key={modeKey}
+                  type="button"
+                  onClick={() => setRatingMode(modeKey)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    ratingMode === modeKey
+                      ? "accent-soft"
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {modeKey}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={0.1}
+                  min={0}
+                  value={activeRule.minRate}
+                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min rate"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min rate"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={0}
+                  value={activeRule.minTotal}
+                  onChange={(e) => setActiveRulePatch({ minTotal: Math.max(0, clampInt(e.target.value, 0)) })}
+                  className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) + 1)) })}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min total"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setActiveRulePatch({ minTotal: Math.max(0, Math.trunc((activeRule.minTotal ?? 0) - 1)) })}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min total"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {[
+              { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
+              { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
+              { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+            ].map((field) => (
+              <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+                <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+                  {field.label}
+                </span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={field.step}
+                    value={field.minValue}
+                    onChange={(e) => field.setMin(e.target.value)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+                    placeholder="min"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={field.step}
+                    value={field.maxValue}
+                    onChange={(e) => field.setMax(e.target.value)}
+                    className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+                    placeholder="max"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
             <div className="flex h-7 items-center gap-2">
               {[
-                { key: "10m", label: "10m" },
-                { key: "30m", label: "30m" },
+                { key: "GLOBAL", label: "GLOB" },
+                { key: "BLUE", label: "BLUE" },
+                { key: "PRE", label: "PRE" },
+                { key: "ARK", label: "ARK" },
+                { key: "PRINT", label: "PRINT" },
+                { key: "OPEN", label: "OPEN" },
+                { key: "INTRA", label: "INTRA" },
+                { key: "POST", label: "POST" },
               ].map((b) => (
                 <button
                   key={b.key}
                   type="button"
-                  onClick={() => setOpenDoorExitClass(b.key as "10m" | "30m")}
+                  onClick={() => {
+                    const nextBand = b.key as PaperArbRatingBand;
+                    if (controlledSession == null) {
+                      setRuleBand(nextBand);
+                    }
+                    setRatingEnabledBands({
+                      BLUE: nextBand === "BLUE",
+                      ARK: nextBand === "ARK",
+                      PRE: nextBand === "PRE",
+                      OPEN: nextBand === "OPEN",
+                      INTRA: nextBand === "INTRA",
+                      PRINT: nextBand === "PRINT",
+                      POST: nextBand === "POST",
+                      GLOBAL: nextBand === "GLOBAL",
+                    });
+                    if (nextBand === "GLOBAL") setSession("GLOB");
+                    if (nextBand === "BLUE") setSession("BLUE");
+                    if (nextBand === "PRE") setSession("PRE");
+                    if (nextBand === "ARK") setSession("ARK");
+                    if (nextBand === "OPEN") setSession("OPEN");
+                    if (nextBand === "INTRA") setSession("INTRA");
+                    if (nextBand === "POST") setSession("POST");
+                  }}
                   className={clsx(
                     TOOLBAR_BUTTON_BASE,
-                    openDoorExitClass === b.key
+                    ruleBand === b.key
                       ? TOOLBAR_BUTTON_ACTIVE
                       : TOOLBAR_BUTTON_INACTIVE
                   )}
                 >
                   {b.label}
+                </button>
+                ))}
+            </div>
+
+            <div className="h-7 w-px self-center bg-white/5" />
+
+            <div className="flex h-7 items-center gap-2">
+              {[
+                { key: "ALL", label: "ALL" },
+                { key: "TOP", label: "TOP" },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => {
+                    const next = m.key as "ALL" | "TOP";
+                    setScopeMode(next);
+                    if (next === "ALL") setTopN(1000);
+                  }}
+                  className={clsx(
+                    TOOLBAR_BUTTON_BASE,
+                    scopeMode === m.key
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-7 w-px self-center bg-white/5" />
+
+            <div className="flex h-7 items-center gap-2">
+              {[
+                { key: "any", label: "ANY" },
+                { key: "hard", label: "HARD" },
+                { key: "soft", label: "SOFT" },
+              ].map((rt) => (
+                <button
+                  key={rt.key}
+                  type="button"
+                  onClick={() => setRatingType(rt.key as PaperArbRatingType)}
+                  className={clsx(
+                    TOOLBAR_BUTTON_BASE,
+                    ratingType === rt.key
+                      ? TOOLBAR_BUTTON_ACTIVE
+                      : TOOLBAR_BUTTON_INACTIVE
+                  )}
+                  title={`RatingType = ${rt.key}`}
+                >
+                  {rt.label}
                 </button>
                 ))}
             </div>
@@ -6405,15 +6086,175 @@ export default function OpenFadeScanner({
                 />
               </div>
             }
-            trailingSlot={
-              <SigmaDevBand
-                metric={fadeMetric}
-                setMetric={setFadeMetric}
-                minAbs={fadeMinAbs}
-                setMinAbs={setFadeMinAbs}
-                maxAbs={fadeMaxAbs}
-                setMaxAbs={setFadeMaxAbs}
-              />
+            zapSlot={
+              <>
+
+              <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "zap") {
+                      setZapMode("off");
+                      setMetric("SigmaZap");
+                    } else {
+                      setZapMode("zap");
+                      setMetric("ZapPct");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "zap"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "sigma") {
+                      setZapMode("off");
+                    } else {
+                      setZapMode("sigma");
+                      setMetric("SigmaZap");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "sigma"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (zapMode === "delta") {
+                      setZapMode("off");
+                    } else {
+                      setZapMode("delta");
+                      setMetric("SigmaZap");
+                    }
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    zapMode === "delta"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                  title="Require start sigma to be above direction-specific print median plus the first input delta"
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+                </button>
+
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={startAbs}
+                    disabled={zapMode === "off"}
+                    onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase start abs"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease start abs"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={startAbsMax}
+                    disabled={zapMode === "off"}
+                    onChange={(e) => setStartAbsMax(e.target.value)}
+                    placeholder="start max"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpStartAbsMax(0.1)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase start max"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => bumpStartAbsMax(-0.1)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease start max"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <input
+                    type="number"
+                    step={0.05}
+                    min={0}
+                    value={endAbs}
+                    disabled={zapMode === "off"}
+                    onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase end abs"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease end abs"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+              </>
             }
           />
         {/* Active ticker, shared with the Sonars and Stream. The Sonar owns the selection; this
@@ -6453,18 +6294,13 @@ export default function OpenFadeScanner({
                     type="button"
                     onClick={() => {
                       const wants = m.key as DateMode;
-                      const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearchEffective);
+                      const canRange = tab === "analytics" || tab === "episodes";
                       if ((wants === "range" || wants === "last") && !canRange) return;
-                      if (tab === "episodes") {
-                        if (wants === "day") {
-                          setEpisodesUseSearch(false);
-                          const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
-                          setDateNy(d);
-                          setDateFrom(d);
-                          setDateTo(d);
-                        } else {
-                          setEpisodesUseSearch(true);
-                        }
+                      if (tab === "episodes" && wants === "day") {
+                        const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
+                        setDateNy(d);
+                        setDateFrom(d);
+                        setDateTo(d);
                       }
                       setDateMode(wants);
                       if (wants === "day") {
@@ -6490,13 +6326,8 @@ export default function OpenFadeScanner({
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={dateNy}
-                      onChange={(e) => {
-                        const d = e.target.value;
-                        setDateNy(d);
-                        setDateFrom(d);
-                        setDateTo(d);
-                      }}
-                      options={(sortedDaysDesc.length ? sortedDaysDesc : [dateNy]).map((d) => ({ value: d, label: d }))}
+                      onChange={handleDaySelectChange}
+                      options={daySelectOptions}
                       className="!inline-flex !w-[112px] !min-w-[112px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={112}
                       panelAnchorRef={daySelectWrapperRef}
@@ -6507,15 +6338,8 @@ export default function OpenFadeScanner({
                   <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
-                      options={[
-                        { value: "3d", label: "3 DAYS" },
-                        { value: "5d", label: "5 DAYS" },
-                        { value: "10d", label: "10 DAYS" },
-                        { value: "15d", label: "15 DAYS" },
-                        { value: "20d", label: "20 DAYS" },
-                        { value: "30d", label: "30 DAYS" },
-                      ]}
+                      onChange={handleRangePresetSelectChange}
+                      options={RANGE_PRESET_OPTIONS}
                       className="!inline-flex !w-[90px] !min-w-[90px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={110}
                       panelAnchorRef={rangePresetWrapperRef}
@@ -6526,12 +6350,8 @@ export default function OpenFadeScanner({
                     <div ref={dateFromSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateFrom}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateFrom(v);
-                          if (toYmd(dateTo) && v > dateTo) setDateTo(v);
-                        }}
-                        options={fromDayOptions.length ? fromDayOptions : [{ value: dateFrom, label: dateFrom }]}
+                        onChange={handleDateFromSelectChange}
+                        options={fromDaySelectOptions}
                         className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                         panelWidth={124}
                         panelAnchorRef={dateFromSelectWrapperRef}
@@ -6540,12 +6360,8 @@ export default function OpenFadeScanner({
                     <div ref={dateToSelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                       <GlassSelect
                         value={dateTo}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDateTo(v);
-                          if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
-                        }}
-                        options={toDayOptions.length ? toDayOptions : [{ value: dateTo, label: dateTo }]}
+                        onChange={handleDateToSelectChange}
+                        options={toDaySelectOptions}
                         className="!inline-flex !w-[124px] !min-w-[124px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                         panelWidth={124}
                         panelAnchorRef={dateToSelectWrapperRef}
@@ -6661,9 +6477,8 @@ export default function OpenFadeScanner({
         </div>
 
         {/* CONTENT */}
-
         {primaryPanel === "stream" && (
-          <OpenDoorStreamView
+          <ArbitrageStreamView
             tab={tab}
             streamSignalsCount={streamSignalMeta.totalCount}
             streamAutoEnabled={effectiveStreamAutoEnabled}
@@ -6698,116 +6513,321 @@ export default function OpenFadeScanner({
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
-                label="TOTAL PNL (pts)"
-                value={num(openDoorCombined.totalPnl, 2)}
+                label="TOTAL PNL"
+                value={num(activeAnalyticsSummary.totalPnlUsd, 2)}
                 className="xl:row-span-2 xl:min-h-[124px]"
                 valueClassName={
                   clsx(
                     "text-4xl md:text-6xl font-bold",
-                    openDoorCombined.totalPnl > 0
+                    activeAnalyticsSummary.totalPnlUsd > 0
                       ? "text-[#6ee7b7]"
-                      : openDoorCombined.totalPnl < 0
+                      : activeAnalyticsSummary.totalPnlUsd < 0
                         ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
                   )
                 }
               />
-              <SummaryMetricCard label="TICKERS" value={intn(openDoorCombined.tickers)} inline />
-              <SummaryMetricCard label="OBS" value={intn(openDoorCombined.totalObs)} inline />
-              <SummaryMetricCard label="WIN RATE" value={`${num(openDoorCombined.weightedRate * 100, 1)}%`} inline />
               <SummaryMetricCard
-                label="AVG TRADE (pts)"
-                value={num(openDoorCombined.avgTrade, 3)}
+                label="TRADES"
+                value={intn(activeAnalyticsSummary.trades)}
                 inline
-                valueClassName={openDoorCombined.avgTrade > 0 ? "text-emerald-300" : openDoorCombined.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
-                label="MAX WIN (pts)"
-                value={num(openDoorCombined.maxWin, 2)}
+                label="WIN RATE"
+                value={`${num(activeAnalyticsSummary.winRate * 100, 1)}%`}
                 inline
-                valueClassName={openDoorCombined.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
-                label="AVG WIN (pts)"
-                value={num(openDoorCombined.avgWin, 3)}
+                label="AVG TRADE"
+                value={num(activeAnalyticsSummary.avgPnlUsd, 2)}
                 inline
-                valueClassName={openDoorCombined.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(openDoorCombined.profitFactor) ? num(openDoorCombined.profitFactor, 2) : "∞"} inline />
-              <SummaryMetricCard label="EXPECTANCY (pts)" value={num(openDoorCombined.expectancy, 3)} inline />
-              <SummaryMetricCard
-                label="MAX LOSS (pts)"
-                value={num(openDoorCombined.maxLoss, 2)}
-                inline
-                valueClassName={openDoorCombined.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                valueClassName={
+                  activeAnalyticsSummary.avgPnlUsd > 0
+                    ? "text-emerald-300"
+                    : activeAnalyticsSummary.avgPnlUsd < 0
+                      ? SOFT_LOSS_TEXT_CLASS
+                      : "text-zinc-200"
+                }
               />
               <SummaryMetricCard
-                label="AVG LOSS (pts)"
-                value={num(openDoorCombined.avgLoss, 3)}
+                label="MAX WIN"
+                value={num(activeAnalyticsSummary.maxWinUsd, 2)}
                 inline
-                valueClassName={openDoorCombined.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                valueClassName={activeAnalyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG WIN"
+                value={num(activeAnalyticsSummary.avgWinUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="PROFIT FACTOR"
+                value={num(activeAnalyticsSummary.profitFactor, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="EXPECTANCY"
+                value={num(activeAnalyticsSummary.expectancyUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX DRAWDOWN"
+                value={num(activeAnalyticsSummary.maxDrawdownUsd, 2)}
+                inline
+              />
+              <SummaryMetricCard
+                label="MAX LOSS"
+                value={num(activeAnalyticsSummary.maxLossUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+              />
+              <SummaryMetricCard
+                label="AVG LOSS"
+                value={num(activeAnalyticsSummary.avgLossUsd, 2)}
+                inline
+                valueClassName={activeAnalyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
+
+            {activeRealtimeSorted.length > 0 ? (
+              <>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {(activeAnalyticsSummary.equityCurve?.length ?? 0) > 0 && (
+                    <div className="p-0">
+                      <EquityChart
+                        points={activeAnalyticsSummary.equityCurve}
+                        title={`EQUITY CURVE | ${equityCurveMode}`}
+                        meta={`points ${intn(activeAnalyticsSummary.equityCurve?.length ?? 0)}`}
+                      />
+                    </div>
+                  )}
+
+                  <div className="p-0">
+                    <StartsEndsByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="START VS CURRENT BY TIME | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                  <div className="p-0">
+                    <StartsByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="START EVENTS BY TIME (OK/BAD) | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakStrengthByTimeChart
+                      rows={activeRealtimeSorted}
+                      title="PEAK STRENGTH BY TIME | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakReversionTwoThirdsChart
+                      rows={activeRealtimeSorted}
+                      title="PEAK REVERSION ≥ 2/3 | 5M"
+                      meta={`rows ${intn(activeRealtimeSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
+                No active realtime rows yet. Run scanner for live open events to render charts.
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  OPENFADE CANDIDATES | rows {openDoorCombined.rows.length}
+                  ACTIVE TRADES | rows {activeRealtimeSorted.length}
                 </div>
-                <div className="text-[10px] font-mono text-zinc-600">
-                  {openDoorExitClass} exit · entry 9:20 · {openDoorResearch.enabledParams.join(" + ") || "no params enabled"}
-                </div>
+                <div className="text-[10px] font-mono text-zinc-600">live open events</div>
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[900px] w-full text-xs font-mono">
+                <table className="min-w-[1840px] w-full text-xs font-mono">
                   <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
-                      <th className="text-left p-2.5">Ticker</th>
-                      <th className="text-left p-2.5">Side</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Rate</th>
-                      <th className="text-right p-2.5">Obs</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Avg Move</th>
-                      <th className="text-right p-2.5">P&amp;L (pts)</th>
-                      <th className="text-left p-2.5 border-l border-white/10">Per-Param (rate × total, move)</th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-right p-2.5 border-l border-white/10" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("total")}>Total{sortMark(analyticsSort.key === "total", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
+                        Bp
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Time
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Metric
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Legs
+                      </th>
+                    </tr>
+                    <tr className="text-zinc-400">
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>CurrentTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>Current{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {openDoorCombined.rows.map((r, i) => (
-                      <tr
-                        key={`${r.ticker}|${r.side}|${i}`}
-                        className={clsx(
-                          "border-t border-white/5 transition-colors",
-                          i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                          "hover:bg-white/[0.03]"
-                        )}
-                      >
-                        <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                        <td className={clsx("p-2.5 font-bold", r.side === "LONG" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{(r.rate * 100).toFixed(0)}%</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.total}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
-                          {r.avgMove != null ? `${r.avgMove.toFixed(2)}%` : "—"}
-                        </td>
-                        <td
+                    {activeRealtimeSorted.map((r, i) => {
+                      const pnl = r.totalPnlUsd ?? 0;
+                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
+                      const benchAmountUsd =
+                        pnlMode === "Hedged" &&
+                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
+                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
+                          : null;
+                      return (
+                        <tr
+                          key={`${r.ticker}|active|${i}`}
                           className={clsx(
-                            "p-2.5 text-right tabular-nums font-bold",
-                            (r.pnl ?? 0) > 0 ? "text-[#6ee7b7]" : (r.pnl ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
+                            "border-t border-white/5 transition-colors",
+                            i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                            "hover:bg-white/[0.03]"
                           )}
                         >
-                          {r.pnl != null ? r.pnl.toFixed(3) : "—"}
-                        </td>
-                        <td className="p-2.5 text-left text-[10px] text-zinc-500 border-l border-white/10">
-                          {Object.entries(r.byParam)
-                            .map(([p, v]) => `${p}: ${(v.rate * 100).toFixed(0)}%×${v.total}${v.avgMove != null ? `, ${v.avgMove.toFixed(2)}%` : ""}`)
-                            .join("  ·  ")}
-                        </td>
-                      </tr>
-                    ))}
-                    {!openDoorCombined.rows.length && (
+                          <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
+                          <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
+                          <td className="p-2.5">
+                            <SideBadge side={r.side} />
+                          </td>
+
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums font-bold border-l border-white/10",
+                              pnl > 0 ? "text-[#6ee7b7]" : pnl < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
+                            )}
+                          >
+                            {num(r.totalPnlUsd ?? null, 2)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums border-l border-white/10">
+                            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Ticker</span>{" "}
+                              <span className="text-zinc-300">
+                                {tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
+                              <span className="text-zinc-500">Bench</span>{" "}
+                              <span className="text-zinc-300">
+                                {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
+                            {minuteIdxToClockLabel(r.startMinuteIdx)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">
+                            {minuteIdxToClockLabel(r.peakMinuteIdx)}
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
+                            )}
+                          >
+                            {minuteIdxToClockLabel(r.endMinuteIdx)}
+                          </td>
+
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums border-l border-white/10",
+                              (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.rawPnlUsd ?? 0) > 0
+                                  ? "bg-[#6ee7b7]/12"
+                                  : (r.rawPnlUsd ?? 0) < 0
+                                    ? "bg-transparent"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.rawPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.benchPnlUsd ?? 0) > 0
+                                  ? "bg-[#6ee7b7]/12"
+                                  : (r.benchPnlUsd ?? 0) < 0
+                                    ? "bg-transparent"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.benchPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-300"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "inline-block min-w-[64px] px-2 py-0.5 rounded-md",
+                                (r.hedgedPnlUsd ?? 0) > 0
+                                  ? "bg-[#6ee7b7]/12"
+                                  : (r.hedgedPnlUsd ?? 0) < 0
+                                    ? "bg-transparent"
+                                    : "bg-white/[0.04]"
+                              )}
+                            >
+                              {num(r.hedgedPnlUsd ?? null, 2)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!activeRealtimeSorted.length && (
                       <tr>
-                        <td colSpan={7} className="p-8 text-center text-zinc-500">
-                          No candidates pass the current gates. Adjust MINRATE/MINTOTAL/MINMOVE or enabled parameters.
+                        <td colSpan={13} className="p-8 text-center text-zinc-500">
+                          No active open trades yet. Run Scanner for live rows.
                         </td>
                       </tr>
                     )}
@@ -6821,7 +6841,8 @@ export default function OpenFadeScanner({
         {primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell && (
           <div className="space-y-3">
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
-                the same track width. */}
+                the same track width. They used to live in two grids of three and seven columns,
+                which made the first four about twice as wide as the rest. */}
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
@@ -6840,6 +6861,8 @@ export default function OpenFadeScanner({
                   }
                 />
               </div>
+              {/* Eighteen cards in nine columns: exactly two rows, and the same height as the
+                  TOTAL PNL column beside them. */}
               {/* Nine columns of two, filled COLUMN by column (grid-flow-col), so each pair sits
                   one above the other: the green reading on top, its red counterpart underneath.
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
@@ -6973,14 +6996,11 @@ export default function OpenFadeScanner({
                   CSV ({filteredEpisodes.length})
                 </button>
               ) : <div />}
-              {OPEN_DOOR_OPTIMIZER_ENABLED && (
-                <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-                  Scope Engine
-                </div>
-              )}
+              <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
+                Scope Engine
+              </div>
             </div>
 
-            {OPEN_DOOR_OPTIMIZER_ENABLED && (
             <GlassCard className="px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 shrink-0">
@@ -7136,7 +7156,6 @@ export default function OpenFadeScanner({
               {optimizerErr && <div className="mt-1 text-xs font-mono text-rose-300">{optimizerErr}</div>}
 
             </GlassCard>
-            )}
 
 
             <div className="space-y-3">
@@ -7193,13 +7212,7 @@ export default function OpenFadeScanner({
                           <GlassSelect
                             value={optimizerRangeRankMetric}
                             onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
-                            options={[
-                              { value: "avgPnlUsd", label: "Avg/Trade" },
-                              { value: "totalPnlUsd", label: "TotalPnL" },
-                              { value: "winRate", label: "WinRate" },
-                              { value: "score", label: "Score" },
-                              { value: "tailDamage", label: "Tail Dmg ↓" },
-                            ]}
+                            options={OPTIMIZER_RANK_METRIC_OPTIONS}
                             className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                           />
                         </div>
@@ -7424,13 +7437,7 @@ export default function OpenFadeScanner({
                               <GlassSelect
                                 value={optimizerRangeRankMetric}
                                 onChange={(e) => setOptimizerRangeRankMetric(e.target.value as OptimizerRangeRankMetric)}
-                                options={[
-                                  { value: "avgPnlUsd", label: "Avg/Trade" },
-                                  { value: "totalPnlUsd", label: "TotalPnL" },
-                                  { value: "winRate", label: "WinRate" },
-                                  { value: "score", label: "Score" },
-                                  { value: "tailDamage", label: "Tail Dmg ↓" },
-                                ]}
+                                options={OPTIMIZER_RANK_METRIC_OPTIONS}
                                 className="min-w-0 w-[136px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent !px-0 !pr-4 text-right !text-[11px] !font-mono !font-semibold !text-zinc-200 !shadow-none"
                               />
                             </div>
@@ -7700,7 +7707,7 @@ export default function OpenFadeScanner({
                                   [panel.key]: { ...prev[panel.key], resultKey: e.target.value as ScopeResearchResultKey },
                                 }))
                               }
-                              options={STRATEGY.scope.resultOptionsForChart(draft.chartType).map((option) => ({ value: option.value, label: option.label }))}
+                              options={STRATEGY.scope.resultSelectOptions(draft.chartType)}
                               className="min-w-0 w-[148px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right"
                             />
                           </div>
@@ -7846,10 +7853,7 @@ export default function OpenFadeScanner({
                                   [panel.key]: { ...prev[panel.key], thresholdMode: e.target.value as ScopeResearchThresholdMode },
                                 }))
                               }
-                              options={[
-                                { value: "more_than", label: ">= x" },
-                                { value: "less_than", label: "<= x" },
-                              ]}
+                              options={SCOPE_THRESHOLD_MODE_OPTIONS}
                               className={clsx(
                                 "min-w-[92px] !h-7 !py-0 !bg-transparent !border-transparent !focus:border-transparent text-right",
                                 draft.chartType !== "results_more_less_parameter" && "opacity-60"
@@ -7895,7 +7899,7 @@ export default function OpenFadeScanner({
                                         ...prev[panel.key].extraFilters,
                                         {
                                           id: `${panel.key}-${Date.now()}-${prev[panel.key].extraFilters.length}`,
-                                          parameterKey: "rating",
+                                          parameterKey: "peakMetricAbs",
                                           from: "",
                                           to: "",
                                         },
@@ -8027,7 +8031,7 @@ export default function OpenFadeScanner({
                                         ...prev[panel.key].parallelFilters,
                                         {
                                           id: `${panel.key}-parallel-${Date.now()}-${prev[panel.key].parallelFilters.length}`,
-                                          parameterKey: "rating",
+                                          parameterKey: "peakMetricAbs",
                                           from: "",
                                           to: "",
                                         },
@@ -8216,7 +8220,7 @@ export default function OpenFadeScanner({
                     <GlassSelect
                       value={scopeResearchResultKey}
                       onChange={(e) => setScopeResearchResultKey(e.target.value as ScopeResearchResultKey)}
-                      options={STRATEGY.scope.resultOptionsForChart(scopeResearchChartType).map((option) => ({ value: option.value, label: option.label }))}
+                      options={STRATEGY.scope.resultSelectOptions(scopeResearchChartType)}
                     />
                   </div>
                   <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-black/20 px-3 py-2">
@@ -8486,168 +8490,422 @@ export default function OpenFadeScanner({
 
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                OPENDOOR SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {openDoorExitClass} exit
+            {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
+                the same track width. They used to live in two grids of three and seven columns,
+                which made the first four about twice as wide as the rest. */}
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+              <div className="grid grid-cols-1 gap-3">
+                <SummaryMetricCard
+                  label="TOTAL PNL"
+                  value={num(analyticsSummary.totalPnlUsd, 2)}
+                  className="h-full xl:min-h-[124px]"
+                  valueClassName={
+                    clsx(
+                      "text-4xl md:text-6xl font-bold",
+                      analyticsSummary.totalPnlUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.totalPnlUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                    )
+                  }
+                />
               </div>
-              {openDoorSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
-              {openDoorSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{openDoorSnapshotError}</span>}
-            </div>
+              {/* Eighteen cards in nine columns: exactly two rows, and the same height as the
+                  TOTAL PNL column beside them. */}
+              {/* Nine columns of two, filled COLUMN by column (grid-flow-col), so each pair sits
+                  one above the other: the green reading on top, its red counterpart underneath.
+                  Track widths are deliberately uneven — the counts are narrow because "31" needs
+                  no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
+                  enough to wrap at a normal width. */}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+                {/* 1 — counts */}
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
 
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <SummaryMetricCard
-                label="TOTAL PNL ($)"
-                value={num(openDoorSnapshotStats.totalPnl, 2)}
-                className="xl:row-span-2 xl:min-h-[124px]"
-                valueClassName={
-                  clsx(
-                    "text-4xl md:text-6xl font-bold",
-                    openDoorSnapshotStats.totalPnl > 0
-                      ? "text-[#6ee7b7]"
-                      : openDoorSnapshotStats.totalPnl < 0
+                {/* 2 — counts */}
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="SHORTS" value={intn(analyticsSummary.shorts)} inline valueClassName={SOFT_LOSS_TEXT_CLASS} />
+
+                {/* 3 — the two long numbers */}
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName={"accent-text"} />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+
+                {/* 4 */}
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
+                <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+
+                {/* 5 — extremes, green over red */}
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 6 — averages, green over red */}
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                {/* 7 — concentration, green over red. Share of the same-sign gross carried by the
+                    two biggest; amber past 60% is where the result is two trades, not a strategy. */}
+                <SummaryMetricCard
+                  label="TOP2 WIN %"
+                  value={analyticsSummary.top2WinShare == null ? "-" : `${num(analyticsSummary.top2WinShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2WinShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2WinShare >= 0.6
+                        ? "text-amber-300"
+                        : "text-[#6ee7b7]"
+                  }
+                />
+                <SummaryMetricCard
+                  label="TOP2 LOSS %"
+                  value={analyticsSummary.top2LossShare == null ? "-" : `${num(analyticsSummary.top2LossShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2LossShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2LossShare >= 0.6
+                        ? "text-amber-300"
+                        : SOFT_LOSS_TEXT_CLASS
+                  }
+                />
+
+                {/* 8 — the average against the median, the pair that exposes a skewed book */}
+                <SummaryMetricCard
+                  label="AVG TRADE"
+                  value={num(analyticsSummary.avgPnlUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.avgPnlUsd > 0
+                      ? "text-emerald-300"
+                      : analyticsSummary.avgPnlUsd < 0
                         ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
-                  )
-                }
-              />
-              <SummaryMetricCard label="TRADES" value={intn(openDoorSnapshotStats.trades)} inline />
-              <SummaryMetricCard label="WIN RATE" value={`${num(openDoorSnapshotStats.winRate * 100, 1)}%`} inline />
-              <SummaryMetricCard
-                label="AVG TRADE ($)"
-                value={num(openDoorSnapshotStats.avgTrade, 2)}
-                inline
-                valueClassName={openDoorSnapshotStats.avgTrade > 0 ? "text-emerald-300" : openDoorSnapshotStats.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="MAX WIN ($)"
-                value={num(openDoorSnapshotStats.maxWin, 2)}
-                inline
-                valueClassName={openDoorSnapshotStats.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG WIN ($)"
-                value={num(openDoorSnapshotStats.avgWin, 2)}
-                inline
-                valueClassName={openDoorSnapshotStats.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(openDoorSnapshotStats.profitFactor) ? num(openDoorSnapshotStats.profitFactor, 2) : "∞"} inline />
-              <SummaryMetricCard label="EXPECTANCY ($)" value={num(openDoorSnapshotStats.expectancy, 2)} inline />
-              <SummaryMetricCard
-                label="MAX LOSS ($)"
-                value={num(openDoorSnapshotStats.maxLoss, 2)}
-                inline
-                valueClassName={openDoorSnapshotStats.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG LOSS ($)"
-                value={num(openDoorSnapshotStats.avgLoss, 2)}
-                inline
-                valueClassName={openDoorSnapshotStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
+                  }
+                />
+                <SummaryMetricCard
+                  label="MEDIAN TRADE"
+                  value={num(analyticsSummary.medianTradeUsd, 2)}
+                  inline
+                  valueClassName={
+                    analyticsSummary.medianTradeUsd > 0
+                      ? "text-[#6ee7b7]"
+                      : analyticsSummary.medianTradeUsd < 0
+                        ? SOFT_LOSS_TEXT_CLASS
+                        : "text-zinc-200"
+                  }
+                />
+
+                {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
+                <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
+                <SummaryMetricCard
+                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
+                  inline
+                  valueClassName={
+                    analyticsSummary.dayCount <= 1
+                      ? "text-zinc-500"
+                      : analyticsSummary.medianDayUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.medianDayUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                  }
+                />
+              </div>
             </div>
 
-            {/* Equity curve, the one Arbitrage chart that carries over to this strategy.
-              *
-              * Arbitrage renders four more here (START VS END BY TIME, START EVENTS BY TIME, PEAK
-              * STRENGTH, PEAK REVERSION 2/3). None of them can say anything about an OpenDoor trade:
-              * measured over 21 days / 13,958 episodes the entry is ALWAYS minuteIdx 560 (09:20) and
-              * the exit always 580/581 (10m) or 600 (30m), so both time charts collapse to a single
-              * bar, and startMetricAbs/peakMetricAbs are null on every row, which is why this
-              * strategy already excludes those research axes in its descriptor.
-              */}
-            {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
-              <div className="grid grid-cols-1 gap-3">
-                <div className="p-0">
-                  <EquityChart
-                    points={analyticsSummary.equityCurve}
-                    title={`EQUITY CURVE | ${equityCurveMode}`}
-                    meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)} | situations ${intn(analyticsSummary.situations)} | trades ${intn(analyticsSummary.trades)}`}
-                  />
-                </div>
-              </div>
-            )}
+            {analytics !== null && (analyticsSorted.length > 0 ? (
+              <>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
+                    <div className="p-0">
+                      <EquityChart
+                        points={analyticsSummary.equityCurve}
+                        title={`EQUITY CURVE | ${equityCurveMode}`}
+                        meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)}`}
+                      />
+                    </div>
+                  )}
 
+                  <div className="p-0">
+                    <StartsEndsByTimeChart
+                      rows={analyticsSorted}
+                      title="START VS END BY TIME | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                  <div className="p-0">
+                    <StartsByTimeChart
+                      rows={analyticsSorted}
+                      title="START EVENTS BY TIME (OK/BAD) | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakStrengthByTimeChart
+                      rows={analyticsSorted}
+                      title="PEAK STRENGTH BY TIME | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                  <div className="p-0">
+                    <PeakReversionTwoThirdsChart
+                      rows={analyticsSorted}
+                      title="PEAK REVERSION ≥ 2/3 | 5M"
+                      meta={`rows ${intn(analyticsSorted.length)}`}
+                      xFrom={sessionTimeChartRange(session).from}
+                      xTo={sessionTimeChartRange(session).to}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/[0.08] bg-[#070707]/95 p-4 text-xs font-mono text-zinc-500">
+                No analytics rows yet. Run analytics for selected date/day range to render charts.
+              </div>
+            ))}
+
+            {analytics !== null && (
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  REALIZED TRADES | rows {openDoorSnapshotStats.rows.length} | size ${sizeValue}/trade
+                  ANALYTICS TRADES | rows {analyticsSorted.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  {analyticsSorted.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => downloadEpisodesCsv(analyticsSorted, `scanner-analytics-${new Date().toISOString().slice(0, 10)}.csv`, priceMode, {
+                        session,
+                        ruleBand,
+                        metric,
+                        closeMode,
+                        priceMode,
+                        pnlMode,
+                        scopeMode,
+                        topN,
+                        offset,
+                        startAbs,
+                        startAbsMax,
+                        endAbs,
+                        minHoldCandles,
+                        startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
+                        preStartMinuteIdx: preStartToMinuteIdx(),
+                        dilutionMode,
+                        dilutionStep,
+                        maxAdds,
+                        zapMode,
+                      })}
+                      className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-1.5 text-[10px] font-mono uppercase text-sky-400 hover:bg-sky-500/20 hover:text-sky-200 transition-colors"
+                      title="Download analytics episodes as CSV"
+                    >
+                      CSV
+                    </button>
+                  )}
+                  <div className="text-[10px] font-mono text-zinc-600">dark pro table</div>
                 </div>
               </div>
 
               <div className={clsx("overflow-auto rounded-xl", SCANNER_PANEL_SURFACE)}>
-                <table className="min-w-[1100px] w-full text-xs font-mono">
+                <table className="analytics-trades-table min-w-[1560px] w-full text-[10px] font-mono">
                   <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
                     <tr>
-                      <th className="text-left p-2.5">Ticker</th>
-                      <th className="text-left p-2.5">Side</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
-                      <th className="text-right p-2.5">Exit Time</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Entry Fill</th>
-                      <th className="text-right p-2.5">Exit Fill</th>
-                      <th className="text-right p-2.5">Move (pts)</th>
-                      <th className="text-right p-2.5">P&amp;L ($)</th>
-                      <th
-                        className="text-right p-2.5 border-l border-white/10"
-                        title={fadeMetric === "pct"
-                          ? "Entry deviation in percent — the reading the % DEV band judged. Derived as sigmas × the ticker's sigma."
-                          : "Entry deviation in sigmas — the reading the σ DEV band judged."}
-                      >
-                        {fadeMetric === "pct" ? "Dev %" : "DevSig"}
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
                       </th>
-                      <th className="text-right p-2.5">Bench</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Gate Rate×Total</th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5" rowSpan={2}>
+                        <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
+                      </th>
+                      <th className="text-left p-2.5 border-l border-white/10 text-rose-400" rowSpan={2} title="How episode closed: Active (σ threshold) / Passive (window end)">Close</th>
+                      <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Bars held (endMinuteIdx − startMinuteIdx)">Hold</th>
+                      <th className="text-right p-2.5 text-zinc-500" rowSpan={2} title="Minimum hold candles config">mHC</th>
+                      <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Number of entries (1 = initial only)">Ent</th>
+                      <th className="text-right p-2.5 text-sky-400" rowSpan={2} title="Number of scale-in adds">Adds</th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-400" colSpan={3}>
+                        P&amp;L
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" rowSpan={2}>
+                        Bp
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
+                        Time
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10" colSpan={4}>
+                        Metric
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
+                        Ticker %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-amber-500/70" colSpan={3}>
+                        Bid %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-orange-500/70" colSpan={3}>
+                        Ask %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
+                        Bench %
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-violet-400/70" rowSpan={2}>
+                        Gap%
+                      </th>
+                      <th className="text-center p-2.5 border-l border-white/10 text-pink-400/70" rowSpan={2}>
+                        SpreadBid%
+                      </th>
+                    </tr>
+                    <tr className="text-zinc-400">
+                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-300"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Ticker{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 text-emerald-200"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 text-emerald-400"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Total{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>EndTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5" title="Opposite-side ZAP field — the value actually compared against EndAbs for an Active-mode threshold close">Exit</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
+                      <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-emerald-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-amber-500/70">Start</th>
+                      <th className="text-right p-2.5 text-amber-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-amber-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-orange-500/70">Start</th>
+                      <th className="text-right p-2.5 text-orange-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-orange-500/70">End</th>
+                      <th className="text-right p-2.5 border-l border-white/10 text-sky-500/70">Start</th>
+                      <th className="text-right p-2.5 text-sky-500/70">Peak</th>
+                      <th className="text-right p-2.5 text-sky-500/70">End</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {openDoorSnapshotStats.rows.map((r, i) => (
-                      <tr
-                        key={`${r.ticker}|${r.side}|${r.entryMinuteIdx}|${i}`}
-                        className={clsx(
-                          "border-t border-white/5 transition-colors",
-                          i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                          "hover:bg-white/[0.03]"
-                        )}
-                      >
-                        <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
-                        <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
-                        <td
+                    {analyticsSorted.map((r, i) => {
+                      const pnl = r.totalPnlUsd ?? 0;
+                      const tickerAmountUsd = scannerTickerAmountUsd(sizingMode, sizeValue, r.tierBp, r.entryCount, dilutionMode);
+                      const benchAmountUsd =
+                        pnlMode === "Hedged" &&
+                        Number.isFinite(tickerAmountUsd ?? NaN) && Number.isFinite(r.beta ?? NaN)
+                          ? Math.abs(tickerAmountUsd ?? 0) * Math.abs(r.beta ?? 0)
+                          : null;
+                      return (
+                        <tr
+                          key={`${r.ticker}|analytics|${i}`}
                           className={clsx(
-                            "p-2.5 text-right tabular-nums font-bold",
-                            (r.pnl ?? 0) > 0 ? "text-[#6ee7b7]" : (r.pnl ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"
+                            "border-t border-white/5 transition-colors",
+                            i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                            "hover:bg-white/[0.03]"
                           )}
                         >
-                          {num(r.pnl ?? null, 2)}
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">
-                          {num(
-                            fadeMetric === "pct"
-                              ? (r.entryDevSig != null && r.sigma != null ? r.entryDevSig * r.sigma : null)
-                              : (r.entryDevSig ?? null),
-                            3
-                          )}
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.entryBench ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
-                          {r.gateRate != null ? `${(r.gateRate * 100).toFixed(0)}%` : "—"}×{r.gateTotal ?? "—"}
-                        </td>
-                      </tr>
-                    ))}
-                    {!openDoorSnapshotStats.rows.length && (
+                          <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
+                          <td className="p-2.5 text-zinc-400">{r.benchTicker}</td>
+                          <td className="p-2.5">
+                            <SideBadge side={r.side} />
+                          </td>
+
+                          <td className="p-2.5 border-l border-white/10">
+                            {r.closeMode
+                              ? <span className={clsx("inline-flex items-center px-1 py-0.5 rounded text-[9px] font-mono font-bold border",
+                                  r.closeMode === "Active" ? "text-rose-400 border-rose-500/40 bg-rose-500/10" : "text-amber-400 border-amber-500/40 bg-amber-500/10"
+                                )}>{r.closeMode}</span>
+                              : <span className="text-zinc-700">—</span>}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-400">
+                            {Number.isFinite(r.endMinuteIdx - r.startMinuteIdx) ? `${r.endMinuteIdx - r.startMinuteIdx}m` : "—"}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.minHoldCandles ?? "—"}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-400">
+                            {r.entryCount != null ? Math.max(1, Math.trunc(Number(r.entryCount))) : 1}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-sky-300">
+                            {r.entryCount != null ? Math.max(0, Math.trunc(Number(r.entryCount)) - 1) : 0}
+                          </td>
+
+                          <td className={clsx("p-2.5 text-right tabular-nums border-l border-white/10", (r.rawPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.rawPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.rawPnlUsd ?? null, 2)}
+                          </td>
+                          <td className={clsx("p-2.5 text-right tabular-nums", (r.benchPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.benchPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.benchPnlUsd ?? null, 2)}
+                          </td>
+                          <td className={clsx("p-2.5 text-right tabular-nums", (r.hedgedPnlUsd ?? 0) > 0 ? "text-[#6ee7b7]" : (r.hedgedPnlUsd ?? 0) < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-400")}>
+                            {num(r.hedgedPnlUsd ?? null, 2)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums border-l border-white/10 whitespace-nowrap">
+                            <span className="text-zinc-500">T</span><span className="text-zinc-300">{tickerAmountUsd !== null ? numSpaced(tickerAmountUsd, 0) : "-"}</span>
+                          </td>
+
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">
+                            {minuteIdxToClockLabel(r.startMinuteIdx)}
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-300">
+                            {minuteIdxToClockLabel(r.peakMinuteIdx)}
+                          </td>
+                          <td
+                            className={clsx(
+                              "p-2.5 text-right tabular-nums",
+                              minuteIdxToClockLabel(r.endMinuteIdx) === "09:30" ? "text-violet-300" : "text-zinc-300"
+                            )}
+                          >
+                            {minuteIdxToClockLabel(r.endMinuteIdx)}
+                          </td>
+
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-500" title="Opposite-side ZAP field compared against EndAbs for an Active-mode threshold close">{num(r.exitMetricAbs ?? null, 3)}</td>
+                          {(() => {
+                            const fP = (v: number | null | undefined) => v == null
+                              ? <span className="text-zinc-600">—</span>
+                              : <span className={v >= 0 ? "text-emerald-400" : "text-rose-400"}>{v >= 0 ? "+" : ""}{v.toFixed(2)}%</span>;
+                            return (<>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.lstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBidPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startAskPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakAskPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endAskPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.peakBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums">{fP(r.endBenchLstPrcLstClsPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-violet-300">{fP(r.gapPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-pink-300">{fP(r.spreadBidPct)}</td>
+                            </>);
+                          })()}
+                        </tr>
+                      );
+                    })}
+                    {!analyticsSorted.length && (
                       <tr>
-                        <td colSpan={11} className="p-8 text-center text-zinc-500">
-                          {openDoorSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
+                        <td colSpan={33} className="p-8 text-center text-zinc-500">
+                          No analytics trades yet. Run Analytics for a date range.
                         </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+
             </div>
+            )}
+            <ScannerAnalyticsLog
+              rows={analyticsSorted}
+              priceMode={priceMode}
+              context={scannerAnalyticsLogContext}
+            />
           </div>
         )}
 
@@ -8657,3 +8915,4 @@ export default function OpenFadeScanner({
     </div>
   );
 }
+

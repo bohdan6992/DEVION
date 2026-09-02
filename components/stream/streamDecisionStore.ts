@@ -38,8 +38,9 @@ function sameDecisionRow(a: StreamDecisionStoreRow | undefined, b: StreamDecisio
     sameNullableNumber(a.positionBp, b.positionBp) &&
     a.report === b.report &&
     a.status === b.status &&
-    a.reason === b.reason &&
-    a.updatedAt === b.updatedAt
+    // `updatedAt` is diagnostic metadata. It is regenerated on every engine tick, while the
+    // fields above are the actual row contents shown to the user and used by subscribers.
+    a.reason === b.reason
   );
 }
 
@@ -94,7 +95,8 @@ export class StreamDecisionStore {
     };
   };
 
-  applySnapshot(nextRows: StreamDecisionStoreRow[]): void {
+  /** Returns true only when the visible decision data actually changed. */
+  applySnapshot(nextRows: StreamDecisionStoreRow[]): boolean {
     const nextIds = nextRows.map((row) => row.ticker);
     const prevIds = this.ids;
     const prevIdSet = new Set(prevIds);
@@ -133,10 +135,12 @@ export class StreamDecisionStore {
       this.idsListeners.forEach((listener) => listener());
     }
 
-    if (idsChanged || anyRowChanged) {
+    const changed = idsChanged || anyRowChanged;
+    if (changed) {
       this.version += 1;
       this.versionListeners.forEach((listener) => listener());
     }
+    return changed;
   }
 
   clear(): void {

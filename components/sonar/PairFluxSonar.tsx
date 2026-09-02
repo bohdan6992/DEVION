@@ -16,8 +16,6 @@ import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import ScannerHeader from "../scanner/shell/panels/ScannerHeader";
-import OpenDoorGatesRow from "../scanner/shell/panels/OpenDoorGatesRow";
-import SigmaDevBand, { type FadeMetric } from "../scanner/shell/panels/SigmaDevBand";
 import SharedMinMaxPanel from "../scanner/shell/panels/SharedMinMaxPanel";
 // The min/max card lives with the rest of the shared UI kit under components/scanner/shared —
 // one implementation for Sonar and Scanner, so the grid cannot drift apart again.
@@ -94,9 +92,11 @@ import {
 } from "@/lib/signals/signal";
 import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
 import { getLiveStrategy } from "@/lib/strategies/registry";
+import PairFluxDivergence from "@/components/pairflux/PairFluxDivergence";
+import type { PairFluxClass } from "@/lib/pairflux/client";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
-const SONAR_NAV = getLiveStrategy("openfade")!.nav;
+const SONAR_NAV = getLiveStrategy("pairflux")!.nav;
 export { normalizeSignal };
 export type { ArbitrageSignal };
 
@@ -148,11 +148,14 @@ const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
-const IGNORE_LS_KEY = "bridge.openfade.ignoreTickers.v2";
-const APPLY_LS_KEY = "bridge.openfade.applyOnlyTickers.v1";
-const PIN_LS_KEY = "bridge.openfade.pinTickers.v1";
-const ACTIVE_PANEL_LS_KEY = "bridge.openfade.activePanel.v1";
-const UI_STATE_LS_KEY = "bridge.openfade.uiState.v1";
+// Namespaced off the registry's sonarPrefix, NOT "bridge.arb" — sharing those keys would make
+// the PairFlux and Arbitrage sonars edit one another's APPLY/PIN/IGNORE ticker lists.
+const SONAR_LS = getLiveStrategy("pairflux")!.storage.sonarPrefix;
+const IGNORE_LS_KEY = `${SONAR_LS}.ignoreTickers.v2`;
+const APPLY_LS_KEY = `${SONAR_LS}.applyOnlyTickers.v1`;
+const PIN_LS_KEY = `${SONAR_LS}.pinTickers.v1`;
+const ACTIVE_PANEL_LS_KEY = `${SONAR_LS}.activePanel.v1`;
+const UI_STATE_LS_KEY = `${SONAR_LS}.uiState.v1`;
 
 /* =========================
    SMALL UTILS (fast)
@@ -161,6 +164,12 @@ const clampInt = (v: any, min: number) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.trunc(n));
+};
+
+const clampFloat = (v: any, min: number) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, n);
 };
 
 const fmtNum = (v: number | null | undefined, digits = 2) =>
@@ -382,13 +391,37 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
   return getRenderableDirection(s) === "down" ? "Short" : "Long";
 }
 
-// getSignalMetricAbs / getSignalDeltaThreshold / isSignalGoldActive lived here. They read
-// zapS/zapL/zapSsigma/zapLsigma — Arbitrage's start-deviation metric — and existed only to serve
-// the ZAP filter block and the gold-ticker strip, both removed from OpenDoor Sonar. OpenDoor's
-// deviation gate is DEV against its own bins (matchOpenDoor); nothing here consumed these.
-// ArbitrageSonar keeps its own copies, untouched.
+const getSignalMetricAbs = (
+  s: ArbitrageSignal,
+  zapMode: "zap" | "sigma" | "delta" | "off"
+): number | null => {
+  if (zapMode === "off") return null;
+  const dir = s.direction;
+  if (dir !== "down" && dir !== "up") return null;
+  const raw =
+    zapMode === "zap"
+      ? dir === "down"
+        ? toNum(s.zapS)
+        : toNum(s.zapL)
+      : dir === "down"
+        ? toNum(s.zapSsigma)
+        : toNum(s.zapLsigma);
+  return raw == null ? null : Math.abs(raw);
+};
 
-const SONAR_ACTIVE_PRESET_ID_LS_KEY = "openfade.sonar.shared-preset.active-id";
+const SONAR_ACTIVE_PRESET_ID_LS_KEY = "arb.sonar.shared-preset.active-id";
+
+const getSignalDeltaThreshold = (s: ArbitrageSignal): number | null => {
+  const best = getBestParams(s);
+  const printMedian = safeObj(best?.dev_print_last5_median ?? best?.DevPrintLast5Median);
+  if (s.direction === "down") {
+    return toNum(best?.printMedianPos ?? best?.PrintMedianPos) ?? toNum(printMedian?.pos ?? printMedian?.Pos);
+  }
+  if (s.direction === "up") {
+    return toNum(best?.printMedianNeg ?? best?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
+  }
+  return null;
+};
 
 const parseTodayReportFlag = (value: any): boolean | null => {
   const byDate = parseReportDateAffectsTodaySession(value);
@@ -397,6 +430,15 @@ const parseTodayReportFlag = (value: any): boolean | null => {
 };
 
 const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySession(s);
+
+const isSignalGoldActive = (
+  s: ArbitrageSignal,
+  zapMode: "zap" | "sigma" | "delta" | "off",
+  zapGoldAbs: number
+): boolean => {
+  const absM = getSignalMetricAbs(s, zapMode);
+  return zapMode !== "off" && isActiveByPositionBp(s) && absM != null && absM <= Math.max(0, Number(zapGoldAbs ?? 0));
+};
 
 /* =========================
    Beta parsing
@@ -1289,6 +1331,11 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
+  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapShowAbs: number;    // NEW
+  zapSilverAbs: number;  // NEW
+  zapGoldAbs: number;    // NEW (only ACTIVE)
+
   pinColor?: PinColor | null;
   [k: string]: any;
 }
@@ -1301,21 +1348,53 @@ const SignalCard: React.FC<SignalCardProps> = ({
   flashClass,
   compact = false,
 
+  zapMode,
+  zapShowAbs,
+  zapSilverAbs,
+  zapGoldAbs,
+
   pinColor = null,
 }) => {
   const isShort = side === "short";
   const isActive = activeTicker === s.ticker;
 
-  // Gold/silver tinting and the below-threshold dimming used to be computed here from the ZAP
-  // deviation metric. Both are gone with the ZAP block: a card is now plain, or highlighted
-  // because it is the selected ticker. Nothing about OpenDoor's own rule was ever shown this way.
+  // ACTIVE position by PositionBp != 0
+  const posActive = isActiveByPositionBp(s);
 
-  const mintTextClass = "text-[#6ee7b7]";
-
-  // Still SHOWN on the card body below (the % and σ readouts), just no longer used to decide
-  // whether the card is tinted or dimmed.
   const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
   const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
+
+  const metric =
+    zapMode === "zap" ? z :
+    zapMode === "sigma" || zapMode === "delta" ? zs :
+    null;
+
+  const absM = metric == null ? null : Math.abs(metric);
+
+  const isGold = isSignalGoldActive(s, zapMode, zapGoldAbs);
+
+  const isSilver =
+    zapMode !== "off" &&
+    absM != null &&
+    absM >= Math.max(0, Number(zapSilverAbs ?? 0));
+
+  const deltaBase = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+  const minShowAbs = zapMode === "delta"
+    ? deltaBase + Math.max(0.05, Number(zapShowAbs ?? 0))
+    : Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
+
+  const isBelowShow =
+    !posActive &&
+    zapMode !== "off" &&
+    absM != null &&
+    absM < minShowAbs;
+
+  const mintTextClass = "text-[#6ee7b7]";
+  const goldClasses =
+    "bg-amber-500/10 border-amber-500/50 shadow-[0_0_18px_-6px_rgba(245,158,11,0.35)]";
+
+  const silverClasses =
+    "bg-zinc-200/5 border-zinc-200/30 shadow-[0_0_18px_-10px_rgba(255,255,255,0.18)]";
 
   const activeClasses = isShort
     ? "bg-rose-950/28 border-rose-900/45 shadow-[0_0_12px_-6px_rgba(244,63,94,0.18)]"
@@ -1323,14 +1402,20 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   const inactiveClasses = "bg-transparent border-white/5 hover:border-white/10 hover:bg-white/5";
 
-  const baseClass = isActive ? activeClasses : inactiveClasses;
+  const baseClass =
+    isGold ? goldClasses :
+    isSilver ? silverClasses :
+    isActive ? activeClasses :
+    inactiveClasses;
+
+  const muted = isBelowShow ? "opacity-60" : "opacity-100";
 
   const px = isShort ? toNum(s.bidStock) : toNum(s.askStock);
   const pxLabel = isShort ? "bid" : "ask";
-  const pxColor = isShort ? "text-rose-400" : mintTextClass;
+  const pxColor = isGold ? "text-amber-300" : isShort ? "text-rose-400" : mintTextClass;
 
   const tickerColor = isActive
-    ? isShort ? "text-rose-300" : mintTextClass
+    ? isGold ? "text-amber-200" : isShort ? "text-rose-300" : mintTextClass
     : "text-zinc-300 group-hover:text-zinc-100";
 
   const pinClass =
@@ -1346,6 +1431,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
         "group relative w-full text-left transition-all duration-200 border flex flex-col justify-between",
         compact ? "p-2 rounded-lg gap-1" : "p-3 rounded-xl gap-1.5",
         baseClass,
+        muted,
         flashClass(s.ticker, side),
       ].join(" ")}
     >
@@ -1503,6 +1589,16 @@ type PinColor = "orange" | "lavender" | "cyan";
 type PinMap = Record<string, PinColor>;
 
 export type SonarExactFilterSnapshot = {
+  /**
+   * Skip Arbitrage's own rating gate (session best-rating and the BIN/BINS bin lookups).
+   *
+   * Strategies that rate by their OWN file must set this. OpenDoor scores a signal against its
+   * summary.csv per-bin table (lib/opendoor/gate.ts); running Arbitrage's rating first pre-thins
+   * the feed by an unrelated rule, so the OpenDoor gate then judges a universe Arbitrage already
+   * cut. OpenDoorSonar's own copy of this function has never applied it — this flag is what lets
+   * the shared copy behave the same way for the stream.
+   */
+  skipArbitrageRating?: boolean;
   cls: string;
   type: string;
   mode: string;
@@ -1563,11 +1659,152 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
   cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
 };
 
+
+/* =========================================================================
+   SHARED SIGNAL DETAIL PANEL
+   The tape-metadata card the Sonar shows for the selected ticker. Exported so
+   the Stream renders the identical thing instead of growing its own copy —
+   every value is derived from the signal object both surfaces already hold,
+   plus an optional live snapshot for fields that go stale on the tape row.
+   ========================================================================= */
+export type SignalDetailPanelProps = {
+  signal: any | null;
+  /** Rating type currently selected ("any" | "hard" | "soft") — drives the N figure. */
+  ratingType?: string;
+  /** Optional fresher field map merged over the signal (same shape Sonar fetches). */
+  liveSnap?: Record<string, any> | null;
+  className?: string;
+};
+
+export function SignalDetailPanel({ signal, ratingType = "any", liveSnap = null, className }: SignalDetailPanelProps) {
+  const activeData = signal;
+
+  const bestObj = activeData?.best ?? activeData?.Best ?? null;
+  const bestParams = getBestParams(activeData);
+  const printMedian = safeObj(bestParams?.dev_print_last5_median ?? bestParams?.DevPrintLast5Median);
+
+  const activeBench = (activeData?.benchmark ? String(activeData.benchmark) : getStrAny(activeData, ["benchmark", "Benchmark"], "-")).toUpperCase();
+  const activeExchange2 = getStrAny(activeData, ["exchange", "Exchange"], "-");
+  const activeBeta = toNum(bestObj?.beta ?? bestObj?.Beta ?? (activeData as any)?._bestBeta);
+  const activeSigma = toNum(bestObj?.sigma ?? bestObj?.Sigma) ?? getNumAny(activeData, ["sig", "Sig", "sigma", "Sigma"]);
+  const mdPrintPos = toNum(bestObj?.printMedianPos ?? bestObj?.PrintMedianPos) ?? toNum(printMedian?.pos ?? printMedian?.Pos);
+  const mdPrintNeg = toNum(bestObj?.printMedianNeg ?? bestObj?.PrintMedianNeg) ?? toNum(printMedian?.neg ?? printMedian?.Neg);
+
+  const bestRating = toNum(bestObj?.rating);
+  const bestTotalHard = toNum(bestObj?.hard);
+  const bestTotalSoft = toNum(bestObj?.soft);
+  const bestTotalAny =
+    bestTotalHard != null || bestTotalSoft != null
+      ? (bestTotalHard ?? 0) + (bestTotalSoft ?? 0)
+      : toNum(bestObj?.total);
+  const bestTotalEff = ratingType === "hard" ? bestTotalHard : ratingType === "soft" ? bestTotalSoft : bestTotalAny;
+
+  const sectorFallback = getStrAny(activeData, ["sector", "Sector", "lvl2", "level2", "Level2"], "-");
+  const marketCapFallback = getNumAny(activeData, ["marketCapM", "MarketCapM", "marketcapm"]);
+
+  const isUsableLive = (v: any) => {
+    if (v == null) return false;
+    if (typeof v === "string") { const t = v.trim(); return t.length > 0 && t !== "-" && t !== "—"; }
+    return true;
+  };
+  const liveSnapFiltered = liveSnap
+    ? Object.fromEntries(Object.entries(liveSnap).filter(([, v]) => isUsableLive(v)))
+    : null;
+  const s = activeData
+    ? (liveSnapFiltered && Object.keys(liveSnapFiltered).length > 0 ? { ...activeData, ...liveSnapFiltered } : activeData)
+    : null;
+
+  const bid = s ? toNum((s as any).Bid ?? (s as any).bid ?? getMeta(s)?.Bid ?? getMeta(s)?.bid) : null;
+  const ask = s ? toNum((s as any).Ask ?? (s as any).ask ?? getMeta(s)?.Ask ?? getMeta(s)?.ask) : null;
+  const bidDelta = s ? toNum((s as any)["BidLstClsΔ%"] ?? (s as any).BidLstClsDeltaPct ?? (s as any)["BidLstClsDelta%"]) : null;
+  const askDelta = s ? toNum((s as any)["AskLstClsΔ%"] ?? (s as any).AskLstClsDeltaPct ?? (s as any)["AskLstClsDelta%"]) : null;
+
+  const accentTextClass = "accent-text";
+  const accentLineClass = "accent-line";
+
+  const renderCell = (label: string, value: React.ReactNode, colorClass = "text-zinc-200") => (
+    <div key={label} className="border border-white/0 rounded-xl bg-black/40 px-3 py-2">
+      <span className="block text-[10px] uppercase tracking-[0.14em] text-zinc-600 font-mono">{label}</span>
+      <span className={`mt-1 block text-[12px] font-mono tabular-nums truncate ${colorClass}`}>{value ?? "-"}</span>
+    </div>
+  );
+
+  if (!signal) return null;
+
+  return (
+    <div className={clsx("relative overflow-hidden border border-white/10 rounded-2xl bg-black/40", className)}>
+      <div className={`absolute inset-y-0 left-0 w-px ${accentLineClass}`} />
+
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-white/10">
+        <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">
+          {getStrAny(activeData, ["ticker", "Ticker"], "-")}
+        </span>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500">
+          <span>Exchange: <span className="text-zinc-200">{activeExchange2 !== "-" ? activeExchange2 : "-"}</span></span>
+          <span>Bench: <span className="text-zinc-200">{activeBench !== "-" ? activeBench : "-"}</span></span>
+          <span>Beta: <span className="text-zinc-200">{activeBeta == null ? "-" : fmtNum(activeBeta, 2)}</span></span>
+          <span>Sig: <span className="text-zinc-200">{activeSigma == null ? "-" : fmtNum(activeSigma, 2)}</span></span>
+          <span>Rate: <span className={accentTextClass}>{bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`}</span></span>
+          <span>N: <span className="text-zinc-200">{bestTotalEff == null ? "-" : fmtMaybeInt(bestTotalEff)}</span></span>
+          <span>MD Print Pos: <span className="text-zinc-200">{mdPrintPos == null ? "-" : fmtNum(mdPrintPos, 2)}</span></span>
+          <span>MD Print Neg: <span className="text-zinc-200">{mdPrintNeg == null ? "-" : fmtNum(mdPrintNeg, 2)}</span></span>
+        </div>
+      </div>
+
+      <div className="relative p-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-2">
+                    {renderCell("Company", s ? getCompany(s) : "-")}
+                    {renderCell("PreMhHiLstPrc%", s ? fmtPct(numPreMhBidLstPrcPct(s), 2) : "-")}
+                    {renderCell("AvPreMhv", s ? fmtMaybeInt(numAvPreMh(s)) : "-")}
+                    {renderCell("ADV20", s ? fmtMaybeInt(numADV20(s)) : "-")}
+                    {renderCell("ADV90", s ? fmtMaybeInt(numADV90(s)) : "-")}
+                    {renderCell("RoundLot", s ? (numRoundLot(s) == null ? "-" : fmtMaybeInt(numRoundLot(s))) : "-")}
+                    {renderCell("VolRel", s ? fmtNum(numVolRel(s), 2) : "-")}
+                    {renderCell("BidLstClsDelta%", s ? fmtPct(bidDelta, 2) : "-", s && bidDelta != null ? (bidDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
+                    {renderCell("Bid", s && bid != null ? fmtNum(bid, 2) : "-", s ? "text-emerald-400" : "text-zinc-500")}
+                    {renderCell("SectorL3", s ? (getSector(s) !== "-" ? getSector(s) : sectorFallback) : "-")}
+                    {renderCell("PreMhVolNF", s ? fmtMaybeInt(numPreMktVolNF(s)) : "-")}
+                    {renderCell("SpreadBid%", s ? (numSpreadBidPct(s) == null ? "-" : fmtNum(numSpreadBidPct(s)!, 4)) : "-")}
+                    {renderCell("ADV20NF", s ? fmtMaybeInt(numADV20NF(s)) : "-")}
+                    {renderCell("ADV90NF", s ? fmtMaybeInt(numADV90NF(s)) : "-")}
+                    {renderCell("AskLstClsDelta%", s ? fmtPct(askDelta, 2) : "-", s && askDelta != null ? (askDelta >= 0 ? accentTextClass : "text-rose-400") : "text-zinc-500")}
+                    {renderCell("Ask", s && ask != null ? fmtNum(ask, 2) : "-", s ? "text-rose-300" : "text-zinc-500")}
+                    {renderCell("LstCls", s ? (numLastClose(s) == null ? "-" : fmtNum(numLastClose(s)!, 2)) : "-")}
+                    {renderCell("VWAP", s ? (numVWAP(s) == null ? "-" : fmtNum(numVWAP(s)!, 2)) : "-")}
+                    {renderCell("Country", s ? getCountry(s) : "-")}
+                    {renderCell("AvPreMhVol90NF", s ? fmtMaybeInt(numAvPreMhVol90NF(s)) : "-")}
+                    {renderCell("AvPreMhValue20NF", s ? fmtMaybeInt(numAvPreMhValue20NF(s)) : "-")}
+                    {renderCell("AvPreMhValue90NF", s ? fmtMaybeInt(numAvPreMhValue90NF(s)) : "-")}
+                    {renderCell("AvgDailyValue20", s ? fmtMaybeInt(numAvgDailyValue20(s)) : "-")}
+                    {renderCell("AvgDailyValue90", s ? fmtMaybeInt(numAvgDailyValue90(s)) : "-")}
+                    {renderCell("Volatility20", s ? fmtPct(numVolatility20(s), 2) : "-")}
+                    {renderCell("Volatility90", s ? fmtPct(numVolatility90(s), 2) : "-")}
+                    {renderCell("LstPrcLstCls%", s ? fmtPct(numLstPrcLstClsPctSafe(s), 2) : "-")}
+                    {renderCell("MarketCapM", s ? fmtMaybeInt(numMarketCapM(s) ?? marketCapFallback) : "-", s ? "text-emerald-400" : "text-zinc-500")}
+                    {renderCell("PreMhLoLstPrc%", s ? fmtPct(numPreMhLoLstPrcPct(s), 2) : "-")}
+                    {renderCell("PreMhHiLstCls%", s ? fmtPct(numPreMhHiLstClsPct(s), 2) : "-")}
+                    {renderCell("PreMhLoLstCls%", s ? fmtPct(numPreMhLoLstClsPct(s), 2) : "-")}
+                    {renderCell("ImbExch9:25", s ? fmtMaybeInt(numImbExch925(s)) : "-")}
+                    {renderCell("ImbExch15:55", s ? fmtMaybeInt(numImbExch1555(s)) : "-")}
+                    {renderCell("AvPostMhVol90NF", s ? fmtMaybeInt(numAvPostMhVol90NF(s)) : "-")}
+                    {renderCell("PreMhMDV20NF", s ? fmtMaybeInt(numPreMhMDV20NF(s)) : "-")}
+                    {renderCell("PreMhMDV90NF", s ? fmtMaybeInt(numPreMhMDV90NF(s)) : "-")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
   const out: ArbitrageSignal[] = [];
-  // minRate/minTotal/ratingMode and the zap/sigma thresholds off the snapshot are intentionally
-  // not read here: OpenDoor neither rates by Arbitrage bins nor gates on start deviation. The
-  // snapshot still carries them because it is the shared Scanner/Stream/Sonar filter shape.
+  const mr = toNum(f.minRate);
+  const mt = toNum(f.minTotal);
+  const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
+  const useSigBinFilter = f.ratingMode === "BINS" && f.zapMode === "sigma";
+
+  const base = Number(f.zapShowAbs ?? 0);
+  const zapThr = Math.max(0.3, base);
+  const sigThr = Math.max(0.05, base);
   const eqNeedle = f.equityType.trim().toLowerCase();
 
   const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
@@ -1610,10 +1847,30 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
     }
     if (failedRangeBound) continue;
 
-    // No Arbitrage rating gate here. OpenDoor rates a signal against its OWN summary.csv bins
-    // (matchOpenDoor: STACK/BENCH/DEV x exit class x direction, with its own MINRATE/MINTOTAL/
-    // MINMOVE levels). Running Arbitrage's session/bin rating first would pre-thin the feed by a
-    // completely different statistic before OpenDoor ever looks at it.
+    if (f.skipArbitrageRating) {
+      // Rated by the strategy's own file instead — see skipArbitrageRating.
+    } else if (useBinRatingFilter) {
+      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
+    } else if (useSigBinFilter) {
+      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
+      const binStats = getSessionBinRating(s, f.cls as ArbClass);
+      if (binStats === null) continue;
+      if (mr != null && binStats.rate < mr) continue;
+      if (mt != null && binStats.total < mt) continue;
+    } else {
+      const effMr = Math.max(0, Number(mr) || 0);
+      const effMt = Math.max(0, Math.trunc(Number(mt) || 0));
+      if (effMr > 0 || effMt > 0) {
+        if (mr != null) {
+          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
+          if (r == null || r < mr) continue;
+        }
+        if (mt != null) {
+          const t = getBestTotalByType(s, f.type as any);
+          if (t == null || t < mt) continue;
+        }
+      }
+    }
 
     if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
 
@@ -1671,14 +1928,42 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (!et.includes(eqNeedle)) continue;
     }
 
-    // No start-deviation gate here either. Arbitrage requires the signal to have already moved a
-    // threshold distance (zap / sigma / print-median delta) before it is worth looking at; OpenDoor
-    // does not — it enters at 09:20 regardless of how far the name has travelled, and decides
-    // purely on whether the entry snapshot lands inside a historically profitable bin. Keeping the
-    // gate meant matchOpenDoor only ever saw the residue of an unrelated filter.
-    //
-    // The TOP-window filter above is deliberately left in place: it stays under the user's own
-    // topMode toggle, so it only narrows the feed when explicitly asked for.
+    if (f.zapMode !== "off" && !s.isStaticFallback) {
+      const dir = s.direction;
+      const isShort = dir === "down";
+      const isLong = dir === "up";
+      if (!isShort && !isLong) continue;
+
+      if (!posActive) {
+        if (f.zapMode === "zap") {
+          if (isShort) {
+            const v = toNum(s.zapS);
+            if (v == null || v < zapThr) continue;
+          } else {
+            const v = toNum(s.zapL);
+            if (v == null || v > -zapThr) continue;
+          }
+        } else if (f.zapMode === "delta") {
+          const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+          const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
+          if (isShort) {
+            const v = toNum(s.zapSsigma);
+            if (v == null || v < deltaThr) continue;
+          } else {
+            const v = toNum(s.zapLsigma);
+            if (v == null || v > -deltaThr) continue;
+          }
+        } else {
+          if (isShort) {
+            const v = toNum(s.zapSsigma);
+            if (v == null || v < sigThr) continue;
+          } else {
+            const v = toNum(s.zapLsigma);
+            if (v == null || v > -sigThr) continue;
+          }
+        }
+      }
+    }
 
     out.push(s);
   }
@@ -2079,7 +2364,7 @@ function HedgeHeaderMinimal({
 /* =========================
    COMPONENT
 ========================= */
-export default function OpenFadeSonar() {
+export default function PairFluxSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const isDark = true;
@@ -2115,109 +2400,21 @@ export default function OpenFadeSonar() {
 
   /* ===== defaults requested: global / all / any ===== */
   const [cls, setCls] = useState<ArbClass>("global");
+  // PairFlux rates pairs per PRE / OPEN / INTRA. Held here rather than inside the panel so the
+  // switcher can live in the shared filter toolbar with every other control.
+  const [pfCls, setPfCls] = useState<PairFluxClass>("intra");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
-  // OpenDoor exit class — replaces the inherited Arbitrage session-band selector (GLOB/BLUE/
-  // PRE/ARK/PRINT/OPEN/INTRA/POST) with the two exit horizons OpenDoor.ipynb actually computes
-  // (9:20 entry -> 9:40 "10m" / 10:00 "30m"). Deliberately independent from cls/mode/type, which
-  // stay wired to the old Arbitrage-inherited plumbing elsewhere in this file untouched.
-  // OpenFade selects on the stack's sigma deviation, not on a rating bin. The Sonar has to apply
-  // the SAME rule it displays, otherwise it lists rows the Stream would never send.
-  // GATE OFF drops the rating filtering and leaves only the deviation band.
-  const [openDoorIgnoreRatings, setOpenDoorIgnoreRatings] = useState(false);
-  const [fadeMetric, setFadeMetric] = useState<FadeMetric>("sigma");
-  const [fadeUniverseAll, setFadeUniverseAll] = useState(true);
-  const [fadeMinAbs, setFadeMinAbs] = useState(1.0);
-  const [fadeMaxAbs, setFadeMaxAbs] = useState<number | null>(null);
-  const [openDoorExitClass, setOpenDoorExitClass] = useState<"10m" | "30m">("10m");
-  // ADVANCED: switches the bin data source from best_params.standard (09:20-entry-only) to
-  // best_params.advanced (hourly-pooled, much larger sample — see OpenDoor.ipynb). ADVANCED
-  // always checks all 3 parameters (the per-parameter STACK/BENCH/DEV toggles are hidden and
-  // ignored while it's on) — it replaces the ALL/TOP toggle, which was inherited Arbitrage
-  // plumbing unrelated to OpenDoor.
-  const [openDoorAdvancedMode, setOpenDoorAdvancedMode] = useState(false);
-  // Which of the 3 OpenDoor parameters (Stack%, Bench%, DevSig) to check against live data.
-  // Independently toggleable — if all 3 are on, all 3 are checked (AND) in real time.
-  // Ignored (all 3 forced on) while openDoorAdvancedMode is active.
-  const [openDoorUseStack, setOpenDoorUseStack] = useState(true);
-  const [openDoorUseBench, setOpenDoorUseBench] = useState(true);
-  const [openDoorUseDevSig, setOpenDoorUseDevSig] = useState(true);
-  // OpenDoor bin-rating gates: MINRATE (up_rate/down_rate), MINTOTAL (situation count), and
-  // MINMOVE (avg_up_move/avg_down_move magnitude) — independent per direction.
-  const [openDoorUpMinRate, setOpenDoorUpMinRate] = useState(0.6);
-  const [openDoorUpMinTotal, setOpenDoorUpMinTotal] = useState(20);
-  const [openDoorUpMinMove, setOpenDoorUpMinMove] = useState(0);
-  const [openDoorDownMinRate, setOpenDoorDownMinRate] = useState(0.6);
-  const [openDoorDownMinTotal, setOpenDoorDownMinTotal] = useState(20);
-  const [openDoorDownMinMove, setOpenDoorDownMinMove] = useState(0);
-  // Bulk best_params summary (one row per ticker, lo/hi/rate/total/avg_move for the single best
-  // bin per param x class x direction — see OpenDoor.ipynb's summary.csv). Fetched once and
-  // periodically refreshed; matching is done client-side per live signal tick (no per-ticker
-  // network round-trip).
-  const [openDoorBestByTicker, setOpenDoorBestByTicker] = useState<Record<string, Record<string, string>>>({});
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const { getOpenFadeList } = await import("@/lib/trapClient");
-        const rows = await getOpenFadeList();
-        if (cancelled) return;
-        const byTicker: Record<string, Record<string, string>> = {};
-        for (const row of rows) {
-          const t = String(row.ticker ?? row.Ticker ?? "").toUpperCase().trim();
-          if (t) byTicker[t] = row;
-        }
-        setOpenDoorBestByTicker(byTicker);
-      } catch {
-        // best-effort — matching just yields no results until this succeeds
-      }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 5 * 60_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-  // OpenFade selects from the 09:10+ reference-exchange reading. This must mirror the browser
-  // stream gate and the bridge's OpenDoorLiveEngine: reference stack minus beta-adjusted reference
-  // benchmark, then normalised by sigma. Rating bins and the old bid/ask zap fields are not part
-  // of this strategy's entry rule.
-  const matchOpenDoor = useCallback((s: ArbitrageSignal): { up: boolean; down: boolean } => {
-    const referencePct = getNumAny(s, ["RefPrcExchLstClsΔ%", "RefPrcExchLstClsPct", "RefPrcExchLstClsDeltaPct"]);
-    const benchmarkReferencePct = getNumAny(s, ["BenchRefPrcExchLstClsΔ%", "bench.RefPrcExchLstClsΔ%", "BenchRefPrcExchLstClsPct"]);
-    const best = (s as any)?.best ?? (s as any)?.Best ?? (s as any)?.best_params?.best ?? (s as any)?.bestParams?.best ?? null;
-    const staticBest = (s as any)?.best_params?.static ?? (s as any)?.bestParams?.static ?? null;
-    const beta = toNum((s as any)?.beta ?? (s as any)?.Beta ?? best?.beta ?? best?.Beta ?? staticBest?.beta ?? staticBest?.Beta);
-    const sigma = toNum((s as any)?.sigma ?? (s as any)?.Sigma ?? best?.sigma ?? best?.Sigma ?? staticBest?.sigma ?? staticBest?.Sigma);
-    const rawReferenceDeviation =
-      referencePct != null && benchmarkReferencePct != null && beta != null
-        ? referencePct - benchmarkReferencePct * beta
-        : null;
-    const referenceSigma =
-      rawReferenceDeviation != null && sigma != null && sigma !== 0
-        ? Math.round((rawReferenceDeviation / sigma) * 100) / 100
-        : null;
-    const rawUp = fadeMetric === "pct" ? rawReferenceDeviation : referenceSigma;
-    const rawDown = rawUp;
-    const inBand = (v: number | null, wantNegative: boolean) => {
-      if (v == null || !Number.isFinite(v)) return false;
-      if (wantNegative ? v >= 0 : v <= 0) return false;
-      const abs = Math.abs(v);
-      if (abs < fadeMinAbs) return false;
-      if (fadeMaxAbs != null && abs > fadeMaxAbs) return false;
-      return true;
-    };
-    return { up: inBand(rawUp, true), down: inBand(rawDown, false) };
-  }, [
-    fadeMetric, fadeMinAbs, fadeMaxAbs,
-  ]);
   const [corrMin, setCorrMin] = useState("");
   const [corrMax, setCorrMax] = useState("");
   const [betaMin, setBetaMin] = useState("");
   const [betaMax, setBetaMax] = useState("");
   const [sigmaMin, setSigmaMin] = useState("");
   const [sigmaMax, setSigmaMax] = useState("");
+  // Alpha has no Arbitrage counterpart, so it brings its own pair of boxes rather than borrowing
+  // a slot. It sits beside rho / beta / sigma and reads the same way.
+  const [alphaMin, setAlphaMin] = useState("");
+  const [alphaMax, setAlphaMax] = useState("");
 
 
   const [minRate, setMinRate] = useState<number>(0.3);
@@ -2327,10 +2524,37 @@ export default function OpenFadeSonar() {
 
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
-  // No zapMode / zapShowAbs / zapSilverAbs / zapGoldAbs state here any more — see the removed ZAP
-  // block. The shared SonarExactFilterSnapshot still declares those fields (Arbitrage fills them),
-  // so this page pins them to their inert "off" values where the shape demands them rather than
-  // changing a type Arbitrage also uses.
+  // OFF on this page. `zapMode` scores a stock against its benchmark and, left on, silently
+  // dropped signals from the set the pair panel reads — filtering pairs by a statistic that says
+  // nothing about them. The toolbar slot it used to own now drives the controls below.
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "off">("off");
+
+  // Unit a pair's live deviation is read in, plus its min / max / exit thresholds in that unit.
+  const [pfZapMode, setPfZapMode] = useState<"pct" | "sigma" | "alpha">("pct");
+  const [pfZapMin, setPfZapMin] = useState("0.5");
+  const [pfZapMax, setPfZapMax] = useState("");
+  const [pfZapExit, setPfZapExit] = useState("0.2");
+
+  // Step for the spinner arrows. Percentage points move in 0.1; a reading already divided by the
+  // pair's own sigma or alpha is a smaller number, so it moves in 0.05. An empty field steps up
+  // from zero rather than to NaN, and nothing goes negative — these are all magnitudes.
+  const pfZapStep = pfZapMode === "pct" ? 0.1 : 0.05;
+  const pfBump = (raw: string, dir: number) => {
+    // Comma-normalised for the same reason as the range boxes: 0,7 is a value, not a reset to 0.
+    const cur = raw.trim() === "" ? 0 : Number(raw.replace(",", "."));
+    const base = Number.isFinite(cur) ? cur : 0;
+    return String(Math.max(0, +(base + dir * pfZapStep).toFixed(4)));
+  };
+
+  // 3 inputs:
+  // 1) filter/display threshold (single, depends on zapMode)
+  const [zapShowAbs, setZapShowAbs] = useState<number>(0.3);
+
+  // 2) silver: too high highlight (active + inactive)
+  const [zapSilverAbs, setZapSilverAbs] = useState<number>(2.0);
+
+  // 3) gold: normalization highlight (ONLY active)
+  const [zapGoldAbs, setZapGoldAbs] = useState<number>(0.3);
 
 
   const [adv90Min, setAdv90Min] = useState("");
@@ -2756,7 +2980,7 @@ export default function OpenFadeSonar() {
   };
 
   /* =========================
-     UI State (cls/type/mode/listMode/bpCls)
+     UI State (cls/type/mode/listMode/bpCls/zapMode)
   ========================= */
   // --- Persistence (load before first paint; avoid overwriting stored state with defaults) ---
   const uiHydratedRef = useRef(false);
@@ -2776,12 +3000,14 @@ export default function OpenFadeSonar() {
         if (typeof s?.listMode === "string") setListMode(s.listMode);
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
-        // sort. The zap* keys written by older builds are deliberately NOT restored: there is no
-        // control left to show or clear them, and a stale "sigma"/threshold would otherwise keep
-        // gating this page invisibly.
+        // zap/sort
+        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "off") setZapMode(s.zapMode);
         if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
         if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
         if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
+        if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
+        if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
+        if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
         if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
@@ -2826,6 +3052,8 @@ export default function OpenFadeSonar() {
         if (typeof s?.betaMax === 'string') setBetaMax(s.betaMax);
         if (typeof s?.sigmaMin === 'string') setSigmaMin(s.sigmaMin);
         if (typeof s?.sigmaMax === 'string') setSigmaMax(s.sigmaMax);
+        if (typeof s?.alphaMin === 'string') setAlphaMin(s.alphaMin);
+        if (typeof s?.alphaMax === 'string') setAlphaMax(s.alphaMax);
 
         // multi-select
         const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
@@ -2963,7 +3191,7 @@ export default function OpenFadeSonar() {
           cls, type, mode, listMode, bpCls,
 
           // zap/sort
-          activeMode, sortKey, sortDir,
+          zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
@@ -2974,7 +3202,7 @@ export default function OpenFadeSonar() {
           includeUSA, includeChina,
           filterReport, equityType,
 
-          corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
+          corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax,
 
           // multi-select
           countryEnabled, selCountries: Array.from(selCountries),
@@ -3024,12 +3252,12 @@ export default function OpenFadeSonar() {
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    activeMode, sortKey, sortDir,
+    zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     includeUSA, includeChina,
     filterReport, equityType,
-    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
+    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax,
     countryEnabled, selCountries,
     exchangeEnabled, selExchanges,
     sectorEnabled, selSectors,
@@ -3129,7 +3357,7 @@ export default function OpenFadeSonar() {
   const buildSonarSharedFilterPresetJson = () => {
     const current = {
       rangeModes,
-      corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
+      corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax,
       adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
       avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
       lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
@@ -3168,6 +3396,8 @@ export default function OpenFadeSonar() {
     betaMax: setBetaMax,
     sigmaMin: setSigmaMin,
     sigmaMax: setSigmaMax,
+    alphaMin: setAlphaMin,
+    alphaMax: setAlphaMax,
     adv20Min: setAdv20Min,
     adv20Max: setAdv20Max,
     adv20NFMin: setAdv20NFMin,
@@ -3258,7 +3488,26 @@ export default function OpenFadeSonar() {
           ...createDefaultRangeModes(),
           ...(base?.rangeModes && typeof base.rangeModes === "object" ? base.rangeModes : {}),
         },
+        // Reset all toggle/country/sector filters to defaults so the same preset
+        // produces identical results regardless of prior per-device localStorage state.
+        excludeDividend: false, excludeNews: false, excludePTP: false, excludeSSR: false,
+        excludeReport: false, excludeETF: false, excludeCrap: false,
+        includeUSA: false, includeChina: false,
+        filterReport: "ALL", equityType: "",
+        countryEnabled: "off", selCountries: [],
+        exchangeEnabled: "off", selExchanges: [],
+        sectorEnabled: "off", selSectors: [],
       } as Record<string, any>;
+
+      // Apply the resets to React state as well
+      setExcludeDividend(false); setExcludeNews(false); setExcludePTP(false); setExcludeSSR(false);
+      setExcludeReport(false); setExcludeETF(false); setExcludeCrap(false);
+      setIncludeUSA(false); setIncludeChina(false);
+      setFilterReport("ALL"); setEquityType("");
+      setCountryEnabled("off"); setSelCountries(new Set());
+      setExchangeEnabled("off"); setSelExchanges(new Set());
+      setSectorEnabled("off"); setSelSectors(new Set());
+
       let applied = 0;
 
       for (const { key, sonarMode, sonarMin, sonarMax } of SHARED_FILTER_PRESET_FIELDS) {
@@ -3488,20 +3737,20 @@ export default function OpenFadeSonar() {
       filterReport,
       equityType,
 
-      corrMin,
-      corrMax,
-      betaMin,
-      betaMax,
-      sigmaMin,
-      sigmaMax,
+      // Blank on purpose. These boxes hold a PAIR's corr / beta / sigma now, and the client
+      // filter below would otherwise read them as the ticker-vs-benchmark statistics of the same
+      // name and quietly drop legs the pair panel needs. The panel applies them itself.
+      corrMin: "",
+      corrMax: "",
+      betaMin: "",
+      betaMax: "",
+      sigmaMin: "",
+      sigmaMax: "",
 
-      // Inert. The shape is shared with Arbitrage, which does gate on these; OpenDoor's own
-      // applyExactSonarClientFilters already ignored them, and there is no control left to set
-      // them. "off" makes that explicit instead of leaving a live-looking threshold in the object.
-      zapMode: "off" as const,
-      zapShowAbs: 0,
-      zapSilverAbs: 0,
-      zapGoldAbs: 0,
+      zapMode,
+      zapShowAbs,
+      zapSilverAbs,
+      zapGoldAbs,
 
       topMode,
       topSigmaOn,
@@ -3520,6 +3769,7 @@ export default function OpenFadeSonar() {
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
+    zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
     topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
@@ -3552,24 +3802,19 @@ export default function OpenFadeSonar() {
     mode: snapshot.mode,
     ratingMode: snapshot.ratingMode,
     zapMode: snapshot.zapMode,
-    // OpenDoor evaluates CLEAN data. Sending snapshot.minRate/minTotal (Arbitrage's rating floor,
-    // defaulting to 0.3/1) made the SERVER pre-thin the feed by a rule OpenDoor does not use —
-    // the same leftover this file's own applyExactSonarClientFilters already refuses to apply on
-    // the client. The only rating allowed to reject a ticker is OpenDoor's per-bin table.
-    minRate: 0,
-    minTotal: 0,
-    // Whole universe when GATE ON: OpenFade judges a live reading, so the rows the server would
-    // have filtered away are exactly the ones whose deviation it wants to see.
-    includeAll: fadeUniverseAll,
+    minRate: snapshot.minRate,
+    minTotal: snapshot.minTotal,
     tickers: snapshot.tickersFilterNorm || undefined,
-    minCorr: toNum(snapshot.corrMin),
-    maxCorr: toNum(snapshot.corrMax),
-    minBeta: toNum(snapshot.betaMin),
-    maxBeta: toNum(snapshot.betaMax),
-    minSigma: toNum(snapshot.sigmaMin),
-    maxSigma: toNum(snapshot.sigmaMax),
+    // NOT forwarded on this page. These boxes now hold a PAIR's corr / beta / sigma / alpha, and
+    // sending them here would also narrow the per-TICKER signal request by an unrelated statistic
+    // of the same name — the trap zapMode was already caught in. The pair panel applies them.
+    minCorr: undefined,
+    maxCorr: undefined,
+    minBeta: undefined,
+    maxBeta: undefined,
+    minSigma: undefined,
+    maxSigma: undefined,
   }), [
-    fadeUniverseAll,
     snapshot.betaMax,
     snapshot.betaMin,
     snapshot.cls,
@@ -3939,18 +4184,6 @@ export default function OpenFadeSonar() {
       }));
   }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
 
-  // OpenDoor: only tickers whose live parameters land in a matching good bin — split into
-  // two columns, SHORT (down) on the left, LONG (up) on the right. This replaces the generic
-  // benchmark/beta grid below (still present, just disabled) as Sonar's primary OpenDoor view.
-  const openDoorMatchedDown = useMemo(
-    () => items.filter((s) => matchOpenDoor(s).down),
-    [items, matchOpenDoor]
-  );
-  const openDoorMatchedUp = useMemo(
-    () => items.filter((s) => matchOpenDoor(s).up),
-    [items, matchOpenDoor]
-  );
-
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
@@ -3971,6 +4204,7 @@ export default function OpenFadeSonar() {
     if (corrMin || corrMax) hints.push(`ρ ${corrMin || "min"}..${corrMax || "max"}`);
     if (betaMin || betaMax) hints.push(`β ${betaMin || "min"}..${betaMax || "max"}`);
     if (sigmaMin || sigmaMax) hints.push(`σ ${sigmaMin || "min"}..${sigmaMax || "max"}`);
+    if (alphaMin || alphaMax) hints.push(`α ${alphaMin || "min"}..${alphaMax || "max"}`);
     if (listMode === "ignore" && ignoreSet.size > 0) hints.push(`ignore ${ignoreSet.size}`);
     if (listMode === "apply" && applySet.size > 0) hints.push(`apply ${applySet.size}`);
     if (listMode === "pin" && Object.keys(pinMap).length > 0) hints.push(`pin ${Object.keys(pinMap).length}`);
@@ -3989,9 +4223,12 @@ export default function OpenFadeSonar() {
     if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
+    if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
     return hints.slice(0, 8);
   }, [
     activeMode,
+    alphaMax,
+    alphaMin,
     applySet.size,
     betaMax,
     betaMin,
@@ -4024,6 +4261,8 @@ export default function OpenFadeSonar() {
     tickersFilterNorm,
     volNFfromLstClsMax,
     volNFfromLstClsMin,
+    zapMode,
+    zapShowAbs,
   ]);
   const resetSonarUiState = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -4078,10 +4317,36 @@ export default function OpenFadeSonar() {
   const activeInIgnoreList = activeTickerNorm ? ignoreSet.has(activeTickerNorm) : false;
   const activeInApplyList = activeTickerNorm ? applySet.has(activeTickerNorm) : false;
   const activePinColor = activeTickerNorm ? pinMap[activeTickerNorm] ?? null : null;
-  // activeGoldTickers (the amber "deviation has normalised, consider closing" strip) is gone with
-  // the ZAP block that fed it. It was an Arbitrage idea end to end: an open position whose start
-  // deviation converged. OpenDoor exits on the clock — 09:40 or 10:00 by exit class — so no
-  // deviation reading has anything to say about when to close one.
+  const activeGoldTickers = useMemo(() => {
+    if (zapMode === "off") return [];
+    const byKey = new Map<string, { ticker: string; direction: "up" | "down"; benchmark: string; metricAbs: number | null }>();
+    for (const s of allItems ?? []) {
+      if (!isSignalGoldActive(s, zapMode, zapGoldAbs)) continue;
+      const dir = s.direction;
+      if (dir !== "up" && dir !== "down") continue;
+      const tk = normalizeTicker(s.ticker);
+      if (!tk) continue;
+      const metricAbs = getSignalMetricAbs(s, zapMode);
+      if (metricAbs == null || metricAbs > Math.max(0, Number(zapGoldAbs ?? 0))) continue;
+      const key = `${tk}|${dir}`;
+      const nextEntry = {
+        ticker: tk,
+        direction: dir,
+        benchmark: String(s.benchmark ?? "UNKNOWN").toUpperCase(),
+        metricAbs,
+      };
+      const prev = byKey.get(key);
+      if (!prev || (nextEntry.metricAbs ?? Number.POSITIVE_INFINITY) < (prev.metricAbs ?? Number.POSITIVE_INFINITY)) {
+        byKey.set(key, nextEntry);
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) => {
+      const ma = a.metricAbs ?? Number.POSITIVE_INFINITY;
+      const mb = b.metricAbs ?? Number.POSITIVE_INFINITY;
+      if (ma !== mb) return ma - mb;
+      return a.ticker.localeCompare(b.ticker);
+    });
+  }, [allItems, zapMode, zapGoldAbs]);
 
   const bestRating = toNum(bestObj?.rating);
   const bestTotalHard = toNum(bestObj?.hard);
@@ -4095,12 +4360,12 @@ export default function OpenFadeSonar() {
 
 
   /**
-   * The Sonar's thresholds, shaped as SharedMinMaxPanel expects.
+   * This Sonar's thresholds, shaped as SharedMinMaxPanel expects.
    *
-   * The Sonar keeps each bound in its own useState while the Scanners keep them in a
-   * ScannerFilterBag. Mapping here lets both render the SAME panel instead of the Sonar carrying
-   * its own 36 copied MinMaxRow lines — which is how the two drifted apart in the first place —
-   * without migrating the Sonar's state or its persistence.
+   * Same adapter the OpenDoor Sonar uses: the Sonars keep each bound in its own useState while the
+   * Scanners keep them in a ScannerFilterBag, so mapping here lets all four surfaces render ONE
+   * panel instead of four copies of 36 MinMaxRow lines. Nothing about this Sonar's state or its
+   * persistence moves.
    */
   const sharedMinMaxFilters = useMemo(() => ({
     minAdv20: adv20Min, maxAdv20: adv20Max,
@@ -4176,10 +4441,8 @@ export default function OpenFadeSonar() {
     minImbExch1555: imbExch1555Min, maxImbExch1555: imbExch1555Max,
     setMinImbExch1555: setImbExch1555Min, setMaxImbExch1555: setImbExch1555Max,
     sharedRangeFilterModes: {
-      // corr/beta/sigma are part of the shared key union but SharedMinMaxPanel renders no row for
-      // them — the Sonar shows those three through FilterRatingRow instead. "on" is the same
-      // default the Scanners start from (DEFAULT_SHARED_RANGE_FILTER_MODES), so nothing is filtered
-      // out by supplying it here.
+      // corr/beta/sigma belong to the shared key union but this panel renders no row for them —
+      // the Sonar shows those through FilterRatingRow. "on" is the Scanners' own default.
       corr: "on" as const, beta: "on" as const, sigma: "on" as const,
       adv20: rangeModes.ADV20,
       adv20nf: rangeModes.ADV20NF,
@@ -4230,7 +4493,7 @@ export default function OpenFadeSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="OPENFADE SONAR"
+          scannerShellTitle="PAIRFLUX SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}
@@ -4289,59 +4552,111 @@ export default function OpenFadeSonar() {
           modeSlot={
             <>
 
-              {/* ADVANCED: switches bin data source to the hourly-pooled best_params.advanced set
-                  and forces all 3 parameters on — replaces the inherited Arbitrage ALL/TOP toggle,
-                  which had nothing to do with OpenDoor. */}
+              {/* TOP mode toggle */}
               <div className="flex h-7 items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setOpenDoorAdvancedMode((v) => !v)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    openDoorAdvancedMode
-                      ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  ADVANCED
-                </button>
+                <div className="flex h-7 items-center rounded-lg bg-black/20">
+                  {([false, true] as const).map((isTop) => (
+                    <button
+                      key={String(isTop)}
+                      type="button"
+                      onClick={() => setTopMode(isTop)}
+                      className={clsx(
+                        "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                        topMode === isTop
+                          ? isTop
+                            ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
+                            : secondaryButtonSoftActiveClass
+                          : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      {isTop ? "TOP" : "ALL"}
+                    </button>
+                  ))}
+                </div>
+                {topMode && (
+                  <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+                    {([
+                      { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
+                      { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
+                      { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
+                    ] as const).map(({ key, label, on, set }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => set((v) => !v)}
+                        className={clsx(
+                          "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
+                          on
+                            ? "accent-fill"
+                            : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
-                {/* The rating gate applies ON TOP of the σ DEV band — see the Scanner. */}
-                <OpenDoorGatesRow
-                  ignoreRatings={openDoorIgnoreRatings}
-                  setIgnoreRatings={setOpenDoorIgnoreRatings}
-                  useStack={openDoorUseStack} setUseStack={setOpenDoorUseStack}
-                  useBench={openDoorUseBench} setUseBench={setOpenDoorUseBench}
-                  useDevSig={openDoorUseDevSig} setUseDevSig={setOpenDoorUseDevSig}
-                  upMinRate={openDoorUpMinRate} setUpMinRate={setOpenDoorUpMinRate}
-                  downMinRate={openDoorDownMinRate} setDownMinRate={setOpenDoorDownMinRate}
-                  upMinTotal={openDoorUpMinTotal} setUpMinTotal={setOpenDoorUpMinTotal}
-                  downMinTotal={openDoorDownMinTotal} setDownMinTotal={setOpenDoorDownMinTotal}
-                  upMinMove={openDoorUpMinMove} setUpMinMove={setOpenDoorUpMinMove}
-                  downMinMove={openDoorDownMinMove} setDownMinMove={setOpenDoorDownMinMove}
-                  activeClassName={secondaryButtonSoftActiveClass}
-                  showParamToggles={!openDoorAdvancedMode}
-                />
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
+                  <button
+                    key={modeKey}
+                    type="button"
+                    onClick={() => setRatingMode(modeKey)}
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                      ratingMode === modeKey
+                        ? secondaryButtonSoftActiveClass
+                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    {modeKey}
+                  </button>
+                ))}
+              </div>
             </>
           }
+          steppers={fields}
           ranges={[
-            { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
-            { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
-            { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
+            { label: "ρ", title: "Correlation — на 5-барних дохідностях, для цього класу", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
+            { label: "β", title: "Beta — хедж-коефіцієнт пари для цього класу", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
+            { label: "σ", title: "Sigma — найбільше відхилення, з якого пара ще повертається, pp", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
+            { label: "α", title: "Alpha — медіанний пік зведених епізодів, pp", minValue: alphaMin, maxValue: alphaMax, setMin: setAlphaMin, setMax: setAlphaMax, step: 0.1 },
           ]}
         />
 
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
+          {/* PairFlux classes stand where Arbitrage's session bands used to: this page rates
+              pairs per PRE / OPEN / INTRA, and the eight Arbitrage bands mean nothing to it.
+              The underlying `cls` state stays at its "global" default — the widest setting the
+              signals request can carry — so nothing below is silently narrowed by a band the user
+              can no longer see. */}
           <div className="flex h-7 items-center gap-2">
-            {(["10m", "30m"] as const).map((c) => (
+            {(["intra", "pre", "open"] as PairFluxClass[]).map((c) => (
               <FilterButton
                 key={c}
-                active={openDoorExitClass === c}
-                label={c}
-                onClick={() => setOpenDoorExitClass(c)}
+                active={pfCls === c}
+                label={c.toUpperCase()}
+                onClick={() => setPfCls(c)}
               />
+            ))}
+          </div>
+
+          <div className="h-7 w-px self-center bg-white/5" />
+
+          <div className="flex h-7 items-center gap-2">
+            {(["all", "top"] as const).map((m) => (
+              <FilterButton key={m} active={mode === m} label={m.toUpperCase()} onClick={() => setMode(m)} />
+            ))}
+          </div>
+
+          <div className="h-7 w-px self-center bg-white/5" />
+
+          <div className="flex h-7 items-center gap-2">
+            {(["any", "hard", "soft"] as ArbType[]).map((t) => (
+              <FilterButton key={t} active={type === t} label={t} onClick={() => setType(t)} />
             ))}
           </div>
 
@@ -4537,11 +4852,9 @@ export default function OpenFadeSonar() {
 
 
         {/* ========================= BOOLEAN & MULTI-SELECT FILTERS ========================= */}
-        {/* Shared with the other Sonar, both Scanners and Stream — see components/shared/filters.
-            No zapSlot here: the ZAP group is an Arbitrage statistic. OpenDoor's gate is DEV against
-            its own bins and applyExactSonarClientFilters has always ignored the ZAP thresholds, so
-            the group only ever dimmed and gold-tinted OpenDoor cards by a number that decided
-            nothing. ArbitrageSonar still has it. */}
+        {/* Shared with OpenDoor Sonar, both Scanners and Stream — see components/shared/filters.
+            The ZAP group stays here as a slot: it is an Arbitrage statistic and OpenDoor has no
+            equivalent. */}
         <FilterFlagsRow
           exclusions={[
             { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
@@ -4594,16 +4907,6 @@ export default function OpenFadeSonar() {
               />
             </>
           }
-          trailingSlot={
-            <SigmaDevBand
-              metric={fadeMetric}
-              setMetric={setFadeMetric}
-              minAbs={fadeMinAbs}
-              setMinAbs={setFadeMinAbs}
-              maxAbs={fadeMaxAbs}
-              setMaxAbs={setFadeMaxAbs}
-            />
-          }
           sortSlot={
             <SingleSelectFilter
               value={sortKey}
@@ -4629,8 +4932,73 @@ export default function OpenFadeSonar() {
               ]}
             />
           }
-        />
+          zapSlot={
+            <>
+            {/* PAIR DIVERGENCE — this slot used to hold Arbitrage's ZAP filters, which score a
+                stock against its benchmark and mean nothing for a pair. The buttons now pick the
+                UNIT a pair's live deviation is read in, and the three inputs are its min, max and
+                exit level in that unit. `zapMode` itself is forced off below, so the Arbitrage
+                metric no longer silently filters the signal set this page feeds to the panel. */}
+            <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
+              {([
+                { key: "pct", label: "% DEV", title: "Розходження в процентних пунктах" },
+                { key: "sigma", label: "\u03c3 DEV", title: "dev / sigma — пари без сігми не проходять" },
+                { key: "alpha", label: "\u03b1 DEV", title: "dev / alpha — пари без альфи не проходять" },
+              ] as const).map((z) => (
+                <button
+                  key={z.key}
+                  type="button"
+                  title={z.title}
+                  onClick={() => setPfZapMode(z.key)}
+                  className={[
+                    SONAR_FILTER_INNER_PILL,
+                    pfZapMode === z.key ? FILTER_GROUP_TONES.zap.on : FILTER_GROUP_TONES.zap.off,
+                  ].join(" ")}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>{z.label}</span>
+                </button>
+              ))}
 
+              {([
+                { v: pfZapMin, set: setPfZapMin, ph: "min", t: "Нижній поріг у поточній одиниці" },
+                { v: pfZapMax, set: setPfZapMax, ph: "max", t: "Верхній поріг. Порожньо = без обмеження" },
+                { v: pfZapExit, set: setPfZapExit, ph: "exit", t: "Рівень виходу. Картка показує, скільки pp це дає" },
+              ] as const).map((f, i) => (
+                <div key={i} className="group relative w-[78px]">
+                  <input
+                    value={f.v}
+                    title={f.t}
+                    placeholder={f.ph}
+                    inputMode="decimal"
+                    onChange={(e) => f.set(e.target.value)}
+                    className="center-spin h-7 w-full rounded-md border-0 bg-black/20 !pl-2 !pr-5 text-center font-mono text-[11px] tabular-nums text-zinc-200 placeholder-zinc-600 outline-none transition-all focus:bg-black/30 active:scale-[0.99]"
+                  />
+                  <div className="pointer-events-none absolute right-[1px] top-[1px] bottom-[1px] flex w-4 flex-col overflow-hidden rounded-r-[5px] border-l border-white/10 bg-transparent opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => f.set(pfBump(f.v, 1))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 transition-colors hover:text-zinc-300"
+                      aria-label="Збільшити"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => f.set(pfBump(f.v, -1))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 transition-colors hover:text-zinc-300"
+                      aria-label="Зменшити"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            </>
+          }
+        />
         {/* ========================= DRAWERS (Ignore/Apply) ========================= */}
         {(showIgnore || showApply || showPin) && (
           <div className="grid grid-cols-7 gap-4">
@@ -4813,7 +5181,7 @@ export default function OpenFadeSonar() {
         )}
 
         {/* ========================= ACTIVE PANEL ========================= */}
-        {/* The strip itself is shared with Arbitrage Sonar, the Scanners and Stream — see
+        {/* The strip itself is shared with OpenDoor Sonar, the Scanners and Stream — see
             components/shared/filters/ActiveTickerCard. Only the expanded body below stays local:
             it is the live-snapshot grid, which no other surface has. */}
         {activePanelVisible && (
@@ -5067,6 +5435,42 @@ export default function OpenFadeSonar() {
           </ActiveTickerCard>
         )}
 
+        {activePanelVisible && (
+          <div
+            className={[
+              "rounded-2xl bg-black/40 px-4 py-3",
+              activeGoldTickers.length > 0
+                ? "border border-amber-500/20 bg-amber-500/[0.03]"
+                : "accent-panel-soft",
+            ].join(" ")}
+          >
+            {activeGoldTickers.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {activeGoldTickers.map((entry) => {
+                  const isCurrent = activeTickerNorm === entry.ticker;
+                  return (
+                    <button
+                      key={`${entry.ticker}|${entry.direction}`}
+                      type="button"
+                      onClick={() => setActiveTicker(entry.ticker)}
+                    className={[
+                      "group inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-left font-mono transition-all duration-200",
+                      "border-amber-500/35 bg-amber-500/12 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.16)]",
+                      "animate-pulse hover:bg-white/[0.08]",
+                      isCurrent ? "ring-1 ring-white/30" : "",
+                    ].join(" ")}
+                      title="Set as active ticker"
+                    >
+                      <span className="text-[12px] font-semibold tracking-[0.08em]">{entry.ticker}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="h-5" />
+            )}
+          </div>
+        )}
 
         {/* ========================= MESSAGES & GRID ========================= */}
         {error && (
@@ -5142,62 +5546,35 @@ export default function OpenFadeSonar() {
           </div>
         )}
 
-        {!error && !loading && (
-          <div className="grid grid-cols-2 gap-4">
-            {[
-              { dir: "down" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", rows: openDoorMatchedDown },
-              { dir: "up" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", rows: openDoorMatchedUp },
-            ].map((col) => (
-              <div key={col.dir} className={clsx("rounded-2xl border bg-[#0a0a0a]/40 p-3", col.border)}>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className={clsx("text-xs font-mono font-bold uppercase tracking-widest", col.accent)}>{col.title}</span>
-                  <span className="text-[10px] font-mono text-zinc-500">{col.rows.length} match{col.rows.length === 1 ? "" : "es"}</span>
-                </div>
-                {col.rows.length === 0 ? (
-                  <div className="py-6 text-center text-[11px] font-mono uppercase tracking-widest text-zinc-600">
-                    No tickers pass current OpenDoor gates
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {col.rows.map((s) => {
-                      const row = openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()];
-                      const prefix = openDoorAdvancedMode ? "adv_" : "";
-                      const c = openDoorExitClass;
-                      const devVal = col.dir === "up" ? toNum(s.zapLsigma) : toNum(s.zapSsigma);
-                      const rateVals = ["stack", "bench", "dev"]
-                        .map((p) => toNum(row?.[`${prefix}${p}_${c}_best_${col.dir}_rate`]))
-                        .filter((v): v is number => v != null);
-                      const bestRate = rateVals.length ? Math.max(...rateVals) : null;
-                      return (
-                        <div
-                          key={s.ticker}
-                          className="flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2"
-                        >
-                          <div className="flex items-baseline gap-2">
-                            <span className="font-mono text-sm font-bold text-zinc-100">{s.ticker}</span>
-                            <span className="font-mono text-[10px] text-zinc-500 uppercase">{s.benchmark}</span>
-                            {(() => {
-                              const rep = String((s as any).Report ?? (s as any).report ?? (s as any).meta?.Report ?? "").trim();
-                              return rep && rep.toUpperCase() !== "NO"
-                                ? <span className="font-mono text-[10px] text-pink-400">REP {rep}</span>
-                                : null;
-                            })()}
-                          </div>
-                          <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
-                            {devVal != null && <span>DevSig {devVal.toFixed(2)}</span>}
-                            {bestRate != null && <span className={col.accent}>rate {(bestRate * 100).toFixed(0)}%</span>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+        {/* PairFlux replaces the Arbitrage bucket grid on this page. Same benchmark columns, same
+            beta bands, same card markup — but each row is a PAIR: the leg that ran ahead on the left
+            (sold at its bid), the one that lagged on the right (bought at its ask), and the shared
+            spread statistics between them. ArbitrageSonar still renders the original grid.
+
+            Rendered OUTSIDE the hasAny gate on purpose: hasAny is computed from the ARBITRAGE
+            bucketing, so gating on it would blank the pair panel whenever Arbitrage's own filters
+            emptied their buckets — two unrelated strategies sharing one visibility flag. The panel
+            carries its own empty states. */}
+        {/* `items`, NOT `allItems`: the toolbar's min/max filters are already applied to it, and
+            because a pair needs BOTH legs present to be priced, feeding the filtered set is exactly
+            what makes every filter apply to BOTH tickers of the pair. Passing the raw list would
+            silently ignore the whole toolbar. */}
+        {!error && (
+          <PairFluxDivergence
+            signals={items}
+            cls={pfCls}
+            unit={pfZapMode}
+            minStr={pfZapMin}
+            maxStr={pfZapMax}
+            exitStr={pfZapExit}
+            corrRange={[corrMin, corrMax]}
+            betaRange={[betaMin, betaMax]}
+            sigmaRange={[sigmaMin, sigmaMax]}
+            alphaRange={[alphaMin, alphaMax]}
+          />
         )}
 
-        {false && !error && hasAny && (
+        {!error && hasAny && (
           <div className="space-y-3">
             {(() => {
               const visible = new Set(benchBlocks.map((b) => b.benchmark));
@@ -5236,105 +5613,6 @@ export default function OpenFadeSonar() {
                 </div>
               );
             })()}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {benchBlocks.map((bench) => {
-              return (
-                <div
-                  key={bench.benchmark}
-                  className="flex min-w-0 flex-col self-start"
-                >
-                  <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
-
-                  <div className="px-4 pb-3">
-                    <div className="h-px bg-white/5" />
-                  </div>
-
-                  <div className="space-y-6">
-                    {bench.buckets.map((g) => {
-                      const isExpanded = !!expandedMap[g.id];
-                      const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
-
-                      return (
-                        <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
-                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
-                            <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
-                              </svg>
-                            </div>
-                            <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
-                              {betaLabels[g.betaKey]}
-                            </div>
-                            <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
-                              </svg>
-                            </div>
-                          </div>
-
-                          <div className="p-2 grid grid-cols-2 gap-2">
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.short)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`S-${s.ticker}`}
-                                  s={s}
-                                  side="short"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
-
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.long)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`L-${s.ticker}`}
-                                  s={s}
-                                  side="long"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                          {g.rows.length > 10 && (
-                            <button
-                              onClick={() => toggleBucket(g.id)}
-                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border-t border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
-                            >
-                              {isExpanded ? "SHOW LESS" : `SHOW ALL (${g.rows.length})`}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-            </div>
           </div>
         )}
         <style jsx global>{`
@@ -5457,4 +5735,5 @@ export default function OpenFadeSonar() {
     </div>
   );
 }
+
 

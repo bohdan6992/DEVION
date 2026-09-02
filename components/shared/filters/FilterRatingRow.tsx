@@ -68,7 +68,17 @@ function bump(field: FilterNumField, delta: number) {
 }
 
 function shift(current: string, delta: number): string {
-  return String(+(((Number(current) || 0) + delta).toFixed(4)));
+  return String(+(((Number(normalizeDecimal(current)) || 0) + delta).toFixed(4)));
+}
+
+/**
+ * A decimal comma is what a Ukrainian keyboard layout produces, and `type="number"` REJECTS it:
+ * the browser leaves "0,7" visible in the box while `e.target.value` comes back "", so the state
+ * stays empty and the range silently stops filtering while it looks set. These are text inputs
+ * for that reason; the comma is folded to a dot here so every consumer still parses a dot form.
+ */
+function normalizeDecimal(raw: string): string {
+  return raw.replace(",", ".");
 }
 
 export type FilterRatingRowProps = {
@@ -165,11 +175,10 @@ export default function FilterRatingRow({
             </span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
-                type="number"
+                type="text"
                 inputMode="decimal"
-                step={field.step}
                 value={field.minValue}
-                onChange={(e) => field.setMin(e.target.value)}
+                onChange={(e) => field.setMin(normalizeDecimal(e.target.value))}
                 className={NUM_INPUT}
                 placeholder="min"
               />
@@ -180,11 +189,10 @@ export default function FilterRatingRow({
             </div>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
-                type="number"
+                type="text"
                 inputMode="decimal"
-                step={field.step}
                 value={field.maxValue}
-                onChange={(e) => field.setMax(e.target.value)}
+                onChange={(e) => field.setMax(normalizeDecimal(e.target.value))}
                 className={NUM_INPUT}
                 placeholder="max"
               />

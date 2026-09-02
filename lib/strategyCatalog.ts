@@ -22,6 +22,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "opendoor", name: "Open Door", icon: "🚪", description: "Відкриття ринку: сетапи та статистика." },
   { key: "openfade", name: "Open Fade", icon: "🪞", description: "Фейд відхилення стака в сігмах на відкритті." },
   { key: "openride", name: "Open Ride", icon: "🏄", description: "Те саме відхилення, але за рухом: мінус — сел, плюс — бай." },
+  { key: "pairflux", name: "PairFlux", icon: "⚖️", description: "Пари, що ходять разом: торгівля розходження спреду та його зведення." },
   { key: "rLine", name: "R-Line", icon: "📏", description: "Рівні ризику/нагороди та відпрацювання." },
   { key: "intraDance", name: "Intra Dance", icon: "🩰", description: "Інтра-динаміка: рух/нормалізація." },
   { key: "morningLounch", name: "Morning Launch", icon: "🌅", description: "Ранковий імпульс після відкриття." },

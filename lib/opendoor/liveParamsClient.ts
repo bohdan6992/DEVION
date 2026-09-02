@@ -60,6 +60,11 @@ export type OpenDoorLiveParams = {
   downMinTotal: number;
   downMinMove: number;
   sizeValue: number;
+  /** OpenFade/OpenRide deviation source: raw percent or beta/sigma-normalised value. */
+  fadeMetric?: "sigma" | "pct";
+  fadeMinAbs?: number;
+  fadeMaxAbs?: number | null;
+  ignoreRatings?: boolean;
   filters?: OpenDoorLiveFilters;
   source?: string;
 };

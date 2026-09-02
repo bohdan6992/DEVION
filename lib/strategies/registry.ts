@@ -219,6 +219,34 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       labels: { "10m": "10M", "30m": "30M" },
     },
   },
+  pairflux: {
+    key: "pairflux",
+    bridgeStrategyId: "stream.pairflux",
+    nav: {
+      stream: "/pairflux/stream",
+      scanner: "/pairflux/scanner",
+      sonar: "/pairflux/sonar",
+    },
+    // The union of the three PairFlux classes: PRE opens at 21:00 the evening before (-180) and
+    // INTRA ends at 16:00. OPEN (09:00-10:00) sits inside that span, so the window is one range
+    // rather than three. Half-open, so 960 is exclusive.
+    tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 960 },
+    // Below every single-ticker strategy on purpose. PairFlux holds TWO legs, so a ticker it has
+    // claimed is one it cannot hand over without leaving the other leg naked; letting the
+    // directional strategies win the claim instead keeps that case from arising at all.
+    priority: 10,
+    api: { paperBase: "/api/paper/pairflux", signalsBase: "/api/arbitrage" },
+    storage: { scannerPrefix: "paper.pairflux", sonarPrefix: "bridge.pairflux", streamPrefix: "stream.pairflux" },
+    // PairFlux rates a pair per class the notebook cuts (see OriON-strategies/notebooks/
+    // PairFlux.ipynb): PRE 21:00-09:30, OPEN 09:00-10:00, INTRA 10:00-16:00. Same
+    // `class x direction -> {rate, total}` shape as everything else; direction here is the SIGN OF
+    // THE SPREAD (dev > 0 = this row's ticker is the one that ran ahead), not a long/short call.
+    ratingClasses: {
+      dimension: "CLASS",
+      keys: ["pre", "open", "intra"],
+      labels: { pre: "PRE", open: "OPEN", intra: "INTRA" },
+    },
+  },
 };
 
 export type LiveStrategyKey = keyof typeof LIVE_STRATEGIES & string;

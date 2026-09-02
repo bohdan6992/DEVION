@@ -3602,9 +3602,13 @@ export function useStreamEngine({
       console.groupEnd();
     }
 
-    streamDecisionStore.applySnapshot(displayDecisions);
+    const decisionsChanged = streamDecisionStore.applySnapshot(displayDecisions);
     streamSignalStore.applySnapshot(filtered);
-    streamUpdatedAtStore.setValue(Date.now());
+    // The automation ticker runs every second even on a quiet market. Only move the UI's
+    // UPDATED indicator when a visible decision row actually changed.
+    if (decisionsChanged) {
+      streamUpdatedAtStore.setValue(Date.now());
+    }
 
     // keep sync refs current so sendQueuedIntents can read signal/latch state without closure staleness
     // Use normalized (all signals) as base so open-position tickers that dropped out of
