@@ -7,6 +7,10 @@ import React from "react";
 // meaningful to render on the server.
 const CaesarSchedule = dynamic(() => import("@/components/caesar/CaesarSchedule"), { ssr: false });
 
+// The engines Caesar has to host itself. Mounted BELOW the schedule and kept mounted: Arbitrage and
+// PairFlux have no bridge-side engine, so this tab is where their decisions are made.
+const CaesarRunners = dynamic(() => import("@/components/caesar/CaesarRunners"), { ssr: false });
+
 export default function CaesarPage() {
   return (
     <>
@@ -15,6 +19,9 @@ export default function CaesarPage() {
       </Head>
       <main className="w-full">
         <CaesarSchedule />
+        <div className="px-4 pb-8">
+          <CaesarRunners />
+        </div>
       </main>
     </>
   );

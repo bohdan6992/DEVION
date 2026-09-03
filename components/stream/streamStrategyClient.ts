@@ -45,6 +45,21 @@ async function postJson<T>(path: string, body: unknown): Promise<T | null> {
   }
 }
 
+export type StreamStrategyRegistrationResult = {
+  registered: boolean;
+  /**
+   * Whether THIS client owns dispatch for the strategy.
+   *
+   * One strategy is one engine. Caesar hosts Arbitrage and PairFlux so the day runs with no stream
+   * page open; opening one of those pages anyway would put a second engine on the same strategy,
+   * and the two would not agree — their positions drift, so identical intent ids stop protecting
+   * anything. The bridge hands ownership to whoever registered first and takes it back a TTL after
+   * they stop. A client that is not the owner still shows everything; it just does not send.
+   */
+  isOwner: boolean;
+  ownerClientId: string | null;
+};
+
 export async function registerStreamStrategy(params: {
   strategyId: string;
   label?: string;
@@ -52,16 +67,31 @@ export async function registerStreamStrategy(params: {
   clientId?: string;
   signalClass?: string | null;
   betaMode?: boolean;
-}): Promise<boolean> {
-  const result = await postJson<{ ok: boolean }>("/api/stream/strategies/register", {
-    strategyId: params.strategyId,
-    label: params.label ?? params.strategyId,
-    priority: params.priority,
-    clientId: params.clientId ?? null,
-    signalClass: params.signalClass ?? null,
-    betaMode: params.betaMode ?? false,
-  });
-  return result != null;
+  /** Take dispatch away from a client that still holds it. Only ever set from a user action. */
+  takeOwnership?: boolean;
+}): Promise<StreamStrategyRegistrationResult> {
+  const result = await postJson<{ ok: boolean; registration?: { ownerClientId?: string | null } }>(
+    "/api/stream/strategies/register",
+    {
+      strategyId: params.strategyId,
+      label: params.label ?? params.strategyId,
+      priority: params.priority,
+      clientId: params.clientId ?? null,
+      signalClass: params.signalClass ?? null,
+      betaMode: params.betaMode ?? false,
+      takeOwnership: params.takeOwnership ?? false,
+    },
+  );
+  if (result == null) return { registered: false, isOwner: false, ownerClientId: null };
+  const ownerClientId = result.registration?.ownerClientId ?? null;
+  return {
+    registered: true,
+    // A bridge that reports no owner at all is one that predates ownership; treating that as
+    // "not the owner" would stop every strategy dead, so an absent owner means nobody is claiming
+    // and this client proceeds.
+    isOwner: ownerClientId == null || ownerClientId === (params.clientId ?? null),
+    ownerClientId,
+  };
 }
 
 export async function heartbeatStreamStrategy(strategyId: string): Promise<{ registered: boolean } | null> {

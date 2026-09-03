@@ -2410,6 +2410,8 @@ export default function ArbitrageScanner({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
+    streamDispatchOwner,
+    takeDispatchOwnership,
   } = useStreamEngine({
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
@@ -6478,6 +6480,24 @@ export default function ArbitrageScanner({
         </div>
 
         {/* CONTENT */}
+        {primaryPanel === "stream" && !streamDispatchOwner && (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5">
+            <div className="font-mono text-[11px] text-amber-200">
+              <span className="font-bold uppercase tracking-[0.18em]">Settings only</span>
+              <span className="ml-2 text-amber-200/70">
+                another client is hosting this strategy — Caesar, normally. Everything below is live
+                and every setting you change is saved and picked up there. This page will not send.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void takeDispatchOwnership(); }}
+              className="shrink-0 rounded-md border border-amber-400/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-400/10"
+            >
+              Send from here
+            </button>
+          </div>
+        )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView
             tab={tab}

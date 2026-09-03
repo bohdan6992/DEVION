@@ -1,5 +1,6 @@
 "use client";
 
+import ArbitrageScanner from "../scanner/ArbitrageScanner";
 import StreamPageContainer from "./StreamPageContainer";
 
 type ArbitrageStreamProps = {
@@ -13,5 +14,5 @@ type ArbitrageStreamProps = {
 };
 
 export default function ArbitrageStream(props: ArbitrageStreamProps = {}) {
-  return <StreamPageContainer {...props} />;
+  return <StreamPageContainer {...props} ScannerComponent={ArbitrageScanner} />;
 }

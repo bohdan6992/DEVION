@@ -36,6 +36,16 @@ export type PaperArbSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST"
 
 export type PaperArbCloseMode = "Active" | "Passive";
 
+/**
+ * How a closed trade ACTUALLY left, which is not the same alphabet as the close-mode REQUESTED.
+ *
+ * Arbitrage answers in its request's own words; PairFlux reports which of three things happened —
+ * the opposite-side spread came back inside the exit threshold, the position was unwound at the
+ * class's terminal print (Gap = the 09:30 open, Cls = the 16:00 close), or neither happened and the
+ * window simply ended. The request stays PaperArbCloseMode.
+ */
+export type PaperClosedExit = PaperArbCloseMode | "Converged" | "Gap" | "Cls" | "Forced";
+
 export type PaperArbPnlMode = "RawOnly" | "Hedged";
 
 export type PaperArbPriceMode = "LastPrint" | "BidAsk";
@@ -165,7 +175,7 @@ export type PaperArbClosedDto = {
   // this field is the one that does). Null for WindowEnd/EndOfDay closes.
   exitMetricAbs?: number | null;
 
-  closeMode?: PaperArbCloseMode;
+  closeMode?: PaperClosedExit;
   minHoldCandles?: number;
 
   rawPnlUsd?: number | null;
@@ -291,6 +301,13 @@ export type PaperArbAnalyticsRequest = {
   metric?: PaperArbMetric;
   startAbs?: number;
   usePrintMedianDelta?: boolean;
+  /**
+   * The unit StartAbs / StartAbsMax / EndAbs are expressed in: "pp" | "sigma" | "alpha".
+   *
+   * Only PairFlux sends it. `metric` cannot carry this, because its two values name Arbitrage's
+   * ZAP variants and there is no third one for alpha; a bridge that gets both prefers this.
+   */
+  unit?: string | null;
   startAbsMax?: number | null;
   endAbs?: number;
   session?: PaperArbSession;

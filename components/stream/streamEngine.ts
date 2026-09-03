@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
@@ -1240,17 +1240,22 @@ export function computeStreamDecisionRows(
   maxSpreadValue: unknown,
   automationConfig?: StreamAutomationConfig,
   bookSnapshot?: MarketMakerBookSnapshot | null,
-  metric: "SigmaZap" | "ZapPct" = "SigmaZap"
+  metric: "SigmaZap" | "ZapPct" = "SigmaZap",
+  decisionOverride?: StreamDecisionOverride
 ): StreamDecisionRow[] {
   const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const canApplyBook = signals.length === 1 && (bookSnapshot?.bestBid != null || bookSnapshot?.bestAsk != null);
 
   return signals.flatMap((row) => {
     const side: "Long" | "Short" = row.direction === "down" ? "Short" : "Long";
+    // The strategy's own reading, when it has one. See StreamDecisionOverride.
+    const override = decisionOverride?.(row, side) ?? null;
     // Direction-specific and metric-specific signal. null = no data → exclude candidate.
-    const signal = metric === "SigmaZap"
-      ? (side === "Long" ? toNum(row.zapLsigma) : toNum(row.zapSsigma))
-      : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
+    const signal = override
+      ? override.signal
+      : metric === "SigmaZap"
+        ? (side === "Long" ? toNum(row.zapLsigma) : toNum(row.zapSsigma))
+        : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
     if (signal == null) return []; // no data for this mode/direction → not a candidate
     const bid = toNum(row.Bid ?? row.bidStock ?? row.bid);
     const ask = toNum(row.Ask ?? row.askStock ?? row.ask);
@@ -1278,7 +1283,7 @@ export function computeStreamDecisionRows(
 
     return {
       ticker: row.ticker,
-      benchmark: String(row.benchmark ?? "UNKNOWN"),
+      benchmark: override ? override.benchmark : String(row.benchmark ?? "UNKNOWN"),
       side,
       signal,
       spread,
@@ -2179,6 +2184,23 @@ function buildFallbackPendingEntryPositions(
 export type StreamSignalGate = (signal: ArbitrageSignal) => { up: boolean; down: boolean };
 
 /**
+ * What a decision row's SIGNAL and COUNTERPART are, when the strategy does not measure either the
+ * way Arbitrage does.
+ *
+ * Arbitrage reads a per-ticker sigma against a benchmark ETF, and a row with no such sigma is not
+ * a candidate at all. PairFlux measures a PAIR's spread and its counterpart is the other leg, so
+ * without this its rows arrived carrying Arbitrage's numbers — a benchmark it does not trade
+ * against and a reading it does not gate on — and any leg lacking that unrelated sigma was
+ * silently dropped, which costs the pair one of its two orders.
+ *
+ * Returning null means "no opinion", and the Arbitrage reading is used unchanged.
+ */
+export type StreamDecisionOverride = (
+  signal: ArbitrageSignal,
+  side: "Long" | "Short",
+) => { signal: number; benchmark: string } | null;
+
+/**
  * Overrides for the live signals request, so a strategy can ask the server for exactly the same
  * universe its Sonar asks for.
  *
@@ -2210,6 +2232,8 @@ export type StreamSignalsRequestOverride = {
 type UseStreamEngineArgs = {
   /** Optional strategy-specific entry gate. See StreamSignalGate. */
   signalGate?: StreamSignalGate;
+  /** Optional strategy-specific reading for a decision row. See StreamDecisionOverride. */
+  decisionOverride?: StreamDecisionOverride;
   /**
    * What to send when CUTOFF is reached.
    *
@@ -2351,6 +2375,7 @@ const tradingAppBridgeUrl = (path: string) => {
 export function useStreamEngine({
   instance,
   signalGate,
+  decisionOverride,
   cutoffAction = "print-close-pair",
   entryIntentTypes,
   signalsRequest,
@@ -2549,6 +2574,19 @@ export function useStreamEngine({
   // Tracks the last "dayKey|startCutoffTime" for which the Ctrl+Q cutoff hotkey was
   // sent, so it fires exactly once per cutoff crossing (not once per dispatch tick).
   const cutoffHotkeySentKeyRef = useRef<string | null>(null);
+  /**
+   * Whether this engine has yet SEEN a moment before its cutoff.
+   *
+   * The cutoff pair is meant to fire on a CROSSING. Without this it fired on a STATE — "it is
+   * later than the cutoff" — which is true all afternoon, so an engine mounted at 15:16 with a
+   * 09:00 cutoff sent Ctrl+Q and Ctrl+O into the live TradingApp the moment it woke up. Measured,
+   * not theorised: 2026-09-03 19:16:33 UTC, both Completed, note "entry cutoff reached at 09:00".
+   *
+   * That was survivable while a stream ran only in a tab someone opened in the morning. It is not
+   * survivable now that Caesar mounts engines when a SEGMENT starts, which is routinely after a
+   * strategy's own cutoff.
+   */
+  const cutoffArmedRef = useRef(false);
   // Set by resetStreamAutomationState when called while a dispatch loop is active.
   // The loop's finally block detects this and clears dedup refs AFTER the in-flight
   // request completes, preventing the window where refs are clear but an order is in-flight.
@@ -3244,12 +3282,16 @@ export function useStreamEngine({
       maxSpreadValue,
       automationConfig,
       bookSnapshot,
-      metric
+      metric,
+      decisionOverride,
     );
 
     const autoEnabledNow =
       streamAutoEnabledRef.current &&
       Boolean(automationConfig?.strategyModeEnabled) &&
+      // Not the owner: decide, latch and display exactly as before, but build no intents. See
+      // dispatchClientIdRef — this is what keeps a second page from double-sending.
+      dispatchOwnerRef.current &&
       !(executionSnapshot?.panicOff ?? false);
     const currentCount = filtered.length;
     const prevCount = prevFilteredCountRef.current;
@@ -3790,14 +3832,47 @@ export function useStreamEngine({
   // the bridge reports it does not know us — the normal path after a bridge restart.
   // Kept in a ref so the dispatch loop can re-register on demand when the arbiter reports it no
   // longer knows this strategy (see acquireStreamTicker's ensureRegistered).
-  const registerStrategyRef = useRef<() => Promise<boolean>>(async () => false);
-  registerStrategyRef.current = async () => registerStreamStrategy({
-    strategyId,
-    label: resolvedInstance.label,
-    priority: strategyPriority,
-    signalClass,
-    betaMode: automationConfig?.betaMode === true,
-  });
+  //
+  // DISPATCH OWNERSHIP. This engine identifies itself to the bridge, which grants exactly one
+  // owner per strategy. Losing that race is not an error — it is the normal outcome of opening a
+  // stream page while Caesar is already hosting the same strategy — and a non-owner keeps
+  // rendering everything, minus the sending.
+  const dispatchClientIdRef = useRef<string>("");
+  if (!dispatchClientIdRef.current) {
+    dispatchClientIdRef.current =
+      typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function"
+        ? globalThis.crypto.randomUUID()
+        : `engine-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  const [dispatchOwner, setDispatchOwner] = useState<{ isOwner: boolean; ownerClientId: string | null }>(
+    { isOwner: true, ownerClientId: null },
+  );
+  const dispatchOwnerRef = useRef(true);
+  dispatchOwnerRef.current = dispatchOwner.isOwner;
+
+  const registerStrategyRef = useRef<(takeOwnership?: boolean) => Promise<boolean>>(async () => false);
+  registerStrategyRef.current = async (takeOwnership = false) => {
+    const result = await registerStreamStrategy({
+      strategyId,
+      label: resolvedInstance.label,
+      priority: strategyPriority,
+      clientId: dispatchClientIdRef.current,
+      signalClass,
+      betaMode: automationConfig?.betaMode === true,
+      takeOwnership,
+    });
+    setDispatchOwner((prev) =>
+      prev.isOwner === result.isOwner && prev.ownerClientId === result.ownerClientId
+        ? prev
+        : { isOwner: result.isOwner, ownerClientId: result.ownerClientId },
+    );
+    return result.registered;
+  };
+
+  /** Take dispatch over from a client that still holds it. Only ever called from a user action. */
+  const takeDispatchOwnership = useCallback(async () => {
+    await registerStrategyRef.current(true);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -3979,7 +4054,24 @@ export function useStreamEngine({
       // at the next START, and the pair leaves no residue that could block the following
       // session. (An earlier version of this comment claimed Ctrl+Q stops new entries — it does
       // not; entries are stopped purely by the START/CUTOFF gates in this engine.)
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes)) {
+      const pastCutoffNow =
+        entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes);
+
+      // ARMING. The pair belongs to the moment the cutoff is CROSSED, so it can only fire once
+      // this engine has observed a tick on the near side of it. Starting up already past the
+      // cutoff marks the pair as spent for today instead of sending it: there is no session to
+      // close that this engine ever opened.
+      if (entryCutoffEnabled && !cutoffArmedRef.current) {
+        cutoffArmedRef.current = true;
+        if (pastCutoffNow) {
+          cutoffHotkeySentKeyRef.current = cutoffKey;
+          console.log(
+            `[CUTOFF] started past ${automationConfig?.startCutoffTime ?? "09:20"} — session-end pair skipped, nothing was opened to close`,
+          );
+        }
+      }
+
+      if (pastCutoffNow) {
         if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
           cutoffHotkeySentKeyRef.current = cutoffKey;
           try {
@@ -4810,5 +4902,11 @@ export function useStreamEngine({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh,
+    /**
+     * Whether this engine is the one allowed to SEND for its strategy. False means another client
+     * — normally the Caesar tab — is hosting it; everything is still computed and shown.
+     */
+    streamDispatchOwner: dispatchOwner.isOwner,
+    takeDispatchOwnership,
   };
 }

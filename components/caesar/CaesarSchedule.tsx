@@ -1011,9 +1011,10 @@ function DetailPanel({
       )}
 
       <div className="border-t border-white/[0.06] px-4 py-2.5 text-[10px] text-white/30">
-        Priority mirrors the <span className="font-mono">strategyPriority</span> each stream page passes to the bridge —
-        higher wins when two strategies claim the same ticker at the same minute boundary. This plan is stored locally
-        and does not yet drive the running streams.
+        Priority mirrors the <span className="font-mono">strategyPriority</span> each stream passes to the bridge —
+        higher wins when two strategies claim the same ticker at the same minute boundary. With the schedule ON this
+        plan DOES drive the day: the bridge starts and stops each strategy on its segment, and the engines that have no
+        bridge-side engine of their own are hosted below, so no stream page needs to stay open.
       </div>
     </section>
   );

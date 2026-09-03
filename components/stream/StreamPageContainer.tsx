@@ -1,8 +1,7 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl } from "../../lib/bridgeBase";
-import ArbitrageScanner from "../scanner/ArbitrageScanner";
 import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import {
   deriveStreamExecutionDescriptor,
@@ -67,7 +66,7 @@ function sessionFromRuleBand(band: StreamRuleBand): StreamSession {
   }
 }
 
-function defaultAutomationConfig(): StreamAutomationConfig {
+function defaultAutomationConfig(overrides?: Partial<StreamAutomationConfig>): StreamAutomationConfig {
   return {
     strategyModeEnabled: false,
     minNetEdge: 0,
@@ -91,6 +90,9 @@ function defaultAutomationConfig(): StreamAutomationConfig {
     betaMode: false,
     startCutoffTime: "09:20",
     preStartTime: "21:00",
+    // Applied LAST so a strategy can move a default, and applied to the DEFAULTS rather than to the
+    // restored config, so it never overrules something the user has actually set.
+    ...(overrides ?? {}),
   };
 }
 
@@ -163,70 +165,105 @@ function readInitialStreamTab(key: string): StreamTabKey {
   return "active";
 }
 
-function readInitialStreamRuleBand(key: string): StreamRuleBand {
-  if (typeof window === "undefined") return "GLOBAL";
+function readInitialStreamRuleBand(
+  key: string,
+  fallback: StreamRuleBand = "GLOBAL",
+  allowed?: readonly StreamRuleBand[],
+): StreamRuleBand {
+  if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(key);
     if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "PRINT" || raw === "POST" || raw === "GLOBAL") {
-      return raw;
+      // A band this strategy does not have is not a preference worth restoring. It would gate on a
+      // rating row that can never match, which reads on screen as "the gate is set" and behaves as
+      // "there is no gate at all".
+      if (!allowed || allowed.includes(raw)) return raw;
     }
   } catch {
     // ignore storage issues
   }
-  return "GLOBAL";
+  return fallback;
 }
 
-function readInitialStreamSession(key: string): StreamSession {
-  if (typeof window === "undefined") return "GLOB";
+function readInitialStreamSession(
+  key: string,
+  fallback: StreamSession = "GLOB",
+  allowed?: readonly StreamSession[],
+): StreamSession {
+  if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(key);
     if (raw === "BLUE" || raw === "ARK" || raw === "PRE" || raw === "OPEN" || raw === "INTRA" || raw === "POST" || raw === "NIGHT" || raw === "GLOB") {
-      return raw;
+      if (!allowed || allowed.includes(raw)) return raw;
     }
   } catch {
     // ignore storage issues
   }
-  return "GLOB";
+  return fallback;
 }
 
-function readInitialAutomationConfig(automationKey: string): StreamAutomationConfig {
-  if (typeof window === "undefined") return defaultAutomationConfig();
+function readInitialAutomationConfig(
+  automationKey: string,
+  overrides?: Partial<StreamAutomationConfig>,
+): StreamAutomationConfig {
+  if (typeof window === "undefined") return defaultAutomationConfig(overrides);
   try {
     const raw = window.localStorage.getItem(automationKey);
-    if (!raw) return defaultAutomationConfig();
+    if (!raw) return defaultAutomationConfig(overrides);
     const parsed = JSON.parse(raw) as Partial<StreamAutomationConfig>;
     return {
-      ...defaultAutomationConfig(),
+      ...defaultAutomationConfig(overrides),
       ...parsed,
       strategyModeEnabled: false,
       minNetEdge: Math.max(0, Number(parsed.minNetEdge) || 0),
-      endSignalThreshold: Math.max(0, Number(parsed.endSignalThreshold) || defaultAutomationConfig().endSignalThreshold),
-      maxOpenPositions: Math.max(1, Math.trunc(Number(parsed.maxOpenPositions) || defaultAutomationConfig().maxOpenPositions)),
-      maxAdds: Math.max(0, Math.trunc(Number(parsed.maxAdds) || defaultAutomationConfig().maxAdds)),
+      endSignalThreshold: Math.max(0, Number(parsed.endSignalThreshold) || defaultAutomationConfig(overrides).endSignalThreshold),
+      maxOpenPositions: Math.max(1, Math.trunc(Number(parsed.maxOpenPositions) || defaultAutomationConfig(overrides).maxOpenPositions)),
+      maxAdds: Math.max(0, Math.trunc(Number(parsed.maxAdds) || defaultAutomationConfig(overrides).maxAdds)),
       queueDelayMinSeconds: Math.max(0, Number(parsed.queueDelayMinSeconds) || 0),
       queueDelayMaxSeconds: Math.max(0, Number(parsed.queueDelayMaxSeconds) || 0),
-      sizeValue: Math.max(1, Number(parsed.sizeValue) || defaultAutomationConfig().sizeValue),
-      dilutionStep: Math.max(0.1, Number(parsed.dilutionStep) || defaultAutomationConfig().dilutionStep),
+      sizeValue: Math.max(1, Number(parsed.sizeValue) || defaultAutomationConfig(overrides).sizeValue),
+      dilutionStep: Math.max(0.1, Number(parsed.dilutionStep) || defaultAutomationConfig(overrides).dilutionStep),
       addDelayMinutes: Math.max(0, Math.trunc(Number(parsed.addDelayMinutes) || 0)),
-      minHoldMinutes: Math.max(0, Math.trunc(Number(parsed.minHoldMinutes) || defaultAutomationConfig().minHoldMinutes)),
+      minHoldMinutes: Math.max(0, Math.trunc(Number(parsed.minHoldMinutes) || defaultAutomationConfig(overrides).minHoldMinutes)),
       exitExecutionMode: parsed.exitExecutionMode === "passive" ? "passive" : "active",
       hedgeMode: parsed.hedgeMode === "hedged" ? "hedged" : "unhedged",
       scaleMode: parsed.scaleMode === "single" ? "single" : "scale_in",
       sizingMode: parsed.sizingMode === "TIER" ? "TIER" : "USD",
       exitMode: parsed.exitMode === "normalize" ? "normalize" : "print",
-      printStartTime: typeof parsed.printStartTime === "string" && parsed.printStartTime ? parsed.printStartTime : defaultAutomationConfig().printStartTime,
-      printCloseTime: typeof parsed.printCloseTime === "string" && parsed.printCloseTime ? parsed.printCloseTime : defaultAutomationConfig().printCloseTime,
-      noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig().noSpreadExit,
+      printStartTime: typeof parsed.printStartTime === "string" && parsed.printStartTime ? parsed.printStartTime : defaultAutomationConfig(overrides).printStartTime,
+      printCloseTime: typeof parsed.printCloseTime === "string" && parsed.printCloseTime ? parsed.printCloseTime : defaultAutomationConfig(overrides).printCloseTime,
+      noSpreadExit: typeof parsed.noSpreadExit === "boolean" ? parsed.noSpreadExit : defaultAutomationConfig(overrides).noSpreadExit,
       betaMode: typeof parsed.betaMode === "boolean" ? parsed.betaMode : false,
-      startCutoffTime: typeof parsed.startCutoffTime === "string" && parsed.startCutoffTime ? parsed.startCutoffTime : defaultAutomationConfig().startCutoffTime,
-      preStartTime: typeof parsed.preStartTime === "string" && parsed.preStartTime ? parsed.preStartTime : defaultAutomationConfig().preStartTime,
+      startCutoffTime: typeof parsed.startCutoffTime === "string" && parsed.startCutoffTime ? parsed.startCutoffTime : defaultAutomationConfig(overrides).startCutoffTime,
+      preStartTime: typeof parsed.preStartTime === "string" && parsed.preStartTime ? parsed.preStartTime : defaultAutomationConfig(overrides).preStartTime,
     };
   } catch {
-    return defaultAutomationConfig();
+    return defaultAutomationConfig(overrides);
   }
 }
 
 type StreamPageContainerProps = {
+  /**
+   * Which scanner drives the stream tab.
+   *
+   * The shell, the dispatch and the execution logic are shared; the RULE is not. PairFlux picks
+   * its trades on a pair's spread and rates them in its own three class windows, so it needs its
+   * own toolbar and its own endpoints — a parameter rather than a third copy of this container.
+   * Required, and the container imports no scanner of its own: a default would have pulled the
+   * whole Arbitrage scanner into every strategy's bundle to serve as a value nobody renders.
+   */
+  ScannerComponent: React.ComponentType<any>;
+  /**
+   * The class windows this strategy actually has, and where it starts.
+   *
+   * Arbitrage spans eight bands and opens on GLOB. A strategy with three windows opening on GLOB
+   * would ask the bridge for a class it does not define — which resolves to a fallback server-side
+   * and matches no rating row, so the screen shows a gate that is not gating.
+   */
+  allowedSessions?: readonly StreamSession[];
+  defaultSession?: StreamSession;
+  /** Starting values for the automation panel, before anything the user has saved. */
+  automationDefaults?: Partial<StreamAutomationConfig>;
   lsKeyPrefix?: string;
   headerTitle?: string;
   navStreamHref?: string;
@@ -253,7 +290,11 @@ function StreamPageContainerInner({
   navStreamHref,
   navScannerHref,
   navSonarHref,
-}: StreamPageContainerProps = {}) {
+  ScannerComponent,
+  allowedSessions,
+  defaultSession = "GLOB",
+  automationDefaults,
+}: StreamPageContainerProps) {
   const tabLsKey = `${lsKeyPrefix}.tab`;
   const sessionLsKey = `${lsKeyPrefix}.session`;
   const ruleBandLsKey = `${lsKeyPrefix}.rule-band`;
@@ -264,9 +305,9 @@ function StreamPageContainerInner({
   const { strategyId } = useStreamInstance();
 
   const [tab, setTab] = useState<StreamTabKey>(() => readInitialStreamTab(tabLsKey));
-  const [session, setSession] = useState<StreamSession>(() => readInitialStreamSession(sessionLsKey));
-  const [ruleBand, setRuleBand] = useState<StreamRuleBand>(() => readInitialStreamRuleBand(ruleBandLsKey));
-  const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(() => readInitialAutomationConfig(automationLsKey));
+  const [session, setSession] = useState<StreamSession>(() => readInitialStreamSession(sessionLsKey, defaultSession, allowedSessions));
+  const [ruleBand, setRuleBand] = useState<StreamRuleBand>(() => readInitialStreamRuleBand(ruleBandLsKey, ruleBandFromSession(defaultSession), allowedSessions?.map(ruleBandFromSession)));
+  const [automationConfig, setAutomationConfig] = useState<StreamAutomationConfig>(() => readInitialAutomationConfig(automationLsKey, automationDefaults));
   const [streamAutoEnabled, setStreamAutoEnabled] = useState(false);
   const [streamPageClientId] = useState(createStreamPageClientId);
   const remoteAutomationGuardUntilRef = useRef(0);
@@ -457,7 +498,7 @@ function StreamPageContainerInner({
   }, []);
 
   return (
-    <ArbitrageScanner
+    <ScannerComponent
       initialPrimaryPanel="stream"
       shellMode="streamOnly"
       controlledTab={tab}
@@ -493,7 +534,7 @@ function StreamPageContainerInner({
 // separate wrapper rather than something rendered inside StreamPageContainerInner. Everything
 // below it (scanner, view, engine) resolves its stores and bridge identity from this context —
 // which is what lets several of these run side by side without sharing state.
-export default function StreamPageContainer(props: StreamPageContainerProps = {}) {
+export default function StreamPageContainer(props: StreamPageContainerProps) {
   const lsKeyPrefix = props.lsKeyPrefix ?? DEFAULT_LS_PREFIX;
   const instanceId = props.instanceId ?? lsKeyPrefix;
   return (

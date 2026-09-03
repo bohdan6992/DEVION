@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import clsx from "clsx";
 import AutoSizer from "react-virtualized-auto-sizer";
@@ -49,6 +49,8 @@ type StreamDecisionTableRow = {
 type ArbitrageStreamViewProps = {
   tab: StreamTabKey;
   streamSignalsCount: number;
+  /** Header for the column holding a row's counterpart. "Bench" for Arbitrage, "Pair" for PairFlux. */
+  counterpartLabel?: string;
   streamAutoEnabled: boolean;
   streamSessionStartedAt: number | null;
   streamSessionStoppedAt: number | null;
@@ -572,7 +574,11 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
   onDismissTicker,
   onDismissAll,
   onTickerClick,
+  // What the second column holds. Arbitrage puts the benchmark ETF there; PairFlux puts the OTHER
+  // LEG, which is a ticker being traded rather than something measured against.
+  counterpartLabel = "Bench",
 }: {
+  counterpartLabel?: string;
   title: string;
   rows: StreamDecisionTableRow[];
   emptyMessage: string;
@@ -616,7 +622,7 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
             style={gridStyle}
           >
             <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
-            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">{counterpartLabel}</div>
             <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
             <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
             <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
@@ -702,7 +708,11 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   rowIds,
   emptyMessage,
   onTickerClick,
+  // What the second column holds. Arbitrage puts the benchmark ETF there; PairFlux puts the OTHER
+  // LEG, which is a ticker being traded rather than something measured against.
+  counterpartLabel = "Bench",
 }: {
+  counterpartLabel?: string;
   title: string;
   rowIds: string[];
   emptyMessage: string;
@@ -726,7 +736,7 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
         <div>
           <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
             <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
-            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">{counterpartLabel}</div>
             <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
             <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
             <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
@@ -1306,6 +1316,7 @@ const ACTIVE_TICKER_STRATEGY = "arbitrage" as const;
 export default function ArbitrageStreamView({
   tab,
   streamSignalsCount,
+  counterpartLabel,
   streamAutoEnabled,
   streamSessionStartedAt,
   streamSessionStoppedAt,
@@ -1654,6 +1665,7 @@ export default function ArbitrageStreamView({
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <StreamDecisionTable
               title="ACTIVE"
+              counterpartLabel={counterpartLabel}
               rows={activeTableRows}
               emptyMessage="No active STREAM situations yet."
               onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
@@ -1665,6 +1677,7 @@ export default function ArbitrageStreamView({
               rowIds={signalDecisionIds}
               emptyMessage="No filtered signals waiting in STREAM."
               onTickerClick={onTickerClick}
+              counterpartLabel={counterpartLabel}
             />
           </div>
           <StreamSimLog />

@@ -21,6 +21,11 @@ import ArbitrageStreamView from "../stream/ArbitrageStreamView";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
+import { subscribeToStreamSse } from "../stream/streamSseHub";
+import { buildSignalsStreamUrl } from "@/lib/signals/url";
+import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "@/lib/pairflux/client";
+import { buildQuoteIndex, computeLivePairs } from "@/lib/pairflux/livePairs";
+import { buildPairFluxGateMap, matchPairFluxGate } from "@/lib/pairflux/gate";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
@@ -46,7 +51,7 @@ import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPos
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
-import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
+import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
@@ -642,6 +647,24 @@ export default function PairFluxScanner({
   const tab = controlledTab ?? internalTab;
 
   const session = controlledSession ?? internalSession;
+
+  /**
+   * THE PURPLE GROUP: the unit the pair's START deviation is expressed in.
+   *
+   * On this strategy the three buttons are not Arbitrage's ZAP variants — there is no ZAP here.
+   * They pick what the three numbers next to them MEAN, and the engine divides the raw spread by
+   * the matching per-pair constant before comparing:
+   *
+   *   %  raw percentage points of spread between the two legs
+   *   σ  divided by the pair's own spread deviation  — "unusual for THIS pair"
+   *   α  divided by its median converged peak        — "far, by this pair's own history"
+   *
+   * It is a radio, never off: a threshold with no unit compares nothing. `zapMode` keeps carrying
+   * it so the saved-filter and restore paths stay unchanged.
+   */
+  const devUnit: "pp" | "sigma" | "alpha" =
+    zapMode === "sigma" ? "sigma" : zapMode === "delta" ? "alpha" : "pp";
+  const devUnitLabel = devUnit === "sigma" ? "σ" : devUnit === "alpha" ? "α" : "%";
   const ruleBand = controlledRuleBand ?? internalRuleBand;
   const setTab = useCallback((nextTab: TabKey) => {
     if (controlledTab != null) {
@@ -712,6 +735,12 @@ export default function PairFluxScanner({
     setAddDelayMinutes(normalized);
     onStreamAutomationConfigChange?.({ addDelayMinutes: normalized });
   }, [onStreamAutomationConfigChange]);
+
+  /**
+   * Stands in for the /analytics response, which this strategy does not fetch. Only its
+   * non-nullness matters — see the ANALYTICS TRADES block, which renders filteredEpisodes.
+   */
+  const EMPTY_ANALYTICS = React.useMemo(() => ({ ok: true, items: [] } as unknown as PaperArbAnalyticsResponse), []);
 
   // analytics options
 
@@ -1045,7 +1074,7 @@ export default function PairFluxScanner({
     return [
       `metric=${metric}`,
       `startAbs=${startAbs}`,
-      `deltaPrint=${zapMode === "delta" ? "on" : "off"}`,
+      `unit=${devUnit}`,
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
@@ -1062,7 +1091,7 @@ export default function PairFluxScanner({
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
+    const s = `${metric}|${devUnit}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
@@ -1084,7 +1113,7 @@ export default function PairFluxScanner({
 
     if (!(startAbs > 0)) e.push("startAbs must be > 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    if (zapMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    if (endAbs > startAbs) e.push("endAbs must be <= startAbs");
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
@@ -1266,7 +1295,10 @@ export default function PairFluxScanner({
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
         if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
-        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
+        // "off" was a state the old three-way toggle could reach. The unit is mandatory now, so
+        // an older saved filter carrying it restores as raw percentage points.
+        if (s.zapMode === "off") setZapMode("zap");
+        else if (s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -2113,7 +2145,7 @@ export default function PairFluxScanner({
     };
     return [
       { label: "Exchange", value: pick("Exchange") },
-      { label: "Bench", value: pick("Bench") },
+      { label: "Pair", value: pick("Bench") },
       { label: "Beta", value: pick("Beta") },
       { label: "Sig", value: pick("Sig") },
       { label: "SpreadBid%", value: pick("SpreadBid%") },
@@ -2386,6 +2418,113 @@ export default function PairFluxScanner({
     Boolean(streamAutoStartEnabledOverride) ||
     Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
 
+  // ===================== THE STREAM'S SIGNALS ARE THE SONAR'S =====================
+  //
+  // This scanner used to pass NO signalGate, so the engine fell through to its default — the
+  // Arbitrage per-ticker ZAP band. That is a rule about a ticker against its benchmark ETF, not
+  // about a pair coming apart, which is why the stream tab and the PairFlux Sonar listed
+  // different things. Everything below feeds ONE function, lib/pairflux/livePairs, which is the
+  // same function the Sonar's divergence panel renders from.
+
+  /** The published pair universe for the class being watched. */
+  const [pfPairs, setPfPairs] = useState<PairFluxRow[]>([]);
+  useEffect(() => {
+    if (primaryPanel !== "stream") return;
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetchPairFluxRatings({
+          cls: (session.toLowerCase() as PairFluxClass),
+          includeInverted: false,
+          limit: 20000,
+        });
+        if (alive) setPfPairs(res.rows ?? []);
+      } catch {
+        if (alive) setPfPairs([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [primaryPanel, session]);
+
+  /**
+   * The live rows. Same hub the engine itself subscribes to, so this opens no second connection
+   * when the URL matches and costs one shared EventSource when it does not — and either way the
+   * gate is derived independently of the engine's own output rather than fed back into it.
+   */
+  const [pfSignals, setPfSignals] = useState<any[]>([]);
+  const pfSignalsUrl = useMemo(() => buildSignalsStreamUrl({
+    cls: (session.toLowerCase() as any),
+    type: (ratingType ?? "any") as any,
+    mode: "all" as any,
+    ratingMode: "SESSION" as any,
+    zapMode: "zap" as any,
+    minRate: streamRatingRule.minRate,
+    minTotal: streamRatingRule.minTotal,
+    // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
+    // would narrow the universe before the pair can even be formed. Both legs must arrive.
+    startAbs: undefined,
+    tickers: splitListUpper(tickersText).join(",") || undefined,
+    limit: 5000,
+    includeAll: true,
+  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText]);
+
+  useEffect(() => {
+    if (primaryPanel !== "stream") { setPfSignals([]); return; }
+    return subscribeToStreamSse(pfSignalsUrl, (state) => {
+      setPfSignals(state.signals ?? []);
+    });
+  }, [primaryPanel, pfSignalsUrl]);
+
+  /** The pairs that are APART right now, read exactly as the Sonar reads them. */
+  const pfLivePairs = useMemo(() => computeLivePairs({
+    pairs: pfPairs,
+    quoteByTicker: buildQuoteIndex(pfSignals),
+    unit: devUnit === "sigma" ? "sigma" : devUnit === "alpha" ? "alpha" : "pct",
+    minStr: String(startAbs),
+    maxStr: startAbsMax ?? "",
+    exitStr: String(endAbs),
+    corrRange: [minCorr, maxCorr],
+    betaRange: [minBeta, maxBeta],
+    sigmaRange: [minSigma, maxSigma],
+    // The scanner toolbar has no alpha range of its own; alpha still gates through the unit.
+    alphaRange: ["", ""],
+  }), [pfPairs, pfSignals, devUnit, startAbs, startAbsMax, endAbs,
+       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+
+  /**
+   * BOTH LEGS, ONE EVENT. The ahead leg is approved to be SOLD and the lagging leg to be BOUGHT,
+   * so one diverged pair yields two approvals — and because the engine is per-ticker, two
+   * decisions and two order intents. That is the two orders the desk actually has to send.
+   */
+  const pfGateMap = useMemo(() => buildPairFluxGateMap(pfLivePairs), [pfLivePairs]);
+  const pairFluxStreamGate = useCallback(
+    (signal: any) => matchPairFluxGate(pfGateMap, signal?.ticker),
+    [pfGateMap],
+  );
+
+  /**
+   * What the SIGNALS table shows for a pair leg.
+   *
+   * Without this the row kept Arbitrage's numbers: the BENCH column showed the leg's benchmark
+   * ETF rather than the ticker it is actually paired against, and SIGNAL showed a per-ticker
+   * sigma this strategy never gates on. Worse, a leg with no such sigma was dropped outright —
+   * so a pair could reach the table with only one of its two orders.
+   *
+   * The reading is signed the way the trade is: the leg being SOLD carries a positive deviation,
+   * the leg being BOUGHT a negative one, so the sign and the side agree at a glance.
+   */
+  const pairFluxDecisionOverride = useCallback(
+    (signal: any, side: "Long" | "Short") => {
+      const hit = pfGateMap.get(String(signal?.ticker ?? "").trim().toUpperCase());
+      if (!hit) return null;
+      return {
+        signal: side === "Short" ? hit.measure : -hit.measure,
+        benchmark: hit.partner,
+      };
+    },
+    [pfGateMap],
+  );
+
   const {
     streamEntryReadyCount,
     streamAutoEnabled,
@@ -2409,7 +2548,14 @@ export default function PairFluxScanner({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
+    streamDispatchOwner,
+    takeDispatchOwnership,
   } = useStreamEngine({
+    signalGate: pairFluxStreamGate,
+    decisionOverride: pairFluxDecisionOverride,
+    // The universe must arrive whole: a pair needs BOTH legs, and the server's own candidate set
+    // is built from a per-ticker sigma rule this strategy does not use.
+    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     trackedSignalsEnabled: streamTrackedSignalsEnabled,
@@ -2658,8 +2804,10 @@ export default function PairFluxScanner({
     return {
       dateNy: d,
       metric,
+      // The purple group's unit. The bridge prefers this over `metric`, whose two Arbitrage
+      // values cannot express alpha at all.
+      unit: devUnit,
       startAbs,
-      usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: optNumOrNull(startAbsMax),
       endAbs,
       session,
@@ -2817,7 +2965,9 @@ export default function PairFluxScanner({
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
+    // The upper cap on the START deviation. It is read in the same unit as the lower one, so the
+    // only thing that makes it meaningless is sitting below it.
+    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && startAbsMaxNum >= startAbs ? startAbsMaxNum : null;
     const reqTickers = requestScopedTickers;
 
     const sessionBand = ratingBandFromSession(session);
@@ -2832,8 +2982,8 @@ export default function PairFluxScanner({
       dateTo: to,
 
       metric,
+      unit: devUnit,
       startAbs,
-      usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: startAbsMaxEff,
       endAbs,
       session,
@@ -3049,12 +3199,13 @@ export default function PairFluxScanner({
         req.includeEquityCurve = includeEquityCurve;
         req.equityCurveMode = equityCurveMode;
         req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
-        const [analyticsResp, rows] = await Promise.all([
-          apiPost<PaperArbAnalyticsResponse>(`${STRATEGY.api.base}/analytics`, req),
-          fetchEpisodesSearchRows(req),
-        ]);
+        // No /analytics call, for the same reason the OpenDoor family dropped it: the response is
+        // never read. `analytics` is used only as a non-null gate on the ANALYTICS TRADES block,
+        // whose rows come from filteredEpisodes. Asking a server endpoint to recompute the same day
+        // with a different engine could only produce numbers that contradict the rows underneath.
+        const rows = await fetchEpisodesSearchRows(req);
 
-        setAnalytics(analyticsResp ?? null);
+        setAnalytics(EMPTY_ANALYTICS);
         setEpisodesRows(rows);
       }
       setUpdatedAt(new Date());
@@ -3894,13 +4045,6 @@ export default function PairFluxScanner({
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
-      if (zapMode === "delta" && !passesDeltaZapGate({
-        side: r.side,
-        metricAbs: r.start?.metricAbs,
-        deltaAbs: startAbs,
-        printMedianPos: r.printMedianPos,
-        printMedianNeg: r.printMedianNeg,
-      })) return false;
       if (ratingMode === "SESSION") {
         if (!passesStreamRatingFilter({
           ratingMode: "SESSION",
@@ -3973,13 +4117,6 @@ export default function PairFluxScanner({
         if (qSide === "Long" && s.isLong !== true) return false;
         if (qSide === "Short" && s.isLong !== false) return false;
       }
-      if (zapMode === "delta" && !passesDeltaZapGate({
-        side: r.side,
-        metricAbs: r.startMetricAbs,
-        deltaAbs: startAbs,
-        printMedianPos: r.printMedianPos,
-        printMedianNeg: r.printMedianNeg,
-      })) return false;
       if (ratingMode === "SESSION") {
         if (!passesStreamRatingFilter({
           ratingMode: "SESSION",
@@ -4527,7 +4664,7 @@ export default function PairFluxScanner({
               );
             } else if (definition.key === "bench") {
               catParam = buildCategoricalOptimizerParameter(
-                filteredEpisodes, "bench", "BENCH", definition.group,
+                filteredEpisodes, "bench", "PAIR", definition.group,
                 (row) => row.benchTicker?.trim().toUpperCase() ?? null
               );
             }
@@ -4599,7 +4736,7 @@ export default function PairFluxScanner({
           );
         } else if (definition.key === "bench") {
           catParam = buildCategoricalOptimizerParameter(
-            filteredEpisodes, "bench", "BENCH", definition.group,
+            filteredEpisodes, "bench", "PAIR", definition.group,
             (row) => row.benchTicker?.trim().toUpperCase() ?? null
           );
         }
@@ -5730,16 +5867,15 @@ export default function PairFluxScanner({
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
             <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "GLOBAL", label: "GLOB" },
-                { key: "BLUE", label: "BLUE" },
-                { key: "PRE", label: "PRE" },
-                { key: "ARK", label: "ARK" },
-                { key: "PRINT", label: "PRINT" },
-                { key: "OPEN", label: "OPEN" },
-                { key: "INTRA", label: "INTRA" },
-                { key: "POST", label: "POST" },
-              ].map((b) => (
+              {/* PairFlux rates THREE classes, and the registry is the authority on which. This row
+                  used to render Arbitrage's eight session bands, five of which this strategy has no
+                  statistics for at all: picking GLOB or ARK sent a class the replay does not know,
+                  and the engine quietly fell back to OPEN. A wrong answer that looks like an answer
+                  is worse than a missing button, so the buttons now come from the strategy. */}
+              {STRATEGY.ratingClasses.keys.map((key) => ({
+                key: key.toUpperCase(),
+                label: STRATEGY.ratingClasses.labels?.[key] ?? key.toUpperCase(),
+              })).map((b) => (
                 <button
                   key={b.key}
                   type="button"
@@ -6093,80 +6229,67 @@ export default function PairFluxScanner({
                 <button
                   type="button"
                   onClick={() => {
-                    if (zapMode === "zap") {
-                      setZapMode("off");
-                      setMetric("SigmaZap");
-                    } else {
-                      setZapMode("zap");
-                      setMetric("ZapPct");
-                    }
+                    setZapMode("zap");
+                    setMetric("ZapPct");
                   }}
+                  title="Start deviation between the pair, in raw percentage points of spread"
                   className={clsx(
                     `${FILTER_PILL} gap-1`,
-                    zapMode === "zap"
+                    devUnit === "pp"
                       ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                       : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                   )}
                 >
-                  <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
+                  <span className="leading-none" style={{ textTransform: "none" }}>% DEV</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => {
-                    if (zapMode === "sigma") {
-                      setZapMode("off");
-                    } else {
-                      setZapMode("sigma");
-                      setMetric("SigmaZap");
-                    }
+                    setZapMode("sigma");
+                    setMetric("SigmaZap");
                   }}
+                  title="Start deviation in SIGMAS — the spread divided by this pair's own deviation"
                   className={clsx(
                     `${FILTER_PILL} gap-1`,
-                    zapMode === "sigma"
+                    devUnit === "sigma"
                       ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                       : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                   )}
                 >
-                  <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+                  <span className="leading-none" style={{ textTransform: "none" }}>σ DEV</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => {
-                    if (zapMode === "delta") {
-                      setZapMode("off");
-                    } else {
-                      setZapMode("delta");
-                      setMetric("SigmaZap");
-                    }
+                    setZapMode("delta");
+                    setMetric("SigmaZap");
                   }}
                   className={clsx(
                     `${FILTER_PILL} gap-1`,
-                    zapMode === "delta"
+                    devUnit === "alpha"
                       ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                       : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
                   )}
-                  title="Require start sigma to be above direction-specific print median plus the first input delta"
+                  title="Start deviation in ALPHAS — the spread divided by this pair's median converged peak"
                 >
-                  <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+                  <span className="leading-none" style={{ textTransform: "none" }}>α DEV</span>
                 </button>
 
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <div className={"group relative w-[78px]"}>
                   <input
                     type="number"
                     step={0.1}
                     min={0}
                     value={startAbs}
-                    disabled={zapMode === "off"}
                     onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                       aria-label="Increase start abs"
@@ -6175,8 +6298,7 @@ export default function PairFluxScanner({
                     </button>
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease start abs"
@@ -6185,13 +6307,12 @@ export default function PairFluxScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <div className={"group relative w-[78px]"}>
                   <input
                     type="number"
                     step={0.1}
                     min={0}
                     value={startAbsMax}
-                    disabled={zapMode === "off"}
                     onChange={(e) => setStartAbsMax(e.target.value)}
                     placeholder="start max"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
@@ -6199,8 +6320,7 @@ export default function PairFluxScanner({
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => bumpStartAbsMax(0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                       aria-label="Increase start max"
@@ -6209,8 +6329,7 @@ export default function PairFluxScanner({
                     </button>
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => bumpStartAbsMax(-0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease start max"
@@ -6219,21 +6338,19 @@ export default function PairFluxScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <div className={"group relative w-[78px]"}>
                   <input
                     type="number"
                     step={0.05}
                     min={0}
                     value={endAbs}
-                    disabled={zapMode === "off"}
                     onChange={(e) => setEndAbs(clampNumber(e.target.value, 0.05))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setEndAbs((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                       aria-label="Increase end abs"
@@ -6242,8 +6359,7 @@ export default function PairFluxScanner({
                     </button>
                     <button
                       type="button"
-                      disabled={zapMode === "off"}
-                      onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setEndAbs((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease end abs"
@@ -6477,9 +6593,28 @@ export default function PairFluxScanner({
         </div>
 
         {/* CONTENT */}
+        {primaryPanel === "stream" && !streamDispatchOwner && (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5">
+            <div className="font-mono text-[11px] text-amber-200">
+              <span className="font-bold uppercase tracking-[0.18em]">Settings only</span>
+              <span className="ml-2 text-amber-200/70">
+                another client is hosting this strategy — Caesar, normally. Everything below is live
+                and every setting you change is saved and picked up there. This page will not send.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void takeDispatchOwnership(); }}
+              className="shrink-0 rounded-md border border-amber-400/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-400/10"
+            >
+              Send from here
+            </button>
+          </div>
+        )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView
             tab={tab}
+            counterpartLabel="Pair"
             streamSignalsCount={streamSignalMeta.totalCount}
             streamAutoEnabled={effectiveStreamAutoEnabled}
             streamSessionStartedAt={streamSessionStartedAt}
@@ -6666,7 +6801,7 @@ export default function PairFluxScanner({
                         <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
                       </th>
                       <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
+                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Pair{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
                       </th>
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
@@ -6695,7 +6830,7 @@ export default function PairFluxScanner({
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>Current{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Raw{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Pair{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Hedged{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
                     </tr>
                   </thead>
@@ -6739,7 +6874,7 @@ export default function PairFluxScanner({
                               </span>
                             </div>
                             <div className="mt-0.5 text-[10px] font-mono font-bold uppercase tracking-[0.12em]">
-                              <span className="text-zinc-500">Bench</span>{" "}
+                              <span className="text-zinc-500">Pair</span>{" "}
                               <span className="text-zinc-300">
                                 {benchAmountUsd !== null ? numSpaced(benchAmountUsd, 0) : "-"}
                               </span>
@@ -8724,12 +8859,12 @@ export default function PairFluxScanner({
                         <button type="button" onClick={() => toggleAnalyticsSort("ticker")}>Ticker{sortMark(analyticsSort.key === "ticker", analyticsSort.dir)}</button>
                       </th>
                       <th className="text-left p-2.5" rowSpan={2}>
-                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Bench{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
+                        <button type="button" onClick={() => toggleAnalyticsSort("bench")}>Pair{sortMark(analyticsSort.key === "bench", analyticsSort.dir)}</button>
                       </th>
                       <th className="text-left p-2.5" rowSpan={2}>
                         <button type="button" onClick={() => toggleAnalyticsSort("side")}>Side{sortMark(analyticsSort.key === "side", analyticsSort.dir)}</button>
                       </th>
-                      <th className="text-left p-2.5 border-l border-white/10 text-rose-400" rowSpan={2} title="How episode closed: Active (σ threshold) / Passive (window end)">Close</th>
+                      <th className="text-left p-2.5 border-l border-white/10 text-rose-400" rowSpan={2} title="Converged = the opposite-side spread came back inside the exit threshold. Gap = unwound at the 09:30 open print. Cls = unwound at the 16:00 close print. Forced = neither, so the window ended first.">Close</th>
                       <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Bars held (endMinuteIdx − startMinuteIdx)">Hold</th>
                       <th className="text-right p-2.5 text-zinc-500" rowSpan={2} title="Minimum hold candles config">mHC</th>
                       <th className="text-right p-2.5 text-zinc-400" rowSpan={2} title="Number of entries (1 = initial only)">Ent</th>
@@ -8756,7 +8891,7 @@ export default function PairFluxScanner({
                         Ask %
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
-                        Bench %
+                        Pair %
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-violet-400/70" rowSpan={2}>
                         Gap%
@@ -8767,7 +8902,7 @@ export default function PairFluxScanner({
                     </tr>
                     <tr className="text-zinc-400">
                       <th className="text-right p-2.5 border-l border-white/10 text-emerald-300"><button type="button" onClick={() => toggleAnalyticsSort("raw")}>Ticker{sortMark(analyticsSort.key === "raw", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5 text-emerald-200"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Bench{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5 text-emerald-200"><button type="button" onClick={() => toggleAnalyticsSort("benchPnl")}>Pair{sortMark(analyticsSort.key === "benchPnl", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 text-emerald-400"><button type="button" onClick={() => toggleAnalyticsSort("hedged")}>Total{sortMark(analyticsSort.key === "hedged", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startTime")}>StartTime{sortMark(analyticsSort.key === "startTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakTime")}>PeakTime{sortMark(analyticsSort.key === "peakTime", analyticsSort.dir)}</button></th>
@@ -8775,7 +8910,7 @@ export default function PairFluxScanner({
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5" title="Opposite-side ZAP field — the value actually compared against EndAbs for an Active-mode threshold close">Exit</th>
+                      <th className="text-right p-2.5" title="The OPPOSITE-side spread at the exit bar — the reading the exit threshold is compared against, since a position entered on one side is unwound on the other">Exit</th>
                       <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
                       <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
                       <th className="text-right p-2.5 text-emerald-500/70">End</th>
@@ -8817,7 +8952,12 @@ export default function PairFluxScanner({
                           <td className="p-2.5 border-l border-white/10">
                             {r.closeMode
                               ? <span className={clsx("inline-flex items-center px-1 py-0.5 rounded text-[9px] font-mono font-bold border",
-                                  r.closeMode === "Active" ? "text-rose-400 border-rose-500/40 bg-rose-500/10" : "text-amber-400 border-amber-500/40 bg-amber-500/10"
+                                  // Three ways out, three colours. Gap borrows the violet the Gap%
+                                  // column already uses, so the exit and the price it was taken at
+                                  // read as the same fact.
+                                  r.closeMode === "Converged" ? "text-emerald-400 border-emerald-500/40 bg-emerald-500/10"
+                                    : r.closeMode === "Gap" || r.closeMode === "Cls" ? "text-violet-300 border-violet-500/40 bg-violet-500/10"
+                                    : "text-amber-400 border-amber-500/40 bg-amber-500/10"
                                 )}>{r.closeMode}</span>
                               : <span className="text-zinc-700">—</span>}
                           </td>
@@ -8863,7 +9003,7 @@ export default function PairFluxScanner({
                           <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.startMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.peakMetric ?? null, 3)}</td>
                           <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.endMetric ?? null, 3)}</td>
-                          <td className="p-2.5 text-right tabular-nums text-zinc-500" title="Opposite-side ZAP field compared against EndAbs for an Active-mode threshold close">{num(r.exitMetricAbs ?? null, 3)}</td>
+                          <td className="p-2.5 text-right tabular-nums text-zinc-500" title="The opposite-side spread at the exit bar — what the exit threshold compared">{num(r.exitMetricAbs ?? null, 3)}</td>
                           {(() => {
                             const fP = (v: number | null | undefined) => v == null
                               ? <span className="text-zinc-600">—</span>

@@ -66,6 +66,20 @@ export type LiveStrategy = {
   tradingWindow: { fromMinuteIdx: number; toMinuteIdx: number };
   /** HIGHER WINS. See the header. */
   priority: number;
+  /**
+   * Where this strategy's stream engine RUNS.
+   *
+   * "bridge" — an IServerStrategy exists, so the bridge decides and dispatches on its own and the
+   *            browser is only a view. Closing every tab changes nothing.
+   * "browser" — the decisions are made by useStreamEngine inside a mounted page. Nothing happens
+   *            while no tab hosts it, which is why Caesar mounts these itself rather than leaving
+   *            the day to whether someone remembered to keep a tab open.
+   *
+   * Not derivable from anything else here: it is a fact about the bridge's DI registration
+   * (Program.cs, AddSingleton<IServerStrategy, …>), and getting it wrong means either a strategy
+   * nobody runs or one that runs twice.
+   */
+  streamEngine: "bridge" | "browser";
   api: {
     /** Paper endpoints, e.g. `/api/paper/arbitrage`. No trailing slash. */
     paperBase: string;
@@ -109,6 +123,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
     priority: 100,
     api: { paperBase: "/api/paper/arbitrage", signalsBase: "/api/arbitrage" },
+    streamEngine: "browser",
     storage: { scannerPrefix: "paper.arb", sonarPrefix: "bridge.arb", streamPrefix: "stream.arbitrage" },
     ratingClasses: {
       dimension: "SESSION",
@@ -133,6 +148,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     tradingWindow: { fromMinuteIdx: 9 * 60, toMinuteIdx: 10 * 60 },
     priority: 50,
     api: { paperBase: "/api/paper/opendoor", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.opendoor", sonarPrefix: "bridge.opendoor", streamPrefix: "stream.opendoor" },
     // OpenDoor's own rating classes: the two exit horizons from ExitTargetMinByClass. They play
     // exactly the role Arbitrage's session bands play — class x direction -> {rate, total} gated by
@@ -162,6 +178,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     api: { paperBase: "/api/paper/daytwo", signalsBase: "/api/arbitrage" },
     // Storage IS separate from the start: sharing it would have Day Two and OpenDoor overwrite each
     // other's filters and presets the first time both are open.
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.daytwo", sonarPrefix: "bridge.daytwo", streamPrefix: "stream.daytwo" },
     ratingClasses: {
       dimension: "EXIT",
@@ -185,6 +202,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // Its own endpoints from the start. Day Two spent weeks reading OpenDoor's ratings because the
     // copy pointed at OpenDoor's routes and nothing said so out loud.
     api: { paperBase: "/api/paper/openfade", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.openfade", sonarPrefix: "bridge.openfade", streamPrefix: "stream.openfade" },
     ratingClasses: {
       dimension: "EXIT",
@@ -212,6 +230,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // strategy and wins by default; swap the two numbers to hand a contested ticker to OpenRide.
     priority: 15,
     api: { paperBase: "/api/paper/openride", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.openride", sonarPrefix: "bridge.openride", streamPrefix: "stream.openride" },
     ratingClasses: {
       dimension: "EXIT",
@@ -236,6 +255,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // directional strategies win the claim instead keeps that case from arising at all.
     priority: 10,
     api: { paperBase: "/api/paper/pairflux", signalsBase: "/api/arbitrage" },
+    streamEngine: "browser",
     storage: { scannerPrefix: "paper.pairflux", sonarPrefix: "bridge.pairflux", streamPrefix: "stream.pairflux" },
     // PairFlux rates a pair per class the notebook cuts (see OriON-strategies/notebooks/
     // PairFlux.ipynb): PRE 21:00-09:30, OPEN 09:00-10:00, INTRA 10:00-16:00. Same
