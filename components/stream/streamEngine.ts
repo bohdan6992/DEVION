@@ -834,7 +834,7 @@ function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayK
     }
 
     const nextEntryCount = entry.kind === "ADD" ? existing.entryCount + 1 : existing.entryCount;
-    openByTicker.set(entry.ticker, {
+    openByTicker.set(logLegId(entry), {
       ...existing,
       benchmark: entry.benchmark || existing.benchmark,
       side: entry.side,
@@ -1140,7 +1140,10 @@ function syncStreamSignalLatches(
     // behavior where a candle below threshold resets the consecutive streak — even a brief
     // sub-minute bounce must not survive a minute boundary that showed the signal below.
     if (!existing && !isPrimed) {
-      const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${row.ticker}|${row.side}`);
+      // Leg-keyed, because the minute accumulator that FILLS this set is leg-keyed. Reading it by
+      // ticker made the lookup miss every time on a paired strategy, so no latch was ever created
+      // and nothing could enter: ENTRY READY counted 10 while ENTRIES stayed 0.
+      const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${legId}|${row.side}`);
       if (!isMinuteQualified) {
         logStreamGateBlock("latches:notMinuteQualified", {
           ticker: row.ticker,
@@ -1973,7 +1976,7 @@ export function syncStreamPositions(
       }
       // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
       // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
-      const latchDecision = decisionMap.get(latch.ticker);
+      const latchDecision = decisionMap.get(legIdentityOf(latch));
       if (!latchDecision || latchDecision.status !== "ENTRY_READY") {
         logStreamGateBlock("positions:notEntryReady", { ticker: latch.ticker, status: latchDecision?.status ?? "missing" });
         continue;
@@ -2078,7 +2081,7 @@ export function syncStreamPositions(
         reason: automationConfig?.noSpreadExit === false ? "forced exit despite spread" : "exit blocked by spread",
         updatedAt: now,
       });
-      seen.add(existing.ticker);
+      seen.add(legIdentityOf(existing));
       continue;
     }
 
@@ -2104,7 +2107,7 @@ export function syncStreamPositions(
       entryDispatchedAt: existing.entryDispatchedAt,
       updatedAt: now,
     });
-    seen.add(existing.ticker);
+    seen.add(legIdentityOf(existing));
   }
 
   return next
@@ -2210,7 +2213,7 @@ export function buildStreamOrderIntents(
   }
 
   for (const position of positions) {
-    const decision = decisionMap.get(position.ticker);
+    const decision = decisionMap.get(legIdentityOf(position));
     const normalizeExitTriggered =
       decision?.signal != null &&
       Number.isFinite(decision.signal) &&
@@ -2805,15 +2808,17 @@ export function useStreamEngine({
   const appendStreamActionLogEntries = useCallback((entries: StreamActionLogEntry[]) => {
     if (!entries.length) return;
     const nextLog = pruneStreamActionLog([...streamActionLogRef.current, ...entries], Date.now());
+    // Per SITUATION. Keyed by ticker, logging the SFNC/AUB entry also dropped the still-unsent
+    // SFNC/FIBK and SFNC/UBSI intents, because all three carry the same symbol.
     const entryLoggedTickers = new Set(
       entries
         .filter((row) => row.kind === "ENTRY" || row.kind === "ADD")
-        .map((row) => row.ticker)
+        .map((row) => logLegId(row))
     );
     const closeLoggedTickers = new Set(
       entries
         .filter((row) => row.kind === "CLOSE")
-        .map((row) => row.ticker)
+        .map((row) => logLegId(row))
     );
     actionLogVersionRef.current += 1;
     streamActionLogRef.current = nextLog;
@@ -2821,13 +2826,13 @@ export function useStreamEngine({
     setStreamPositions((prev) => mergeStreamPositionsWithActionLog(prev, nextLog, localDayKey()));
     setStreamOrderIntents((prev) => prev.filter((intent) => {
       if (
-        entryLoggedTickers.has(intent.ticker) &&
+        entryLoggedTickers.has(legIdentityOf(intent)) &&
         (intent.intent === "ENTER_LONG_AGGRESSIVE" || intent.intent === "ENTER_SHORT_AGGRESSIVE")
       ) {
         return false;
       }
       if (
-        closeLoggedTickers.has(intent.ticker) &&
+        closeLoggedTickers.has(legIdentityOf(intent)) &&
         (
           intent.intent === "EXIT_LONG_AGGRESSIVE" ||
           intent.intent === "EXIT_SHORT_AGGRESSIVE" ||
@@ -3754,7 +3759,8 @@ export function useStreamEngine({
     // resets the SCANNER consecutive count.
     const latchHistoryTTL = 60_000;
     for (const latch of nextLatches) {
-      latchQualifiedSinceHistoryRef.current.set(latch.ticker, { qualifiedSince: latch.qualifiedSince, lastSeenAt: latch.lastSeenAt });
+      // Leg-keyed to match the lookup in syncStreamSignalLatches, which reads it by legId.
+      latchQualifiedSinceHistoryRef.current.set(legIdentityOf(latch), { qualifiedSince: latch.qualifiedSince, lastSeenAt: latch.lastSeenAt });
     }
     latchQualifiedSinceHistoryRef.current.forEach((v, k) => {
       if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
@@ -3770,11 +3776,13 @@ export function useStreamEngine({
       const exitedBelow = absSignal < startAbsMin;
       const exitedAbove = hasEntryWindowUpperBound && startAbsMax != null && absSignal > startAbsMax;
       if (exitedBelow || exitedAbove) {
-        latchQualifiedSinceHistoryRef.current.delete(row.ticker);
+        latchQualifiedSinceHistoryRef.current.delete(legIdentityOf(row));
         // Record that this ticker exited the window this minute. If signal recovers
         // in the same minute, the latch will use currentMinute (not previousMinute)
         // as qualifiedSince — forcing the hold wait to restart from this minute.
-        windowExitMinuteRef.current.set(row.ticker, currentMinuteIdx);
+        // Leg-keyed: syncStreamSignalLatches reads this map by legId, and a ticker-keyed write
+        // would simply never be found on a paired strategy.
+        windowExitMinuteRef.current.set(legIdentityOf(row), currentMinuteIdx);
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
@@ -3785,7 +3793,7 @@ export function useStreamEngine({
     // consecutive tape candles after each episode close).
     for (const pos of nextPositionsBase) {
       if (pos.status === "CLOSED") {
-        latchQualifiedSinceHistoryRef.current.delete(pos.ticker);
+        latchQualifiedSinceHistoryRef.current.delete(legIdentityOf(pos));
       }
     }
     const minHoldMinutesForDisplay = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
@@ -3831,8 +3839,8 @@ export function useStreamEngine({
       console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
       console.group(`  INTENTS (${intents.length}):`);
       for (const intent of intents) {
-        const d2 = decisionMap2.get(intent.ticker);
-        const pos2 = positionMap2.get(intent.ticker);
+        const d2 = decisionMap2.get(legIdentityOf(intent));
+        const pos2 = positionMap2.get(legIdentityOf(intent));
         // pendingAddTrigger was captured exactly at decision time in syncStreamPositions.
         const entryBase2 = pos2?.lastScaleSignal ?? pos2?.entrySignal;
         const isAdd2 = intent.sequence > 1;
