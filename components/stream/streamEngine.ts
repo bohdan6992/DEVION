@@ -1446,7 +1446,9 @@ export function syncStreamPositions(
   sessionStartMinutes: number | null = null,
   loggedOpenTickers: ReadonlySet<string> = new Set(),
   dispatchingEntryTickers: ReadonlySet<string> = new Set(),
-  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
+  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map(),
+  /** The toolbar's own maximum entry deviation, in the unit the strategy reads. See ADD_MAX_SIGMA. */
+  entryWindowMax: number | null = null
 ): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
@@ -1476,7 +1478,11 @@ export function syncStreamPositions(
         const zapSigma = existing.side === "Long"
           ? toNum(raw?.zapLsigma)
           : toNum(raw?.zapSsigma);
-        const currentSignal = zapSigma ?? signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
+        // Same rule for a position restored from the action log: it is tracked on its pair.
+        const restoredPairSignal = existing.pairKey
+          ? decisionMap.get(legIdentityOf(existing))?.signal ?? null
+          : null;
+        const currentSignal = restoredPairSignal ?? zapSigma ?? signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
         // Ctrl+O only ever fires as part of the Ctrl+Q -> 1s -> Ctrl+O cutoff pair (dispatch
         // loop, driven by startCutoffTime) — this printStartTime-driven auto print-exit is
         // disabled so no other path can arm/dispatch it.
@@ -1560,7 +1566,14 @@ export function syncStreamPositions(
       const exitZapSigma = existing.side === "Long"
         ? (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma))
         : (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma));
-      const exitSigned = exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
+      /**
+       * A PAIR EXITS ON THE PAIR. The whole opposite-side-ZAP argument above is about one ticker
+       * against its benchmark ETF, and it does not describe a pair spread at all: PairFlux closes
+       * when the two names come back together, which is its own deviation falling to the exit
+       * level, not when either leg happens to sit near its own benchmark. Reading the ticker's ZAP
+       * here would hold a converged pair open and close a diverged one.
+       */
+      const exitSigned = pairSigned ?? exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
       const exitAbs = exitSigned == null ? signalAbs(raw) : Math.abs(exitSigned);
       const belowEndThreshold = exitAbs != null && exitAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
@@ -1834,7 +1847,19 @@ export function syncStreamPositions(
 
           // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
           // and restart the add delay timer (same hold protection as entry window).
-          const ADD_MAX_SIGMA = 4.0;
+          /**
+           * The runaway cap, in the unit the position is actually measured in.
+           *
+           * 4.0 was written for Arbitrage, where the reading is a per-ticker sigma. A pair is
+           * measured in whatever the toolbar selects — at a 2-alpha entry the live pairs sit at 4
+           * and 5, so a flat 4.0 silently blocked every add they could ever take. For a pair the
+           * meaningful bound is the user's OWN entry maximum: past it the deviation is outside the
+           * band they said they would trade. Unset, there is no cap, which matches the entry rule
+           * itself having none.
+           */
+          const ADD_MAX_SIGMA = existing.pairKey
+            ? (entryWindowMax != null && entryWindowMax > 0 ? entryWindowMax : Infinity)
+            : 4.0;
           if (confirmedAddAbs != null && confirmedAddAbs > ADD_MAX_SIGMA) {
             lastAboveAddCapAt = now;
             if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
@@ -1942,6 +1967,40 @@ export function syncStreamPositions(
       row.status === "PRINT_PENDING" ||
       (row.status === "PENDING_ENTRY" && row.entryDispatchedAt != null)
     ).length;
+    /**
+     * A PAIR ENTERS AS A PAIR, OR NOT AT ALL.
+     *
+     * Each leg has its own latch and its own hold window, and they finish at different moments —
+     * so the leg that qualified first was dispatched alone and the other followed minutes later,
+     * or never. Observed live: four SFNC shorts went out at 10:43:01 and the AUB long that
+     * belonged with one of them at 10:45:04, leaving the book directional for two minutes.
+     *
+     * A leg counts as satisfied when it is ready to enter on THIS pass, or when it already holds a
+     * position — the second case only so a pair that somehow half-opened can still be completed.
+     */
+    const pairReadyKeys = new Set<string>();
+    {
+      const legsByPair = new Map<string, Set<string>>();
+      const noteLeg = (pairKey: string, ticker: string) => {
+        const set = legsByPair.get(pairKey);
+        if (set) set.add(ticker);
+        else legsByPair.set(pairKey, new Set([ticker]));
+      };
+      for (const row of next) {
+        if (row.pairKey && row.status !== "CLOSED") noteLeg(row.pairKey, row.ticker);
+      }
+      for (const l of latches) {
+        if (!l.pairKey) continue;
+        if (!hasCompletedStreamHoldWindow(l.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
+        const d = decisionMap.get(legIdentityOf(l));
+        if (!d || d.status !== "ENTRY_READY") continue;
+        noteLeg(l.pairKey, l.ticker);
+      }
+      for (const [key, tickers] of legsByPair) {
+        if (tickers.size >= 2) pairReadyKeys.add(key);
+      }
+    }
+
     for (const latch of latches) {
       if (seen.has(legIdentityOf(latch))) continue;
       if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
@@ -1954,8 +2013,16 @@ export function syncStreamPositions(
         logStreamGateBlock("positions:beforeStart", { ticker: latch.ticker, nowMinutes, sessionStartMinutes, startCutoffMinutes });
         continue;
       }
-      if (openCount >= maxOpenAllowed) {
-        logStreamGateBlock("positions:maxOpen", { ticker: latch.ticker, openCount, maxOpenAllowed });
+      // A pair costs TWO slots, and it must be able to afford both before either goes out.
+      // Checked per leg, a pair arriving with one slot left would open its first half and have the
+      // second refused here — the exact naked position the pair gating exists to prevent. The
+      // partner already being open means the slot is spent, so then one is enough.
+      const partnerAlreadyOpen = latch.pairKey != null && next.some(
+        (r) => r.pairKey === latch.pairKey && r.ticker !== latch.ticker && r.status !== "CLOSED",
+      );
+      const slotsNeeded = latch.pairKey && !partnerAlreadyOpen ? 2 : 1;
+      if (openCount + slotsNeeded > maxOpenAllowed) {
+        logStreamGateBlock("positions:maxOpen", { ticker: latch.ticker, openCount, maxOpenAllowed, slotsNeeded });
         continue;
       }
       // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
@@ -1981,13 +2048,22 @@ export function syncStreamPositions(
         logStreamGateBlock("positions:notEntryReady", { ticker: latch.ticker, status: latchDecision?.status ?? "missing" });
         continue;
       }
+      // Both halves, same pass. See pairReadyKeys.
+      if (latch.pairKey && !pairReadyKeys.has(latch.pairKey)) {
+        logStreamGateBlock("positions:partnerNotReady", { ticker: latch.ticker, pairKey: latch.pairKey });
+        continue;
+      }
 
       const raw = filteredSignalMap.get(latch.ticker) ?? signalMap.get(latch.ticker);
       const filteredRawEntry = filteredSignalMap.get(latch.ticker);
       const zapSigmaEntry = latch.side === "Long"
         ? (toNum(filteredRawEntry?.zapLsigma) ?? toNum(raw?.zapLsigma))
         : (toNum(filteredRawEntry?.zapSsigma) ?? toNum(raw?.zapSsigma));
-      const currentSigned = zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
+      // The pair's own reading when this is a pair. Without it every SFNC leg recorded the same
+      // number — its zap against its benchmark ETF — so four different pairs logged an identical
+      // 3.4621 entry and every add was anchored to a series the trade does not use.
+      const pairSignedEntry = latchDecision.pairKey ? latchDecision.signal : null;
+      const currentSigned = pairSignedEntry ?? zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
       if (currentSigned == null) continue; // no signal — cannot anchor add triggers, skip
       // Anchor the DISPATCHED entry value to the last poll of the minute that just closed
       // (frozenEntrySignalMap), not whatever the live poll shows right now — dispatch can run
@@ -2265,9 +2341,12 @@ function buildFallbackPendingEntryPositions(
   automationConfig: StreamAutomationConfig | undefined,
   entryCutoffEnabled: boolean,
   sessionStartMinutes: number | null,
-  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map()
+  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map(),
+  /** Leg-keyed, so a paired latch can be anchored on ITS pair's reading. */
+  decisions: readonly StreamDecisionRow[] = []
 ): StreamPosition[] {
   if (!qualifiedLatches.length) return existingPositions;
+  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
 
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
@@ -2295,9 +2374,13 @@ function buildFallbackPendingEntryPositions(
     if (openCount >= maxOpenAllowed) break;
 
     const raw = signalMap.get(latch.ticker);
-    const signed = latch.side === "Long"
+    // The pair's own reading first — a paired position must never be anchored to one leg's ZAP.
+    const pairedSigned = latch.pairKey
+      ? decisionMap.get(legIdentityOf(latch))?.signal ?? null
+      : null;
+    const signed = pairedSigned ?? (latch.side === "Long"
       ? (toNum(raw?.zapLsigma) ?? signalSigned(raw) ?? signalAbs(raw))
-      : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw));
+      : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw)));
     // See syncStreamPositions: anchor to the value at the closed minute's last poll, not
     // whatever the live poll shows at dispatch time.
     const frozenSigned = frozenEntrySignalMap.get(`${legIdentityOf(latch)}|${latch.side}`);
@@ -3786,7 +3869,7 @@ export function useStreamEngine({
       }
     }
     const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap);
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap, startAbsMax ?? null);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3821,6 +3904,7 @@ export function useStreamEngine({
         entryCutoffEnabled,
         strategySessionStartMinutes,
         minuteSnapshotRef.current?.lastSignedMap,
+        decisionsForAutomation,
       );
       intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
     }
@@ -4515,7 +4599,7 @@ export function useStreamEngine({
           }
         }
 
-        const correspondingDecision = streamDecisionStore.getRow(intent.ticker);
+        const correspondingDecision = streamDecisionStore.getRow(legIdentityOf(intent));
         const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
         const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
 
@@ -4587,11 +4671,26 @@ export function useStreamEngine({
           // Dispatch-time entry window check: cancel initial ENTRY (not ADD) if the live
           // signal has moved outside [startAbsMin, startAbsMax] since the tick that
           // created the PENDING_ENTRY. SSE can update rawSignalByTickerRef between ticks.
+          /**
+           * THE LIVE READING THIS INTENT IS JUDGED ON.
+           *
+           * The two checks below re-test the entry window at the moment of dispatch, against
+           * `startAbs` — and on a paired strategy `startAbs` is the PAIR's threshold while
+           * zapL/zapS is the ticker's own distance from its benchmark ETF. Those are different
+           * quantities, and the mismatch was not symmetric: the leg that ran ahead has a large own
+           * ZAP and passed, the leg that LAGGED has a small one by construction and was cancelled
+           * here every single time.
+           *
+           * Observed live: four SFNC shorts dispatched while FFBC, FULT, ONB and UCB — their
+           * long partners — sat in PENDING_ENTRY with queued orders, re-cancelled on every tick,
+           * because `continue` deliberately does not mark them dispatched.
+           */
+          const _pairedSignal = intent.pairKey ? correspondingDecision?.signal ?? null : null;
           if (isAdd && isEntryIntent) {
             const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
-            const _liveSigned = intent.side === "Long"
+            const _liveSigned = _pairedSignal ?? (intent.side === "Long"
               ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
-              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS));
+              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS)));
             const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
             if (_liveAbs != null && _liveAbs > 4.0) {
               console.log(`[CANCEL ADD] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} above ADD_MAX_SIGMA 4.0 at dispatch`);
@@ -4600,9 +4699,9 @@ export function useStreamEngine({
           }
           if (!isAdd && isEntryIntent) {
             const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
-            const _liveSigned = intent.side === "Long"
+            const _liveSigned = _pairedSignal ?? (intent.side === "Long"
               ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
-              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS));
+              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS)));
             const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
             const _dispatchStartMin = Math.max(0, startAbs ?? 0);
             const _dispatchStartMax = (startAbsMax != null && startAbsMax > 0) ? startAbsMax : null;
