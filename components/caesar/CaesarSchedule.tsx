@@ -8,7 +8,6 @@ import {
   CAESAR_SEGMENTS,
   CAESAR_STRATEGIES,
   CAESAR_STRATEGY_BY_KEY,
-  DAY_MINUTES,
   MAX_PRIORITY,
   MIN_PRIORITY,
   PRIORITY_STEP,
@@ -66,13 +65,6 @@ const FIT_COPY: Record<WindowFit, { label: string; tone: "ok" | "warn" | "bad" |
   unknown: { label: "NO ENGINE YET", tone: "muted" },
 };
 
-const FIT_TONE_CLASS = {
-  ok: "text-emerald-300/60",
-  warn: "text-amber-300/70",
-  bad: "text-rose-300/70",
-  muted: "text-white/25",
-} as const;
-
 // =========================
 // COMPONENT
 // =========================
@@ -94,12 +86,40 @@ export default function CaesarSchedule() {
     setPlan(loadCaesarPlan());
   }, []);
 
-  useEffect(() => {
-    void (async () => {
-      const remote = await fetchBridgePlan();
-      setScheduleEnabled(remote?.plan.enabled ?? false);
-    })();
+  /**
+   * Whether a toggle is in flight, and whether the bridge could be reached.
+   *
+   * Both exist because the button had neither: it read the bridge once at mount and never again,
+   * so it could sit on "Schedule on" while the bridge had it off — and a click then looked like it
+   * did nothing, because the state it was flipping to was the state already shown.
+   */
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState(false);
+  /** Set while a value came FROM the bridge, so the auto-push does not echo it straight back. */
+  const remoteEchoRef = useRef(false);
+
+  const pullSchedule = useCallback(async () => {
+    const remote = await fetchBridgePlan();
+    if (remote == null) {
+      setScheduleError(true);
+      return;
+    }
+    setScheduleError(false);
+    setScheduleEnabled((prev) => {
+      const next = remote.plan.enabled;
+      if (prev === next) return prev;
+      remoteEchoRef.current = true;
+      return next;
+    });
   }, []);
+
+  // Polled on the same cadence as the clock. The switch starts and stops real strategies, so a
+  // stale reading of it is worse than no reading.
+  useEffect(() => {
+    void pullSchedule();
+    const id = window.setInterval(() => { void pullSchedule(); }, 30_000);
+    return () => window.clearInterval(id);
+  }, [pullSchedule]);
 
   useEffect(() => {
     const tick = () => setNowMin(nyAxisMinutesNow());
@@ -167,6 +187,12 @@ export default function CaesarSchedule() {
   // and the bridge rewrites its state file on each PUT.
   useEffect(() => {
     if (plan == null || scheduleEnabled == null) return;
+    // A value we just READ from the bridge must not be written back: that turns a poll into a
+    // write loop, and worse, it would let a stale local value overwrite the bridge's own.
+    if (remoteEchoRef.current) {
+      remoteEchoRef.current = false;
+      return;
+    }
     const id = window.setTimeout(() => {
       void pushBridgePlan(plan, scheduleEnabled);
     }, 600);
@@ -174,23 +200,43 @@ export default function CaesarSchedule() {
   }, [plan, scheduleEnabled]);
 
   const toggleSchedule = useCallback(async () => {
+    if (scheduleBusy) return;
     const next = !(scheduleEnabled ?? false);
-    // Push the plan first: enabling the switch against a stale server-side plan would run
-    // yesterday's schedule for up to one tick.
-    if (plan) await pushBridgePlan(plan, next);
-    const result = await setBridgeScheduleEnabled(next);
-    setScheduleEnabled(result?.enabled ?? next);
-  }, [plan, scheduleEnabled]);
+    setScheduleBusy(true);
+    try {
+      // Push the plan first: enabling the switch against a stale server-side plan would run
+      // yesterday's schedule for up to one tick.
+      if (plan) await pushBridgePlan(plan, next);
+      const result = await setBridgeScheduleEnabled(next);
+      if (result == null) {
+        // The bridge did not take it. Saying so beats showing the value we wanted, which is how a
+        // switch ends up claiming to be on while nothing is scheduled.
+        setScheduleError(true);
+        await pullSchedule();
+        return;
+      }
+      setScheduleError(false);
+      setScheduleEnabled(result.enabled);
+    } finally {
+      setScheduleBusy(false);
+    }
+  }, [plan, scheduleEnabled, scheduleBusy, pullSchedule]);
 
   const nowSegment = nowMin == null ? null : segmentAtAxisMinute(nowMin);
 
+  // NOT min-h-screen. This used to be the only thing on the page, so filling the viewport was
+  // free; it is not any more. With ~645px of content the div still stretched to 100vh, and
+  // everything rendered after it — the engines, the window binding, the positions terminal, the
+  // live feed — started below the fold on a page that looked like it simply ended.
   return (
-    <div className="min-h-screen w-full text-zinc-100">
+    <div className="w-full text-zinc-100">
       <div className="mx-auto w-full max-w-[1720px] px-6 py-8 lg:px-10">
         <Header
           nowLabel={nowMin == null ? null : clockLabel(nowMin)}
           nowSegment={nowSegment}
           scheduleEnabled={scheduleEnabled}
+          scheduleBusy={scheduleBusy}
+          scheduleError={scheduleError}
           onToggleSchedule={toggleSchedule}
           onReset={() => mutate(defaultCaesarPlan())}
         />
@@ -255,12 +301,16 @@ function Header({
   nowLabel,
   nowSegment,
   scheduleEnabled,
+  scheduleBusy,
+  scheduleError,
   onToggleSchedule,
   onReset,
 }: {
   nowLabel: string | null;
   nowSegment: CaesarSegment | null;
   scheduleEnabled: boolean | null;
+  scheduleBusy: boolean;
+  scheduleError: boolean;
   onToggleSchedule: () => void;
   onReset: () => void;
 }) {
@@ -294,20 +344,38 @@ function Header({
         <button
           type="button"
           onClick={onToggleSchedule}
-          disabled={scheduleEnabled == null}
-          title="Let the bridge start and stop strategies at the edges of their segments"
+          disabled={scheduleEnabled == null || scheduleBusy}
+          title={
+            scheduleError
+              ? "The bridge did not answer — this switch shows the last value it confirmed, not what you asked for."
+              : "Let the bridge start and stop strategies at the edges of their segments"
+          }
           className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors disabled:opacity-40 ${
-            scheduleEnabled
-              ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/70"
-              : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white"
+            scheduleError
+              ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
+              : scheduleEnabled
+                ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/70"
+                : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white"
           }`}
         >
           <span
             className={`h-1.5 w-1.5 rounded-full ${
-              scheduleEnabled ? "bg-emerald-400 shadow-[0_0_8px_currentColor]" : "bg-white/25"
+              scheduleError
+                ? "bg-rose-400"
+                : scheduleEnabled
+                  ? "bg-emerald-400 shadow-[0_0_8px_currentColor]"
+                  : "bg-white/25"
             }`}
           />
-          {scheduleEnabled == null ? "Schedule …" : scheduleEnabled ? "Schedule on" : "Schedule off"}
+          {scheduleBusy
+            ? "Schedule …"
+            : scheduleError
+              ? "Bridge down"
+              : scheduleEnabled == null
+                ? "Schedule …"
+                : scheduleEnabled
+                  ? "Schedule on"
+                  : "Schedule off"}
         </button>
 
         <button
@@ -524,7 +592,7 @@ function SegmentCard({
   return (
     <div
       onClick={onSelect}
-      className="relative flex min-h-[230px] cursor-pointer flex-col rounded-xl border bg-white/[0.02] p-3 transition-all duration-200"
+      className="relative flex min-h-[132px] cursor-pointer flex-col rounded-xl border bg-white/[0.02] p-2.5 transition-all duration-200"
       style={{
         borderColor: selected ? withAlpha(seg.color, 0.55) : "rgba(255,255,255,0.08)",
         boxShadow: selected ? `0 0 24px ${withAlpha(seg.color, 0.13)}` : "none",
@@ -548,29 +616,27 @@ function SegmentCard({
         }}
       />
 
-      <div className="mt-1 flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-black tracking-[0.2em]" style={{ color: seg.color }}>
-              {seg.label}
-            </span>
-            {isNow && (
-              <span className="rounded bg-white/15 px-1 py-px text-[8px] font-bold tracking-[0.15em] text-white">
-                NOW
-              </span>
-            )}
-          </div>
-          <div className="font-mono text-[10px] tabular-nums text-white/45">{segmentRangeLabel(seg)}</div>
-        </div>
-        <span className="shrink-0 font-mono text-[10px] text-white/30">{rows.length}</span>
+      {/*
+        The header is the segment's NAME and nothing else. The hours are already on the ruler
+        directly above, the hint repeated what the name says, and the count is visible by looking.
+        Three labels for one fact is three chances to read the wrong one.
+      */}
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className="text-[11px] font-black tracking-[0.2em]" style={{ color: seg.color }}>
+          {seg.label}
+        </span>
+        {isNow && (
+          <span className="rounded bg-white/15 px-1 py-px text-[8px] font-bold tracking-[0.15em] text-white">
+            NOW
+          </span>
+        )}
       </div>
 
-      <div className="mt-1.5 text-[10px] leading-snug text-white/35">{seg.hint}</div>
-
-      <div className="mt-3 flex flex-1 flex-col gap-1.5">
+      {/* Two per row: a chip is an icon and a number, so a full-width one was mostly padding. */}
+      <div className="mt-2 grid flex-1 grid-cols-2 content-start gap-1.5">
         {ranked.length === 0 && (
-          <div className="rounded-lg border border-dashed border-white/10 px-2 py-4 text-center text-[10px] text-white/30">
-            No strategy assigned
+          <div className="col-span-2 rounded-lg border border-dashed border-white/10 px-2 py-3 text-center text-[10px] text-white/25">
+            —
           </div>
         )}
 
@@ -596,9 +662,9 @@ function SegmentCard({
             onSelect();
             onTogglePicker();
           }}
-          className="w-full rounded-lg border border-dashed border-white/12 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40 transition-colors hover:border-white/30 hover:text-white/80"
+          className="w-full rounded-lg border border-dashed border-white/12 py-1 text-[11px] leading-none text-white/35 transition-colors hover:border-white/30 hover:text-white/80"
         >
-          {pickerOpen ? "Close" : "+ Assign strategy"}
+          {pickerOpen ? "×" : "+"}
         </button>
 
         {pickerOpen && (
@@ -648,46 +714,49 @@ function AssignmentChip({
     </span>
   );
 
+  // NO NAME. The icon identifies the strategy and the picker spells it out when you choose it;
+  // repeating it on every chip is the single thing that forced these cards to be full width. The
+  // name still reaches anyone who needs it, through the tooltip and the row below the cards.
+  const label = `${strategy.name} · priority ${row.priority} · ${row.enabled ? "ON" : "OFF"}${
+    fit === "full" ? "" : fit === "none" ? " · outside its trading window" : " · partly outside its window"
+  }${conflicted ? " · priority clashes with another strategy here" : ""}`;
+
   return (
     <div
-      className={`group flex items-center gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.03] px-1.5 py-1.5 transition-opacity ${
-        row.enabled ? "" : "opacity-45"
+      title={label}
+      className={`group flex items-center gap-1 rounded-lg border bg-white/[0.03] px-1 py-1 transition-opacity ${
+        row.enabled ? "" : "opacity-40"
       }`}
+      style={{
+        // The only status colour left on the chip: a window that does not cover the segment, or a
+        // priority two strategies share. Both change what actually happens; nothing else did.
+        borderColor: conflicted
+          ? "rgba(251,113,133,0.45)"
+          : fit === "none"
+            ? "rgba(251,146,60,0.35)"
+            : "rgba(255,255,255,0.07)",
+      }}
     >
-      {/* Icon links to the strategy's own stream page. */}
       {strategy.nav ? (
-        <Link
-          href={strategy.nav.stream}
-          onClick={stop}
-          title={`Open ${strategy.name} stream`}
-          className="shrink-0 hover:scale-105"
-        >
+        <Link href={strategy.nav.stream} onClick={stop} className="shrink-0 hover:scale-105">
           {iconInner}
         </Link>
       ) : (
-        <span title={`${strategy.name} has no stream page yet`} className="shrink-0 opacity-50">
-          {iconInner}
+        <span className="shrink-0 opacity-50">{iconInner}</span>
+      )}
+
+      {rank != null && (
+        <span
+          className={`shrink-0 rounded px-0.5 text-[8px] font-black tabular-nums ${
+            rank === 1 ? "bg-amber-400/20 text-amber-300" : "bg-white/8 text-white/35"
+          }`}
+        >
+          {rank}
         </span>
       )}
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1">
-          {rank != null && (
-            <span
-              className={`rounded px-1 text-[8px] font-black tabular-nums ${
-                rank === 1 ? "bg-amber-400/20 text-amber-300" : "bg-white/8 text-white/40"
-              }`}
-            >
-              #{rank}
-            </span>
-          )}
-          <span className="truncate text-[11px] font-semibold text-zinc-200">{strategy.name}</span>
-        </div>
-        <FitBadge fit={fit} conflicted={conflicted} />
-      </div>
-
-      {/* Priority stepper — HIGHER WINS, so up-arrow means "beats the others". */}
-      <div onClick={stop} className="flex shrink-0 items-center rounded-md bg-white/[0.05]">
+      {/* Priority — HIGHER WINS a contested ticker. */}
+      <div onClick={stop} className="ml-auto flex shrink-0 items-center rounded-md bg-white/[0.05]">
         <StepButton label="−" onClick={() => onPriority(row.priority - PRIORITY_STEP)} />
         <input
           type="number"
@@ -695,33 +764,46 @@ function AssignmentChip({
           min={MIN_PRIORITY}
           max={MAX_PRIORITY}
           onChange={(e) => onPriority(Number(e.target.value))}
-          title="Priority — higher wins a contested ticker"
-          className="w-8 border-0 bg-transparent p-0 text-center font-mono text-[11px] font-bold tabular-nums text-zinc-100 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          title="Priority — higher wins when two strategies claim the same ticker"
+          className="w-7 border-0 bg-transparent p-0 text-center font-mono text-[11px] font-bold tabular-nums text-zinc-100 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
         <StepButton label="+" onClick={() => onPriority(row.priority + PRIORITY_STEP)} />
       </div>
 
+      {/*
+        ON / OFF for this segment.
+        A 3px dot with no tooltip read as decoration rather than a control — compact is not the
+        same as invisible. It is now a small switch: filled and pushed right when on, hollow and
+        pushed left when off, and it says which in its title either way.
+      */}
       <button
         type="button"
-        onClick={(e) => {
-          stop(e);
-          onToggle();
+        onClick={(e) => { stop(e); onToggle(); }}
+        title={row.enabled ? `${strategy.name}: ON — click to disable here` : `${strategy.name}: OFF — click to enable here`}
+        aria-label={row.enabled ? "Disable on this segment" : "Enable on this segment"}
+        aria-pressed={row.enabled}
+        className="relative h-3.5 w-6 shrink-0 rounded-full border transition-colors"
+        style={{
+          borderColor: row.enabled ? withAlpha(seg.color, 0.65) : "rgba(255,255,255,0.22)",
+          backgroundColor: row.enabled ? withAlpha(seg.color, 0.3) : "transparent",
         }}
-        title={row.enabled ? "Disable on this segment" : "Enable on this segment"}
-        className={`h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${
-          row.enabled ? "border-transparent" : "border-white/25"
-        }`}
-        style={row.enabled ? { backgroundColor: seg.color } : undefined}
-      />
+      >
+        <span
+          className="absolute top-1/2 h-2 w-2 -translate-y-1/2 rounded-full transition-all"
+          style={{
+            left: row.enabled ? "calc(100% - 10px)" : "2px",
+            backgroundColor: row.enabled ? seg.color : "rgba(255,255,255,0.35)",
+          }}
+        />
+      </button>
 
+      {/* Faint until hovered rather than absent: a control you cannot find is not compact. */}
       <button
         type="button"
-        onClick={(e) => {
-          stop(e);
-          onRemove();
-        }}
-        title="Remove from this segment"
-        className="shrink-0 px-0.5 text-[13px] leading-none text-white/40 opacity-0 transition-opacity hover:text-rose-300 group-hover:opacity-100"
+        onClick={(e) => { stop(e); onRemove(); }}
+        title={`Remove ${strategy.name} from this segment`}
+        aria-label="Remove from this segment"
+        className="shrink-0 px-0.5 text-[12px] leading-none text-white/20 transition-colors hover:text-rose-300 group-hover:text-white/50"
       >
         ×
       </button>
@@ -741,19 +823,6 @@ function StepButton({ label, onClick }: { label: string; onClick: () => void }) 
     </button>
   );
 }
-
-function FitBadge({ fit, conflicted }: { fit: WindowFit; conflicted: boolean }) {
-  const copy = conflicted ? { label: "PRIORITY TIE", tone: "warn" as const } : FIT_COPY[fit];
-  return (
-    <div className={`truncate text-[8px] font-bold tracking-[0.1em] ${FIT_TONE_CLASS[copy.tone]}`}>
-      {copy.label}
-    </div>
-  );
-}
-
-// =========================
-// STRATEGY PICKER
-// =========================
 
 function StrategyPicker({
   seg,
@@ -851,7 +920,6 @@ function DetailPanel({
   const rows = useMemo(() => rankAssignments(plan[selected]), [plan, selected]);
   const conflicts = useMemo(() => conflictingPriorities(plan[selected]), [plan, selected]);
 
-  const totalMinutes = seg.toMin - seg.fromMin;
 
   return (
     <section className={`mt-5 rounded-2xl ${PANEL}`}>
@@ -878,31 +946,28 @@ function DetailPanel({
         })}
       </div>
 
-      <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 px-4 pt-3">
-        <span className="text-sm font-bold" style={{ color: seg.color }}>
+      {/* The share-of-day figure was arithmetic anyone can do from the span, so only the span stays. */}
+      <div className="flex flex-wrap items-baseline gap-x-4 px-4 pt-2">
+        <span className="text-[12px] font-bold" style={{ color: seg.color }}>
           {seg.label}
         </span>
-        <span className="font-mono text-xs tabular-nums text-white/70">{segmentRangeLabel(seg)}</span>
-        <span className="font-mono text-[11px] tabular-nums text-white/45">
-          {Math.floor(totalMinutes / 60)}h {totalMinutes % 60}m · {((totalMinutes / DAY_MINUTES) * 100).toFixed(1)}% of the day
-        </span>
+        <span className="font-mono text-[11px] tabular-nums text-white/55">{segmentRangeLabel(seg)}</span>
       </div>
 
       {rows.length === 0 ? (
-        <div className="px-4 py-10 text-center text-sm text-white/45">
-          No strategy runs during {seg.label}. Assign one on the card above.
+        <div className="px-4 py-6 text-center text-[11px] text-white/35">
+          Nothing assigned to {seg.label}.
         </div>
       ) : (
         <div className="overflow-x-auto px-2 pb-3 pt-2">
-          <table className="w-full min-w-[900px] border-collapse">
+          <table className="w-full min-w-[720px] border-collapse">
             <thead>
               <tr className="text-left text-[9px] font-bold uppercase tracking-[0.15em] text-white/45">
                 <th className="px-2 py-2">Rank</th>
                 <th className="px-2 py-2">Strategy</th>
                 <th className="px-2 py-2">Priority</th>
                 <th className="px-2 py-2">State</th>
-                <th className="px-2 py-2">Trading window</th>
-                <th className="px-2 py-2">Coverage</th>
+                <th className="px-2 py-2">Window</th>
                 <th className="px-2 py-2">Pages</th>
               </tr>
             </thead>
@@ -915,9 +980,9 @@ function DetailPanel({
                 return (
                   <tr
                     key={row.strategyKey}
-                    className={`border-t border-white/[0.05] text-[12px] ${row.enabled ? "" : "opacity-45"}`}
+                    className={`border-t border-white/[0.05] text-[11px] ${row.enabled ? "" : "opacity-45"}`}
                   >
-                    <td className="px-2 py-2.5">
+                    <td className="px-2 py-2">
                       <span
                         className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10px] font-black tabular-nums ${
                           row.enabled && index === 0
@@ -929,32 +994,34 @@ function DetailPanel({
                       </span>
                     </td>
 
-                    <td className="px-2 py-2.5">
+                    {/*
+                      This row is where the NAME lives — the chips above are icons only, so one
+                      place has to spell them out. The description does not: it is a sentence about
+                      the strategy, not about this assignment, and it doubled the row height.
+                    */}
+                    <td className="px-2 py-2" title={strategy.description}>
                       <div className="flex items-center gap-2">
-                        <span className="text-[14px]">{strategy.icon}</span>
-                        <div className="min-w-0">
-                          {strategy.nav ? (
-                            <Link
-                              href={strategy.nav.stream}
-                              className="font-semibold text-zinc-100 hover:underline"
-                              style={{ textDecorationColor: seg.color }}
-                            >
-                              {strategy.name}
-                            </Link>
-                          ) : (
-                            <span className="font-semibold text-white/70">{strategy.name}</span>
-                          )}
-                          <div className="truncate text-[10px] text-white/45">{strategy.description}</div>
-                        </div>
+                        <span className="text-[13px]">{strategy.icon}</span>
+                        {strategy.nav ? (
+                          <Link
+                            href={strategy.nav.stream}
+                            className="font-semibold text-zinc-100 hover:underline"
+                            style={{ textDecorationColor: seg.color }}
+                          >
+                            {strategy.name}
+                          </Link>
+                        ) : (
+                          <span className="font-semibold text-white/70">{strategy.name}</span>
+                        )}
                       </div>
                     </td>
 
-                    <td className="px-2 py-2.5 font-mono tabular-nums text-zinc-100">
+                    <td className="px-2 py-2 font-mono tabular-nums text-zinc-100">
                       {row.priority}
                       {conflicted && <span className="ml-1.5 text-[9px] font-bold text-amber-300">TIE</span>}
                     </td>
 
-                    <td className="px-2 py-2.5">
+                    <td className="px-2 py-2">
                       <span
                         className="rounded px-1.5 py-0.5 text-[9px] font-bold tracking-[0.1em]"
                         style={{
@@ -967,19 +1034,22 @@ function DetailPanel({
                       </span>
                     </td>
 
-                    <td className="px-2 py-2.5 font-mono text-[11px] tabular-nums text-white/70">
-                      {strategy.window
-                        ? `${minuteIdxLabel(strategy.window.fromMinuteIdx)} – ${minuteIdxLabel(
-                            strategy.window.toMinuteIdx
-                          )}`
-                        : "—"}
+                    <td className="px-2 py-2 font-mono text-[11px] tabular-nums">
+                      <span className={fit === "full" ? "text-white/70" : "text-amber-300"}>
+                        {strategy.window
+                          ? `${minuteIdxLabel(strategy.window.fromMinuteIdx)} – ${minuteIdxLabel(
+                              strategy.window.toMinuteIdx
+                            )}`
+                          : "—"}
+                      </span>
+                      {fit !== "full" && (
+                        <span className="ml-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-amber-300/70">
+                          {fit === "none" ? "outside" : "partial"}
+                        </span>
+                      )}
                     </td>
 
-                    <td className="px-2 py-2.5">
-                      <FitBadge fit={fit} conflicted={false} />
-                    </td>
-
-                    <td className="px-2 py-2.5">
+                    <td className="px-2 py-2">
                       {strategy.nav ? (
                         <div className="flex items-center gap-1.5">
                           {(

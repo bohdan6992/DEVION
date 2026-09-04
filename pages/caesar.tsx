@@ -7,9 +7,48 @@ import React from "react";
 // meaningful to render on the server.
 const CaesarSchedule = dynamic(() => import("@/components/caesar/CaesarSchedule"), { ssr: false });
 
-// The engines Caesar has to host itself. Mounted BELOW the schedule and kept mounted: Arbitrage and
-// PairFlux have no bridge-side engine, so this tab is where their decisions are made.
-const CaesarRunners = dynamic(() => import("@/components/caesar/CaesarRunners"), { ssr: false });
+/**
+ * The engines Caesar has to host itself, plus the window binding, the positions terminal and the
+ * live feed. Arbitrage and PairFlux have no bridge-side engine, so this tab is where their
+ * decisions are made.
+ *
+ * LOADED LOUDLY. `dynamic` with ssr:false renders NOTHING while the chunk is in flight and, if the
+ * import rejects, renders nothing for ever — no overlay, no console entry, just a page that ends
+ * early. That is indistinguishable from "the feature was never added", which is exactly how this
+ * section looked when it was in fact failing to load. So the pending and failed states are both
+ * given something to show.
+ */
+const CaesarRunners = dynamic(
+  () =>
+    import("@/components/caesar/CaesarRunners").catch((err) => {
+      console.error("[caesar] runners chunk failed to load", err);
+      return {
+        default: function CaesarRunnersLoadError() {
+          return (
+            <section className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/[0.07] px-4 py-3">
+              <div className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-rose-200">
+                Live engines failed to load
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-rose-200/70">
+                The chunk did not load, so no strategy is being hosted by this tab. See the browser
+                console for the reason. Nothing below this point is running.
+              </div>
+            </section>
+          );
+        },
+      };
+    }),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 px-4 py-3">
+        <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-zinc-500">
+          Live engines · loading…
+        </div>
+      </section>
+    ),
+  },
+);
 
 export default function CaesarPage() {
   return (
@@ -19,7 +58,8 @@ export default function CaesarPage() {
       </Head>
       <main className="w-full">
         <CaesarSchedule />
-        <div className="px-4 pb-8">
+        {/* Same container as the schedule above, so the two read as one page rather than two. */}
+        <div className="mx-auto w-full max-w-[1720px] px-6 pb-10 lg:px-10">
           <CaesarRunners />
         </div>
       </main>

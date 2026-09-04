@@ -29,7 +29,31 @@ export type PairFluxGateEntry = PairFluxGateVerdict & {
   dev: number;
   /** |deviation| in the unit the toolbar is set to. */
   measure: number;
+  /**
+   * The two legs' shared identity: the pair, not the ticker.
+   *
+   * Both legs carry the SAME key, which is what lets everything downstream judge the pair once
+   * instead of judging each leg on its own numbers and letting the two answers disagree.
+   */
+  pairKey: string;
+  /**
+   * What the trade banks running from here to the exit level, in PERCENTAGE POINTS.
+   *
+   * This is the pair's real edge and it is already net of crossing — `dev` is built from bid and
+   * ask, not mid, so both half-spreads are paid inside it. It exists here because the engine's
+   * generic edge test subtracts a leg's dollar spread from the signal, and when the toolbar is set
+   * to sigmas or alphas that subtracts dollars from sigmas. Supplying the edge outright keeps the
+   * comparison in one unit.
+   */
+  toExit: number;
 };
+
+/** The unordered identity of a pair: A|B and B|A are one situation, so they get one key. */
+export function pairKeyOf(a: string, b: string): string {
+  const x = a.trim().toUpperCase();
+  const y = b.trim().toUpperCase();
+  return x < y ? `${x}|${y}` : `${y}|${x}`;
+}
 
 const NO: PairFluxGateVerdict = { up: false, down: false };
 
@@ -68,10 +92,11 @@ export function buildPairFluxGateMap(pairs: readonly LivePair[]): Map<string, Pa
     // Either leg already committed to a wider pair: this one cannot be traded as a pair at all.
     if (out.has(ahead) || out.has(behind)) continue;
 
+    const shared = { dev: p.dev, measure: p.measure, pairKey: pairKeyOf(ahead, behind), toExit: p.toExit };
     // Sold at its bid — the leg that ran ahead.
-    out.set(ahead, { up: false, down: true, partner: behind, dev: p.dev, measure: p.measure });
+    out.set(ahead, { up: false, down: true, partner: behind, ...shared });
     // Bought at its ask — the leg that lagged.
-    out.set(behind, { up: true, down: false, partner: ahead, dev: p.dev, measure: p.measure });
+    out.set(behind, { up: true, down: false, partner: ahead, ...shared });
   }
 
   return out;

@@ -31,6 +31,12 @@ export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT
 export type StreamDecisionRow = {
   ticker: string;
   benchmark: string;
+  /**
+   * The situation this row is one leg of, for strategies that trade more than one ticker at a
+   * time. null for every single-ticker strategy. Legs sharing a key are judged together — see
+   * reconcilePairedDecisions.
+   */
+  pairKey: string | null;
   side: "Long" | "Short";
   signal: number | null;
   spread: number | null;
@@ -1246,7 +1252,7 @@ export function computeStreamDecisionRows(
   const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const canApplyBook = signals.length === 1 && (bookSnapshot?.bestBid != null || bookSnapshot?.bestAsk != null);
 
-  return signals.flatMap((row) => {
+  const rows = signals.flatMap((row) => {
     const side: "Long" | "Short" = row.direction === "down" ? "Short" : "Long";
     // The strategy's own reading, when it has one. See StreamDecisionOverride.
     const override = decisionOverride?.(row, side) ?? null;
@@ -1269,12 +1275,24 @@ export function computeStreamDecisionRows(
       : rawSpread ?? (bid != null && ask != null ? Math.max(0, ask - bid) : null);
     const safePrice = side === "Long" ? effectiveBid : effectiveAsk;
     const edge = signal == null ? null : Math.abs(signal);
-    const netEdge = edge == null ? null : Math.max(0, edge - Math.max(0, spread ?? 0));
+    // A strategy that knows its own edge says so; otherwise the signal pays the leg's spread.
+    const netEdge =
+      override && override.netEdge != null && Number.isFinite(override.netEdge)
+        ? Math.max(0, override.netEdge)
+        : edge == null
+          ? null
+          : Math.max(0, edge - Math.max(0, spread ?? 0));
     const positionBp = numPositionBp(row);
     const blockedBySpread = spreadLimit != null && spread != null && spread > spreadLimit;
     const minNetEdge = automationConfig?.minNetEdge ?? 0;
     const blockedByEdge = netEdge != null && netEdge < minNetEdge;
-    const status = blockedBySpread ? "BLOCKED_SPREAD" : blockedByEdge ? "BLOCKED_EDGE" : "ENTRY_READY";
+    // Annotated: the rows now pass through a local before being returned, and without this the
+    // ternary widens to plain string.
+    const status: StreamDecisionStatus = blockedBySpread
+      ? "BLOCKED_SPREAD"
+      : blockedByEdge
+        ? "BLOCKED_EDGE"
+        : "ENTRY_READY";
     const reason = blockedBySpread
       ? "spread too wide"
       : blockedByEdge
@@ -1284,6 +1302,7 @@ export function computeStreamDecisionRows(
     return {
       ticker: row.ticker,
       benchmark: override ? override.benchmark : String(row.benchmark ?? "UNKNOWN"),
+      pairKey: override?.pairKey ?? null,
       side,
       signal,
       spread,
@@ -1296,6 +1315,69 @@ export function computeStreamDecisionRows(
       reason,
       updatedAt: Date.now(),
     };
+  });
+
+  return reconcilePairedDecisions(rows);
+}
+
+/**
+ * Rows that named the same pair get ONE verdict.
+ *
+ * A pair trade is one situation with two orders, but the checks above are per ticker: each leg is
+ * measured against its OWN spread, so two legs of the same divergence routinely land on different
+ * answers. Observed live on GFI/HMY: one deviation, 0.83, shown on both legs — and two net edges,
+ * 0.690 and 0.780, because GFI's spread was 0.140 and HMY's 0.050. With a minimum edge anywhere
+ * between those, one leg is ENTRY READY and the other is BLOCKED, and the strategy sends a single
+ * naked order on a book it only ever measured hedged.
+ *
+ * Two rules, both conservative:
+ *
+ *   1. If any leg is blocked, every leg is blocked, and they all carry the blocked leg's reason.
+ *      A pair is tradable only where BOTH sides can be crossed.
+ *   2. A leg whose partner is not in this decision set at all is blocked outright. This is the
+ *      quieter half: the partner can be absent because a per-ticker filter removed it from the
+ *      universe upstream, and the surviving leg then looks like a perfectly good single-ticker
+ *      signal. It is not one — its edge was measured against a hedge that is not there.
+ *
+ * Untouched when no row declares a pairKey, which is every single-leg strategy.
+ */
+function reconcilePairedDecisions(rows: StreamDecisionRow[]): StreamDecisionRow[] {
+  const groups = new Map<string, StreamDecisionRow[]>();
+  for (const r of rows) {
+    if (!r.pairKey) continue;
+    const g = groups.get(r.pairKey);
+    if (g) g.push(r);
+    else groups.set(r.pairKey, [r]);
+  }
+  if (groups.size === 0) return rows;
+
+  const verdict = new Map<string, { status: StreamDecisionStatus; reason: string }>();
+  for (const [key, legs] of groups) {
+    if (legs.length < 2) {
+      verdict.set(key, {
+        status: "BLOCKED_EDGE",
+        reason: "partner leg missing — a pair trade cannot go out one-sided",
+      });
+      continue;
+    }
+    // Spread first: an uncrossable book is a harder no than a thin edge, and it is the reason
+    // worth showing.
+    const blocked =
+      legs.find((l) => l.status === "BLOCKED_SPREAD") ??
+      legs.find((l) => l.status !== "ENTRY_READY");
+    if (!blocked) continue;
+    const self = blocked.ticker;
+    verdict.set(key, {
+      status: blocked.status,
+      reason: `${blocked.reason} (on ${self})`,
+    });
+  }
+  if (verdict.size === 0) return rows;
+
+  return rows.map((r) => {
+    const v = r.pairKey ? verdict.get(r.pairKey) : undefined;
+    if (!v || (r.status === v.status && r.reason === v.reason)) return r;
+    return { ...r, status: v.status, reason: v.reason };
   });
 }
 
@@ -1386,7 +1468,23 @@ export function syncStreamPositions(
       const zapSigma = existing.side === "Long"
         ? (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma))
         : (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma));
-      const currentSigned = zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
+      /**
+       * A multi-leg strategy is tracked on ITS OWN reading, not on the ticker's ZAP.
+       *
+       * zapLsigma/zapSsigma is each ticker's sigma-ZAP against its benchmark ETF — Arbitrage's
+       * metric, and the right one there. PairFlux does not trade it: its situation is the PAIR's
+       * divergence, measured in whatever unit the toolbar selects and divided by that pair's own
+       * per-class alpha or residual sigma. Reading zap here meant entry and exit were judged on the
+       * pair while ADDS were judged on a different series in a different unit — a position could
+       * scale in on the ticker drifting from GDX while the pair itself was converging.
+       *
+       * The decision row already carries the strategy's own number, so prefer it whenever the row
+       * declares a pairKey. Single-leg strategies have no pairKey and keep the ZAP path exactly.
+       */
+      const ownDecision = decisionMap.get(existing.ticker);
+      const pairSigned = ownDecision?.pairKey ? ownDecision.signal : null;
+      const currentSigned =
+        pairSigned ?? zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
       const currentAbs = currentSigned == null ? signalAbs(raw) : Math.abs(currentSigned);
       const currentSpread = signalSpread(raw) ?? existing.spread;
       // Lazy-init: positions restored from action log may have null entrySignal (missing deviation).
@@ -1659,7 +1757,10 @@ export function syncStreamPositions(
           const filteredSignedZap = existing.side === "Long"
             ? (toNum(filteredSignal?.zapLsigma) ?? toNum(raw?.zapLsigma))
             : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
-          const filteredSigned = filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
+          // Same substitution as above, and it has to be the same or the rung and the anchor it is
+          // measured from would come off two different series.
+          const filteredSigned =
+            pairSigned ?? filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
           const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
 
           // Direction (sign) is always anchored to the FIRST entry signal.
@@ -2198,7 +2299,26 @@ export type StreamSignalGate = (signal: ArbitrageSignal) => { up: boolean; down:
 export type StreamDecisionOverride = (
   signal: ArbitrageSignal,
   side: "Long" | "Short",
-) => { signal: number; benchmark: string } | null;
+) => {
+  signal: number;
+  benchmark: string;
+  /**
+   * The rows that must be judged together, if any.
+   *
+   * A strategy holding more than one leg per trade returns the SAME key on every leg. The engine
+   * then gives all of them one verdict — see reconcilePairedDecisions. Omit it and nothing
+   * changes: a single-leg strategy stays judged per ticker, as it always was.
+   */
+  pairKey?: string | null;
+  /**
+   * The edge, supplied outright, when the generic `|signal| - spread` does not measure it.
+   *
+   * The generic form assumes signal and spread share a unit. A pair spread quoted in sigmas or
+   * alphas does not share a unit with a dollar spread, and subtracting one from the other produced
+   * a number that was not an edge in any unit.
+   */
+  netEdge?: number | null;
+} | null;
 
 /**
  * Overrides for the live signals request, so a strategy can ask the server for exactly the same

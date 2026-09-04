@@ -143,7 +143,7 @@ export default function ArbitrageScanner({
   analyticsTabLabelOverride,
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
-  lsKeyPrefix = "paper.arb",
+  lsKeyPrefix = STRATEGY.lsKeyPrefix,
   // Routes come from the registry entry, not from literals repeated per component.
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,

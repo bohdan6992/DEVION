@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useSyncExternalStore } from "react";
 import type { StreamDecisionStore } from "./streamDecisionStore";
@@ -135,7 +135,18 @@ function buildActiveRows(
   const rows = new Map<string, StreamActiveDecisionRow>();
 
   for (const position of positions) {
-    if (position.status === "CLOSED" || position.status === "PENDING_ENTRY") continue;
+    if (position.status === "CLOSED") continue;
+
+    // A DISPATCHED entry is not a candidate any more.
+    //
+    // PENDING_ENTRY covers two different things: an entry decided but not yet sent, and one whose
+    // order is already with the broker awaiting confirmation. Excluding both from ACTIVE left the
+    // second kind sitting in SIGNALS still labelled ENTRY READY — a row that reads as "still to
+    // do" for an order that has already gone out. Observed live on 2026-09-04: DAL, DNLI, HUT and
+    // MRNA all logged ENTRY/SENT and all four stayed in the signals table.
+    //
+    // entryDispatchedAt is what separates them, and it is set at the moment the intent is sent.
+    if (position.status === "PENDING_ENTRY" && position.entryDispatchedAt == null) continue;
     const decision = decisionStore.getRow(position.ticker);
     const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
     const spread = decision?.spread ?? position.spread;

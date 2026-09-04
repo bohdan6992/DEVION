@@ -1,0 +1,569 @@
+"use client";
+
+/**
+ * The positions terminal: what is actually open, and which strategy opened it.
+ *
+ * Two sources, deliberately not one:
+ *
+ *   THE BRIDGE is ground truth. TradingAppPositionsService reads the account itself, so it knows
+ *   about every position — including ones no strategy here opened, and ones a strategy thinks it
+ *   closed but did not.
+ *
+ *   EACH ENGINE knows what IT did. The per-instance position store is the strategy's own record of
+ *   the tickers it entered and why.
+ *
+ * Joining them on the ticker is the whole point. Agreement is unremarkable; the two ways they can
+ * disagree are the reason this panel exists:
+ *
+ *   UNCLAIMED — the account holds it, no strategy admits to it. Manual, or left from a session
+ *               whose engine is no longer mounted. On a two-strategy day this is the row you want
+ *               to see immediately, because nothing here will manage it.
+ *   MISSING   — a strategy believes it is open, the account does not have it. The order never
+ *               filled, or it was closed by hand.
+ *
+ * Money comes from the bridge only. The engine tracks a signal, not a fill price, so any P&L it
+ * could offer would be a model of the trade rather than the trade.
+ */
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { bridgeUrl } from "@/lib/bridgeBase";
+import { getStreamStores } from "@/components/stream/streamStoreRegistry";
+import type { StreamPosition } from "@/components/stream/streamEngine";
+
+type BridgePosition = {
+  ticker: string;
+  side: string | null;
+  status: string | null;
+  posSize: number | null;
+  posAvgPrc: number | null;
+  positionBp: number | null;
+  openOrders: number | null;
+  hasWorkingOrder: boolean | null;
+  isFlat: boolean | null;
+  totalPnL: number | null;
+  /** Marked at the last price. Exists only while the position does. */
+  openPnL: number | null;
+  /** Realised on this ticker today. Survives the close — this is what keeps the score. */
+  closedPnL: number | null;
+  netClosedPnL: number | null;
+};
+
+type BridgeSnapshot = {
+  account: string | null;
+  ageSeconds: number;
+  count: number;
+  /** The P&L keys the pipe actually delivered. Empty while there are no positions to inspect. */
+  pnlFieldsSeen?: string[];
+  positions: BridgePosition[];
+};
+
+export type CaesarPositionsProps = {
+  /** The strategies Caesar is hosting: label -> the instanceId their stores are keyed by. */
+  instances: readonly { key: string; instanceId: string; priority: number }[];
+};
+
+type Claim = { strategyKey: string; position: StreamPosition };
+
+/** One line of the terminal: an account position, and the strategy claiming it (if any). */
+type Row = {
+  bridge: BridgePosition;
+  claim: Claim | null;
+  ticker: string;
+  open: boolean;
+  /** The ticker is held by more than one strategy, so its money belongs to neither alone. */
+  shared: boolean;
+};
+
+const POLL_MS = 4000;
+
+function fmt(n: number | null | undefined, digits = 2): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return n.toFixed(digits);
+}
+
+function fmtInt(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return Math.round(n).toLocaleString("en-US");
+}
+
+/** Carrying size right now. */
+function isOpen(p: BridgePosition): boolean {
+  if (p.isFlat === true) return false;
+  return (p.posSize ?? 0) !== 0;
+}
+
+/**
+ * Worth a row: either still open, or flat with something realised on it today.
+ *
+ * Filtering on size alone was the bug this fixes. A strategy that opened and closed a ticker went
+ * flat, dropped out of the view, and took its whole result with it — by the close the day looked
+ * empty no matter how it had gone.
+ */
+function isRelevant(p: BridgePosition): boolean {
+  return isOpen(p) || (p.closedPnL ?? 0) !== 0;
+}
+
+export default function CaesarPositions({ instances }: CaesarPositionsProps) {
+  const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [claims, setClaims] = useState<Claim[]>([]);
+
+  // ---- the account, polled -------------------------------------------------------------------
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    const pull = async () => {
+      try {
+        const res = await fetch(bridgeUrl("/api/execution/tradingapp/positions"), { cache: "no-store" });
+        const json = (await res.json()) as BridgeSnapshot;
+        if (!alive.current) return;
+        setSnapshot(json);
+        setError(null);
+      } catch (e: any) {
+        if (!alive.current) return;
+        setError(String(e?.message ?? e));
+      }
+    };
+    void pull();
+    const id = window.setInterval(pull, POLL_MS);
+    return () => { alive.current = false; window.clearInterval(id); };
+  }, []);
+
+  // ---- what each mounted engine says it holds -------------------------------------------------
+  //
+  // Subscribed imperatively rather than with a hook per store: the set of hosted strategies changes
+  // with the segment, and a hook cannot be called in a loop over a list that changes length.
+  const instanceKey = instances.map((i) => `${i.key}:${i.instanceId}`).join(",");
+  const recompute = useCallback(() => {
+    const out: Claim[] = [];
+    for (const inst of instances) {
+      const rows = getStreamStores(inst.instanceId).position.getRows();
+      for (const position of rows) {
+        // CLOSED rows are kept on purpose: they are how a realised result stays attributed to the
+        // strategy that made it. Dropping them left every closed ticker UNCLAIMED by the close.
+        out.push({ strategyKey: inst.key, position });
+      }
+    }
+    setClaims(out);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceKey]);
+
+  useEffect(() => {
+    recompute();
+    const unsubs = instances.map((inst) =>
+      getStreamStores(inst.instanceId).position.subscribe(recompute)
+    );
+    return () => { for (const u of unsubs) u(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceKey, recompute]);
+
+  // ---- the join --------------------------------------------------------------------------------
+  const view = useMemo(() => {
+    // A LIST per ticker, not one claim.
+    //
+    // This was a Map<ticker, Claim>, so the second strategy holding a name silently overwrote the
+    // first and the account's position was attributed to whichever happened to be iterated last.
+    // Arbitrage shorting AXTI on its own signal then read as PairFlux's position, and PairFlux's
+    // own row vanished. Two strategies sharing a ticker on the same side is now something the
+    // bridge deliberately allows, so the display has to represent it rather than pick a winner.
+    const claimsByTicker = new Map<string, Claim[]>();
+    for (const c of claims) {
+      const t = c.position.ticker.trim().toUpperCase();
+      if (!t) continue;
+      const list = claimsByTicker.get(t);
+      if (list) list.push(c);
+      else claimsByTicker.set(t, [c]);
+    }
+
+    const relevant = (snapshot?.positions ?? []).filter(isRelevant);
+    const seen = new Set<string>();
+
+    const rows: Row[] = relevant
+      .flatMap((p): Row[] => {
+        const t = (p.ticker ?? "").trim().toUpperCase();
+        seen.add(t);
+        const owners = claimsByTicker.get(t) ?? [];
+        const open = isOpen(p);
+        const shared = owners.length > 1;
+        if (owners.length === 0) {
+          return [{ bridge: p, claim: null, ticker: t, open, shared: false }];
+        }
+        // One row each: entry count, status and reason belong to the strategy, not the account.
+        return owners.map((claim) => ({ bridge: p, claim, ticker: t, open, shared }));
+      })
+      // Open first, then the realised ones — what is still at risk reads above what is settled.
+      .sort((a, b) =>
+        a.open === b.open
+          ? a.ticker.localeCompare(b.ticker) ||
+            (a.claim?.strategyKey ?? "").localeCompare(b.claim?.strategyKey ?? "")
+          : a.open
+            ? -1
+            : 1,
+      );
+
+    // A strategy holds it OPEN, the account has neither size nor a realised result on it.
+    const missing = claims.filter(
+      (c) => c.position.status !== "CLOSED" && !seen.has(c.position.ticker.trim().toUpperCase()),
+    );
+
+    type Agg = {
+      open: number; long: number; short: number; adds: number; priority: number;
+      openPnl: number; closedPnl: number; closedCount: number;
+    };
+    const perStrategy = new Map<string, Agg>();
+    for (const inst of instances) {
+      perStrategy.set(inst.key, {
+        open: 0, long: 0, short: 0, adds: 0, priority: inst.priority,
+        openPnl: 0, closedPnl: 0, closedCount: 0,
+      });
+    }
+    let unclaimedCount = 0;
+    let unclaimedOpenPnl = 0;
+    let unclaimedClosedPnl = 0;
+    let openCount = 0;
+
+    // The account reports ONE P&L per ticker and does not say who owns which part of it, so a
+    // shared ticker's money is counted once into a shared bucket rather than added to both
+    // strategies or split down the middle. A split would be a number nobody measured.
+    const countedTickers = new Set<string>();
+    let sharedOpenPnl = 0;
+    let sharedClosedPnl = 0;
+    let sharedCount = 0;
+
+    for (const r of rows) {
+      const firstForTicker = !countedTickers.has(r.ticker);
+      if (firstForTicker) {
+        countedTickers.add(r.ticker);
+        if (r.open) openCount += 1;
+      }
+
+      const openPnl = r.open ? r.bridge.openPnL ?? 0 : 0;
+      // null (field absent) contributes nothing rather than a fabricated zero.
+      const closedPnl = r.bridge.closedPnL ?? 0;
+
+      if (!r.claim) {
+        if (firstForTicker) {
+          unclaimedCount += 1;
+          unclaimedOpenPnl += openPnl;
+          unclaimedClosedPnl += closedPnl;
+        }
+        continue;
+      }
+
+      const agg = perStrategy.get(r.claim.strategyKey);
+      if (!agg) continue;
+
+      // Counts are per strategy: both really do hold the position.
+      if (r.open) {
+        agg.open += 1;
+        if (r.claim.position.side === "Short") agg.short += 1;
+        else agg.long += 1;
+        agg.adds += Math.max(0, (r.claim.position.entryCount ?? 1) - 1);
+      } else if (closedPnl !== 0) {
+        agg.closedCount += 1;
+      }
+
+      // Money is per ticker, and only once.
+      if (!firstForTicker) continue;
+      if (r.shared) {
+        sharedCount += 1;
+        sharedOpenPnl += openPnl;
+        sharedClosedPnl += closedPnl;
+      } else {
+        agg.openPnl += openPnl;
+        agg.closedPnl += closedPnl;
+      }
+    }
+
+    return {
+      rows, missing, perStrategy,
+      unclaimedCount, unclaimedOpenPnl, unclaimedClosedPnl,
+      sharedCount, sharedOpenPnl, sharedClosedPnl,
+      openCount, rowCount: countedTickers.size,
+    };
+  }, [claims, snapshot, instances]);
+
+  const age = snapshot?.ageSeconds;
+  const stale = age != null && age >= 0 && age > 30;
+
+  return (
+    <section className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 shadow-xl backdrop-blur-md">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="flex items-baseline gap-3">
+          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-400">
+            Positions
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
+            {snapshot?.account ? `acct ${snapshot.account}` : "account —"}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest">
+          <span className={stale ? "text-amber-300" : "text-zinc-600"}>
+            {age == null ? "no read yet" : age < 0 ? "never read" : `read ${fmt(age, 0)}s ago`}
+          </span>
+          <span className="text-zinc-600">{view.openCount} open · {view.rowCount - view.openCount} closed</span>
+        </div>
+      </header>
+
+      {error && (
+        <div className="mx-4 mb-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
+          bridge unreachable — {error}
+        </div>
+      )}
+
+      {/*
+        Only meaningful once there IS a position to inspect: with a flat book the pipe sends no rows
+        and there are no keys to report, which is not the same as the field being missing.
+      */}
+      {!error && snapshot != null && (snapshot.positions?.length ?? 0) > 0 &&
+        !(snapshot.pnlFieldsSeen ?? []).some((f) => /closedpnl/i.test(f)) && (
+        <div className="mx-4 mb-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 font-mono text-[11px] text-amber-200">
+          The positions pipe is not sending a ClosedPnL field — realised results cannot be attributed.
+          {(snapshot.pnlFieldsSeen ?? []).length > 0 && (
+            <span className="text-amber-200/60"> Seen: {(snapshot.pnlFieldsSeen ?? []).join(", ")}</span>
+          )}
+        </div>
+      )}
+
+      {/* ---- distribution by strategy ---- */}
+      <div className="flex flex-wrap gap-2 px-4 pb-3">
+        {instances.length === 0 ? (
+          <span className="font-mono text-[11px] text-zinc-600">No strategy hosted on this segment.</span>
+        ) : (
+          Array.from(view.perStrategy.entries()).map(([key, s]) => (
+            <div
+              key={key}
+              className="min-w-[190px] flex-1 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2"
+            >
+              <div className="flex items-baseline justify-between font-mono">
+                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
+                <span className="text-[10px] text-zinc-600">#{s.priority}</span>
+              </div>
+              <div className="mt-1 flex items-baseline gap-3 font-mono text-[11px]">
+                <span className="text-zinc-300">{s.open} open</span>
+                <span className="text-emerald-300/80">{s.long}L</span>
+                <span className="text-rose-300/80">{s.short}S</span>
+                {s.adds > 0 && <span className="text-sky-300/70">+{s.adds} adds</span>}
+                {s.closedCount > 0 && <span className="text-zinc-500">{s.closedCount} closed</span>}
+              </div>
+              {/*
+                TOTAL is what the strategy has made today: realised plus what is still at risk.
+                The two are also shown apart, because they are not the same claim — one is banked,
+                the other is a mark that moves every tick.
+              */}
+              <div
+                className={
+                  "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
+                  (s.openPnl + s.closedPnl > 0
+                    ? "text-emerald-400"
+                    : s.openPnl + s.closedPnl < 0
+                      ? "text-rose-400"
+                      : "text-zinc-500")
+                }
+              >
+                {s.openPnl + s.closedPnl >= 0 ? "+" : ""}
+                {fmt(s.openPnl + s.closedPnl)}
+              </div>
+              <div className="mt-0.5 flex items-baseline gap-3 font-mono text-[10px] tabular-nums">
+                <span className="text-zinc-600">
+                  open{" "}
+                  <span className={s.openPnl > 0 ? "text-emerald-400/80" : s.openPnl < 0 ? "text-rose-400/80" : "text-zinc-500"}>
+                    {s.openPnl >= 0 ? "+" : ""}{fmt(s.openPnl)}
+                  </span>
+                </span>
+                <span className="text-zinc-600">
+                  closed{" "}
+                  <span className={s.closedPnl > 0 ? "text-emerald-400/80" : s.closedPnl < 0 ? "text-rose-400/80" : "text-zinc-500"}>
+                    {s.closedPnl >= 0 ? "+" : ""}{fmt(s.closedPnl)}
+                  </span>
+                </span>
+              </div>
+            </div>
+          ))
+        )}
+
+        {view.sharedCount > 0 && (
+          <div className="min-w-[190px] flex-1 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2">
+            <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-sky-200">
+              Shared
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-sky-200/70">
+              {view.sharedCount} ticker{view.sharedCount === 1 ? "" : "s"} held by more than one strategy
+            </div>
+            <div
+              className={
+                "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
+                (view.sharedOpenPnl + view.sharedClosedPnl >= 0 ? "text-emerald-400" : "text-rose-400")
+              }
+            >
+              {view.sharedOpenPnl + view.sharedClosedPnl >= 0 ? "+" : ""}
+              {fmt(view.sharedOpenPnl + view.sharedClosedPnl)}
+            </div>
+            <div className="mt-0.5 font-mono text-[10px] tabular-nums text-sky-200/50">
+              open {fmt(view.sharedOpenPnl)} · closed {fmt(view.sharedClosedPnl)}
+            </div>
+          </div>
+        )}
+
+        {view.unclaimedCount > 0 && (
+          <div className="min-w-[190px] flex-1 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2">
+            <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-amber-200">
+              Unclaimed
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-amber-200/70">
+              {view.unclaimedCount} ticker{view.unclaimedCount === 1 ? "" : "s"} — no hosted strategy owns these
+            </div>
+            <div
+              className={
+                "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
+                (view.unclaimedOpenPnl + view.unclaimedClosedPnl >= 0 ? "text-emerald-400" : "text-rose-400")
+              }
+            >
+              {view.unclaimedOpenPnl + view.unclaimedClosedPnl >= 0 ? "+" : ""}
+              {fmt(view.unclaimedOpenPnl + view.unclaimedClosedPnl)}
+            </div>
+            <div className="mt-0.5 font-mono text-[10px] tabular-nums text-amber-200/50">
+              open {fmt(view.unclaimedOpenPnl)} · closed {fmt(view.unclaimedClosedPnl)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ---- the terminal ---- */}
+      <div className="max-h-[320px] overflow-auto border-t border-white/[0.06]">
+        <table className="w-full min-w-[860px] font-mono text-[11px]">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur">
+            <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
+              <th className="text-left">Ticker</th>
+              <th className="text-left">Strategy</th>
+              <th className="text-left">Side</th>
+              <th className="text-right">Size</th>
+              <th className="text-right">Avg</th>
+              <th className="text-right">Open P&amp;L</th>
+              <th className="text-right">Closed P&amp;L</th>
+              <th className="text-right">Ent</th>
+              <th className="text-left">Status</th>
+              <th className="text-left">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.rows.length === 0 && view.missing.length === 0 ? (
+              <tr>
+                <td colSpan={10} className="px-3 py-8 text-center text-zinc-600">
+                  Nothing open.
+                </td>
+              </tr>
+            ) : null}
+
+            {view.rows.map((r) => {
+              const openPnl = r.open ? r.bridge.openPnL ?? 0 : null;
+              // null (field absent) contributes nothing rather than a fabricated zero.
+      const closedPnl = r.bridge.closedPnL ?? 0;
+              const side = (r.claim?.position.side ?? r.bridge.side ?? "").toString();
+              const money = (v: number | null) =>
+                v == null
+                  ? "text-zinc-700"
+                  : v > 0
+                    ? "text-emerald-400"
+                    : v < 0
+                      ? "text-rose-400"
+                      : "text-zinc-500";
+              return (
+                <tr
+                  key={`${r.ticker}-${r.claim?.strategyKey ?? "unclaimed"}`}
+                  className={
+                    "border-t border-white/[0.04] [&>td]:px-3 [&>td]:py-1.5 " +
+                    (!r.claim ? "bg-amber-500/[0.05]" : r.open ? "" : "opacity-70")
+                  }
+                >
+                  <td className="font-bold text-zinc-200">
+                    {r.ticker}
+                    {r.shared && (
+                      <span
+                        className="ml-1.5 rounded bg-sky-500/15 px-1 text-[9px] font-bold uppercase tracking-[0.1em] text-sky-300"
+                        title="Held by more than one strategy. The account reports one size and one P&L for it, so those columns describe the whole ticker, not this strategy's share."
+                      >
+                        shared
+                      </span>
+                    )}
+                  </td>
+                  <td className={r.claim ? "text-zinc-300" : "text-amber-300"}>
+                    {r.claim ? r.claim.strategyKey.toUpperCase() : "UNCLAIMED"}
+                  </td>
+                  <td className={side === "Short" ? "text-rose-300" : "text-emerald-300"}>
+                    {r.open ? side || "—" : <span className="text-zinc-600">flat</span>}
+                  </td>
+                  <td className="text-right tabular-nums text-zinc-300">
+                    {r.open ? fmtInt(r.bridge.posSize) : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className="text-right tabular-nums text-zinc-400">
+                    {r.open ? fmt(r.bridge.posAvgPrc) : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className={"text-right tabular-nums " + money(openPnl)}>
+                    {openPnl == null ? "—" : `${openPnl >= 0 ? "+" : ""}${fmt(openPnl)}`}
+                  </td>
+                  {/*
+                    A null is "the pipe did not send this field" and a 0 is "nothing was realised".
+                    Rendering both as a dash would hide a plumbing fault behind a normal-looking day,
+                    so an absent value says so.
+                  */}
+                  <td
+                    className={
+                      "text-right tabular-nums " +
+                      (r.bridge.closedPnL == null ? "text-amber-400/60" : money(closedPnl))
+                    }
+                    title={r.bridge.closedPnL == null ? "ClosedPnL absent from the positions pipe" : undefined}
+                  >
+                    {r.bridge.closedPnL == null
+                      ? "n/a"
+                      : `${closedPnl >= 0 ? "+" : ""}${fmt(closedPnl)}`}
+                  </td>
+                  <td className="text-right tabular-nums text-zinc-400">
+                    {r.claim ? r.claim.position.entryCount : "—"}
+                  </td>
+                  <td className="text-zinc-400">
+                    {r.open ? r.claim?.position.status ?? r.bridge.status ?? "—" : "CLOSED"}
+                  </td>
+                  <td className="truncate text-zinc-600">{r.claim?.position.reason ?? ""}</td>
+                </tr>
+              );
+            })}
+
+            {view.missing.map((c) => (
+              <tr
+                key={`missing-${c.strategyKey}-${c.position.ticker}`}
+                className="border-t border-white/[0.04] bg-rose-500/[0.05] [&>td]:px-3 [&>td]:py-1.5"
+              >
+                <td className="font-bold text-zinc-200">{c.position.ticker}</td>
+                <td className="text-zinc-300">{c.strategyKey.toUpperCase()}</td>
+                <td className={c.position.side === "Short" ? "text-rose-300" : "text-emerald-300"}>
+                  {c.position.side}
+                </td>
+                <td className="text-right text-rose-300">not in account</td>
+                <td className="text-right text-zinc-600">—</td>
+                <td className="text-right text-zinc-600">—</td>
+                <td className="text-right text-zinc-600">—</td>
+                <td className="text-right tabular-nums text-zinc-400">{c.position.entryCount}</td>
+                <td className="text-zinc-400">{c.position.status}</td>
+                <td className="truncate text-zinc-600">{c.position.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="border-t border-white/[0.06] px-4 py-2 font-mono text-[10px] text-white/30">
+        Size, average and both P&amp;L columns come from the account —{" "}
+        <span className="font-mono text-white/40">LstPrcOpenPnL</span> while the position is open and{" "}
+        <span className="font-mono text-white/40">ClosedPnL</span> once it is not, so a ticker keeps its
+        result after it goes flat. Strategy, entry count and reason come from the engine that opened it. An <span className="text-amber-300/70">UNCLAIMED</span> row is held by
+        the account and managed by nothing here; a <span className="text-rose-300/70">not in account</span>{" "}
+        row is a strategy holding a position the account does not have. A{" "}
+        <span className="text-sky-300/70">shared</span> ticker is held by two strategies at once —
+        legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
+        so they are counted once into SHARED rather than added to either strategy.
+      </div>
+    </section>
+  );
+}

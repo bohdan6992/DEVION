@@ -147,7 +147,11 @@ export default function PairFluxScanner({
   analyticsTabLabelOverride,
   onStreamShellStatsChange,
   onSharedRatingRulesChange,
-  lsKeyPrefix = "paper.arb",
+  // From the strategy's own descriptor, never a literal: PairFlux was forked from this file and
+  // kept "paper.arb" here, so BOTH scanners wrote every toolbar value to Arbitrage's key. Setting
+  // a threshold on one strategy silently set it on the other, on the scanner page, the stream page
+  // and inside Caesar alike.
+  lsKeyPrefix = STRATEGY.lsKeyPrefix,
   // Routes come from the registry entry, not from literals repeated per component.
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,
@@ -170,10 +174,24 @@ export default function PairFluxScanner({
   // Every filter/view field below used to be declared here AND, identically, in
   // OpenDoorScanner - 226 of them. They now live in useScannerFilters; the bag is destructured
   // so the several thousand references throughout this file stay exactly as they were.
+  /**
+   * The three classes PairFlux actually publishes ratings for, taken from the registry rather
+   * than written out again — the band buttons below already read the same list, so the toolbar
+   * and the state cannot describe different worlds.
+   *
+   * Ordered as the registry orders them, so PRE is the default: the shared hook otherwise starts
+   * every scanner on GLOB, which for this strategy fetches zero pairs.
+   */
+  const PAIRFLUX_SESSIONS = useMemo(
+    () => STRATEGY.ratingClasses.keys.map((k) => k.toUpperCase() as PaperArbSession),
+    [],
+  );
+
   const scannerFilters = useScannerFilters({
     strategy: STRATEGY,
     streamAutomationConfigOverride,
     startAbsDefault: 0.1,
+    sessions: PAIRFLUX_SESSIONS,
   });
   const {
     internalTab,
@@ -1306,7 +1324,10 @@ export default function PairFluxScanner({
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
 
-        if (controlledSession == null && (s.session === "BLUE" || s.session === "ARK" || s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB")) {
+        // Only the classes this strategy rates. The list used to be Arbitrage's eight, so a saved
+        // layout holding GLOB or POST restored a class whose ratings endpoint answers with nothing
+        // — and since the band row renders three buttons, none of them lit up to show it.
+        if (controlledSession == null && PAIRFLUX_SESSIONS.includes(s.session as PaperArbSession)) {
           setSession(s.session);
           const restoredBand = ratingBandFromSession(s.session);
           if (controlledRuleBand != null) {
@@ -2370,7 +2391,20 @@ export default function PairFluxScanner({
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
     strategyModeEnabled: streamAutomationConfigOverride?.strategyModeEnabled ?? false,
     minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
-    endSignalThreshold: streamAutomationConfigOverride?.endSignalThreshold ?? Math.max(0, Number(endAbs) || 0),
+    // Unconditional, for the same reason as maxAdds below — with one extra reason on this
+    // strategy: THE THRESHOLD HAS A UNIT.
+    //
+    // The engine exits on `abs(decision.signal) < endSignalThreshold`, and for PairFlux
+    // `decision.signal` is the pair deviation expressed in whatever the purple group is set to —
+    // pp, sigmas, or alphas. `endAbs` is the field in that same group, so it is already in the
+    // matching unit by construction. The stream's stored `endSignalThreshold` is not: it is a bare
+    // 0.2 that was chosen as PERCENTAGE POINTS, to match the replay's ConvAbsPp default.
+    //
+    // Taking the override therefore did two wrong things at once on the stream. It discarded the
+    // exit level the user had typed, and it compared a pp constant against a number that was in
+    // alphas — so a pair asked to exit at 0.5 alpha was held until 0.2 alpha instead, a level with
+    // no relation to the one on screen and reached far later.
+    endSignalThreshold: Math.max(0, Number(endAbs) || 0),
     maxOpenPositions: streamAutomationConfigOverride?.maxOpenPositions ?? 10,
     // Unconditional, like sizeValue/dilutionStep/minHoldMinutes below: maxAdds must always come
     // from the shared toolbar state (the visible MAXADD field), never from
@@ -2380,7 +2414,25 @@ export default function PairFluxScanner({
     queueDelayMinSeconds: streamAutomationConfigOverride?.queueDelayMinSeconds ?? 0,
     queueDelayMaxSeconds: streamAutomationConfigOverride?.queueDelayMaxSeconds ?? 0,
     exitExecutionMode: closeMode === "Passive" ? "passive" : "active",
-    hedgeMode: pnlMode === "Hedged" ? "hedged" : "unhedged",
+    /**
+     * ALWAYS unhedged — and that is not the same as unhedged trading.
+     *
+     * PairFlux's second leg is already a decision of its own: the gate approves BOTH ends of a
+     * pair, so the engine produces two decisions, two intents and two orders. The engine's hedge
+     * mechanism is a SECOND, independent way of getting a second leg, meant for Arbitrage, where
+     * one ticker trades against a benchmark ETF that never has a decision of its own.
+     *
+     * Turning it on here fires both. `benchmark` on a PairFlux decision is the PARTNER ticker (the
+     * override sets it, so the table can show what the leg is paired against), and the dispatcher
+     * only asks whether benchmark differs from ticker — which for a pair it always does. So GFI
+     * Short would send GFI sell and then a hedge buy on HMY, while the HMY Long decision sent HMY
+     * buy and a hedge sell on GFI: four orders for one pair, double size on both legs.
+     *
+     * `pnlMode` cannot decide this. On this strategy it selects which P&L NUMBER to display —
+     * `RawPnlUsd` (one leg) or `HedgedPnlUsd` (both) — and it defaults to "Hedged", so reading a
+     * display preference as an execution instruction armed the duplicate by default.
+     */
+    hedgeMode: "unhedged",
     scaleMode: dilutionMode === "Diluted" ? "scale_in" : "single",
     sizingMode: sizingMode === "Tier" ? "TIER" : "USD",
     sizeValue,
@@ -2512,6 +2564,17 @@ export default function PairFluxScanner({
    *
    * The reading is signed the way the trade is: the leg being SOLD carries a positive deviation,
    * the leg being BOUGHT a negative one, so the sign and the side agree at a glance.
+   *
+   * ONE SITUATION, CHECKED ONCE. Both legs return the same `pairKey`, so the engine gives the pair
+   * a single verdict instead of judging each leg on its own book — GFI and HMY carried the same
+   * 0.83 deviation and different net edges (0.690 vs 0.780) purely because their spreads differ,
+   * which is enough to arm one leg and block the other.
+   *
+   * And the edge is handed over rather than derived. The generic rule is |signal| - spread, but
+   * `measure` is in whatever unit the toolbar selected and `spread` is in dollars; in sigma or
+   * alpha mode that subtraction has no meaning. `toExit` is what the trade banks reaching the exit
+   * level, in pp, already net of crossing both books — the same quantity for both legs, because it
+   * belongs to the pair.
    */
   const pairFluxDecisionOverride = useCallback(
     (signal: any, side: "Long" | "Short") => {
@@ -2520,6 +2583,8 @@ export default function PairFluxScanner({
       return {
         signal: side === "Short" ? hit.measure : -hit.measure,
         benchmark: hit.partner,
+        pairKey: hit.pairKey,
+        netEdge: hit.toExit,
       };
     },
     [pfGateMap],
@@ -4914,23 +4979,53 @@ export default function PairFluxScanner({
     const count = Math.trunc(row.entryCount ?? 1);
     return Number.isFinite(count) && count > 0 ? count : 1;
   };
-  const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
-    pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
-  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
-  const episodeTickerStreamflowUsd = (row: PaperArbClosedDto) => {
-    const baseNotional = row.positionNotionalUsd ?? 0;
-    if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
-    return baseNotional * episodeEntryCount(row);
+  /**
+   * TWO LEGS, EQUAL SIZE. Beta prices the SPREAD, never the position.
+   *
+   * These were Arbitrage's formulas, and Arbitrage genuinely sizes its hedge by beta —
+   * `benchSum += posNotional * Beta * bFrac` in TapeArbitrageEngine. PairFlux does not. Its engine
+   * puts `p.SizeValue` on BOTH legs:
+   *
+   *     aLeg = (...) / 100.0 * p.SizeValue;
+   *     bLeg = (...) / 100.0 * p.SizeValue;
+   *
+   * so the money it reports is already equal-notional. Carrying the beta-weighted turnover formula
+   * over meant the summary contradicted the engine underneath it: 31 pairs at 1000 a leg move
+   * 62 000, and MONEYFLOW showed 57 000 because it had scaled the second leg by an average beta of
+   * 0.84 that the trade never used.
+   *
+   * Beta still decides WHERE the pair is apart — `execUp = aBid - beta * bAsk` is the spread this
+   * strategy is built on. It just has no say in how much is bought.
+   *
+   * There is no `episodeHasHedgeLeg` here any more. Arbitrage needs one because its second leg is
+   * optional — RawOnly trades the ticker alone. A PairFlux episode without both legs is not a
+   * smaller trade, it is not this strategy.
+   *
+   * Both counts are therefore unconditional, and one identity falls out of that worth knowing:
+   * with a fixed size, MONEYFLOW is exactly TRADES x sizeValue.
+   */
+  /**
+   * Always two, never conditional on pnlMode.
+   *
+   * The engine sends both orders whatever the display is set to — `PnlUsd = shortPnl + longPnl`
+   * unconditionally — so a pnlMode that only chooses which number to SHOW must not change how many
+   * trades are counted as having happened.
+   */
+  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * 2;
+  /**
+   * ONE leg's turnover, adds included — and NOT multiplied by the add count again.
+   *
+   * Arbitrage's `positionNotionalUsd` is the size of a single entry, so its summary multiplies by
+   * entryCount to get the total. PairFlux's is not the same quantity: the replay sets
+   * `PositionNotionalUsd = p.SizeValue * entries.Count` and says so at TapePairFluxEngine.cs:226.
+   * Multiplying it again squared the adds — invisible while every episode is a single entry, and
+   * a fourfold overstatement on a pair that scaled in twice.
+   */
+  const episodeLegStreamflowUsd = (row: PaperArbClosedDto) => {
+    const legFlow = row.positionNotionalUsd ?? 0;
+    return Number.isFinite(legFlow) && legFlow > 0 ? legFlow : 0;
   };
-  const episodeBenchStreamflowUsd = (row: PaperArbClosedDto) => {
-    if (!episodeHasHedgeLeg(row)) return 0;
-    const tickerFlow = episodeTickerStreamflowUsd(row);
-    if (!Number.isFinite(tickerFlow) || tickerFlow <= 0) return 0;
-    return tickerFlow * Math.abs(row.beta ?? 0);
-  };
-  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
-    return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
-  };
+  const episodeStreamflowUsd = (row: PaperArbClosedDto) => episodeLegStreamflowUsd(row) * 2;
   const analyticsSummary = useMemo(() => {
     // Single pass instead of one map plus eight filter/reduce scans and two spread-based extremes.
     const situations = filteredEpisodes.length;

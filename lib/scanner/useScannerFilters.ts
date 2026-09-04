@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { PresetDto } from "../../types/presets";
 import { todayNyYmd } from "../time";
 import { normalizeDilutionStepValue, normalizeMaxAddsValue } from "./format";
+import { ratingBandFromSession } from "./rating";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES } from "./scopeParameters";
 import type { ScannerStrategy } from "./strategy";
 import type { ScopeOptimizerBinMode } from "./types";
@@ -27,6 +28,19 @@ export type ScannerFiltersOptions = {
   } | null;
   /** The one shared default that differs per strategy: 0.1 for Arbitrage, 0 for OpenDoor. */
   startAbsDefault?: number;
+  /**
+   * The sessions this strategy actually has statistics for, most-preferred first.
+   *
+   * Omit it and nothing changes: the session defaults to GLOB and the band to GLOBAL, which is
+   * Arbitrage's eight-band world. Pass it and both defaults come from the list instead, and any
+   * attempt to set a session outside it is refused.
+   *
+   * PairFlux is why this exists. It rates three classes, but it started on GLOB — a class its
+   * ratings endpoint answers with zero rows. The result was a scanner that looked configured,
+   * highlighted no band at all (GLOBAL is not one of its three buttons), fetched an empty pair
+   * universe and produced no signals, with nothing anywhere saying why.
+   */
+  sessions?: readonly PaperArbSession[];
 };
 
 /**
@@ -43,7 +57,12 @@ export function useScannerFilters(
   options: ScannerFiltersOptions = {}
 ): ScannerFilterState & ScannerFilterSetters {
   const [internalTab, setInternalTab] = useState<TabKey>("active");
-  const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>("GLOBAL");
+  // The strategy's own first class when it declared a list, else Arbitrage's historical default.
+  const allowedSessions = options.sessions;
+  const defaultSession: PaperArbSession = allowedSessions?.[0] ?? "GLOB";
+  const [internalRuleBand, setInternalRuleBand] = useState<PaperArbRatingBand>(
+    allowedSessions?.[0] ? ratingBandFromSession(allowedSessions[0]) : "GLOBAL",
+  );
   const [zapMode, setZapMode] = useState<ZapMode>("zap");
   const [showSharedMinMax, setShowSharedMinMax] = useState<boolean>(true);
   const [days, setDays] = useState<string[]>([]);
@@ -52,7 +71,18 @@ export function useScannerFilters(
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
   const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
-  const [internalSession, setInternalSession] = useState<PaperArbSession>("GLOB");
+  const [internalSession, setInternalSessionRaw] = useState<PaperArbSession>(defaultSession);
+  /**
+   * Refuses a session the strategy has no ratings for.
+   *
+   * The blocked paths are the quiet ones — a layout saved before the list existed, or one carried
+   * over from another strategy's stored shape. Both restore a class that fetches nothing.
+   */
+  const setInternalSession = useCallback((next: PaperArbSession) => {
+    if (allowedSessions && !allowedSessions.includes(next)) return;
+    setInternalSessionRaw(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedSessions]);
   const [metric, setMetric] = useState<PaperArbMetric>("SigmaZap");
   const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
   const [startAbs, setStartAbs] = useState<number>(options.startAbsDefault ?? 0.1);
