@@ -58,57 +58,100 @@ export function pairKeyOf(a: string, b: string): string {
 const NO: PairFluxGateVerdict = { up: false, down: false };
 
 /**
- * Ticker -> verdict, built once per live-pair refresh so the gate itself is a map lookup.
+ * Ticker -> EVERY pair it is currently a leg of.
  *
- * PAIRS ARE MATCHED, NOT TICKERS SCORED.
+ * NO EXCLUSIVITY (user, 2026-09-04). This used to be a greedy matching: a pair was taken only when
+ * neither leg was already spoken for, so one ticker belonged to at most one trade. Measured on the
+ * live intra universe that turned 301 diverged pairs into 71 — not a filter, a structural cap, and
+ * the Sonar rightly showed all 301. The rule is now that a ticker may be a leg of as many pairs as
+ * it has diverged from: SFNC apart from AUB, FIBK and UBSI is three trades, and SFNC is sold in
+ * each of them.
  *
- * A ticker is usually a leg of many live pairs at once — the miners all diverge from each other,
- * so do the bitcoin proxies. Claiming each ticker independently by its own widest reading looks
- * right per ticker and is wrong per trade: measured live, 78% of approved tickers ended up
- * pointing at a partner that was itself paired with somebody else. CIFR approved against IREN
- * while IREN traded against CLSK is not a pair trade, it is a naked directional position on a
- * strategy that exists to have two hedged legs.
+ * That is why this returns a LIST. A ticker no longer has "a" verdict — it has one per pair, and
+ * in different pairs it can even sit on different sides (ahead of one name, behind another). The
+ * per-ticker question the old gate answered cannot express that, so callers work per PAIR LEG and
+ * the engine keys its bookkeeping by (ticker, pairKey) rather than by ticker alone.
  *
- * So this is a greedy matching, widest first: a pair is taken only when NEITHER leg is already
- * spoken for. Every approved ticker therefore has a partner that names it back, and the two
- * orders that go out are two halves of one trade.
- *
- * The cost is real and worth naming: the second-widest pair sharing a leg is skipped entirely,
- * not re-pointed at someone else. That is the correct answer — its edge was measured against a
- * partner that is no longer available.
+ * Widest first within each ticker, so anything that has to pick one still picks the strongest.
  */
-export function buildPairFluxGateMap(pairs: readonly LivePair[]): Map<string, PairFluxGateEntry> {
-  const out = new Map<string, PairFluxGateEntry>();
-
+export function buildPairFluxGateMap(pairs: readonly LivePair[]): Map<string, PairFluxGateEntry[]> {
+  const out = new Map<string, PairFluxGateEntry[]>();
   const norm = (t: string) => t.trim().toUpperCase();
 
-  // Widest first, so the strongest divergence gets first refusal on its legs.
-  const ordered = [...pairs].sort((a, b) => b.measure - a.measure);
+  const add = (ticker: string, entry: PairFluxGateEntry) => {
+    const list = out.get(ticker);
+    if (list) list.push(entry);
+    else out.set(ticker, [entry]);
+  };
 
-  for (const p of ordered) {
+  const seen = new Set<string>();
+  for (const p of [...pairs].sort((a, b) => b.measure - a.measure)) {
     const ahead = norm(p.ahead);
     const behind = norm(p.behind);
     if (!ahead || !behind || ahead === behind) continue;
-    // Either leg already committed to a wider pair: this one cannot be traded as a pair at all.
-    if (out.has(ahead) || out.has(behind)) continue;
+    const key = pairKeyOf(ahead, behind);
+    // The same unordered pair can arrive twice if the universe ever ships both directions.
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-    const shared = { dev: p.dev, measure: p.measure, pairKey: pairKeyOf(ahead, behind), toExit: p.toExit };
+    const shared = { dev: p.dev, measure: p.measure, pairKey: key, toExit: p.toExit };
     // Sold at its bid — the leg that ran ahead.
-    out.set(ahead, { up: false, down: true, partner: behind, ...shared });
+    add(ahead, { up: false, down: true, partner: behind, ...shared });
     // Bought at its ask — the leg that lagged.
-    out.set(behind, { up: true, down: false, partner: ahead, ...shared });
+    add(behind, { up: true, down: false, partner: ahead, ...shared });
   }
 
   return out;
 }
 
+/** Every pair leg approved for this ticker, widest first. Empty when it is in no pair. */
+export function pairFluxLegsFor(
+  map: ReadonlyMap<string, PairFluxGateEntry[]>,
+  ticker: unknown,
+): readonly PairFluxGateEntry[] {
+  const key = String(ticker ?? "").trim().toUpperCase();
+  return key ? map.get(key) ?? [] : [];
+}
+
 /** The gate the engine calls, per signal. */
 export function matchPairFluxGate(
-  map: ReadonlyMap<string, PairFluxGateEntry>,
+  map: ReadonlyMap<string, PairFluxGateEntry[]>,
   ticker: unknown,
 ): PairFluxGateVerdict {
-  const key = String(ticker ?? "").trim().toUpperCase();
-  if (!key) return NO;
-  const hit = map.get(key);
-  return hit ? { up: hit.up, down: hit.down } : NO;
+  const legs = pairFluxLegsFor(map, ticker);
+  if (legs.length === 0) return NO;
+  // A ticker that is ahead in one pair and behind in another is approved BOTH ways. The verdict
+  // alone can no longer say which trade a row belongs to — that is what the expansion below is
+  // for; this stays only so a ticker in no pair is still refused outright.
+  return { up: legs.some((l) => l.up), down: legs.some((l) => l.down) };
+}
+
+/**
+ * One signal row in, one row per approved pair out.
+ *
+ * The engine is built around "a row is a candidate"; it never had to represent one ticker being a
+ * candidate three separate times. Rather than teach every part of it about pairs, the row itself
+ * is duplicated per pair here, each copy carrying the pair it belongs to and pointed at the side
+ * that pair needs. Downstream, a decision, a latch and a position are then keyed by
+ * (ticker, pairKey) — see legIdentityOf in streamEngine — so the three SFNC shorts are three
+ * independent situations that open, add and close on their own.
+ *
+ * The quote is shared deliberately: every copy is the same instrument at the same instant, so the
+ * bid, the ask and the spread must be identical across them. Only the pair context differs.
+ *
+ * Returns [] for a ticker in no approved pair, which drops it exactly as the old gate did.
+ */
+export function expandPairFluxSignal<T extends { ticker?: unknown }>(
+  map: ReadonlyMap<string, PairFluxGateEntry[]>,
+  row: T,
+): T[] {
+  const legs = pairFluxLegsFor(map, row?.ticker);
+  if (legs.length === 0) return [];
+  return legs.map((leg) => ({
+    ...row,
+    // `down` is how the engine spells Short; the leg that ran ahead is the one being sold.
+    direction: leg.down ? "down" : "up",
+    pairKey: leg.pairKey,
+    pairPartner: leg.partner,
+  })) as T[];
 }

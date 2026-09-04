@@ -1,10 +1,12 @@
-﻿"use client";
+"use client";
 
 import { useSyncExternalStore } from "react";
 import { useStreamStores } from "./streamStoreRegistry";
 
 export type StreamDecisionStoreRow = {
   ticker: string;
+  /** The situation this row belongs to; null for single-ticker strategies. */
+  pairKey?: string | null;
   benchmark: string;
   side: "Long" | "Short";
   signal: number | null;
@@ -18,6 +20,19 @@ export type StreamDecisionStoreRow = {
   reason: string;
   updatedAt: number;
 };
+
+/**
+ * The row's identity in this store.
+ *
+ * The ticker alone was enough while a ticker could be in one situation at a time. PairFlux can
+ * hold the same name against several partners at once, and keying by ticker would keep only the
+ * last of them — 54 FMTM pairs would render as one row and 53 would silently vanish. Consumers
+ * treat the id as opaque (they call getRow(id) and read row.ticker to display), so widening it
+ * costs them nothing.
+ */
+function keyOf(row: { ticker: string; pairKey?: string | null }): string {
+  return row.pairKey ? `${row.ticker}|${row.pairKey}` : row.ticker;
+}
 
 function sameNullableNumber(a: number | null | undefined, b: number | null | undefined): boolean {
   if (a == null && b == null) return true;
@@ -97,7 +112,7 @@ export class StreamDecisionStore {
 
   /** Returns true only when the visible decision data actually changed. */
   applySnapshot(nextRows: StreamDecisionStoreRow[]): boolean {
-    const nextIds = nextRows.map((row) => row.ticker);
+    const nextIds = nextRows.map((row) => keyOf(row));
     const prevIds = this.ids;
     const prevIdSet = new Set(prevIds);
     const nextIdSet = new Set(nextIds);
@@ -121,13 +136,14 @@ export class StreamDecisionStore {
     }
 
     for (const row of nextRows) {
-      const prev = this.rows.get(row.ticker);
+      const key = keyOf(row);
+      const prev = this.rows.get(key);
       if (!sameDecisionRow(prev, row)) {
-        this.rows.set(row.ticker, row);
-        this.rowListeners.get(row.ticker)?.forEach((listener) => listener());
+        this.rows.set(key, row);
+        this.rowListeners.get(key)?.forEach((listener) => listener());
         anyRowChanged = true;
       }
-      prevIdSet.delete(row.ticker);
+      prevIdSet.delete(key);
     }
 
     if (idsChanged) {

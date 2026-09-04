@@ -25,13 +25,15 @@ import { subscribeToStreamSse } from "../stream/streamSseHub";
 import { buildSignalsStreamUrl } from "@/lib/signals/url";
 import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "@/lib/pairflux/client";
 import { buildQuoteIndex, computeLivePairs } from "@/lib/pairflux/livePairs";
-import { buildPairFluxGateMap, matchPairFluxGate } from "@/lib/pairflux/gate";
+import { buildPairFluxGateMap, expandPairFluxSignal, matchPairFluxGate, pairFluxLegsFor } from "@/lib/pairflux/gate";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
-import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+// The SAME implementation the engine imports, deliberately — a second copy of this filter is
+// exactly how the gate and the decisions came to disagree about which tickers exist.
+import { applyExactSonarClientFilters, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
@@ -2271,6 +2273,23 @@ export default function PairFluxScanner({
       sigmaMax: maxSigma,
       zapMode: zapMode,
       zapShowAbs: startAbs,
+        /**
+         * The per-ticker ZAP floor must not apply here — see SonarExactFilterSnapshot.
+         *
+         * `zapShowAbs` above is PairFlux's PAIR threshold (the purple group), but the shared
+         * Arbitrage filter reads it as "this ticker must be at least this far from its benchmark".
+         * That is a different rule about a different quantity, and it removes the lagging leg of
+         * every pair: the leg PairFlux buys is the one that has NOT moved, so its own ZAP is small
+         * by construction. Measured live on 2026-09-04: of three blocked pairs the surviving leg
+         * always carried the large own-ZAP (ALAB 9.36, SFNC 3.93, FMTM 2.02) and the missing one
+         * the small (ASX -0.14, UBSI 0.14, CHAT 1.73). The cut sits between 1.73 and 2.02, which
+         * is the toolbar's own START read as a per-ticker floor. Each surviving leg then had no
+         * partner and was correctly refused as one-sided.
+         *
+         * Note that zeroing zapShowAbs would NOT have fixed it: the floor is
+         * `Math.max(0.3, zapShowAbs)`, and ASX and UBSI sit under 0.3 on their own.
+         */
+        skipArbitrageZapThreshold: true,
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
       topMode,
@@ -2507,9 +2526,13 @@ export default function PairFluxScanner({
   const pfSignalsUrl = useMemo(() => buildSignalsStreamUrl({
     cls: (session.toLowerCase() as any),
     type: (ratingType ?? "any") as any,
-    mode: "all" as any,
-    ratingMode: "SESSION" as any,
-    zapMode: "zap" as any,
+    // Taken from the SAME snapshot the engine builds its own URL from. These three were hardcoded
+    // here, so whenever the toolbar sat on sigmas or alphas the two subscriptions asked the server
+    // for different things — and a leg present in one and absent from the other is precisely the
+    // "partner leg missing" case, arriving before any client filter had a chance to run.
+    mode: (streamExactSonarFilterSnapshot?.mode ?? "all") as any,
+    ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
+    zapMode: (streamExactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
     minRate: streamRatingRule.minRate,
     minTotal: streamRatingRule.minTotal,
     // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
@@ -2518,7 +2541,8 @@ export default function PairFluxScanner({
     tickers: splitListUpper(tickersText).join(",") || undefined,
     limit: 5000,
     includeAll: true,
-  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText]);
+  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText,
+       streamExactSonarFilterSnapshot, ratingMode, metric]);
 
   useEffect(() => {
     if (primaryPanel !== "stream") { setPfSignals([]); return; }
@@ -2527,10 +2551,30 @@ export default function PairFluxScanner({
     });
   }, [primaryPanel, pfSignalsUrl]);
 
+  /**
+   * The universe a pair may be BUILT from — the same one the engine will act on.
+   *
+   * `pfSignals` is deliberately unfiltered (includeAll, no sigma floor) so that both legs of a
+   * pair can arrive. But the ENGINE only ever decides on signals that survived the client filter
+   * chain, so a pair built here from a leg that chain rejects can never be traded: one leg reaches
+   * the table and the other never becomes a decision, and the pair is refused as one-sided. That
+   * is what "partner leg missing" was reporting — GFI/FSM among them.
+   *
+   * The Sonar never had the problem because its divergence panel already reads the filtered set.
+   * Running the same function here is what makes the two surfaces agree on the same filters, which
+   * is the whole point: a pair the stream shows is a pair the stream can send.
+   */
+  const pfQuotableSignals = useMemo(
+    () => (streamExactSonarFilterSnapshot
+      ? applyExactSonarClientFilters(pfSignals as any[], streamExactSonarFilterSnapshot)
+      : pfSignals),
+    [pfSignals, streamExactSonarFilterSnapshot],
+  );
+
   /** The pairs that are APART right now, read exactly as the Sonar reads them. */
   const pfLivePairs = useMemo(() => computeLivePairs({
     pairs: pfPairs,
-    quoteByTicker: buildQuoteIndex(pfSignals),
+    quoteByTicker: buildQuoteIndex(pfQuotableSignals),
     unit: devUnit === "sigma" ? "sigma" : devUnit === "alpha" ? "alpha" : "pct",
     minStr: String(startAbs),
     maxStr: startAbsMax ?? "",
@@ -2540,7 +2584,7 @@ export default function PairFluxScanner({
     sigmaRange: [minSigma, maxSigma],
     // The scanner toolbar has no alpha range of its own; alpha still gates through the unit.
     alphaRange: ["", ""],
-  }), [pfPairs, pfSignals, devUnit, startAbs, startAbsMax, endAbs,
+  }), [pfPairs, pfQuotableSignals, devUnit, startAbs, startAbsMax, endAbs,
        minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
 
   /**
@@ -2551,6 +2595,19 @@ export default function PairFluxScanner({
   const pfGateMap = useMemo(() => buildPairFluxGateMap(pfLivePairs), [pfLivePairs]);
   const pairFluxStreamGate = useCallback(
     (signal: any) => matchPairFluxGate(pfGateMap, signal?.ticker),
+    [pfGateMap],
+  );
+
+  /**
+   * One row per PAIR, not per ticker.
+   *
+   * A ticker diverged from three partners is three trades, and the engine used to be able to hold
+   * only one of them: a row was a ticker. Expanding here gives each pair its own row, and the
+   * engine keys decisions, latches, positions and dispatch by (ticker, pairKey) from there on, so
+   * the three situations open, add and close independently.
+   */
+  const pairFluxSignalExpand = useCallback(
+    (signal: any) => expandPairFluxSignal(pfGateMap, signal),
     [pfGateMap],
   );
 
@@ -2578,8 +2635,13 @@ export default function PairFluxScanner({
    */
   const pairFluxDecisionOverride = useCallback(
     (signal: any, side: "Long" | "Short") => {
-      const hit = pfGateMap.get(String(signal?.ticker ?? "").trim().toUpperCase());
-      if (!hit) return null;
+      // The ROW says which pair it is, not the ticker — a ticker is a leg of as many pairs as it
+      // has diverged from, and the expansion gave each of them its own row. Falling back to the
+      // widest leg only covers a row that reached here without being expanded.
+      const legs = pairFluxLegsFor(pfGateMap, signal?.ticker);
+      if (legs.length === 0) return null;
+      const wanted = String(signal?.pairKey ?? "");
+      const hit = (wanted ? legs.find((l) => l.pairKey === wanted) : null) ?? legs[0];
       return {
         signal: side === "Short" ? hit.measure : -hit.measure,
         benchmark: hit.partner,
@@ -2618,9 +2680,12 @@ export default function PairFluxScanner({
   } = useStreamEngine({
     signalGate: pairFluxStreamGate,
     decisionOverride: pairFluxDecisionOverride,
+    signalExpand: pairFluxSignalExpand,
     // The universe must arrive whole: a pair needs BOTH legs, and the server's own candidate set
     // is built from a per-ticker sigma rule this strategy does not use.
-    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true },
+    // corr/beta/sigma are PAIR statistics here, and computeLivePairs already applies the
+    // toolbar's ranges to the pair's own values — see omitTickerRanges.
+    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true, omitTickerRanges: true },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     trackedSignalsEnabled: streamTrackedSignalsEnabled,

@@ -53,6 +53,8 @@ export type StreamDecisionRow = {
 
 export type StreamPosition = {
   ticker: string;
+  /** The situation this position belongs to; null for single-ticker strategies. See legIdentityOf. */
+  pairKey?: string | null;
   benchmark: string;
   side: "Long" | "Short";
   entrySignal: number | null;
@@ -101,6 +103,12 @@ export type StreamActionLogEntry = {
   id: string;
   dayKey: string;
   ticker: string;
+  /**
+   * The situation this order belonged to; absent for single-ticker strategies and for entries
+   * written before pairs existed. Without it a reload cannot tell three simultaneous FMTM pairs
+   * apart, and the restore would collapse them into one position.
+   */
+  pairKey?: string | null;
   benchmark: string;
   side: "Long" | "Short";
   kind: StreamActionLogKind;
@@ -130,6 +138,8 @@ export type StreamOrderIntentType =
 export type StreamOrderIntent = {
   id: string;
   ticker: string;
+  /** The situation this order belongs to; null for single-ticker strategies. See legIdentityOf. */
+  pairKey?: string | null;
   benchmark: string;
   side: "Long" | "Short";
   intent: StreamOrderIntentType;
@@ -139,6 +149,23 @@ export type StreamOrderIntent = {
   reason: string;
   createdAt: number;
 };
+
+/**
+ * What makes a situation distinct.
+ *
+ * For every single-ticker strategy this is just the ticker, and every map keyed by it behaves
+ * exactly as before. For a strategy that can hold one ticker in several situations at once it is
+ * (ticker, pairKey): SFNC sold against AUB and SFNC sold against FIBK are two positions that open,
+ * add and close independently, and keying them by "SFNC" alone would silently collapse them into
+ * one — the second dispatch deduped away, the second exit never sent.
+ *
+ * The TICKER ITSELF IS UNCHANGED. It is still the real symbol everywhere it leaves the engine —
+ * the order, the bridge lease, the position table — because that is what it is. Only the internal
+ * bookkeeping gains the second dimension.
+ */
+function legIdentityOf(row: { ticker: string; pairKey?: string | null }): string {
+  return row.pairKey ? `${row.ticker}|${row.pairKey}` : row.ticker;
+}
 
 function isEntryOrderIntent(intent: StreamOrderIntentType | null | undefined): boolean {
   return intent === "ENTER_LONG_AGGRESSIVE" || intent === "ENTER_SHORT_AGGRESSIVE";
@@ -304,6 +331,8 @@ export type StreamAutomationConfig = {
 
 type StreamSignalLatch = {
   ticker: string;
+  /** The situation this latch belongs to; null for single-ticker strategies. See legIdentityOf. */
+  pairKey?: string | null;
   benchmark: string;
   side: "Long" | "Short";
   qualifiedSince: number;
@@ -772,14 +801,15 @@ function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayK
 
   for (const entry of chronological) {
     if (entry.kind === "CLOSE") {
-      openByTicker.delete(entry.ticker);
+      openByTicker.delete(logLegId(entry));
       continue;
     }
 
-    const existing = openByTicker.get(entry.ticker);
+    const existing = openByTicker.get(logLegId(entry));
     if (!existing) {
-      openByTicker.set(entry.ticker, {
+      openByTicker.set(logLegId(entry), {
         ticker: entry.ticker,
+        pairKey: entry.pairKey ?? null,
         benchmark: entry.benchmark,
         side: entry.side,
         entrySignal: entry.deviation,
@@ -921,20 +951,25 @@ function normalizeConfirmedActionLogEntries(entries: StreamActionLogEntry[]): St
   }));
 }
 
+/** The action log's own copy of legIdentityOf — an entry is a ticker plus, maybe, a situation. */
+function logLegId(entry: { ticker: string; pairKey?: string | null }): string {
+  return entry.pairKey ? `${entry.ticker}|${entry.pairKey}` : entry.ticker;
+}
+
 function mergeStreamPositionsWithActionLog(
   prev: StreamPosition[],
   entries: StreamActionLogEntry[],
   dayKey = localDayKey()
 ): StreamPosition[] {
   const restored = buildStreamPositionsFromActionLog(entries, dayKey);
-  const restoredByTicker = new Map(restored.map((row) => [row.ticker, row]));
-  const prevByTicker = new Map(prev.map((row) => [row.ticker, row]));
+  const restoredByTicker = new Map(restored.map((row) => [legIdentityOf(row), row]));
+  const prevByTicker = new Map(prev.map((row) => [legIdentityOf(row), row]));
   const transient = prev.filter((row) =>
     row.status !== "CLOSED" &&
     row.entryDispatchedAt == null &&
     isEntryOrderIntent(row.pendingIntent)
   );
-  const transientByTicker = new Map(transient.map((row) => [row.ticker, row]));
+  const transientByTicker = new Map(transient.map((row) => [legIdentityOf(row), row]));
   const merged = new Map<string, StreamPosition>();
 
   for (const [ticker, row] of restoredByTicker) {
@@ -1081,21 +1116,25 @@ function syncStreamSignalLatches(
     return [];
   }
 
-  const prevMap = new Map(prev.map((row) => [row.ticker, row]));
+  const prevMap = new Map(prev.map((row) => [legIdentityOf(row), row]));
   const next: StreamSignalLatch[] = [];
 
   for (const row of decisions) {
     // Track all signal candidates (above startAbs threshold): ENTRY_READY,
     // BLOCKED_SPREAD, and BLOCKED_EDGE. HOLD means below threshold — skip.
     if (row.status === "HOLD") continue;
-    const existing = prevMap.get(row.ticker);
+    const legId = legIdentityOf(row);
+    const existing = prevMap.get(legId);
     // Recover qualifiedSince from history if the latch briefly dropped (signal bounced
     // below threshold for < 1 min). Without this, sub-minute noise resets the hold
     // timer and the ticker never dispatches.
-    const historic = !existing ? latchHistory?.get(row.ticker) : null;
+    const historic = !existing ? latchHistory?.get(legId) : null;
     // If this ticker was already active in SCANNER when STREAM started, pre-seed its
     // qualifiedSince so it qualifies immediately (matching SCANNER candidate list).
     const isPrimed = !existing && !historic && !!primedTickers?.has(`${row.ticker}|${row.side}`);
+    // Priming and minute-qualification are seeded from SCANNER rows, which have no pair — so they
+    // stay keyed by ticker and side. A primed ticker primes every situation it is a leg of, which
+    // is the intended reading: the ticker was already active when the stream started.
     // For latches without a live predecessor (new or recovering from history): require the
     // signal to have been above threshold at the last minute boundary. This mirrors tape
     // behavior where a candle below threshold resets the consecutive streak — even a brief
@@ -1146,7 +1185,7 @@ function syncStreamSignalLatches(
     // requirement that "appeared, dropped, reappeared, held the last ~10s" dispatches at THIS
     // boundary, not the next one. So a brand-new latch always anchors to the immediately
     // preceding minute boundary, bounce or not.
-    const exitMinute = windowExitedMinutes?.get(row.ticker);
+    const exitMinute = windowExitedMinutes?.get(legId);
     const freshQualifiedSince = completedSignalMinuteBoundary;
     // Track how many signal drop/recovery cycles this latch has seen.
     // A bounce = latch was absent (signal below threshold) and just recovered,
@@ -1159,6 +1198,7 @@ function syncStreamSignalLatches(
       ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince);
     next.push({
       ticker: row.ticker,
+      pairKey: row.pairKey ?? null,
       benchmark: row.benchmark,
       side: row.side,
       qualifiedSince: resolvedQualifiedSince,
@@ -1302,7 +1342,9 @@ export function computeStreamDecisionRows(
     return {
       ticker: row.ticker,
       benchmark: override ? override.benchmark : String(row.benchmark ?? "UNKNOWN"),
-      pairKey: override?.pairKey ?? null,
+      // From the override when the strategy supplies one, else straight off the row the expansion
+      // produced — either way the decision knows which situation it is.
+      pairKey: override?.pairKey ?? (row as { pairKey?: string | null }).pairKey ?? null,
       side,
       signal,
       spread,
@@ -1354,9 +1396,16 @@ function reconcilePairedDecisions(rows: StreamDecisionRow[]): StreamDecisionRow[
   const verdict = new Map<string, { status: StreamDecisionStatus; reason: string }>();
   for (const [key, legs] of groups) {
     if (legs.length < 2) {
+      // Name the absent side. "partner leg missing" alone says a pair is broken but not which
+      // half, and the half is the whole question: the partner is normally absent because some
+      // per-ticker filter removed it from the universe, and knowing the symbol is what makes that
+      // checkable instead of guessable.
+      const absent = legs[0]?.benchmark?.trim();
       verdict.set(key, {
         status: "BLOCKED_EDGE",
-        reason: "partner leg missing — a pair trade cannot go out one-sided",
+        reason: absent
+          ? `${absent} is not in the signal universe — a pair trade cannot go out one-sided`
+          : "partner leg missing — a pair trade cannot go out one-sided",
       });
       continue;
     }
@@ -1398,7 +1447,8 @@ export function syncStreamPositions(
 ): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
-  const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
+  // Leg-keyed: one ticker can own several decisions at once. See legIdentityOf.
+  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
   const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
   const now = Date.now();
   const nowMinutes = currentMinutesLocal();
@@ -1481,7 +1531,7 @@ export function syncStreamPositions(
        * The decision row already carries the strategy's own number, so prefer it whenever the row
        * declares a pairKey. Single-leg strategies have no pairKey and keep the ZAP path exactly.
        */
-      const ownDecision = decisionMap.get(existing.ticker);
+      const ownDecision = decisionMap.get(legIdentityOf(existing));
       const pairSigned = ownDecision?.pairKey ? ownDecision.signal : null;
       const currentSigned =
         pairSigned ?? zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
@@ -1565,7 +1615,7 @@ export function syncStreamPositions(
       let addPeakSigned = existing.addPeakSigned ?? null;
       let confirmedAddAbs = existing.confirmedAddAbs ?? null;
       let confirmedAddSigned = existing.confirmedAddSigned ?? null;
-      const decision = decisionMap.get(existing.ticker);
+      const decision = decisionMap.get(legIdentityOf(existing));
       const entryStillReady = decision?.status === "ENTRY_READY";
       const hasUndispatchedEntry =
         entryDispatchedAt == null &&
@@ -1593,7 +1643,7 @@ export function syncStreamPositions(
           pendingIntent: null,
           updatedAt: now,
         });
-        seen.add(existing.ticker); // block latch from recreating
+        seen.add(legIdentityOf(existing)); // block latch from recreating
         continue;
       }
 
@@ -1620,14 +1670,14 @@ export function syncStreamPositions(
           // the position alive so the latch cannot recreate it with a new qualifiedSince.
           // A new qualifiedSince would produce a different intentId and bypass
           // dispatchedIntentIdsRef, causing a duplicate ENTRY order to be sent.
-          if (dispatchingEntryTickers.has(existing.ticker)) {
+          if (dispatchingEntryTickers.has(legIdentityOf(existing))) {
             next.push({
               ...existing,
               pendingIntent: null,
               reason: "dispatch in-flight — entry hold cancelled, keeping to block latch",
               updatedAt: now,
             });
-            seen.add(existing.ticker);
+            seen.add(legIdentityOf(existing));
           }
           continue;
         }
@@ -1653,7 +1703,7 @@ export function syncStreamPositions(
           lastConfirmedActiveAt,
           updatedAt: now,
         });
-        seen.add(existing.ticker);
+        seen.add(legIdentityOf(existing));
         continue;
       }
 
@@ -1881,7 +1931,7 @@ export function syncStreamPositions(
         pendingAddTrigger,
         updatedAt: now,
       });
-      seen.add(existing.ticker);
+      seen.add(legIdentityOf(existing));
     }
 
     let openCount = next.filter((row) =>
@@ -1890,7 +1940,7 @@ export function syncStreamPositions(
       (row.status === "PENDING_ENTRY" && row.entryDispatchedAt != null)
     ).length;
     for (const latch of latches) {
-      if (seen.has(latch.ticker)) continue;
+      if (seen.has(legIdentityOf(latch))) continue;
       if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
         logStreamGateBlock("positions:pastCutoff", { ticker: latch.ticker, nowMinutes, startCutoffMinutes, sessionStartMinutes });
         continue;
@@ -1940,11 +1990,12 @@ export function syncStreamPositions(
       // (frozenEntrySignalMap), not whatever the live poll shows right now — dispatch can run
       // a few ticks after the boundary, during which the price may keep moving. Falls back to
       // the live value when no frozen snapshot exists yet (startup / first minute).
-      const frozenSigned = frozenEntrySignalMap.get(`${latch.ticker}|${latch.side}`);
+      const frozenSigned = frozenEntrySignalMap.get(`${legIdentityOf(latch)}|${latch.side}`);
       const entrySignedValue = frozenSigned ?? currentSigned;
       const currentSpread = signalSpread(raw);
       next.push({
         ticker: latch.ticker,
+        pairKey: latch.pairKey ?? null,
         benchmark: latch.benchmark,
         side: latch.side,
         entrySignal: entrySignedValue,
@@ -1966,7 +2017,7 @@ export function syncStreamPositions(
         updatedAt: now,
       });
       openCount += 1;
-      seen.add(latch.ticker);
+      seen.add(legIdentityOf(latch));
     }
 
     return next
@@ -1990,7 +2041,7 @@ export function syncStreamPositions(
     if (existing.entryDispatchedAt != null && !loggedOpenTickers.has(existing.ticker)) {
       continue;
     }
-    const current = decisionMap.get(existing.ticker);
+    const current = decisionMap.get(legIdentityOf(existing));
     if (!current) {
       if (printWindowEnabled && nowMinutes < printCloseMinutes) {
         next.push({
@@ -2001,7 +2052,7 @@ export function syncStreamPositions(
           entryDispatchedAt: existing.entryDispatchedAt,
           updatedAt: now,
         });
-        seen.add(existing.ticker);
+        seen.add(legIdentityOf(existing));
         continue;
       }
       next.push({
@@ -2012,7 +2063,7 @@ export function syncStreamPositions(
         entryDispatchedAt: existing.entryDispatchedAt,
         updatedAt: now,
       });
-      seen.add(existing.ticker);
+      seen.add(legIdentityOf(existing));
       continue;
     }
 
@@ -2080,7 +2131,8 @@ export function buildStreamOrderIntents(
   const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
   const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
   const intents: StreamOrderIntent[] = [];
-  const decisionMap = new Map(decisions.map((row) => [row.ticker, row]));
+  // Leg-keyed: one ticker can own several decisions at once. See legIdentityOf.
+  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
 
   if (automationConfig?.strategyModeEnabled) {
     // Ctrl+O is only ever sent as part of the Ctrl+Q → 1s → Ctrl+O cutoff pair, driven by
@@ -2089,8 +2141,9 @@ export function buildStreamOrderIntents(
     for (const position of positions) {
       if (!position.pendingIntent) continue;
       intents.push({
-        id: intentId([strategyId, position.ticker, "strategy", position.openedAt, position.pendingIntent, position.entryCount, "live"]),
+        id: intentId([strategyId, legIdentityOf(position), "strategy", position.openedAt, position.pendingIntent, position.entryCount, "live"]),
         ticker: position.ticker,
+        pairKey: position.pairKey ?? null,
         benchmark: position.benchmark,
         side: position.side,
         intent: position.pendingIntent,
@@ -2126,8 +2179,9 @@ export function buildStreamOrderIntents(
       if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
       if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
       intents.push({
-        id: intentId([row.ticker, "enter", row.side]),
+        id: intentId([legIdentityOf(row), "enter", row.side]),
         ticker: row.ticker,
+        pairKey: row.pairKey ?? null,
         benchmark: row.benchmark,
         side: row.side,
         intent: row.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
@@ -2140,8 +2194,9 @@ export function buildStreamOrderIntents(
       });
     } else if (row.status === "BLOCKED_SPREAD" || row.status === "BLOCKED_EDGE") {
       intents.push({
-        id: intentId([row.ticker, "blocked", row.status]),
+        id: intentId([legIdentityOf(row), "blocked", row.status]),
         ticker: row.ticker,
+        pairKey: row.pairKey ?? null,
         benchmark: row.benchmark,
         side: row.side,
         intent: row.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
@@ -2162,8 +2217,9 @@ export function buildStreamOrderIntents(
       Math.abs(decision.signal) < Math.max(0, automationConfig?.endSignalThreshold ?? 0);
     if (position.status === "EXIT_BLOCKED") {
       intents.push({
-        id: intentId([position.ticker, "exit-blocked", position.side]),
+        id: intentId([legIdentityOf(position), "exit-blocked", position.side]),
         ticker: position.ticker,
+        pairKey: position.pairKey ?? null,
         benchmark: position.benchmark,
         side: position.side,
         intent: position.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE",
@@ -2179,8 +2235,9 @@ export function buildStreamOrderIntents(
     if (normalizeExitTriggered) {
       const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 60_000;
       intents.push({
-        id: intentId([position.ticker, "normalize-exit", position.side]),
+        id: intentId([legIdentityOf(position), "normalize-exit", position.side]),
         ticker: position.ticker,
+        pairKey: position.pairKey ?? null,
         benchmark: position.benchmark,
         side: position.side,
         intent: position.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE",
@@ -2222,7 +2279,8 @@ function buildFallbackPendingEntryPositions(
     : Number.MAX_SAFE_INTEGER;
   const signalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
   const next = existingPositions.slice();
-  const existingByTicker = new Set(existingPositions.map((row) => row.ticker));
+  // Per situation: a ticker already holding one pair can still open another.
+  const existingByLeg = new Set(existingPositions.map((row) => legIdentityOf(row)));
   let openCount = existingPositions.filter((row) =>
     row.status === "OPEN" ||
     row.status === "PRINT_PENDING" ||
@@ -2230,7 +2288,7 @@ function buildFallbackPendingEntryPositions(
   ).length;
 
   for (const latch of qualifiedLatches) {
-    if (existingByTicker.has(latch.ticker)) continue;
+    if (existingByLeg.has(legIdentityOf(latch))) continue;
     if (openCount >= maxOpenAllowed) break;
 
     const raw = signalMap.get(latch.ticker);
@@ -2239,11 +2297,12 @@ function buildFallbackPendingEntryPositions(
       : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw));
     // See syncStreamPositions: anchor to the value at the closed minute's last poll, not
     // whatever the live poll shows at dispatch time.
-    const frozenSigned = frozenEntrySignalMap.get(`${latch.ticker}|${latch.side}`);
+    const frozenSigned = frozenEntrySignalMap.get(`${legIdentityOf(latch)}|${latch.side}`);
     const entrySignedValue = frozenSigned ?? signed;
 
     next.push({
       ticker: latch.ticker,
+      pairKey: latch.pairKey ?? null,
       benchmark: latch.benchmark,
       side: latch.side,
       entrySignal: entrySignedValue,
@@ -2265,7 +2324,7 @@ function buildFallbackPendingEntryPositions(
       updatedAt: now,
     });
 
-    existingByTicker.add(latch.ticker);
+    existingByLeg.add(legIdentityOf(latch));
     openCount += 1;
   }
 
@@ -2341,6 +2400,16 @@ export type StreamSignalsRequestOverride = {
    */
   omitStartAbs?: boolean;
   /**
+   * Skip the per-ticker corr / beta / sigma bounds in the server query.
+   *
+   * Those describe a TICKER against its benchmark ETF. On PairFlux the same three names describe
+   * the PAIR — its correlation, its hedge ratio, its residual spread — and computeLivePairs
+   * already applies the toolbar's ranges to the pair's own published values. Sending them to the
+   * server as per-ticker bounds narrows the universe by an unrelated measurement before a pair can
+   * form, and the leg it removes is not the one the user meant to exclude.
+   */
+  omitTickerRanges?: boolean;
+  /**
    * Ask the server for the WHOLE universe rather than only the rows it already considers
    * candidates. A strategy that decides on a live reading — OpenFade fades a deviation band — has
    * to see every ticker, because the ones the server pre-filtered away are exactly the ones whose
@@ -2352,6 +2421,17 @@ export type StreamSignalsRequestOverride = {
 type UseStreamEngineArgs = {
   /** Optional strategy-specific entry gate. See StreamSignalGate. */
   signalGate?: StreamSignalGate;
+  /**
+   * Turn one signal row into one row PER SITUATION, when a ticker can be in more than one at once.
+   *
+   * PairFlux is the case: a ticker diverged from three partners is three trades, and the engine
+   * had no way to say that — a row was a ticker, and a ticker was one candidate. Supplied, this
+   * replaces the gate's keep/drop/re-point step entirely; each returned row carries its own
+   * `pairKey`, and everything downstream is keyed by (ticker, pairKey) instead of ticker.
+   *
+   * Returning [] drops the ticker, exactly as a refusing gate does.
+   */
+  signalExpand?: (row: ArbitrageSignal) => ArbitrageSignal[];
   /** Optional strategy-specific reading for a decision row. See StreamDecisionOverride. */
   decisionOverride?: StreamDecisionOverride;
   /**
@@ -2495,6 +2575,7 @@ const tradingAppBridgeUrl = (path: string) => {
 export function useStreamEngine({
   instance,
   signalGate,
+  signalExpand,
   decisionOverride,
   cutoffAction = "print-close-pair",
   entryIntentTypes,
@@ -2825,12 +2906,12 @@ export function useStreamEngine({
         ? endAbs
         : (startAbs ?? undefined),
     tickers: tickersCsv || undefined,
-    minCorr: minCorr ?? undefined,
-    maxCorr: maxCorr ?? undefined,
-    minBeta: minBeta ?? undefined,
-    maxBeta: maxBeta ?? undefined,
-    minSigma: minSigma ?? undefined,
-    maxSigma: maxSigma ?? undefined,
+    minCorr: signalsRequest?.omitTickerRanges ? undefined : minCorr ?? undefined,
+    maxCorr: signalsRequest?.omitTickerRanges ? undefined : maxCorr ?? undefined,
+    minBeta: signalsRequest?.omitTickerRanges ? undefined : minBeta ?? undefined,
+    maxBeta: signalsRequest?.omitTickerRanges ? undefined : maxBeta ?? undefined,
+    minSigma: signalsRequest?.omitTickerRanges ? undefined : minSigma ?? undefined,
+    maxSigma: signalsRequest?.omitTickerRanges ? undefined : maxSigma ?? undefined,
     limit: 5000,
     // A strategy that decides on a live reading needs the whole universe, not the server's own
     // candidate set — see StreamSignalsRequestOverride.includeAll.
@@ -3383,7 +3464,12 @@ export function useStreamEngine({
     // filters — those are correct for every strategy — and INSTEAD of Arbitrage's session rating.
     // A signal is kept only if the direction it carries was the one approved, so a row gated for
     // Long can never be traded as a Short.
-    const gated: ArbitrageSignal[] = signalGate == null ? ratingFiltered : ratingFiltered.flatMap((row): ArbitrageSignal[] => {
+    // A strategy that can hold one ticker in several situations expands here instead of being
+    // gated: the row is duplicated per situation, each copy already pointed at the side that
+    // situation needs, so no re-pointing step is required for it.
+    const gated: ArbitrageSignal[] = signalExpand != null
+      ? ratingFiltered.flatMap((row) => signalExpand(row))
+      : signalGate == null ? ratingFiltered : ratingFiltered.flatMap((row): ArbitrageSignal[] => {
       const verdict = signalGate(row);
       if (!verdict.up && !verdict.down) return [];
       const ownSide = (row.direction ?? "").toLowerCase() === "down" ? "down" : "up";
@@ -3521,7 +3607,10 @@ export function useStreamEngine({
     }
 
     for (const row of decisionsWithWindowGuard) {
-      const key = `${row.ticker}|${row.side}`;
+      // Per SITUATION, not per ticker: one ticker can be a leg of several pairs at once and each
+      // carries its own deviation, so a key without the pair would freeze one of them and then
+      // hand that value to all of them.
+      const key = `${legIdentityOf(row)}|${row.side}`;
       const absSignal = Math.abs(row.signal ?? 0);
       const isAboveStartAbs = absSignal >= (startAbs ?? 0) && row.status !== "HOLD";
       const isAboveEndAbs = absSignal >= effectiveEndAbs;
@@ -3561,7 +3650,7 @@ export function useStreamEngine({
         const absSignal = Math.abs(row.signal ?? 0);
         // Never show above startAbsMax
         if (effectiveStartAbsMax != null && absSignal > effectiveStartAbsMax) return false;
-        const key = `${row.ticker}|${row.side}`;
+        const key = `${legIdentityOf(row)}|${row.side}`;
         // Decaying signals: below startAbs but above endAbs, previously passed minHoldCandles
         if (absSignal < (startAbs ?? 0)) {
           return signalDisplayedRef.current.has(key);
@@ -3588,7 +3677,7 @@ export function useStreamEngine({
         };
       }
       for (const row of decisionsWithWindowGuard) {
-        const key = `${row.ticker}|${row.side}`;
+        const key = `${legIdentityOf(row)}|${row.side}`;
         // aboveSet reflects the LATEST poll's state, not "was ever above threshold this
         // minute" — add/delete on every poll (not just add) so a ticker that touched
         // threshold, dropped, and never recovered is correctly absent by the time the
@@ -3737,8 +3826,8 @@ export function useStreamEngine({
       const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
       const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
       const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
-      const decisionMap2 = new Map(decisionsForAutomation.map(d => [d.ticker, d]));
-      const positionMap2 = new Map(nextPositions.map(p => [p.ticker, p]));
+      const decisionMap2 = new Map(decisionsForAutomation.map(d => [legIdentityOf(d), d]));
+      const positionMap2 = new Map(nextPositions.map(p => [legIdentityOf(p), p]));
       console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
       console.group(`  INTENTS (${intents.length}):`);
       for (const intent of intents) {
@@ -4239,6 +4328,7 @@ export function useStreamEngine({
                   id: `${row.ticker}|CLOSE|${dispatchAtE}`,
                   dayKey: currentTradingDayKey(strategySessionStartMinutes),
                   ticker: row.ticker,
+                  pairKey: row.pairKey ?? null,
                   benchmark: row.benchmark,
                   side: row.side,
                   kind: "CLOSE" as const,
@@ -4322,6 +4412,7 @@ export function useStreamEngine({
                 id: `${row.ticker}|CLOSE|${dispatchAt}`,
                 dayKey: currentTradingDayKey(strategySessionStartMinutes),
                 ticker: row.ticker,
+                pairKey: row.pairKey ?? null,
                 benchmark: row.benchmark,
                 side: row.side,
                 kind: "CLOSE" as const,
@@ -4632,6 +4723,7 @@ export function useStreamEngine({
             latchOrigin: _latch?.latchOrigin ?? null,
             exitSigmaAbs: _exitSigmaAbs,
             ticker: intent.ticker,
+            pairKey: intent.pairKey ?? null,
             benchmark: intent.benchmark,
             side: intent.side as "Long" | "Short",
             sigmaZap: _isLong
@@ -4680,7 +4772,7 @@ export function useStreamEngine({
           // The ref update is synchronous, guaranteeing visibility on the next engine
           // tick regardless of React's async state update scheduling.
           if (!isAdd && isEntryIntent) {
-            dispatchingEntryTickersRef.current.add(intent.ticker);
+            dispatchingEntryTickersRef.current.add(legIdentityOf(intent));
           }
           // Pre-mark entryDispatchedAt before the HTTP round-trip so the engine
           // never sees entryDispatchedAt==null on the next tick and drops the position.
@@ -4705,7 +4797,7 @@ export function useStreamEngine({
             sentDispatchKeys.delete(dispatchKey);
             if (!isAdd && isEntryIntent) {
               // Remove from in-flight tracking so next cycle can retry.
-              dispatchingEntryTickersRef.current.delete(intent.ticker);
+              dispatchingEntryTickersRef.current.delete(legIdentityOf(intent));
               // Roll back the pre-marked entryDispatchedAt so the engine re-generates the intent.
               setStreamPositions((prev) => prev.map((row) => {
                 if (row.ticker !== intent.ticker) return row;
@@ -4743,7 +4835,7 @@ export function useStreamEngine({
           }));
           // entryDispatchedAt is now permanently set in state — the in-flight guard is no longer needed.
           if (!isAdd && isEntryIntent) {
-            dispatchingEntryTickersRef.current.delete(intent.ticker);
+            dispatchingEntryTickersRef.current.delete(legIdentityOf(intent));
           }
           // In beta mode: immediately confirm action log entries (no backend to confirm them).
           // In real mode: queue pending entries and wait for execution snapshot confirmation.
@@ -4761,6 +4853,7 @@ export function useStreamEngine({
                   id: `${row.ticker}|CLOSE|${dispatchAt}`,
                   dayKey: currentTradingDayKey(strategySessionStartMinutes),
                   ticker: row.ticker,
+                  pairKey: row.pairKey ?? null,
                   benchmark: row.benchmark,
                   side: row.side,
                   kind: "CLOSE" as const,
@@ -4791,6 +4884,7 @@ export function useStreamEngine({
               id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
               ticker: intent.ticker,
+              pairKey: intent.pairKey ?? null,
               benchmark: intent.benchmark,
               side: intent.side,
               kind: isAdd ? "ADD" : "ENTRY",
@@ -4811,6 +4905,7 @@ export function useStreamEngine({
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
               ticker: intent.ticker,
+              pairKey: intent.pairKey ?? null,
               benchmark: intent.benchmark,
               side: intent.side,
               kind: "CLOSE",

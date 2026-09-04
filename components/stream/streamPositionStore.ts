@@ -147,11 +147,14 @@ function buildActiveRows(
     //
     // entryDispatchedAt is what separates them, and it is set at the moment the intent is sent.
     if (position.status === "PENDING_ENTRY" && position.entryDispatchedAt == null) continue;
-    const decision = decisionStore.getRow(position.ticker);
+    // Same identity the decision store uses: a ticker held in several pairs has one row per pair,
+    // and looking it up by ticker alone would hand every one of them the same decision.
+    const legId = position.pairKey ? `${position.ticker}|${position.pairKey}` : position.ticker;
+    const decision = decisionStore.getRow(legId);
     const signal = decision?.signal ?? position.lastSignal ?? position.entrySignal;
     const spread = decision?.spread ?? position.spread;
     const netEdge = decision?.netEdge ?? (signal != null ? Math.max(0, Math.abs(signal) - Math.max(0, spread ?? 0)) : null);
-    rows.set(position.ticker, {
+    rows.set(legId, {
       ticker: position.ticker,
       benchmark: decision?.benchmark ?? position.benchmark,
       side: decision?.side ?? position.side,

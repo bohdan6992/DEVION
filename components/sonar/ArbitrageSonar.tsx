@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1594,6 +1594,18 @@ export type SonarExactFilterSnapshot = {
    * the shared copy behave the same way for the stream.
    */
   skipArbitrageRating?: boolean;
+  /**
+   * Skip the per-ticker ZAP magnitude test (the `zapThr` / `sigThr` / `deltaThr` clauses).
+   *
+   * A strategy whose entry rule is not "this ticker moved far from its benchmark" must set this.
+   * PairFlux is the case it was added for: its rule is a PAIR spread, and the leg it wants to BUY
+   * is by definition the one that has NOT moved — so a per-ticker floor removes exactly the leg
+   * the trade needs, leaving the other half of an approved pair with no partner to trade against.
+   *
+   * The direction requirement is still enforced; only the magnitude test is skipped. Unset, the
+   * filter behaves exactly as before, which is what Arbitrage wants.
+   */
+  skipArbitrageZapThreshold?: boolean;
   cls: string;
   type: string;
   mode: string;
@@ -1929,7 +1941,7 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       const isLong = dir === "up";
       if (!isShort && !isLong) continue;
 
-      if (!posActive) {
+      if (!posActive && !f.skipArbitrageZapThreshold) {
         if (f.zapMode === "zap") {
           if (isShort) {
             const v = toNum(s.zapS);
