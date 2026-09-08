@@ -1879,9 +1879,20 @@ export default function OpenDoorScanner({
         if (typeof s.excludeSSR === "boolean") setExcludeSSR(s.excludeSSR);
         if (typeof s.excludeETF === "boolean") setExcludeETF(s.excludeETF);
         if (typeof s.excludeCrap === "boolean") setExcludeCrap(s.excludeCrap);
+        // ITB/HARD/CORR reached the shared FilterFlagsRow but never the persistence, so these
+        // three were the only toolbar toggles that silently reset on every reload.
+        if (typeof s.excludeItb === "boolean") setExcludeItb(s.excludeItb);
+        if (typeof s.excludeHard === "boolean") setExcludeHard(s.excludeHard);
+        if (typeof s.excludeCorr === "boolean") setExcludeCorr(s.excludeCorr);
+        // The raw input, not the clamped number: corrThreshold is derived from it.
+        if (typeof s.corrThresholdInput === "string") setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
         if (typeof s.includeChina === "boolean") setIncludeChina(s.includeChina);
   }, [controlledRuleBand, controlledSession, controlledTab, routeLocksPrimaryPanel]);
+
+  // Declared here rather than beside the CORR memo below: persistedFilters reads it during
+  // render, so it has to exist before that.
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
 
   const persistedFilters = useMemo(
     () => ({
@@ -2036,6 +2047,10 @@ export default function OpenDoorScanner({
       excludeSSR,
       excludeETF,
       excludeCrap,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      corrThresholdInput,
       includeUSA,
       includeChina,
       minMdnPreMhVol90,
@@ -2105,7 +2120,7 @@ export default function OpenDoorScanner({
       maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
       minLstClsNewsCnt, maxLstClsNewsCnt, minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, minNewsCnt,
       maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludeDividend, excludePTP,
-      excludeSSR, excludeETF, excludeCrap, minMdnPreMhVol90, maxMdnPreMhVol90,
+      excludeSSR, excludeETF, excludeCrap, excludeItb, excludeHard, excludeCorr, corrThresholdInput, minMdnPreMhVol90, maxMdnPreMhVol90,
       includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
       minMdnPostMhVol90NF, maxMdnPostMhVol90NF,
@@ -2549,7 +2564,6 @@ export default function OpenDoorScanner({
   // CORR: drop names correlated with today's reporting tickers. Seeds are the whole sample this
   // surface knows about — episodes plus the live active set — evaluated with the same report rule
   // the REP button uses. The correlation table itself lives on the bridge (86 MB).
-  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
   const corrThreshold = useMemo(
     () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
     [corrThresholdInput]

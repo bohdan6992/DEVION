@@ -347,7 +347,10 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20">
+    <div
+      className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20"
+      title="MINHOLD — скільки хвилин поспіль умова має триматись, щоб їй повірили. Одне й те саме число гейтить ВХІД (підтвердження розходження) і ВИХІД (підтвердження збіжності). 0 і 1 означають одне: підтверджено на самому барі, без очікування."
+    >
       <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
       <div className="group relative h-8 w-14 overflow-hidden rounded-md">
         <input

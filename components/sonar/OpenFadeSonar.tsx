@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -1548,7 +1548,7 @@ export type SonarExactFilterSnapshot = {
   betaMax: string;
   sigmaMin: string;
   sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
   zapGoldAbs: number;
@@ -2800,6 +2800,9 @@ export default function OpenFadeSonar() {
         // toggles
         for (const k of [
           'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
+          // ITB/HARD/CORR reached the shared FilterFlagsRow but never this list, so they were
+          // the only toolbar toggles that silently reset on every reload.
+          'excludeItb','excludeHard','excludeCorr',
           'includeUSA','includeChina',
         ] as const) {
           if (typeof s?.[k] === 'boolean') {
@@ -2812,6 +2815,9 @@ export default function OpenFadeSonar() {
               case 'excludeReport': setExcludeReport(v); break;
               case 'excludeETF': setExcludeETF(v); break;
               case 'excludeCrap': setExcludeCrap(v); break;
+              case 'excludeItb': setExcludeItb(v); break;
+              case 'excludeHard': setExcludeHard(v); break;
+              case 'excludeCorr': setExcludeCorr(v); break;
               case 'includeUSA': setIncludeUSA(v); break;
               case 'includeChina': setIncludeChina(v); break;
             }
@@ -2820,6 +2826,8 @@ export default function OpenFadeSonar() {
         if (typeof s?.filterReport === 'string') setFilterReport(s.filterReport);
         if (typeof s?.equityType === 'string') setEquityType(s.equityType);
 
+        // The raw input, not the clamped number: corrThreshold is derived from it.
+        if (typeof s?.corrThresholdInput === 'string') setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s?.corrMin === 'string') setCorrMin(s.corrMin);
         if (typeof s?.corrMax === 'string') setCorrMax(s.corrMax);
         if (typeof s?.betaMin === 'string') setBetaMin(s.betaMin);
@@ -2971,6 +2979,7 @@ export default function OpenFadeSonar() {
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+          excludeItb, excludeHard, excludeCorr, corrThresholdInput,
           includeUSA, includeChina,
           filterReport, equityType,
 
@@ -3027,6 +3036,7 @@ export default function OpenFadeSonar() {
     activeMode, sortKey, sortDir,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+    excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,

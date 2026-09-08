@@ -4331,7 +4331,8 @@ export function useStreamEngine({
     // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and
     // restart the effect (streamPositions is excluded from deps for the same reason).
     const positionsSnapshot = streamPositionsRef.current;
-    const positionByTicker = new Map(positionsSnapshot.map((row) => [row.ticker, row]));
+    // Leg-keyed: one symbol can hold several positions at once, and the log must name the right one.
+    const positionByTicker = new Map(positionsSnapshot.map((row) => [legIdentityOf(row), row]));
     const openLoggedPositions = positionsSnapshot.filter((row) =>
       row.status !== "CLOSED" &&
       row.entryDispatchedAt != null &&
@@ -4600,7 +4601,7 @@ export function useStreamEngine({
         }
 
         const correspondingDecision = streamDecisionStore.getRow(legIdentityOf(intent));
-        const correspondingPosition = positionByTicker.get(intent.ticker) ?? null;
+        const correspondingPosition = positionByTicker.get(legIdentityOf(intent)) ?? null;
         const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
 
         if (!primaryAlreadyDispatched && isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
@@ -4773,7 +4774,12 @@ export function useStreamEngine({
 
           // Pre-build structured log fields (shared between SENT and FAILED paths)
           const _rawSig = rawSignalByTickerRef.current.get(intent.ticker);
-          const _latch = streamSignalLatchesRef.current.find(l => l.ticker === intent.ticker);
+          // Match the LEG. `find(l => l.ticker === ...)` returned the first latch wearing this
+          // symbol, so with five SFNC pairs open every log line described whichever of them came
+          // first — which is why an order stamped SFNC/AUB carried FULT's deviation.
+          const _latch = streamSignalLatchesRef.current.find(
+            (l) => l.ticker === intent.ticker && (l.pairKey ?? null) === (intent.pairKey ?? null),
+          );
           const _fmtMs = (ts: number) => {
             const d = new Date(ts);
             return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
@@ -4988,7 +4994,7 @@ export function useStreamEngine({
               );
             const _prevDispatch = correspondingPosition?.lastDispatchedAt ?? correspondingPosition?.entryDispatchedAt ?? null;
             _dispatchActionLog([{
-              id: `${intent.ticker}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
+              id: `${legIdentityOf(intent)}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
               ticker: intent.ticker,
               pairKey: intent.pairKey ?? null,

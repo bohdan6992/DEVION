@@ -28,6 +28,7 @@ import dynamic from "next/dynamic";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { LIVE_STRATEGIES, type LiveStrategy } from "@/lib/strategies/registry";
+import CaesarPanel, { CAESAR_PILL, CAESAR_PILL_IDLE, CAESAR_PILL_ON } from "./CaesarPanel";
 import {
   CAESAR_SEGMENTS,
   loadCaesarPlan,
@@ -144,26 +145,28 @@ export default function CaesarRunners() {
   const missing = hosted.filter((r) => !STREAMS[r.strategy.key]);
 
   return (
-    <section className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 shadow-xl backdrop-blur-md">
-      <header className="flex items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-400">
-            Live engines
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-            {seg ? `${seg} segment` : "outside every segment"}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShowPanels((v) => !v)}
-          className="rounded-md border border-white/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:text-zinc-200"
-        >
-          {showPanels ? "Hide panels" : "Show panels"}
-        </button>
-      </header>
-
-      <div className="flex flex-wrap gap-2 px-4 pb-3">
+    /*
+      ONE STACK, NOT ONE BOX INSIDE ANOTHER. These used to be nested: every panel below rendered
+      inside the "live engines" section, which drew a frame around four frames. They are siblings
+      now, on a single rhythm, exactly like the panels on a stream board.
+    */
+    <div className="mt-3 space-y-3">
+      <CaesarPanel
+        title="Live engines"
+        subtitle={seg ? `${seg} segment` : "outside every segment"}
+        accent="#199e70"
+        right={
+          <button
+            type="button"
+            onClick={() => setShowPanels((v) => !v)}
+            className={CAESAR_PILL + (showPanels ? CAESAR_PILL_ON : CAESAR_PILL_IDLE)}
+          >
+            {showPanels ? "Hide panels" : "Show panels"}
+          </button>
+        }
+      >
+      <div className="space-y-2 px-3 py-3">
+      <div className="flex flex-wrap gap-2">
         {runners.length === 0 ? (
           <span className="font-mono text-[11px] text-zinc-600">
             Nothing assigned to this segment that Caesar has to host — the bridge runs the rest.
@@ -180,24 +183,39 @@ export default function CaesarRunners() {
                     : "Run by the bridge on its own engine. Listed for completeness; this tab does not host it, and mounting a second copy would double its decisions."
                 }
                 className={
-                  "inline-flex items-center gap-2 rounded-md border px-2 py-1 font-mono text-[11px] " +
+                  "group inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] transition-colors " +
                   (here
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                    : "border-white/10 bg-white/[0.03] text-zinc-400")
+                    ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-200 shadow-[0_0_22px_-12px_rgba(52,211,153,0.9)] hover:bg-emerald-500/[0.13]"
+                    : "border-white/[0.07] bg-black/25 text-zinc-400 hover:bg-white/[0.05]")
                 }
               >
+                {/* The dot PULSES only when this tab is the thing keeping the engine alive — that
+                    is the one state where closing the tab changes what the day does. */}
+                <span className="relative flex h-1.5 w-1.5 shrink-0">
+                  {here && (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                  )}
+                  <span
+                    className={"relative inline-flex h-1.5 w-1.5 rounded-full " + (here ? "bg-emerald-400" : "bg-zinc-600")}
+                  />
+                </span>
+                <span className="font-bold tracking-[0.12em]">{r.strategy.key.toUpperCase()}</span>
                 <span
-                  className={"h-1.5 w-1.5 rounded-full " + (here ? "bg-emerald-400" : "bg-zinc-500")}
-                />
-                {r.strategy.key.toUpperCase()}
-                <span className={here ? "text-emerald-200/50" : "text-zinc-600"}>#{r.priority}</span>
-                <span className={"uppercase tracking-widest " + (here ? "text-emerald-200/40" : "text-zinc-600")}>
+                  className={
+                    "rounded px-1 py-px text-[9px] tabular-nums " +
+                    (here ? "bg-emerald-400/10 text-emerald-200/70" : "bg-white/[0.04] text-zinc-600")
+                  }
+                >
+                  #{r.priority}
+                </span>
+                <span className={"text-[9px] uppercase tracking-[0.18em] " + (here ? "text-emerald-200/40" : "text-zinc-600")}>
                   {here ? "here" : "bridge"}
                 </span>
                 <a
                   href={r.strategy.nav.stream}
                   className={
-                    "underline-offset-2 hover:underline " + (here ? "text-emerald-200/50" : "text-zinc-600")
+                    "text-[9px] uppercase tracking-[0.14em] underline-offset-2 hover:underline " +
+                    (here ? "text-emerald-200/45 hover:text-emerald-100" : "text-zinc-600 hover:text-zinc-300")
                   }
                 >
                   configure
@@ -209,24 +227,27 @@ export default function CaesarRunners() {
       </div>
 
       {runners.length > hosted.length && (
-        <div className="px-4 pb-3 font-mono text-[10px] text-zinc-600">
+        <div className="font-mono text-[10px] text-zinc-600">
           {runners.length - hosted.length} of {runners.length} run on the bridge&apos;s own engine and
           are not hosted by this tab — they keep running with no browser open at all.
         </div>
       )}
 
       {missing.length > 0 && (
-        <div className="px-4 pb-3 font-mono text-[11px] text-amber-300/80">
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2 font-mono text-[11px] text-amber-300/80">
           No scanner wired for: {missing.map((m) => m.strategy.key).join(", ")} — assigned, but Caesar
           cannot host it.
         </div>
       )}
+
+      </div>
 
       {/*
         The window binding sits ABOVE the positions: nothing below it can be executed until a window
         is bound, so it is the first thing to be wrong and the first thing to check.
       */}
       <CaesarWindowBinding />
+      </CaesarPanel>
 
       {/*
         The terminal is fed by the SAME runner list that mounts the engines, so a strategy can never
@@ -268,12 +289,12 @@ export default function CaesarRunners() {
         keeps the effects, so the engines keep deciding. Unmounting to tidy the page would stop the
         very thing this component exists to run.
       */}
-      <div className={showPanels ? "space-y-4 px-4 pb-4" : "hidden"}>
+      <div className={showPanels ? "space-y-3" : "hidden"}>
         {hosted.map((r) => {
           const Stream = STREAMS[r.strategy.key];
           if (!Stream) return null;
           return (
-            <div key={r.strategy.key} className="overflow-hidden rounded-xl border border-white/[0.06]">
+            <div key={r.strategy.key} className="overflow-hidden rounded-xl border border-white/[0.07] bg-[#0a0a0a]/75 p-3 backdrop-blur-xl">
               <Stream
                 instanceId={r.strategy.bridgeStrategyId}
                 lsKeyPrefix={r.strategy.storage.streamPrefix}
@@ -287,6 +308,6 @@ export default function CaesarRunners() {
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }

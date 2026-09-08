@@ -30,6 +30,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { bridgeUrl } from "@/lib/bridgeBase";
 import { getStreamStores } from "@/components/stream/streamStoreRegistry";
 import type { StreamPosition } from "@/components/stream/streamEngine";
+import CaesarPanel, { CaesarPanelNote } from "./CaesarPanel";
 
 type BridgePosition = {
   ticker: string;
@@ -288,26 +289,30 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const stale = age != null && age >= 0 && age > 30;
 
   return (
-    <section className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 shadow-xl backdrop-blur-md">
-      <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-400">
-            Positions
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-            {snapshot?.account ? `acct ${snapshot.account}` : "account —"}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest">
-          <span className={stale ? "text-amber-300" : "text-zinc-600"}>
+    <CaesarPanel
+      title="Positions"
+      subtitle={snapshot?.account ? `acct ${snapshot.account}` : "account —"}
+      accent="#d95926"
+      right={
+        <>
+          <span
+            className={
+              "rounded-lg border px-2 py-1 font-mono text-[10px] uppercase tracking-widest " +
+              (stale
+                ? "border-amber-500/25 bg-amber-500/[0.08] text-amber-300"
+                : "border-white/[0.06] bg-black/25 text-zinc-500")
+            }
+          >
             {age == null ? "no read yet" : age < 0 ? "never read" : `read ${fmt(age, 0)}s ago`}
           </span>
-          <span className="text-zinc-600">{view.openCount} open · {view.rowCount - view.openCount} closed</span>
-        </div>
-      </header>
-
+          <span className="rounded-lg border border-white/[0.06] bg-black/25 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            {view.openCount} open · {view.rowCount - view.openCount} closed
+          </span>
+        </>
+      }
+    >
       {error && (
-        <div className="mx-4 mb-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
+        <div className="mx-3 mt-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
         </div>
       )}
@@ -318,7 +323,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       */}
       {!error && snapshot != null && (snapshot.positions?.length ?? 0) > 0 &&
         !(snapshot.pnlFieldsSeen ?? []).some((f) => /closedpnl/i.test(f)) && (
-        <div className="mx-4 mb-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 font-mono text-[11px] text-amber-200">
+        <div className="mx-3 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 font-mono text-[11px] text-amber-200">
           The positions pipe is not sending a ClosedPnL field — realised results cannot be attributed.
           {(snapshot.pnlFieldsSeen ?? []).length > 0 && (
             <span className="text-amber-200/60"> Seen: {(snapshot.pnlFieldsSeen ?? []).join(", ")}</span>
@@ -327,14 +332,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       )}
 
       {/* ---- distribution by strategy ---- */}
-      <div className="flex flex-wrap gap-2 px-4 pb-3">
+      <div className="flex flex-wrap gap-2 px-3 py-3">
         {instances.length === 0 ? (
           <span className="font-mono text-[11px] text-zinc-600">No strategy hosted on this segment.</span>
         ) : (
           Array.from(view.perStrategy.entries()).map(([key, s]) => (
             <div
               key={key}
-              className="min-w-[190px] flex-1 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2"
+              className="min-w-[190px] flex-1 rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2 transition-colors hover:border-white/[0.12]"
             >
               <div className="flex items-baseline justify-between font-mono">
                 <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
@@ -384,7 +389,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         )}
 
         {view.sharedCount > 0 && (
-          <div className="min-w-[190px] flex-1 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] px-3 py-2">
+          <div className="min-w-[190px] flex-1 rounded-lg border border-sky-500/25 bg-sky-500/[0.07] px-3 py-2">
             <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-sky-200">
               Shared
             </div>
@@ -407,7 +412,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         )}
 
         {view.unclaimedCount > 0 && (
-          <div className="min-w-[190px] flex-1 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2">
+          <div className="min-w-[190px] flex-1 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2">
             <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-amber-200">
               Unclaimed
             </div>
@@ -431,9 +436,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       </div>
 
       {/* ---- the terminal ---- */}
-      <div className="max-h-[320px] overflow-auto border-t border-white/[0.06]">
+      <div className="max-h-[320px] overflow-auto border-t border-white/[0.05]">
         <table className="w-full min-w-[860px] font-mono text-[11px]">
-          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/85 text-zinc-500 backdrop-blur-xl">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
               <th className="text-left">Ticker</th>
               <th className="text-left">Strategy</th>
@@ -553,7 +558,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         </table>
       </div>
 
-      <div className="border-t border-white/[0.06] px-4 py-2 font-mono text-[10px] text-white/30">
+      <CaesarPanelNote>
         Size, average and both P&amp;L columns come from the account —{" "}
         <span className="font-mono text-white/40">LstPrcOpenPnL</span> while the position is open and{" "}
         <span className="font-mono text-white/40">ClosedPnL</span> once it is not, so a ticker keeps its
@@ -563,7 +568,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         <span className="text-sky-300/70">shared</span> ticker is held by two strategies at once —
         legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
         so they are counted once into SHARED rather than added to either strategy.
-      </div>
-    </section>
+      </CaesarPanelNote>
+    </CaesarPanel>
   );
 }

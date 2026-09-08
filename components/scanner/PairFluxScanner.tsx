@@ -682,9 +682,17 @@ export default function PairFluxScanner({
    * It is a radio, never off: a threshold with no unit compares nothing. `zapMode` keeps carrying
    * it so the saved-filter and restore paths stay unchanged.
    */
-  const devUnit: "pp" | "sigma" | "alpha" =
-    zapMode === "sigma" ? "sigma" : zapMode === "delta" ? "alpha" : "pp";
-  const devUnitLabel = devUnit === "sigma" ? "σ" : devUnit === "alpha" ? "α" : "%";
+  const devUnit: "pp" | "sigma" | "alpha" | "gamma" =
+    zapMode === "sigma" ? "sigma"
+      : zapMode === "delta" ? "alpha"
+      : zapMode === "gamma" ? "gamma"
+      : "pp";
+  const devUnitLabel = devUnit === "sigma" ? "σ" : devUnit === "alpha" ? "α" : devUnit === "gamma" ? "γ" : "%";
+  /**
+   * Which scheduled print this class unwinds at — the same split the replay makes.
+   * PRE and OPEN run into the 09:30 open; INTRA runs into the 16:00 close.
+   */
+  const terminalIsClose = String(session).toUpperCase() === "INTRA";
   const ruleBand = controlledRuleBand ?? internalRuleBand;
   const setTab = useCallback((nextTab: TabKey) => {
     if (controlledTab != null) {
@@ -1106,16 +1114,29 @@ export default function PairFluxScanner({
       `priceMode=${priceMode}`,
       `pnlMode=${pnlMode}`,
       `maxAdds=${maxAdds}`,
+      // EVERY knob the replay reads has to be in here, or a result cached under an older setting
+      // is served for a newer one. These five were missing while the request has always sent them:
+      // flipping UNDILUTED to DILUTED, or moving STEP or DELAY, changed the trade and not the
+      // variant, so the table kept showing the previous run's episodes. sizeValue is here for the
+      // same reason — the P&L columns scale with it.
+      `dilutionMode=${dilutionMode}`,
+      `dilutionStep=${dilutionStep}`,
+      `addDelayMinutes=${addDelayMinutes}`,
+      `sizingMode=${sizingMode}`,
+      `sizeValue=${sizeValue}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles,
+      priceMode, pnlMode, maxAdds, zapMode, dilutionMode, dilutionStep, addDelayMinutes, sizingMode, sizeValue]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${devUnit}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
+    const s = `${metric}|${devUnit}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`
+      + `|${dilutionMode}|${dilutionStep}|${addDelayMinutes}|${sizingMode}|${sizeValue}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles,
+      priceMode, pnlMode, maxAdds, zapMode, dilutionMode, dilutionStep, addDelayMinutes, sizingMode, sizeValue]);
 
   // ========= Preflight validation
   const validationErrors = useMemo(() => {
@@ -1318,7 +1339,7 @@ export default function PairFluxScanner({
         // "off" was a state the old three-way toggle could reach. The unit is mandatory now, so
         // an older saved filter carrying it restores as raw percentage points.
         if (s.zapMode === "off") setZapMode("zap");
-        else if (s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
+        else if (s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta" || s.zapMode === "gamma") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -1551,9 +1572,20 @@ export default function PairFluxScanner({
         if (typeof s.excludeSSR === "boolean") setExcludeSSR(s.excludeSSR);
         if (typeof s.excludeETF === "boolean") setExcludeETF(s.excludeETF);
         if (typeof s.excludeCrap === "boolean") setExcludeCrap(s.excludeCrap);
+        // ITB/HARD/CORR reached the shared FilterFlagsRow but never the persistence, so these
+        // three were the only toolbar toggles that silently reset on every reload.
+        if (typeof s.excludeItb === "boolean") setExcludeItb(s.excludeItb);
+        if (typeof s.excludeHard === "boolean") setExcludeHard(s.excludeHard);
+        if (typeof s.excludeCorr === "boolean") setExcludeCorr(s.excludeCorr);
+        // The raw input, not the clamped number: corrThreshold is derived from it.
+        if (typeof s.corrThresholdInput === "string") setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
         if (typeof s.includeChina === "boolean") setIncludeChina(s.includeChina);
   }, [controlledRuleBand, controlledSession, controlledTab, routeLocksPrimaryPanel]);
+
+  // Declared here rather than beside the CORR memo below: persistedFilters reads it during
+  // render, so it has to exist before that.
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
 
   const persistedFilters = useMemo(
     () => ({
@@ -1691,6 +1723,10 @@ export default function PairFluxScanner({
       excludeSSR,
       excludeETF,
       excludeCrap,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      corrThresholdInput,
       includeUSA,
       includeChina,
       minMdnPreMhVol90,
@@ -1760,7 +1796,7 @@ export default function PairFluxScanner({
       maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
       minLstClsNewsCnt, maxLstClsNewsCnt, minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, minNewsCnt,
       maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludeDividend, excludePTP,
-      excludeSSR, excludeETF, excludeCrap, minMdnPreMhVol90, maxMdnPreMhVol90,
+      excludeSSR, excludeETF, excludeCrap, excludeItb, excludeHard, excludeCorr, corrThresholdInput, minMdnPreMhVol90, maxMdnPreMhVol90,
       includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
       minMdnPostMhVol90NF, maxMdnPostMhVol90NF,
@@ -2152,7 +2188,6 @@ export default function PairFluxScanner({
   // CORR: drop names correlated with today's reporting tickers. Seeds are the whole sample this
   // surface knows about — episodes plus the live active set — evaluated with the same report rule
   // the REP button uses. The correlation table itself lives on the bridge (86 MB).
-  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
   const corrThreshold = useMemo(
     () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
     [corrThresholdInput]
@@ -2575,7 +2610,10 @@ export default function PairFluxScanner({
   const pfLivePairs = useMemo(() => computeLivePairs({
     pairs: pfPairs,
     quoteByTicker: buildQuoteIndex(pfQuotableSignals),
-    unit: devUnit === "sigma" ? "sigma" : devUnit === "alpha" ? "alpha" : "pct",
+    unit: devUnit === "sigma" ? "sigma"
+      : devUnit === "alpha" ? "alpha"
+      : devUnit === "gamma" ? "gamma"
+      : "pct",
     minStr: String(startAbs),
     maxStr: startAbsMax ?? "",
     exitStr: String(endAbs),
@@ -6437,6 +6475,25 @@ export default function PairFluxScanner({
                   <span className="leading-none" style={{ textTransform: "none" }}>α DEV</span>
                 </button>
 
+                <button
+                  type="button"
+                  onClick={() => {
+                    setZapMode("gamma");
+                    setMetric("SigmaZap");
+                  }}
+                  className={clsx(
+                    `${FILTER_PILL} gap-1`,
+                    devUnit === "gamma"
+                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                  )}
+                  title={"Start deviation in GAMMAS — the spread divided by the level this pair pays off from WITH CONFIDENCE. "
+                    + "1.00 is that level exactly. Most pairs have no gamma at all (99.6% of INTRA), and they drop out of the "
+                    + "list entirely in this mode rather than being measured on a scale they do not have."}
+                >
+                  <span className="leading-none" style={{ textTransform: "none" }}>γ DEV</span>
+                </button>
+
                 <div className={"group relative w-[78px]"}>
                   <input
                     type="number"
@@ -9038,8 +9095,12 @@ export default function PairFluxScanner({
                       <th className="text-center p-2.5 border-l border-white/10" colSpan={3}>
                         Time
                       </th>
-                      <th className="text-center p-2.5 border-l border-white/10" colSpan={4}>
-                        Metric
+                      <th
+                        className="text-center p-2.5 border-l border-white/10"
+                        colSpan={4}
+                        title={`Відхилення у поточній одиниці (${devUnitLabel}). Один дільник обслуговує вхід, вихід і крок доборів, тож вони не можуть опинитись на різних шкалах.`}
+                      >
+                        Metric ({devUnitLabel})
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-emerald-500/70" colSpan={3}>
                         Ticker %
@@ -9053,8 +9114,20 @@ export default function PairFluxScanner({
                       <th className="text-center p-2.5 border-l border-white/10 text-sky-500/70" colSpan={3}>
                         Pair %
                       </th>
-                      <th className="text-center p-2.5 border-l border-white/10 text-violet-400/70" rowSpan={2}>
-                        Gap%
+                      {/* The TERMINAL of the class, and they are different prints: PRE and OPEN
+                          unwind at the 09:30 open (GapPct), INTRA at the 16:00 close (ClsToClsPct).
+                          The column used to show GapPct and say "Gap%" on every class, so an INTRA
+                          table displayed the morning's gap while the exit that mattered was the
+                          close — which is why a row could look like it had its terminal price and
+                          still close as Forced. */}
+                      <th
+                        className="text-center p-2.5 border-l border-white/10 text-violet-400/70"
+                        rowSpan={2}
+                        title={terminalIsClose
+                          ? "ClsToClsPct — the 16:00 close this class unwinds an unconverged pair at. Empty means the day's close never landed in the tape, and those episodes close as Forced."
+                          : "GapPct — the 09:30 open this class unwinds an unconverged pair at."}
+                      >
+                        {terminalIsClose ? "Cls%" : "Gap%"}
                       </th>
                       <th className="text-center p-2.5 border-l border-white/10 text-pink-400/70" rowSpan={2}>
                         SpreadBid%
@@ -9069,7 +9142,7 @@ export default function PairFluxScanner({
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endTime")}>EndTime{sortMark(analyticsSort.key === "endTime", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5 border-l border-white/10"><button type="button" onClick={() => toggleAnalyticsSort("startAbs")}>Start{sortMark(analyticsSort.key === "startAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("peakAbs")}>Peak{sortMark(analyticsSort.key === "peakAbs", analyticsSort.dir)}</button></th>
-                      <th className="text-right p-2.5"><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
+                      <th className="text-right p-2.5" title="Детекційний ряд на барі виходу. Рівно 0 означає, що розрив цілком сидить УСЕРЕДИНІ двох спредів — торгувати нема чого в жодну сторону. Це відповідь, а не пропуск: так закінчується більшість епізодів."><button type="button" onClick={() => toggleAnalyticsSort("endAbs")}>End{sortMark(analyticsSort.key === "endAbs", analyticsSort.dir)}</button></th>
                       <th className="text-right p-2.5" title="The OPPOSITE-side spread at the exit bar — the reading the exit threshold is compared against, since a position entered on one side is unwound on the other">Exit</th>
                       <th className="text-right p-2.5 border-l border-white/10 text-emerald-500/70">Start</th>
                       <th className="text-right p-2.5 text-emerald-500/70">Peak</th>
@@ -9181,7 +9254,7 @@ export default function PairFluxScanner({
                               <td className="p-2.5 text-right tabular-nums border-l border-white/10">{fP(r.startBenchLstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.peakBenchLstPrcLstClsPct)}</td>
                               <td className="p-2.5 text-right tabular-nums">{fP(r.endBenchLstPrcLstClsPct)}</td>
-                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-violet-300">{fP(r.gapPct)}</td>
+                              <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-violet-300">{fP(terminalIsClose ? r.clsToClsPct : r.gapPct)}</td>
                               <td className="p-2.5 text-right tabular-nums border-l border-white/10 text-pink-300">{fP(r.spreadBidPct)}</td>
                             </>);
                           })()}

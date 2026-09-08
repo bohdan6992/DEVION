@@ -28,7 +28,7 @@ import type { PairFluxRow } from "@/lib/pairflux/client";
 
 export type Quote = { bid: number; ask: number };
 
-export type LivePairUnit = "pct" | "sigma" | "alpha";
+export type LivePairUnit = "pct" | "sigma" | "alpha" | "gamma";
 
 export type LivePair = {
   a: string;
@@ -48,13 +48,24 @@ export type LivePair = {
   z: number | null;
   /** dev / alpha — stretch against this pair's habitual converged peak. */
   aRatio: number | null;
+  /**
+   * dev / gamma — stretch against the level from which entry pays off WITH CONFIDENCE.
+   *
+   * `gRatio >= 1` is the entry the notebook measured. Null for most pairs, because most pairs have
+   * no such level at all; in gamma mode those are dropped rather than measured on a scale they do
+   * not have, the same way sigma mode drops a pair with no sigma.
+   */
+  gRatio: number | null;
   /** |deviation| in the unit currently selected. */
   measure: number;
   /** What running from here to the exit level would bank, in percentage points. */
   toExit: number;
-  /** The pair's published sigma and alpha, pp. */
+  /** The pair's published sigma, alpha and gamma, pp. */
   sigma: number | null;
   alpha: number | null;
+  gamma: number | null;
+  /** Mean capture entering at gamma, pp, GROSS — costs are not in it. Context only. */
+  gammaCap: number | null;
   /** The leg that ran ahead — the one to SHORT. */
   ahead: string;
   /** The leg that lagged — the one to BUY. */
@@ -174,6 +185,7 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
 
     const sg = p.sigma;
     const al = p.alpha;
+    const gm = p.gamma;
 
     // Pair-level gates from the toolbar, read on the pair's own published statistics.
     if (!inRange(p.corr, corrLo, corrHi)) continue;
@@ -182,6 +194,7 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
     if (!inRange(al, alphaLo, alphaHi)) continue;
     const z = sg !== null && Number.isFinite(sg) && sg > 1e-9 ? dev / sg : null;
     const aRatio = al !== null && Number.isFinite(al) && al > 1e-9 ? dev / al : null;
+    const gRatio = gm !== null && Number.isFinite(gm) && gm > 1e-9 ? dev / gm : null;
 
     // The reading, in whichever unit is selected. `unit` converts that unit back to percentage
     // points, so a threshold set in sigmas can still be reported as a real take.
@@ -189,6 +202,7 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
     let unitScale: number;
     if (zapMode === "sigma") { measure = z; unitScale = sg ?? NaN; }
     else if (zapMode === "alpha") { measure = aRatio; unitScale = al ?? NaN; }
+    else if (zapMode === "gamma") { measure = gRatio; unitScale = gm ?? NaN; }
     else { measure = dev; unitScale = 1; }
 
     // No published scale means the pair cannot be placed on this axis at all.
@@ -210,10 +224,13 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
       cost: Math.max(0, Math.abs(devMid) - Math.abs(dev)),
       z,
       aRatio,
+      gRatio,
       measure: m,
       toExit,
       sigma: sg,
       alpha: al,
+      gamma: gm,
+      gammaCap: p.gammaCap ?? null,
       ahead: aAhead ? p.ticker : p.partner,
       behind: aAhead ? p.partner : p.ticker,
       // The price each leg is actually struck at: the ahead leg is sold at its bid, the lagging

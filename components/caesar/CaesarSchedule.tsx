@@ -1,8 +1,11 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
+import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
+import CaesarControlBar from "./CaesarControlBar";
 import { fetchBridgePlan, pushBridgePlan, setBridgeScheduleEnabled } from "@/lib/caesar/planClient";
 import {
   CAESAR_SEGMENTS,
@@ -53,7 +56,14 @@ function withAlpha(hex: string, alpha: number): string {
  * segment bands are colour-over-dark (`withAlpha` fills tuned against black). Both wash out on a
  * light background, so the panels carry their own backdrop instead of following `useUi().isDark`.
  */
-const PANEL = "border border-white/[0.06] bg-[#0a0a0a]/50 shadow-xl backdrop-blur-md";
+/**
+ * ONE surface for the whole tab.
+ *
+ * It is the stream boards' panel, imported rather than re-described, so the plan at the top of the
+ * page and the engines at the bottom of it are visibly the same kind of object. `scanner-panel-surface`
+ * rides along inside it, which is what the borderless and light themes key off.
+ */
+const PANEL = CAESAR_PANEL_SURFACE;
 
 const HOUR_TICKS = Array.from({ length: 25 }, (_, i) => i * 60);
 const HALF_HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60 + 30);
@@ -230,25 +240,20 @@ export default function CaesarSchedule() {
   // live feed — started below the fold on a page that looked like it simply ended.
   return (
     <div className="w-full text-zinc-100">
-      <div className="mx-auto w-full max-w-[1720px] px-6 py-8 lg:px-10">
+      <div className="mx-auto w-full max-w-[1720px] px-6 pb-2 pt-6 lg:px-10">
         <Header
           nowLabel={nowMin == null ? null : clockLabel(nowMin)}
           nowSegment={nowSegment}
-          scheduleEnabled={scheduleEnabled}
-          scheduleBusy={scheduleBusy}
-          scheduleError={scheduleError}
-          onToggleSchedule={toggleSchedule}
-          onReset={() => mutate(defaultCaesarPlan())}
         />
 
         {plan == null ? (
-          <div className={`mt-6 rounded-2xl p-10 text-center text-sm text-white/45 ${PANEL}`}>
+          <div className={`mt-3 p-10 text-center text-sm text-white/45 ${PANEL}`}>
             Loading schedule…
           </div>
         ) : (
           <>
             {/* ---------- TIMELINE ---------- */}
-            <section className={`mt-6 rounded-2xl p-5 ${PANEL}`}>
+            <section className={`mt-3 p-5 ${PANEL}`}>
               <div className="overflow-x-auto pb-1">
                 {/* px-6 keeps the 21:00 labels at both ends of the ruler — they are centred on a
                     tick at 0% / 100% — from being clipped by the scroll container. */}
@@ -280,6 +285,22 @@ export default function CaesarSchedule() {
               </div>
             </section>
 
+            {/*
+              OUTSIDE THE TIMELINE'S FRAME, ON THE PAGE ITSELF.
+              These are not part of the plan drawing — they act ON it — so they get no panel of
+              their own and sit in the gap between the timeline and the detail below, aligned to the
+              same left edge as both. Out of the `overflow-x-auto` div too, so they stay put when
+              the 1128px ruler is scrolled sideways.
+            */}
+            <CaesarControlBar
+              scheduleEnabled={scheduleEnabled}
+              scheduleBusy={scheduleBusy}
+              scheduleError={scheduleError}
+              onToggleSchedule={toggleSchedule}
+              onReset={() => mutate(defaultCaesarPlan())}
+              accent={nowSegment?.color ?? "#3ddc97"}
+            />
+
             {/* ---------- DETAIL PANEL ---------- */}
             <DetailPanel plan={plan} selected={selected} onSelect={setSelected} />
           </>
@@ -300,92 +321,53 @@ export default function CaesarSchedule() {
 function Header({
   nowLabel,
   nowSegment,
-  scheduleEnabled,
-  scheduleBusy,
-  scheduleError,
-  onToggleSchedule,
-  onReset,
 }: {
   nowLabel: string | null;
   nowSegment: CaesarSegment | null;
-  scheduleEnabled: boolean | null;
-  scheduleBusy: boolean;
-  scheduleError: boolean;
-  onToggleSchedule: () => void;
-  onReset: () => void;
 }) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-4 shadow-xl backdrop-blur-md">
+    <header className={`relative flex flex-wrap items-center justify-between gap-4 p-4 ${PANEL}`}>
+      {/* The cap is the CURRENT segment's colour, so the head of the page and the band the clock
+          is standing in are the same fact stated twice. Off the data — it labels nothing on its
+          own, and the badge beside the clock spells the segment out. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[2px]"
+        style={{
+          background: `linear-gradient(90deg, ${withAlpha(nowSegment?.color ?? "#ffffff", 0.85)}, transparent 55%)`,
+        }}
+      />
       <div className="flex items-center gap-3">
         <GlitchTitle text="CAESAR" />
       </div>
 
-      <div className="flex items-center gap-3">
-        {/* items-stretch makes the segment badge take the time's line-box height; the badge then
-            centres its own label inside that box. */}
-        {nowLabel && (
-          <div className="flex items-stretch gap-2 px-1">
-            <span className="font-mono text-3xl font-bold leading-none tabular-nums text-zinc-100">
-              {nowLabel}
-            </span>
-            {nowSegment && (
-              <span
-                className="flex items-center rounded px-2 text-[10px] font-bold leading-none tracking-[0.15em]"
-                style={{ backgroundColor: withAlpha(nowSegment.color, 0.16), color: nowSegment.color }}
-              >
-                {nowSegment.label}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* The switch that decides whether the bridge may act on this plan. It starts and stops
-            real strategies, so it is deliberately explicit rather than implied by editing. */}
-        <button
-          type="button"
-          onClick={onToggleSchedule}
-          disabled={scheduleEnabled == null || scheduleBusy}
-          title={
-            scheduleError
-              ? "The bridge did not answer — this switch shows the last value it confirmed, not what you asked for."
-              : "Let the bridge start and stop strategies at the edges of their segments"
-          }
-          className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors disabled:opacity-40 ${
-            scheduleError
-              ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
-              : scheduleEnabled
-                ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:border-emerald-300/70"
-                : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white"
-          }`}
-        >
+      {/*
+        IDENTITY AND TIME ONLY. The schedule switch and the reset button used to live here; they
+        are controls you press once, against the plan, so they sit with the plan — see
+        CaesarControlBar under the timeline.
+      */}
+      {nowLabel && (
+        <div className="flex items-stretch gap-2 px-1">
           <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              scheduleError
-                ? "bg-rose-400"
-                : scheduleEnabled
-                  ? "bg-emerald-400 shadow-[0_0_8px_currentColor]"
-                  : "bg-white/25"
-            }`}
-          />
-          {scheduleBusy
-            ? "Schedule …"
-            : scheduleError
-              ? "Bridge down"
-              : scheduleEnabled == null
-                ? "Schedule …"
-                : scheduleEnabled
-                  ? "Schedule on"
-                  : "Schedule off"}
-        </button>
-
-        <button
-          type="button"
-          onClick={onReset}
-          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/60 transition-colors hover:border-white/25 hover:text-white"
-        >
-          Reset plan
-        </button>
-      </div>
+            className="font-mono text-3xl font-bold leading-none tabular-nums text-zinc-100"
+            style={
+              nowSegment
+                ? { textShadow: `0 0 22px ${withAlpha(nowSegment.color, 0.45)}` }
+                : undefined
+            }
+          >
+            {nowLabel}
+          </span>
+          {nowSegment && (
+            <span
+              className="flex items-center rounded px-2 text-[10px] font-bold leading-none tracking-[0.15em]"
+              style={{ backgroundColor: withAlpha(nowSegment.color, 0.16), color: nowSegment.color }}
+            >
+              {nowSegment.label}
+            </span>
+          )}
+        </div>
+      )}
     </header>
   );
 }
@@ -588,11 +570,16 @@ function SegmentCard({
   const ranked = useMemo(() => rankAssignments(rows), [rows]);
   const conflicts = useMemo(() => conflictingPriorities(rows), [rows]);
   const assignedKeys = useMemo(() => new Set(rows.map((r) => r.strategyKey)), [rows]);
+  /** The picker is portalled out of this card, so it needs the button's box to position against. */
+  const addRef = useRef<HTMLButtonElement | null>(null);
 
   return (
     <div
       onClick={onSelect}
-      className="relative flex min-h-[132px] cursor-pointer flex-col rounded-xl border bg-white/[0.02] p-2.5 transition-all duration-200"
+      /* 132 was sized around the add row that used to sit at the foot. Without it the floor is
+         header + one chip row + padding; cards with more chips still grow, and the grid keeps all
+         four at the tallest one's height. */
+      className="relative flex min-h-[84px] cursor-pointer flex-col rounded-xl border bg-white/[0.02] p-2.5 transition-all duration-200"
       style={{
         borderColor: selected ? withAlpha(seg.color, 0.55) : "rgba(255,255,255,0.08)",
         boxShadow: selected ? `0 0 24px ${withAlpha(seg.color, 0.13)}` : "none",
@@ -621,7 +608,7 @@ function SegmentCard({
         directly above, the hint repeated what the name says, and the count is visible by looking.
         Three labels for one fact is three chances to read the wrong one.
       */}
-      <div className="mt-1 flex items-center gap-1.5">
+      <div className="relative mt-1 flex items-center gap-1.5">
         <span className="text-[11px] font-black tracking-[0.2em]" style={{ color: seg.color }}>
           {seg.label}
         </span>
@@ -629,6 +616,37 @@ function SegmentCard({
           <span className="rounded bg-white/15 px-1 py-px text-[8px] font-bold tracking-[0.15em] text-white">
             NOW
           </span>
+        )}
+
+        {/*
+          ADD sits on the title line, not on a full-width dashed row of its own.
+          The row cost ~26px of every card plus a margin, to hold one glyph — a quarter of the
+          card's height spent on padding. Up here it is a 16px target beside the name it acts on,
+          and the four cards get that height back.
+        */}
+        <button
+          ref={addRef}
+          type="button"
+          title={`Add a strategy to ${seg.label}`}
+          aria-label={`Add a strategy to ${seg.label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+            onTogglePicker();
+          }}
+          className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded font-mono text-[13px] leading-none text-white/30 transition-colors hover:bg-white/10 hover:text-white/85"
+        >
+          {pickerOpen ? "×" : "+"}
+        </button>
+
+        {pickerOpen && (
+          <StrategyPicker
+            seg={seg}
+            assigned={assignedKeys}
+            onPick={onAdd}
+            onClose={onTogglePicker}
+            anchor={addRef}
+          />
         )}
       </div>
 
@@ -654,23 +672,6 @@ function SegmentCard({
         ))}
       </div>
 
-      <div className="relative mt-2">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect();
-            onTogglePicker();
-          }}
-          className="w-full rounded-lg border border-dashed border-white/12 py-1 text-[11px] leading-none text-white/35 transition-colors hover:border-white/30 hover:text-white/80"
-        >
-          {pickerOpen ? "×" : "+"}
-        </button>
-
-        {pickerOpen && (
-          <StrategyPicker seg={seg} assigned={assignedKeys} onPick={onAdd} onClose={onTogglePicker} />
-        )}
-      </div>
     </div>
   );
 }
@@ -824,27 +825,79 @@ function StepButton({ label, onClick }: { label: string; onClick: () => void }) 
   );
 }
 
+/** Roughly what the panel measures at full height: search box + a 260px list + padding. */
+const PICKER_W = 280;
+const PICKER_H = 320;
+const PICKER_MARGIN = 8;
+
+/**
+ * PORTALLED, because the card it belongs to lives inside `overflow-x-auto`.
+ *
+ * That container needs the horizontal scroll for the 1128px ruler, and a box with a non-visible
+ * overflow on ONE axis clips the OTHER one too. So an absolutely positioned dropdown inside a
+ * segment card cannot leave the timeline strip: opened downward it is cut off mid-list, and opened
+ * upward it disappears behind the ruler. It only ever looked fine because it used to hang off a
+ * button at the card's foot, where there happened to be enough room above it.
+ *
+ * Rendering into `document.body` with fixed coordinates takes it out of that clip entirely. The
+ * position is measured from the button, flipped above when there is no room below, and clamped to
+ * the viewport so the POST card — hard against the right edge — does not open a panel off-screen.
+ */
 function StrategyPicker({
   seg,
   assigned,
   onPick,
   onClose,
+  anchor,
 }: {
   seg: CaesarSegment;
   assigned: Set<string>;
   onPick: (strategyKey: string) => void;
   onClose: () => void;
+  anchor: React.RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState("");
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const a = anchor.current;
+      if (!a) return;
+      const r = a.getBoundingClientRect();
+      const left = Math.min(
+        Math.max(PICKER_MARGIN, r.left),
+        window.innerWidth - PICKER_W - PICKER_MARGIN,
+      );
+      let top = r.bottom + 6;
+      if (top + PICKER_H > window.innerHeight - PICKER_MARGIN) {
+        const above = r.top - 6 - PICKER_H;
+        top = above >= PICKER_MARGIN ? above : Math.max(PICKER_MARGIN, window.innerHeight - PICKER_H - PICKER_MARGIN);
+      }
+      setPos({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // Capture phase: the page scrolls on <body>, and the timeline scrolls in its own div — a
+    // fixed panel has to follow whichever one moved.
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [anchor]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      // The anchor is excluded, not just the panel: closing on its mousedown would let its own
+      // click re-open the picker a moment later, and the × would never shut anything.
+      if (ref.current?.contains(t) || anchor.current?.contains(t)) return;
+      onClose();
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   const options = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -859,11 +912,16 @@ function StrategyPicker({
       });
   }, [assigned, query]);
 
-  return (
+  // AFTER every hook. An early return above `options` changes the hook count between the first
+  // render (unmeasured) and the second (placed), which React rejects outright.
+  if (pos == null || typeof document === "undefined") return null;
+
+  return createPortal(
     <div
       ref={ref}
       onClick={(e) => e.stopPropagation()}
-      className="absolute bottom-full left-0 z-30 mb-1.5 w-[280px] rounded-xl border border-white/12 bg-[#0b0b0c]/95 p-2 shadow-2xl backdrop-blur-xl"
+      style={{ position: "fixed", top: pos.top, left: pos.left, width: PICKER_W }}
+      className="z-[80] rounded-xl border border-white/12 bg-[#0b0b0c]/95 p-2 shadow-2xl backdrop-blur-xl"
     >
       <input
         autoFocus
@@ -899,7 +957,8 @@ function StrategyPicker({
           );
         })}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -922,7 +981,7 @@ function DetailPanel({
 
 
   return (
-    <section className={`mt-5 rounded-2xl ${PANEL}`}>
+    <section className={`mt-3 ${PANEL}`}>
       {/* Segment tabs */}
       <div className="flex flex-wrap items-center gap-1 border-b border-white/[0.07] p-2">
         {CAESAR_SEGMENTS.map((s) => {

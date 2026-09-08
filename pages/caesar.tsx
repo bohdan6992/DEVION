@@ -25,7 +25,7 @@ const CaesarRunners = dynamic(
       return {
         default: function CaesarRunnersLoadError() {
           return (
-            <section className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/[0.07] px-4 py-3">
+            <section className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/[0.07] px-3 py-3 backdrop-blur-xl">
               <div className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-rose-200">
                 Live engines failed to load
               </div>
@@ -41,7 +41,7 @@ const CaesarRunners = dynamic(
   {
     ssr: false,
     loading: () => (
-      <section className="mt-4 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 px-4 py-3">
+      <section className="mt-3 rounded-xl border border-white/[0.07] bg-[#0a0a0a]/75 px-3 py-3 backdrop-blur-xl">
         <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-zinc-500">
           Live engines · loading…
         </div>

@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { getStreamStores } from "@/components/stream/streamStoreRegistry";
 import type { StreamLogEntry } from "@/components/stream/streamLogStore";
+import CaesarPanel, { CAESAR_PILL, CAESAR_PILL_IDLE, CAESAR_PILL_ON } from "./CaesarPanel";
 
 export type CaesarTerminalProps = {
   instances: readonly { key: string; instanceId: string; priority: number }[];
@@ -35,6 +36,17 @@ type Counters = {
   decisions: number;
   positions: number;
   open: number;
+  /**
+   * SENT, NOT YET CONFIRMED.
+   *
+   * The gap this closes: an entry is dispatched, `sent` goes up, and the position sits in
+   * PENDING_ENTRY with `entryDispatchedAt` set until the TradingApp queue reports the item as
+   * Sent/Completed (`hasExecutionDispatchConfirmation`) — normally within one 2.5s status poll.
+   * `open` does not count it, by design, because the broker has not confirmed it. Without this
+   * number the operator reads "sent 1 · open 0" as an order that went nowhere, when it is an
+   * order in flight.
+   */
+  pending: number;
   intents: number;
   blocked: number;
   sent: number;
@@ -55,7 +67,7 @@ type Counters = {
 };
 
 const EMPTY: Counters = {
-  signals: 0, decisions: 0, positions: 0, open: 0, intents: 0, blocked: 0, sent: 0, failed: 0,
+  signals: 0, decisions: 0, positions: 0, open: 0, pending: 0, intents: 0, blocked: 0, sent: 0, failed: 0,
   ready: 0, blockedSpread: 0, blockedEdge: 0, otherStatus: 0, topReason: null,
 };
 
@@ -131,7 +143,12 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
         signals: stores.signal.getMeta().totalCount,
         decisions: ids.length,
         positions: positions.length,
-        open: positions.filter((p) => p.status === "OPEN").length,
+        // The STORE's count, not a fourth definition of "open". `status === "OPEN"` — what this
+        // used to filter on — silently dropped PRINT_PENDING and EXIT_BLOCKED, so Caesar reported
+        // fewer open positions than the strategy's own header did for the same engine. The store's
+        // `countsAsOpen` is the predicate the stream page renders, so now they cannot disagree.
+        open: stores.position.getMeta().openCount,
+        pending: positions.filter((p) => p.status === "PENDING_ENTRY" && p.entryDispatchedAt != null).length,
         intents: intents.filter((i) => i.status === "QUEUED").length,
         blocked: intents.filter((i) => i.status === "BLOCKED").length,
         sent: log.filter((l) => l.status === "SENT").length,
@@ -180,36 +197,32 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
     const t = { ...EMPTY };
     for (const c of Object.values(counters)) {
       t.signals += c.signals; t.decisions += c.decisions; t.positions += c.positions;
-      t.open += c.open; t.intents += c.intents; t.blocked += c.blocked;
+      t.open += c.open; t.pending += c.pending; t.intents += c.intents; t.blocked += c.blocked;
       t.sent += c.sent; t.failed += c.failed;
     }
     return t;
   }, [counters]);
 
-  const pill = "rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-widest transition-colors";
-
   return (
-    <section className="mt-4 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl backdrop-blur-md">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-300">
-            Caesar terminal
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-            {segment ? `${segment} segment` : "outside every segment"}
-          </span>
-          {/* The shape of the pipeline, so the eight numbers below read as stages, not a grid. */}
-          <span className="font-mono text-[10px] tracking-wide text-zinc-700">
-            sig <span className="text-zinc-800">→</span> dec{" "}
-            <span className="text-zinc-800">→</span> queued <span className="text-zinc-800">→</span> sent
-            <span className="ml-2 text-zinc-800">(hover any label)</span>
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
+    <CaesarPanel
+      title="Caesar terminal"
+      subtitle={segment ? `${segment} segment` : "outside every segment"}
+      accent="#c98500"
+      meta={
+        /* The shape of the pipeline, so the eight numbers below read as stages, not a grid. */
+        <span className="font-mono text-[10px] tracking-wide text-zinc-700">
+          sig <span className="text-zinc-800">→</span> dec{" "}
+          <span className="text-zinc-800">→</span> queued <span className="text-zinc-800">→</span> sent{" "}
+          <span className="text-zinc-800">→</span> pend <span className="text-zinc-800">→</span> open
+          <span className="ml-2 text-zinc-800">(hover any label)</span>
+        </span>
+      }
+      right={
+        <>
           <button
             type="button"
             onClick={() => setFilter(null)}
-            className={pill + (filter === null ? " bg-white/10 text-zinc-200" : " text-zinc-500 hover:text-zinc-300")}
+            className={CAESAR_PILL + (filter === null ? CAESAR_PILL_ON : CAESAR_PILL_IDLE)}
           >
             All
           </button>
@@ -218,10 +231,7 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
               key={i.key}
               type="button"
               onClick={() => setFilter(filter === i.key ? null : i.key)}
-              className={
-                pill +
-                (filter === i.key ? " bg-white/10 text-zinc-200" : " text-zinc-500 hover:text-zinc-300")
-              }
+              className={CAESAR_PILL + (filter === i.key ? CAESAR_PILL_ON : CAESAR_PILL_IDLE)}
             >
               {i.key}
             </button>
@@ -229,16 +239,21 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
           <button
             type="button"
             onClick={() => setFollow((v) => !v)}
-            className={pill + (follow ? " text-emerald-300" : " text-zinc-600 hover:text-zinc-400")}
+            className={
+              CAESAR_PILL +
+              (follow
+                ? " border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300"
+                : " text-zinc-600 hover:bg-white/5 hover:text-zinc-400")
+            }
             title="Keep the newest line in view"
           >
             {follow ? "● follow" : "○ follow"}
           </button>
-        </div>
-      </header>
-
+        </>
+      }
+    >
       {/* ---- live counters, per strategy ---- */}
-      <div className="flex flex-wrap gap-2 px-4 py-3">
+      <div className="flex flex-wrap gap-2 px-3 py-3">
         {instances.length === 0 ? (
           <span className="font-mono text-[11px] text-zinc-600">
             No engine hosted on this segment — nothing to report.
@@ -249,7 +264,7 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
             return (
               <div
                 key={i.key}
-                className="min-w-[230px] flex-1 rounded-lg border border-white/[0.07] bg-black/25 px-3 py-2"
+                className="min-w-[230px] flex-1 rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2 transition-colors hover:border-white/[0.12]"
               >
                 <div className="flex items-baseline justify-between">
                   <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">
@@ -258,11 +273,16 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
                   <span className="font-mono text-[10px] text-zinc-600">#{i.priority}</span>
                 </div>
                 {/*
-                  The eight numbers are one pipeline, read left to right, top row then bottom:
-                  a signal becomes a decision, a decision becomes a queued order, a queued order is
-                  sent. Anything that stops on the way shows up in failed or blocked.
+                  THREE ROWS OF THREE, and the order is the pipeline itself:
+
+                    sig -> dec -> queued      a signal becomes a candidate, a candidate an intent
+                    sent -> pend -> open      the intent goes out, waits for the broker, lands
+                    failed / blocked / pos    everything that stopped, and the running total
+
+                  The middle row is the one that gets misread without `pend`: "sent 3 / open 0" is
+                  three orders in flight for the next couple of seconds, not three that vanished.
                 */}
-                <div className="mt-1.5 grid grid-cols-4 gap-x-2 gap-y-1 font-mono text-[10px]">
+                <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-1 font-mono text-[10px]">
                   <Stat
                     label="sig"
                     value={c.signals}
@@ -276,12 +296,6 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
                     hint="DECISIONS — signals that passed this strategy's gate and the toolbar filters, so they are candidates. Not orders yet: they still have to hold past the minute boundary."
                   />
                   <Stat
-                    label="open"
-                    value={c.open}
-                    tone="text-emerald-300"
-                    hint="OPEN — positions the engine believes are live right now."
-                  />
-                  <Stat
                     label="queued"
                     value={c.intents}
                     tone="text-amber-300"
@@ -292,6 +306,18 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
                     value={c.sent}
                     tone="text-emerald-400"
                     hint="SENT — orders the bridge accepted today. This is the one that means money moved."
+                  />
+                  <Stat
+                    label="pend"
+                    value={c.pending}
+                    tone={c.pending ? "text-amber-200" : "text-zinc-600"}
+                    hint="IN FLIGHT — sent, and waiting for the TradingApp queue to report the order as Sent/Completed. It becomes OPEN on the next status poll (2.5s). This is the answer to 'sent went up but open did not' — the order is on its way, not stuck."
+                  />
+                  <Stat
+                    label="open"
+                    value={c.open}
+                    tone="text-emerald-300"
+                    hint="OPEN — positions the engine holds and the broker has confirmed. Counted with the strategy's own predicate, so this always matches the number its stream page shows."
                   />
                   <Stat
                     label="failed"
@@ -367,7 +393,7 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
           if (!atBottom && follow) setFollow(false);
         }}
-        className="h-[280px] overflow-auto border-t border-white/[0.06] bg-black/30 px-3 py-2"
+        className="h-[280px] overflow-auto border-t border-white/[0.05] bg-black/40 px-3 py-2"
       >
         {shown.length === 0 ? (
           <div className="flex h-full items-center justify-center font-mono text-[11px] text-zinc-700">
@@ -414,7 +440,7 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
         )}
       </div>
 
-      <div className="flex items-center justify-between border-t border-white/[0.06] px-4 py-2 font-mono text-[10px] text-white/30">
+      <div className="flex items-center justify-between border-t border-white/[0.05] bg-black/20 px-3 py-2 font-mono text-[10px] text-white/30">
         <span>
           {shown.length} line{shown.length === 1 ? "" : "s"}
           {filter ? ` · ${filter} only` : ""} · both engines on one clock
@@ -423,7 +449,7 @@ export default function CaesarTerminal({ instances, segment }: CaesarTerminalPro
           sent {totals.sent} · failed {totals.failed} · queued {totals.intents} · blocked {totals.blocked}
         </span>
       </div>
-    </section>
+    </CaesarPanel>
   );
 }
 

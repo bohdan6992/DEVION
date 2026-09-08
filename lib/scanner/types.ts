@@ -9,7 +9,9 @@ export type DateMode = "day" | "last" | "range";
 
 export type PaperListMode = "off" | "ignore" | "apply" | "pin";
 
-export type ZapMode = "off" | "zap" | "sigma" | "delta";
+// "delta" is ALPHA and "gamma" is GAMMA — the names are historical on the first, deliberate on
+// the second. See LivePairUnit for what each divides by.
+export type ZapMode = "off" | "zap" | "sigma" | "delta" | "gamma";
 
 export type SortDir = "asc" | "desc";
 
@@ -221,6 +223,19 @@ export type PaperArbClosedDto = {
   yCls?: number | null;
   tCls?: number | null;
   clsToClsPct?: number | null;
+  /**
+   * The four prices a PAIR trade was made of, percent against each leg's own previous close.
+   * Absent on single-ticker strategies. A is `ticker`, B is `benchTicker`, and `side` is A's side:
+   *
+   *   N    = positionNotionalUsd                 (already leg notional x entryCount)
+   *   aLeg = (side==="Short" ? aIn - aOut : aOut - aIn) / 100 * N
+   *   bLeg = (side==="Short" ? bOut - bIn : bIn - bOut) / 100 * N
+   *   total = aLeg + bLeg
+   */
+  aLegEntryPct?: number | null;
+  aLegExitPct?: number | null;
+  bLegEntryPct?: number | null;
+  bLegExitPct?: number | null;
   gapPct?: number | null;
   lo?: number | null;
   newsCnt?: number | null;

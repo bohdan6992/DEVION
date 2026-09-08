@@ -133,7 +133,7 @@ export default function PairFluxDivergence({
 }: {
   signals: ArbitrageSignal[];
   cls: PairFluxClass;
-  unit: "pct" | "sigma" | "alpha";
+  unit: "pct" | "sigma" | "alpha" | "gamma";
   minStr: string;
   maxStr: string;
   exitStr: string;

@@ -388,7 +388,7 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
 
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off"
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off"
 ): number | null => {
   if (zapMode === "off") return null;
   const dir = s.direction;
@@ -428,7 +428,7 @@ const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySes
 
 const isSignalGoldActive = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off",
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off",
   zapGoldAbs: number
 ): boolean => {
   const absM = getSignalMetricAbs(s, zapMode);
@@ -1326,7 +1326,7 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;    // NEW
   zapSilverAbs: number;  // NEW
   zapGoldAbs: number;    // NEW (only ACTIVE)
@@ -1651,7 +1651,7 @@ export type SonarExactFilterSnapshot = {
   betaMax: string;
   sigmaMin: string;
   sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
   zapGoldAbs: number;
@@ -2524,7 +2524,7 @@ export default function ArbitrageSonar() {
 
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "off">("zap");
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "gamma" | "off">("zap");
 
   // 3 inputs:
   // 1) filter/display threshold (single, depends on zapMode)
@@ -3006,6 +3006,9 @@ export default function ArbitrageSonar() {
         // toggles
         for (const k of [
           'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
+          // ITB/HARD/CORR reached the shared FilterFlagsRow but never this list, so they were
+          // the only toolbar toggles that silently reset on every reload.
+          'excludeItb','excludeHard','excludeCorr',
           'includeUSA','includeChina',
         ] as const) {
           if (typeof s?.[k] === 'boolean') {
@@ -3018,6 +3021,9 @@ export default function ArbitrageSonar() {
               case 'excludeReport': setExcludeReport(v); break;
               case 'excludeETF': setExcludeETF(v); break;
               case 'excludeCrap': setExcludeCrap(v); break;
+              case 'excludeItb': setExcludeItb(v); break;
+              case 'excludeHard': setExcludeHard(v); break;
+              case 'excludeCorr': setExcludeCorr(v); break;
               case 'includeUSA': setIncludeUSA(v); break;
               case 'includeChina': setIncludeChina(v); break;
             }
@@ -3026,6 +3032,8 @@ export default function ArbitrageSonar() {
         if (typeof s?.filterReport === 'string') setFilterReport(s.filterReport);
         if (typeof s?.equityType === 'string') setEquityType(s.equityType);
 
+        // The raw input, not the clamped number: corrThreshold is derived from it.
+        if (typeof s?.corrThresholdInput === 'string') setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s?.corrMin === 'string') setCorrMin(s.corrMin);
         if (typeof s?.corrMax === 'string') setCorrMax(s.corrMax);
         if (typeof s?.betaMin === 'string') setBetaMin(s.betaMin);
@@ -3177,6 +3185,7 @@ export default function ArbitrageSonar() {
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+          excludeItb, excludeHard, excludeCorr, corrThresholdInput,
           includeUSA, includeChina,
           filterReport, equityType,
 
@@ -3233,6 +3242,7 @@ export default function ArbitrageSonar() {
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+    excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
@@ -3468,6 +3478,7 @@ export default function ArbitrageSonar() {
         // produces identical results regardless of prior per-device localStorage state.
         excludeDividend: false, excludeNews: false, excludePTP: false, excludeSSR: false,
         excludeReport: false, excludeETF: false, excludeCrap: false,
+        excludeItb: false, excludeHard: false, excludeCorr: false,
         includeUSA: false, includeChina: false,
         filterReport: "ALL", equityType: "",
         countryEnabled: "off", selCountries: [],
@@ -3774,7 +3785,10 @@ export default function ArbitrageSonar() {
     type: snapshot.type,
     mode: snapshot.mode,
     ratingMode: snapshot.ratingMode,
-    zapMode: snapshot.zapMode,
+    // GAMMA is a PairFlux-only scale and the server has no such rating mode, so it travels as
+    // "zap". That loses nothing: the server's zapMode only picks which per-ticker rating bins
+    // to read, and gamma divides a PAIR spread — a quantity the signals endpoint never sees.
+    zapMode: snapshot.zapMode === "gamma" ? "zap" : snapshot.zapMode,
     minRate: snapshot.minRate,
     minTotal: snapshot.minTotal,
     tickers: snapshot.tickersFilterNorm || undefined,

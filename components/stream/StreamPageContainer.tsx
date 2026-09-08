@@ -16,6 +16,29 @@ type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT
 
 const DEFAULT_LS_PREFIX = "stream.arbitrage";
 const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
+/**
+ * How often the tab re-reads the bridge's automation flags.
+ *
+ * WHY THIS EXISTS. `strategyModeEnabled` is forced false on every mount and `streamAutoEnabled`
+ * starts false, so the ONLY way this tab ever starts dispatching is `pullRemoteState` finding the
+ * bridge's flags on. Until now that ran on mount, focus and visibilitychange and nowhere else —
+ * which is fine for a tab someone just opened, and wrong for the one case Caesar exists to serve:
+ * a tab left open all day while `CaesarPlanService` flips strategies on and off at segment edges
+ * (its own timer ticks every 15s). A background tab gets no focus event, so the schedule started
+ * ARBITRAGE at 10:00 and the engine sitting right there never found out.
+ *
+ * It cuts BOTH ways, and the stop direction is the safety-critical one: a per-strategy
+ * `Stop("caesar-schedule")` does not raise queue panic-off — only the operator's all-strategies
+ * stop does — so before this, a segment ending did not stop a tab that was already running either.
+ *
+ * Safe against clobbering an operator: every local toggle POSTs to the bridge BEFORE it touches
+ * local state (see the scanner header's start/stop), so remote and local already agree by the time
+ * a poll lands, and `remoteAutomationGuardUntilRef` covers the 4s in-flight window regardless.
+ *
+ * 10s against the schedule's 15s: worst case is ~25s from a segment boundary to the engine
+ * running, and the poll is a single tiny GET.
+ */
+const STREAM_AUTOMATION_STATE_POLL_MS = 10000;
 
 function createStreamPageClientId(): string {
   if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
@@ -446,12 +469,18 @@ function StreamPageContainerInner({
     const heartbeatTimer = window.setInterval(() => {
       void sendHeartbeat();
     }, STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS);
+    // The schedule moves without anyone touching this tab. See STREAM_AUTOMATION_STATE_POLL_MS.
+    const stateTimer = window.setInterval(() => {
+      if (cancelled) return;
+      void pullRemoteState();
+    }, STREAM_AUTOMATION_STATE_POLL_MS);
     window.addEventListener("focus", onVisibilityOrFocus);
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
 
     return () => {
       cancelled = true;
       window.clearInterval(heartbeatTimer);
+      window.clearInterval(stateTimer);
       window.removeEventListener("focus", onVisibilityOrFocus);
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };

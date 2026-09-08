@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -393,7 +393,7 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
 
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off"
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off"
 ): number | null => {
   if (zapMode === "off") return null;
   const dir = s.direction;
@@ -433,7 +433,7 @@ const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySes
 
 const isSignalGoldActive = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "off",
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off",
   zapGoldAbs: number
 ): boolean => {
   const absM = getSignalMetricAbs(s, zapMode);
@@ -1331,7 +1331,7 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;    // NEW
   zapSilverAbs: number;  // NEW
   zapGoldAbs: number;    // NEW (only ACTIVE)
@@ -1644,7 +1644,7 @@ export type SonarExactFilterSnapshot = {
   betaMax: string;
   sigmaMin: string;
   sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
   zapGoldAbs: number;
@@ -2527,10 +2527,10 @@ export default function PairFluxSonar() {
   // OFF on this page. `zapMode` scores a stock against its benchmark and, left on, silently
   // dropped signals from the set the pair panel reads — filtering pairs by a statistic that says
   // nothing about them. The toolbar slot it used to own now drives the controls below.
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "off">("off");
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "gamma" | "off">("off");
 
   // Unit a pair's live deviation is read in, plus its min / max / exit thresholds in that unit.
-  const [pfZapMode, setPfZapMode] = useState<"pct" | "sigma" | "alpha">("pct");
+  const [pfZapMode, setPfZapMode] = useState<"pct" | "sigma" | "alpha" | "gamma">("pct");
   const [pfZapMin, setPfZapMin] = useState("0.5");
   const [pfZapMax, setPfZapMax] = useState("");
   const [pfZapExit, setPfZapExit] = useState("0.2");
@@ -3009,6 +3009,14 @@ export default function PairFluxSonar() {
         if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
+        // Pair divergence group. pfZapMax may legitimately be "" - an empty max means "no upper
+        // bound", which is a real setting rather than a missing one.
+        if (s?.pfCls === "pre" || s?.pfCls === "open" || s?.pfCls === "intra") setPfCls(s.pfCls);
+        if (s?.pfZapMode === "pct" || s?.pfZapMode === "sigma" || s?.pfZapMode === "alpha" || s?.pfZapMode === "gamma") setPfZapMode(s.pfZapMode);
+        if (typeof s?.pfZapMin === "string") setPfZapMin(s.pfZapMin);
+        if (typeof s?.pfZapMax === "string") setPfZapMax(s.pfZapMax);
+        if (typeof s?.pfZapExit === "string") setPfZapExit(s.pfZapExit);
+
         // query params
         if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
@@ -3026,6 +3034,9 @@ export default function PairFluxSonar() {
         // toggles
         for (const k of [
           'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
+          // ITB/HARD/CORR reached the shared FilterFlagsRow but never this list, so they were
+          // the only toolbar toggles that silently reset on every reload.
+          'excludeItb','excludeHard','excludeCorr',
           'includeUSA','includeChina',
         ] as const) {
           if (typeof s?.[k] === 'boolean') {
@@ -3038,6 +3049,9 @@ export default function PairFluxSonar() {
               case 'excludeReport': setExcludeReport(v); break;
               case 'excludeETF': setExcludeETF(v); break;
               case 'excludeCrap': setExcludeCrap(v); break;
+              case 'excludeItb': setExcludeItb(v); break;
+              case 'excludeHard': setExcludeHard(v); break;
+              case 'excludeCorr': setExcludeCorr(v); break;
               case 'includeUSA': setIncludeUSA(v); break;
               case 'includeChina': setIncludeChina(v); break;
             }
@@ -3046,6 +3060,8 @@ export default function PairFluxSonar() {
         if (typeof s?.filterReport === 'string') setFilterReport(s.filterReport);
         if (typeof s?.equityType === 'string') setEquityType(s.equityType);
 
+        // The raw input, not the clamped number: corrThreshold is derived from it.
+        if (typeof s?.corrThresholdInput === 'string') setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s?.corrMin === 'string') setCorrMin(s.corrMin);
         if (typeof s?.corrMax === 'string') setCorrMax(s.corrMax);
         if (typeof s?.betaMin === 'string') setBetaMin(s.betaMin);
@@ -3192,6 +3208,10 @@ export default function PairFluxSonar() {
 
           // zap/sort
           zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+          // The PAIR divergence group. Distinct from the zap* fields above: those are Arbitrage's
+          // stock-vs-benchmark metric, which this page forces off. These four are the unit a pair's
+          // deviation is read in, plus its min/max/exit in that unit.
+          pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit,
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
@@ -3199,6 +3219,7 @@ export default function PairFluxSonar() {
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+          excludeItb, excludeHard, excludeCorr, corrThresholdInput,
           includeUSA, includeChina,
           filterReport, equityType,
 
@@ -3253,8 +3274,10 @@ export default function PairFluxSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+    pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
+    excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax,
@@ -3492,6 +3515,7 @@ export default function PairFluxSonar() {
         // produces identical results regardless of prior per-device localStorage state.
         excludeDividend: false, excludeNews: false, excludePTP: false, excludeSSR: false,
         excludeReport: false, excludeETF: false, excludeCrap: false,
+        excludeItb: false, excludeHard: false, excludeCorr: false,
         includeUSA: false, includeChina: false,
         filterReport: "ALL", equityType: "",
         countryEnabled: "off", selCountries: [],
@@ -3801,7 +3825,10 @@ export default function PairFluxSonar() {
     type: snapshot.type,
     mode: snapshot.mode,
     ratingMode: snapshot.ratingMode,
-    zapMode: snapshot.zapMode,
+    // GAMMA is a PairFlux-only scale and the server has no such rating mode, so it travels as
+    // "zap". That loses nothing: the server's zapMode only picks which per-ticker rating bins
+    // to read, and gamma divides a PAIR spread — a quantity the signals endpoint never sees.
+    zapMode: snapshot.zapMode === "gamma" ? "zap" : snapshot.zapMode,
     minRate: snapshot.minRate,
     minTotal: snapshot.minTotal,
     tickers: snapshot.tickersFilterNorm || undefined,
@@ -4944,6 +4971,7 @@ export default function PairFluxSonar() {
                 { key: "pct", label: "% DEV", title: "Розходження в процентних пунктах" },
                 { key: "sigma", label: "\u03c3 DEV", title: "dev / sigma — пари без сігми не проходять" },
                 { key: "alpha", label: "\u03b1 DEV", title: "dev / alpha — пари без альфи не проходять" },
+                { key: "gamma", label: "\u03b3 DEV", title: "dev / gamma — рівень, з якого вхід окупається з довірою. 1.00 = рівно він. Пари без гамми не проходять, а це 99.6% INTRA" },
               ] as const).map((z) => (
                 <button
                   key={z.key}

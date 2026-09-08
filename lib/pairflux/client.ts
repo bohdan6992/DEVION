@@ -39,6 +39,21 @@ export type PairFluxRow = {
   rate: number | null;
   /** Wilson 95% lower bound. Rank on this, not on rate. */
   rateLb: number | null;
+  /**
+   * GAMMA — the level from which entry pays off WITH CONFIDENCE, pp: a floor the pair may only
+   * raise, never lower, until its own capture clears a 95% lower bound.
+   *
+   * Null for MOST pairs (99.6% of INTRA), and that is an answer, not missing data: the pair has no
+   * level worth entering from. `gammaN` is a number even then — it says how many episodes were
+   * examined — so an absent gamma and an unexamined pair stay distinguishable.
+   *
+   * On a mirrored row the bridge has already divided it by |beta|, exactly as it does alpha and
+   * sigma; `gammaCap` too. `gammaCap` is GROSS — execution costs go on top of it.
+   */
+  gamma: number | null;
+  gammaRate: number | null;
+  gammaN: number;
+  gammaCap: number | null;
   /** Episodes ending in profit / all. Null on published builds older than the forced-exit change. */
   winRate: number | null;
   /** Completed diverge->converge cycles per session. Null on older builds. */
