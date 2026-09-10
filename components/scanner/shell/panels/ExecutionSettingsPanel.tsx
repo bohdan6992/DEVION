@@ -7,6 +7,24 @@ import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArb
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
 
 /**
+ * THESE FOUR GROUPS DESCRIBE THE BACKTEST'S ARITHMETIC, NOT THE LIVE ORDER.
+ *
+ * HEDGED/RAWONLY picks which P&L number a replayed row reports, PRINT/BIDASK which price it is
+ * marked at, and USD/TIER + SIZE how much notional it assumed. The stream sends a TradingApp
+ * HOTKEY: the order intent carries no price and no quantity at all (see streamEngine's intent
+ * builder, where sizeValue reaches nothing but the log line), so the size actually traded is
+ * whatever that hotkey is configured for inside TradingApp. Left visible because the same toolbar
+ * drives the scanner, where every one of them is load-bearing — but said out loud here, because a
+ * SIZE box on a live panel reads like an instruction.
+ */
+const BACKTEST_ONLY_TITLE =
+  "Backtest only — the stream sends a TradingApp hotkey, which carries no price and no size. " +
+  "The traded quantity comes from that hotkey's own configuration in TradingApp.";
+
+const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
+  clsx("flex h-7 items-center rounded-lg bg-black/20", extra, isStreamOnlyShell && "opacity-50");
+
+/**
  * The execution-settings card (the `order-2` row): sizing, dilution, close mode,
  * P&L and price mode, min hold, the stream start/cutoff steppers and the two log
  * downloads. Identical for every strategy.
@@ -53,6 +71,7 @@ export default function ExecutionSettingsPanel({
     preStartTime,
     priceMode,
     setCloseMode,
+    setEntryStopTime,
     setMinHoldCandles,
     setPnlMode,
     setPreStartTime,
@@ -93,7 +112,7 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+    <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
       {[
         { key: "Hedged", label: "HEDGED" },
         { key: "RawOnly", label: "RAWONLY" },
@@ -114,7 +133,7 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+    <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
       {[
         { key: "LastPrint", label: "PRINT" },
         { key: "BidAsk", label: "BIDASK" },
@@ -135,7 +154,7 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+    <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
       {[
         { key: "Notional", label: "USD" },
         { key: "Tier", label: "TIER" },
@@ -164,7 +183,7 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
-    <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
+    <div className={backtestOnlyGroupClass(isStreamOnlyShell, "pl-3 pr-0")} title={BACKTEST_ONLY_TITLE}>
       <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
         {sizingMode === "Notional" ? "SIZE" : "TIERS"}
       </span>
@@ -708,7 +727,7 @@ export default function ExecutionSettingsPanel({
             const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
             const m = entryStopValue.split(":")[1] ?? "00";
             const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-            setStartCutoffTime(nextCutoffTime);
+            setEntryStopTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
           }}
           className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
@@ -721,11 +740,11 @@ export default function ExecutionSettingsPanel({
               const h = Math.max(0, Math.min(23, Number(entryStopValue.split(":")[0] ?? "9") + 1));
               const m = entryStopValue.split(":")[1] ?? "00";
               const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setStartCutoffTime(nextCutoffTime);
+              setEntryStopTime(nextCutoffTime);
               onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
             }}
             className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase cutoff hour"
+            aria-label="Increase entry stop hour"
           >▲</button>
           <button
             type="button"
@@ -734,11 +753,11 @@ export default function ExecutionSettingsPanel({
               const h = Math.max(0, Math.min(23, Number(entryStopValue.split(":")[0] ?? "9") - 1));
               const m = entryStopValue.split(":")[1] ?? "00";
               const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setStartCutoffTime(nextCutoffTime);
+              setEntryStopTime(nextCutoffTime);
               onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
             }}
             className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease cutoff hour"
+            aria-label="Decrease entry stop hour"
           >▼</button>
         </div>
       </div>
@@ -756,7 +775,7 @@ export default function ExecutionSettingsPanel({
             const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
             const h = entryStopValue.split(":")[0] ?? "09";
             const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-            setStartCutoffTime(nextCutoffTime);
+            setEntryStopTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
           }}
           className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
@@ -769,11 +788,11 @@ export default function ExecutionSettingsPanel({
               const m = Math.max(0, Math.min(59, Number(entryStopValue.split(":")[1] ?? "20") + 5));
               const h = entryStopValue.split(":")[0] ?? "09";
               const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setStartCutoffTime(nextCutoffTime);
+              setEntryStopTime(nextCutoffTime);
               onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
             }}
             className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase cutoff minute"
+            aria-label="Increase entry stop minute"
           >▲</button>
           <button
             type="button"
@@ -782,11 +801,11 @@ export default function ExecutionSettingsPanel({
               const m = Math.max(0, Math.min(59, Number(entryStopValue.split(":")[1] ?? "20") - 5));
               const h = entryStopValue.split(":")[0] ?? "09";
               const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setStartCutoffTime(nextCutoffTime);
+              setEntryStopTime(nextCutoffTime);
               onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
             }}
             className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease cutoff minute"
+            aria-label="Decrease entry stop minute"
           >▼</button>
         </div>
       </div>

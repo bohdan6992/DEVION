@@ -22,6 +22,7 @@
 
 import React from "react";
 
+import { getBridgeBaseUrl } from "@/lib/bridgeBase";
 import { useMarketMakerWindow } from "./useMarketMakerWindow";
 
 export type CaesarControlBarProps = {
@@ -31,9 +32,18 @@ export type CaesarControlBarProps = {
   scheduleError: boolean;
   onToggleSchedule: () => void;
   onReset: () => void;
-  /** Colour of the segment the clock is standing in, for the running glow. */
-  accent?: string;
 };
+
+/**
+ * RUNNING IS RED, ALWAYS — not the current segment's band colour.
+ *
+ * This key used to glow whatever colour the clock's own segment carried (green/yellow/red/orange
+ * depending on the hour), which answers "what band is this" rather than "is real money moving
+ * right now". Those are different questions and the button only needs to answer the second one —
+ * a single fixed, unmistakable colour for "live", so a glance never has to also remember which
+ * band is which colour today.
+ */
+const RUNNING_RED = "#f43f5e";
 
 const KEY =
   "group relative flex h-9 items-center justify-center rounded-xl border border-white/[0.06] bg-white/[0.06] text-zinc-300 transition-all duration-150 hover:bg-white/[0.12] hover:text-white active:scale-[0.97] disabled:pointer-events-none disabled:opacity-35";
@@ -65,11 +75,19 @@ export default function CaesarControlBar({
   scheduleError,
   onToggleSchedule,
   onReset,
-  accent = "#3ddc97",
 }: CaesarControlBarProps) {
   const mm = useMarketMakerWindow();
   const running = scheduleEnabled === true;
-  const arming = mm.countdown != null;
+
+  /*
+   * "Bridge down" with the bridge itself answering curl in 3ms, CORS clean, was traced to
+   * `getBridgeBaseUrl()` — a `?bridge=` query param used once (a headless test, a tunnel, a
+   * second machine) writes to `localStorage["bridgeApiBase"]` and every request goes there
+   * FOREVER after, silently, surviving reloads and rebuilds. Surfacing the resolved base right
+   * on the error state is the whole fix for next time: no more guessing whether it's the
+   * server or a five-months-stale localStorage key (2026-09-09).
+   */
+  const resolvedBridgeBase = getBridgeBaseUrl();
 
   return (
     /* No padding and no frame: standing on the page between two panels, the row aligns to their
@@ -81,39 +99,40 @@ export default function CaesarControlBar({
         {/*
           MARKET MAKER. One button, two meanings, because the bind has exactly two states and a
           second button for the other one is how you end up clearing a window you meant to rebind.
-          Bound -> clears. Not bound -> arms the 3s delayed capture, which is the only variant that
-          can work from a browser click (see useMarketMakerWindow).
+          Bound -> clears. Not bound -> binds immediately.
+
+          NOT a delayed capture. `bind-active-window` (BindForegroundWindow, despite its name)
+          finds the Market Maker Window by TITLE — EnumWindows + a title match — and never reads
+          the OS foreground at all. The 3-second countdown this used to run was solving a problem
+          that does not exist: it cannot matter whether the browser or the Market Maker has focus,
+          since the bind never looks. Waiting only made the button slower and suggested a manual
+          window-switch that was never necessary — verified straight from the C# locator, which is
+          also why the detail panel's own "Bind now" button already used the immediate call.
         */}
         <button
           type="button"
-          disabled={mm.busy != null && !arming}
-          onClick={() => void (mm.isBound ? mm.clear() : mm.bindDelayed())}
+          disabled={mm.busy != null}
+          onClick={() => void (mm.isBound ? mm.clear() : mm.bindNow())}
           title={
             mm.error
-              ? `Bridge unreachable — ${mm.error}`
+              ? `Bridge unreachable at ${resolvedBridgeBase} — ${mm.error}. If that is not your bridge's real address, clear localStorage["bridgeApiBase"] or drop the ?bridge= param.`
               : mm.isBound
                 ? `Bound to ${mm.boundTitle || "(no title)"} — click to unbind`
-                : "Connect the Market Maker: waits 3 seconds, then binds whatever window is in front. Bring the Market Maker up during the countdown."
+                : "Connect the Market Maker window — finds it by title and binds it immediately, wherever it is (foreground, minimized, another monitor)."
           }
           aria-label={mm.isBound ? "Unbind the Market Maker window" : "Connect the Market Maker window"}
-          className={KEY + (arming ? " w-[74px] px-0" : " w-10")}
+          className={KEY + " w-10"}
           style={
-            mm.isBound && !arming
+            mm.isBound
               ? { color: "#6ee7b7", backgroundColor: "rgba(110,231,183,0.10)", borderColor: "rgba(110,231,183,0.22)" }
               : mm.error
                 ? { color: "#fda4af", backgroundColor: "rgba(253,164,175,0.08)", borderColor: "rgba(253,164,175,0.20)" }
                 : undefined
           }
         >
-          {arming ? (
-            <span className="font-mono text-[11px] font-bold tabular-nums text-amber-200">
-              {mm.countdown}s
-            </span>
-          ) : (
-            <IconCrosshair />
-          )}
+          <IconCrosshair />
           {/* A live bind is a state you must be able to see without hovering. */}
-          {mm.isBound && !arming && (
+          {mm.isBound && (
             <span
               className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400"
               style={{ boxShadow: "0 0 6px rgba(110,231,183,0.9)" }}
@@ -139,13 +158,13 @@ export default function CaesarControlBar({
         <button
           type="button"
           onClick={onToggleSchedule}
-          disabled={scheduleEnabled == null || scheduleBusy}
+          disabled={scheduleBusy || (scheduleEnabled == null && !scheduleError)}
           title={
             scheduleError
-              ? "The bridge did not answer — this shows the last value it confirmed, not what you asked for."
+              ? `The bridge did not answer at ${resolvedBridgeBase} — this shows the last value it confirmed, not what you asked for. If that address is wrong, clear localStorage["bridgeApiBase"] or drop the ?bridge= param and reload.`
               : running
-                ? "Running: the bridge starts and stops each strategy at the edges of its segment. Click to stop scheduling."
-                : "Let the bridge start and stop strategies at the edges of their segments."
+                ? "Running: Arbitrage and PairFlux are started, and the bridge keeps handing off the rest of the day at each segment edge. Click to stop both."
+                : "Starts Arbitrage and PairFlux right now, and lets the bridge take over segment handoffs for the rest of the day."
           }
           className={KEY + " gap-2 px-4 font-mono text-[11px] font-bold uppercase tracking-[0.16em]"}
           style={
@@ -153,10 +172,10 @@ export default function CaesarControlBar({
               ? { color: "#fda4af", backgroundColor: "rgba(253,164,175,0.10)", borderColor: "rgba(253,164,175,0.24)" }
               : running
                 ? {
-                    color: accent,
-                    backgroundColor: `${accent}1c`,
-                    borderColor: `${accent}44`,
-                    boxShadow: `0 0 22px -8px ${accent}`,
+                    color: RUNNING_RED,
+                    backgroundColor: `${RUNNING_RED}1c`,
+                    borderColor: `${RUNNING_RED}44`,
+                    boxShadow: `0 0 22px -8px ${RUNNING_RED}`,
                   }
                 : undefined
           }
@@ -165,20 +184,20 @@ export default function CaesarControlBar({
             {running && (
               <span
                 className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
-                style={{ backgroundColor: accent }}
+                style={{ backgroundColor: RUNNING_RED }}
               />
             )}
             <span
               className="relative inline-flex h-1.5 w-1.5 rounded-full"
               style={{
-                backgroundColor: scheduleError ? "#fb7185" : running ? accent : "rgba(255,255,255,0.28)",
+                backgroundColor: scheduleError ? "#fb7185" : running ? RUNNING_RED : "rgba(255,255,255,0.28)",
               }}
             />
           </span>
           {scheduleBusy || scheduleEnabled == null
             ? "…"
             : scheduleError
-              ? "Bridge down"
+              ? "Retry bridge"
               : running
                 ? "Stop auto"
                 : "Start auto"}
@@ -191,9 +210,12 @@ export default function CaesarControlBar({
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px]">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="uppercase tracking-[0.16em] text-zinc-600">MM</span>
-          <span className={"truncate " + (mm.error ? "text-rose-300/80" : mm.isBound ? "text-emerald-300/80" : "text-amber-300/80")}>
+          <span
+            className={"truncate " + (mm.error ? "text-rose-300/80" : mm.isBound ? "text-emerald-300/80" : "text-amber-300/80")}
+            title={mm.error ? `resolved base: ${resolvedBridgeBase}` : undefined}
+          >
             {mm.error
-              ? "bridge unreachable"
+              ? `bridge unreachable (${resolvedBridgeBase})`
               : mm.isBound
                 ? mm.boundTitle || "bound (no title)"
                 : "not bound — hotkeys follow focus"}
@@ -202,8 +224,11 @@ export default function CaesarControlBar({
         <span className="text-white/10">·</span>
         <span className="flex items-center gap-1.5">
           <span className="uppercase tracking-[0.16em] text-zinc-600">Schedule</span>
-          <span className={scheduleError ? "text-rose-300/80" : running ? "text-emerald-300/80" : "text-zinc-500"}>
-            {scheduleEnabled == null ? "reading…" : scheduleError ? "unreachable" : running ? "driving the day" : "off — nothing starts"}
+          <span
+            className={scheduleError ? "text-rose-300/80" : running ? "text-emerald-300/80" : "text-zinc-500"}
+            title={scheduleError ? `resolved base: ${resolvedBridgeBase}` : undefined}
+          >
+            {scheduleEnabled == null ? "reading…" : scheduleError ? `unreachable (${resolvedBridgeBase})` : running ? "driving the day" : "off — nothing starts"}
           </span>
         </span>
       </div>

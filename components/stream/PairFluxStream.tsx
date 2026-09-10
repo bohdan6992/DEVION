@@ -11,6 +11,7 @@ type PairFluxStreamProps = {
   strategyLabel?: string;
   lsKeyPrefix?: string;
   headerTitle?: string;
+  caesarEntryStopTime?: string;
 };
 
 /**

@@ -15,6 +15,7 @@ import { setActiveTicker, useActiveTickerSelection, useActiveTickerSnapshot } fr
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
 import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
 import { useStreamStores } from "./streamStoreRegistry";
+import { currentMinutesLocal, isPastSessionCutoff, parseTimeToMinutes } from "./streamEngine";
 import type {
   StreamActionLogEntry,
   MainWindowDataSnapshot,
@@ -63,7 +64,13 @@ type ArbitrageStreamViewProps = {
   onClearTickerPoint: () => Promise<void>;
   onTogglePanicOff: (enabled: boolean) => Promise<void>;
   onStartAutomation?: () => Promise<void>;
-  onClearExecutionQueue: () => Promise<void>;
+  /**
+   * Stop THIS strategy on the bridge. Without it the stop falls back to raising panic-off, which
+   * is a property of the shared TradingApp queue and therefore freezes every other strategy on the
+   * machine as well — see setAutomationRunning.
+   */
+  onStopAutomation?: () => Promise<void>;
+  onClearExecutionQueue: (options?: { thisStrategyOnly?: boolean }) => Promise<void>;
   onResetAutomationState: () => void;
   onDismissActivePositions?: (tickers: string[]) => void;
   onForceRefresh: () => Promise<void>;
@@ -1329,6 +1336,7 @@ export default function ArbitrageStreamView({
   onClearTickerPoint,
   onTogglePanicOff,
   onStartAutomation,
+  onStopAutomation,
   onClearExecutionQueue,
   onResetAutomationState,
   onDismissActivePositions,
@@ -1485,6 +1493,32 @@ export default function ArbitrageStreamView({
     openCapReached &&
     entryReadyCount > 0 &&
     queuedIntentsCount === 0;
+  /**
+   * CUTOFF, THE SILENT ONE.
+   *
+   * Every other reason a ready signal never dispatches has a counter on this panel: BLOCKED EDGE,
+   * EXIT BLOCKED, the entry-cap banner above. Cutoff had none — syncStreamPositions drops a
+   * PENDING_ENTRY the instant `cutoffReached` is true (see its `hasUndispatchedEntry` branch), so
+   * SIGNALS kept showing ENTRY READY (that count never checks cutoff) while SENT ORDERS sat at 0,
+   * with nothing on screen saying why. Measured live 2026-09-09: Arbitrage's default CUTOFF is
+   * 09:20 and hasStrategyEntryCutoff is unconditionally true for every class — run the strategy
+   * into INTRA on its stock settings and every fresh signal is entry-ready and un-dispatchable at
+   * once, forever, until CUTOFF is pushed later or START is re-armed for tomorrow.
+   *
+   * Mirrors isPastSessionCutoff exactly (same wrap-aware function the engine gates on) rather than
+   * a plain nowMinutes>=cutoff comparison, so an overnight window (START > CUTOFF) does not show
+   * this banner during its own just-started evening tail.
+   */
+  const cutoffMinutesNow = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  const sessionStartMinutesNow = automationConfig.preStartTime
+    ? parseTimeToMinutes(automationConfig.preStartTime, 0)
+    : null;
+  const pastCutoffNow = isPastSessionCutoff(currentMinutesLocal(), cutoffMinutesNow, sessionStartMinutesNow);
+  const cutoffBlockingNewOrders =
+    automationRunning &&
+    pastCutoffNow &&
+    entryReadyCount > 0 &&
+    queuedIntentsCount === 0;
   const exitBlockedCount = streamPositionMeta.exitBlockedCount;
   const closedCount = streamPositionMeta.closedCount;
   const blockedEdgeCount = useMemo(
@@ -1505,10 +1539,16 @@ export default function ArbitrageStreamView({
 
     if (!nextRunning) {
       try {
-        await onTogglePanicOff(true);
+        // Per-strategy stop, not panic-off. panic-off belongs to the SHARED queue: raising it here
+        // stopped every strategy on the machine, and since each engine's autoEnabled includes
+        // `!panicOff`, the others went silent while still mounted and connected. The scoped stop
+        // lets the bridge re-derive panic-off from whether anything is still running.
+        if (onStopAutomation) await onStopAutomation();
+        else await onTogglePanicOff(true);
       } finally {
         try {
-          await onClearExecutionQueue();
+          // This strategy's pending orders only — the queue is shared.
+          await onClearExecutionQueue({ thisStrategyOnly: true });
         } catch {
           // queue cleanup is best-effort; local stop still must happen
         }
@@ -1603,6 +1643,19 @@ export default function ArbitrageStreamView({
                 AUTO is running, but new entries are paused because open positions reached the limit:
                 {" "}
                 {intn(openCount)}/{intn(maxOpenPositions)}.
+              </div>
+            </div>
+          ) : null}
+          {cutoffBlockingNewOrders ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-amber-200">
+                Past Cutoff — No New Entries
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-amber-100/90">
+                AUTO is running and {intn(entryReadyCount)} signal{entryReadyCount === 1 ? " is" : "s are"} ENTRY
+                READY, but CUTOFF ({automationConfig.startCutoffTime}) has passed — no new positions open until
+                START is re-armed. Existing positions still add and exit normally. Push CUTOFF later if you meant
+                to keep entering.
               </div>
             </div>
           ) : null}

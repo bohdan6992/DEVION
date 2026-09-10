@@ -30,6 +30,7 @@ export type CaesarPanelProps = {
   right?: React.ReactNode;
   /** Extra bits under the title, on their own row — the terminal's pipeline legend lives here. */
   meta?: React.ReactNode;
+  terminal?: boolean;
   className?: string;
   children: React.ReactNode;
 };
@@ -50,9 +51,23 @@ export default function CaesarPanel({
   accent = "#3987e5",
   right,
   meta,
+  terminal = false,
   className,
   children,
 }: CaesarPanelProps) {
+  if (terminal) {
+    return (
+      <section className={"scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]" + (className ? ` ${className}` : "")}>
+        <header className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+          <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">{title}</div>
+          <div className="flex items-center gap-2">{right}</div>
+        </header>
+        {meta}
+        {children}
+      </section>
+    );
+  }
+
   return (
     <section className={CAESAR_PANEL_SURFACE + (className ? ` ${className}` : "")}>
       <header

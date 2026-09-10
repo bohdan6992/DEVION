@@ -21,6 +21,7 @@ export type ScannerFiltersOptions = {
   streamAutomationConfigOverride?: {
     startCutoffTime?: string;
     preStartTime?: string;
+    entryStopTime?: string;
     scaleMode?: string;
     dilutionStep?: number;
     maxAdds?: number;
@@ -91,6 +92,9 @@ export function useScannerFilters(
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
   const [startCutoffTime, setStartCutoffTime] = useState<string>(() => options.streamAutomationConfigOverride?.startCutoffTime ?? "09:20");
   const [preStartTime, setPreStartTime] = useState<string>(() => options.streamAutomationConfigOverride?.preStartTime ?? "21:00");
+  // Empty means "not set" — ExecutionSettingsPanel already falls back to startCutoffTime when
+  // this is blank, so an empty default here reproduces the original single-time behaviour exactly.
+  const [entryStopTime, setEntryStopTime] = useState<string>(() => options.streamAutomationConfigOverride?.entryStopTime ?? "");
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
   const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
@@ -177,6 +181,10 @@ export function useScannerFilters(
   const [minBeta, setMinBeta] = useState<string>("");
   const [maxBeta, setMaxBeta] = useState<string>("");
   const [minSigma, setMinSigma] = useState<string>("");
+  // ALPHA joins corr / beta / sigma as the fourth PAIR statistic. The Sonar has had a box for it
+  // since it was published; the scanner and the stream had the value and no way to bound it.
+  const [minAlpha, setMinAlpha] = useState<string>("");
+  const [maxAlpha, setMaxAlpha] = useState<string>("");
   const [maxSigma, setMaxSigma] = useState<string>("");
   const [minMarketCapM, setMinMarketCapM] = useState<string>("1000");
   const [maxMarketCapM, setMaxMarketCapM] = useState<string>("");
@@ -368,6 +376,7 @@ export function useScannerFilters(
     minHoldCandles, setMinHoldCandles,
     startCutoffTime, setStartCutoffTime,
     preStartTime, setPreStartTime,
+    entryStopTime, setEntryStopTime,
     pnlMode, setPnlMode,
     priceMode, setPriceMode,
     sizingMode, setSizingMode,
@@ -430,6 +439,8 @@ export function useScannerFilters(
     minBeta, setMinBeta,
     maxBeta, setMaxBeta,
     minSigma, setMinSigma,
+    minAlpha, setMinAlpha,
+    maxAlpha, setMaxAlpha,
     maxSigma, setMaxSigma,
     minMarketCapM, setMinMarketCapM,
     maxMarketCapM, setMaxMarketCapM,

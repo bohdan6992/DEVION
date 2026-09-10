@@ -314,12 +314,23 @@ export const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "corr", label: "CORR", group: "RATING GATES", scenarioParameter: "CORR", optimizerApiKey: "CORR" },
   { key: "beta", label: "BETA", group: "RATING GATES", scenarioParameter: "BETA", optimizerApiKey: "BETA" },
   { key: "sigma", label: "SIGMA", group: "RATING GATES", scenarioParameter: "SIGMA", optimizerApiKey: "SIGMA" },
+  // The fourth pair statistic. Published for PairFlux only; other strategies return no card
+  // for it, exactly as they return none for the pair-level SIGMA above.
+  { key: "alpha", label: "ALPHA", group: "RATING GATES", scenarioParameter: null },
   { key: "sector", label: "SECTOR L3", group: "RATING GATES", kind: "categorical" },
   { key: "sectorL4", label: "SECTOR L4", group: "RATING GATES", kind: "categorical" },
   { key: "sectorL5", label: "SECTOR L5", group: "RATING GATES", kind: "categorical" },
   { key: "bench", label: "BENCH", group: "RATING GATES", kind: "categorical" },
   { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
+  // PairFlux measures a pair through its whole life, so it reports four moments where a
+  // single-ticker strategy reports two: the entry, the widest point, the detection reading at the
+  // exit bar, and the OPPOSITE-side reading the exit threshold was actually compared against.
+  // These were returned by the bridge and simply missing from this list, so they rendered once
+  // requested but could never be picked. HOLD is the same case.
+  { key: "peakabs", label: "PEAK", group: "ZAP THRESHOLDS", scenarioParameter: null },
   { key: "endabs", label: "END", group: "ZAP THRESHOLDS", scenarioParameter: "END" },
+  { key: "exitabs", label: "EXIT", group: "ZAP THRESHOLDS", scenarioParameter: null },
+  { key: "hold", label: "HOLD", group: "ZAP THRESHOLDS", scenarioParameter: null },
   // OpenFade picks its trades on nothing else, and OpenDoor gates on the same reading, so
   // without these two the optimizer could rank every incidental tape field EXCEPT the one
   // the strategy actually acts on. START/END above stay null for both (no peak tracking).

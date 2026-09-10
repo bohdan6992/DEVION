@@ -65,7 +65,7 @@ export default function CaesarWindowBinding() {
           disabled={mm.busy != null}
           onClick={() => void mm.bindNow()}
           className="rounded-lg border border-white/[0.08] bg-black/25 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-500 transition-all hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40"
-          title="Binds the foreground window immediately — which, clicked from here, is this browser. Use the crosshair under the timeline instead; this one is for a keyboard shortcut or a second machine."
+          title="Finds the Market Maker Window by title and binds it immediately — same call the crosshair under the timeline makes; this one is here for a keyboard shortcut or a second machine."
         >
           Bind now
         </button>

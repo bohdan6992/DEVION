@@ -1,6 +1,6 @@
 "use client";
 
-import { bridgeUrl } from "../../lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 
 /**
  * Client for the bridge-side strategy arbiter (see StreamStrategyRegistry.cs).
@@ -32,7 +32,10 @@ export type StreamLeaseDecision = {
 
 async function postJson<T>(path: string, body: unknown): Promise<T | null> {
   try {
-    const response = await fetch(bridgeUrl(path), {
+    // commit blocks server-side for ArbitrationWindowMs (400ms, per StreamStrategyRegistryOptions)
+    // before answering, well inside the default timeout — the timeout here is only a ceiling
+    // against the client-side hang class described in fetchWithTimeout's doc comment.
+    const response = await fetchWithTimeout(bridgeUrl(path), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

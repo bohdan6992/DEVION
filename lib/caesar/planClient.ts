@@ -1,6 +1,6 @@
 "use client";
 
-import { bridgeUrl } from "@/lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import {
   CAESAR_SEGMENTS,
   CAESAR_STRATEGY_BY_KEY,
@@ -65,18 +65,34 @@ export function toBridgePlan(plan: CaesarPlan, enabled: boolean): BridgePlan {
   };
 }
 
+/**
+ * A plain `fetch` with no timeout waits forever if the response never lands — a dropped packet,
+ * the tab briefly suspended mid-flight, anything short of an outright connection error. That is
+ * exactly what stuck the Caesar control bar's START key: `toggleSchedule`'s `finally` clears
+ * `scheduleBusy`, but only once every awaited call here has settled, and an unsettled promise
+ * never reaches it — the button sits on its busy dot until the page is reloaded. The bridge itself
+ * answers in milliseconds (checked live), so this is a client-side hang, not a slow server; an
+ * 8s abort is generous for that and short enough that the button recovers on its own.
+ */
+const REQUEST_TIMEOUT_MS = 8_000;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(bridgeUrl(path), {
+    const response = await fetchWithTimeout(bridgeUrl(path), {
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       ...init,
+      signal: controller.signal,
     });
     const json = await response.json().catch(() => ({}));
     if (!response.ok || json?.ok === false) return null;
     return json as T;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -99,4 +115,34 @@ export async function setBridgeScheduleEnabled(enabled: boolean): Promise<Bridge
     body: JSON.stringify({ enabled }),
   });
   return result?.plan ?? null;
+}
+
+/**
+ * Starts one strategy DIRECTLY, bypassing the schedule's own segment check.
+ *
+ * CaesarPlanService.Apply() only starts a strategy once the wall clock is inside a segment that
+ * assigns it — so flipping the schedule switch outside that window does nothing for it, which
+ * reads as "I pressed START and it looks on, but nothing is actually running". This is what the
+ * Caesar control bar's START key calls, for every browser-hosted strategy the plan names anywhere,
+ * so the button's own promise (both strategies, right now) does not depend on what segment the
+ * clock happens to be standing in.
+ */
+export async function startStrategyNow(bridgeStrategyId: string): Promise<boolean> {
+  const result = await request<{ ok: boolean }>("/api/stream/automation/start", {
+    method: "POST",
+    body: JSON.stringify({ source: "caesar-control-bar", strategyId: bridgeStrategyId }),
+  });
+  return result != null;
+}
+
+/**
+ * Stops one strategy directly — the STOP-side twin of startStrategyNow. Scoped to this one
+ * strategyId (drops only its own queued orders), never the operator's all-strategies panic form.
+ */
+export async function stopStrategyNow(bridgeStrategyId: string): Promise<boolean> {
+  const result = await request<{ ok: boolean }>("/api/stream/automation/stop", {
+    method: "POST",
+    body: JSON.stringify({ source: "caesar-control-bar", strategyId: bridgeStrategyId }),
+  });
+  return result != null;
 }

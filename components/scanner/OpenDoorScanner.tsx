@@ -2896,6 +2896,7 @@ export default function OpenDoorScanner({
     toggleStreamPanicOff,
     startStreamAutomation,
     clearStreamExecutionQueue,
+    stopStreamAutomation,
     resetStreamAutomationState,
     dismissStreamActivePositions,
     submitManualStreamOrders,
@@ -3039,7 +3040,9 @@ export default function OpenDoorScanner({
         }
       } finally {
         try {
-          await clearStreamExecutionQueue();
+          // Only THIS strategy's pending orders. The queue is shared with every other
+          // strategy running on this machine, and an unscoped clear aborted theirs too.
+          await clearStreamExecutionQueue({ thisStrategyOnly: true });
         } catch {
           // best effort cleanup
         }
@@ -6637,6 +6640,7 @@ export default function OpenDoorScanner({
             onClearTickerPoint={clearStreamTickerPoint}
             onTogglePanicOff={toggleStreamPanicOff}
             onStartAutomation={startStreamAutomation}
+            onStopAutomation={stopStreamAutomation}
             onClearExecutionQueue={clearStreamExecutionQueue}
             onResetAutomationState={resetStreamAutomationState}
             onDismissActivePositions={dismissStreamActivePositions}

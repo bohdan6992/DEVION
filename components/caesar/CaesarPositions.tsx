@@ -27,10 +27,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { bridgeUrl } from "@/lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
+import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getStreamStores } from "@/components/stream/streamStoreRegistry";
-import type { StreamPosition } from "@/components/stream/streamEngine";
-import CaesarPanel, { CaesarPanelNote } from "./CaesarPanel";
+import { readPersistedStreamActionLog } from "@/components/stream/streamEngine";
+import type { StreamActionLogEntry, StreamPosition } from "@/components/stream/streamEngine";
+import CaesarPanel from "./CaesarPanel";
 
 type BridgePosition = {
   ticker: string;
@@ -66,6 +68,37 @@ export type CaesarPositionsProps = {
 
 type Claim = { strategyKey: string; position: StreamPosition };
 
+/**
+ * A browser stream restores only OPEN rows. The action log persists CLOSE records, so it is the
+ * durable source for a strategy claim after a bridge or browser restart.
+ */
+function positionFromActionLog(entry: StreamActionLogEntry): StreamPosition {
+  const closed = entry.kind === "CLOSE";
+  return {
+    ticker: entry.ticker,
+    pairKey: entry.pairKey ?? null,
+    benchmark: entry.benchmark,
+    side: entry.side,
+    entrySignal: entry.deviation,
+    lastSignal: entry.deviation,
+    lastScaleSignal: entry.deviation,
+    spread: null,
+    spreadBidPct: null,
+    status: closed ? "CLOSED" : "OPEN",
+    reason: entry.reason ?? (closed ? "restored close from action log" : "restored entry from action log"),
+    entryCount: entry.entryCount ?? entry.sequence ?? 1,
+    belowThresholdTicks: 0,
+    lockedForPrint: false,
+    pendingIntent: null,
+    entryDispatchedAt: entry.at,
+    lastDispatchedAt: entry.at,
+    lastConfirmedActiveAt: entry.at,
+    lastAboveAddCapAt: null,
+    openedAt: entry.at,
+    updatedAt: entry.at,
+  };
+}
+
 /** One line of the terminal: an account position, and the strategy claiming it (if any). */
 type Row = {
   bridge: BridgePosition;
@@ -76,7 +109,9 @@ type Row = {
   shared: boolean;
 };
 
-const POLL_MS = 4000;
+// See useMarketMakerWindow's POLL_MS comment — the account snapshot matters more for freshness
+// than the MM bind does, so this only backs off moderately rather than as far.
+const POLL_MS = 6_000;
 
 function fmt(n: number | null | undefined, digits = 2): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -91,7 +126,10 @@ function fmtInt(n: number | null | undefined): string {
 /** Carrying size right now. */
 function isOpen(p: BridgePosition): boolean {
   if (p.isFlat === true) return false;
-  return (p.posSize ?? 0) !== 0;
+  // PositionBp is the account's strategy-facing activity signal. Some broker snapshots can have
+  // a transient zero PosSize while PositionBp is already non-zero, so hiding that row makes
+  // Caesar disagree with the same rule STREAM uses for add/entry protection.
+  return (p.positionBp ?? 0) !== 0;
 }
 
 /**
@@ -114,21 +152,22 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
-    const pull = async () => {
-      try {
-        const res = await fetch(bridgeUrl("/api/execution/tradingapp/positions"), { cache: "no-store" });
-        const json = (await res.json()) as BridgeSnapshot;
-        if (!alive.current) return;
-        setSnapshot(json);
+    // ONE poll of /positions shared with CaesarCharts (both used to run their own independent 4s
+    // interval against the same endpoint) — see sharedPoll.ts's doc comment: too many independent
+    // pollers on one origin is what pushed requests past Chrome's 6-connections-per-origin cap.
+    const fetchPositions = () =>
+      fetchWithTimeout(bridgeUrl("/api/execution/tradingapp/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<BridgeSnapshot>);
+    const unsubscribe = subscribeSharedPoll("account-positions", fetchPositions, POLL_MS, (value, err) => {
+      if (!alive.current) return;
+      if (err) {
+        setError(err);
+      } else {
+        setSnapshot(value);
         setError(null);
-      } catch (e: any) {
-        if (!alive.current) return;
-        setError(String(e?.message ?? e));
       }
-    };
-    void pull();
-    const id = window.setInterval(pull, POLL_MS);
-    return () => { alive.current = false; window.clearInterval(id); };
+    });
+    return () => { alive.current = false; unsubscribe(); };
   }, []);
 
   // ---- what each mounted engine says it holds -------------------------------------------------
@@ -139,11 +178,28 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const recompute = useCallback(() => {
     const out: Claim[] = [];
     for (const inst of instances) {
-      const rows = getStreamStores(inst.instanceId).position.getRows();
+      const stores = getStreamStores(inst.instanceId);
+      const rows = stores.position.getRows();
+      const claimedTickers = new Set<string>();
       for (const position of rows) {
         // CLOSED rows are kept on purpose: they are how a realised result stays attributed to the
         // strategy that made it. Dropping them left every closed ticker UNCLAIMED by the close.
         out.push({ strategyKey: inst.key, position });
+        claimedTickers.add(position.ticker.trim().toUpperCase());
+      }
+
+      // On restart `position` contains only re-opened positions. Reconstruct missing closed rows
+      // from the stream's persisted action log, one latest event per ticker.
+      const latestByTicker = new Map<string, StreamActionLogEntry>();
+      const persistedLog = readPersistedStreamActionLog(inst.instanceId);
+      for (const entry of [...stores.actionLog.getRows(), ...persistedLog]) {
+        const ticker = entry.ticker.trim().toUpperCase();
+        if (!ticker) continue;
+        const previous = latestByTicker.get(ticker);
+        if (!previous || entry.at > previous.at) latestByTicker.set(ticker, entry);
+      }
+      for (const [ticker, entry] of latestByTicker) {
+        if (!claimedTickers.has(ticker)) out.push({ strategyKey: inst.key, position: positionFromActionLog(entry) });
       }
     }
     setClaims(out);
@@ -152,9 +208,10 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
 
   useEffect(() => {
     recompute();
-    const unsubs = instances.map((inst) =>
-      getStreamStores(inst.instanceId).position.subscribe(recompute)
-    );
+    const unsubs = instances.flatMap((inst) => {
+      const stores = getStreamStores(inst.instanceId);
+      return [stores.position.subscribe(recompute), stores.actionLog.subscribe(recompute)];
+    });
     return () => { for (const u of unsubs) u(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceKey, recompute]);
@@ -287,14 +344,60 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
 
   const age = snapshot?.ageSeconds;
   const stale = age != null && age >= 0 && age > 30;
+  const pnlTone = (value: number) => value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-zinc-500";
+
+  const strategyTotals = (
+    <section className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+      <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">Strategy P&amp;L</div>
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from(view.perStrategy.entries()).map(([key, strategy]) => {
+          const total = strategy.openPnl + strategy.closedPnl;
+          return (
+            <div key={key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+              <div className="flex items-baseline justify-between font-mono">
+                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
+                <span className="text-[10px] text-zinc-600">#{strategy.priority}</span>
+              </div>
+              <div className="mt-1 font-mono text-[10px] text-zinc-500">
+                {strategy.open} open <span className="ml-2 text-emerald-300/80">{strategy.long}L</span><span className="ml-2 text-rose-300/80">{strategy.short}S</span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-2 font-mono tabular-nums">
+                <Metric label="Total" value={total} tone={pnlTone(total)} />
+                <Metric label="Open" value={strategy.openPnl} tone={pnlTone(strategy.openPnl)} />
+                <Metric label="Closed" value={strategy.closedPnl} tone={pnlTone(strategy.closedPnl)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 
   return (
+    <>
+      {strategyTotals}
     <CaesarPanel
-      title="Positions"
+      title="Active"
       subtitle={snapshot?.account ? `acct ${snapshot.account}` : "account —"}
-      accent="#d95926"
+      accent="#fb923c"
+      terminal
+      className="mt-3"
       right={
         <>
+          {Array.from(view.perStrategy.entries()).map(([key, strategy]) => {
+            const total = strategy.openPnl + strategy.closedPnl;
+            return (
+              <span
+                key={key}
+                className={
+                  "font-mono text-[10px] uppercase tracking-widest " +
+                  (total > 0 ? "text-emerald-300" : total < 0 ? "text-rose-300" : "text-zinc-500")
+                }
+              >
+                {key} {total >= 0 ? "+" : ""}{fmt(total)}
+              </span>
+            );
+          })}
           <span
             className={
               "rounded-lg border px-2 py-1 font-mono text-[10px] uppercase tracking-widest " +
@@ -332,14 +435,18 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       )}
 
       {/* ---- distribution by strategy ---- */}
-      <div className="flex flex-wrap gap-2 px-3 py-3">
+      <section className="hidden">
+        <div className="px-1 pb-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">
+          Strategy P&amp;L
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {instances.length === 0 ? (
           <span className="font-mono text-[11px] text-zinc-600">No strategy hosted on this segment.</span>
         ) : (
           Array.from(view.perStrategy.entries()).map(([key, s]) => (
             <div
               key={key}
-              className="min-w-[190px] flex-1 rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2 transition-colors hover:border-white/[0.12]"
+              className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80"
             >
               <div className="flex items-baseline justify-between font-mono">
                 <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
@@ -359,7 +466,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
               */}
               <div
                 className={
-                  "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
+                  "mt-2 font-mono text-[15px] font-bold tabular-nums " +
                   (s.openPnl + s.closedPnl > 0
                     ? "text-emerald-400"
                     : s.openPnl + s.closedPnl < 0
@@ -367,6 +474,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                       : "text-zinc-500")
                 }
               >
+                <span className="mr-2 text-[8px] font-normal uppercase tracking-widest text-zinc-600">total</span>
                 {s.openPnl + s.closedPnl >= 0 ? "+" : ""}
                 {fmt(s.openPnl + s.closedPnl)}
               </div>
@@ -389,7 +497,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         )}
 
         {view.sharedCount > 0 && (
-          <div className="min-w-[190px] flex-1 rounded-lg border border-sky-500/25 bg-sky-500/[0.07] px-3 py-2">
+          <div className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-[#2dd4bf]/25 bg-[#2dd4bf]/[0.07] px-3 py-2 shadow-xl transition-all duration-300 hover:border-[#2dd4bf]/45">
             <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-sky-200">
               Shared
             </div>
@@ -412,7 +520,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         )}
 
         {view.unclaimedCount > 0 && (
-          <div className="min-w-[190px] flex-1 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2">
+          <div className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-[#fb923c]/25 bg-[#fb923c]/[0.07] px-3 py-2 shadow-xl transition-all duration-300 hover:border-[#fb923c]/45">
             <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-amber-200">
               Unclaimed
             </div>
@@ -433,23 +541,24 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      </section>
 
       {/* ---- the terminal ---- */}
-      <div className="max-h-[320px] overflow-auto border-t border-white/[0.05]">
-        <table className="w-full min-w-[860px] font-mono text-[11px]">
-          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/85 text-zinc-500 backdrop-blur-xl">
+      <div className="mt-3 max-h-[320px] overflow-auto">
+        <table className="w-full min-w-[860px] text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-zinc-300 backdrop-blur-xl">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
-              <th className="text-left">Ticker</th>
-              <th className="text-left">Strategy</th>
-              <th className="text-left">Side</th>
-              <th className="text-right">Size</th>
-              <th className="text-right">Avg</th>
-              <th className="text-right">Open P&amp;L</th>
-              <th className="text-right">Closed P&amp;L</th>
-              <th className="text-right">Ent</th>
-              <th className="text-left">Status</th>
-              <th className="text-left">Reason</th>
+              <th className="text-left text-zinc-200">Ticker</th>
+              <th className="text-left text-sky-300/70">Strategy</th>
+              <th className="text-left text-violet-300/80">Side</th>
+              <th className="text-right text-violet-300">Size</th>
+              <th className="text-right text-amber-400/80">Avg</th>
+              <th className="text-right text-emerald-300/80">Open P&amp;L</th>
+              <th className="text-right text-pink-400/80">Closed P&amp;L</th>
+              <th className="text-right text-amber-300/80">Ent</th>
+              <th className="text-left text-teal-300/80">Status</th>
+              <th className="text-left text-zinc-300">Reason</th>
             </tr>
           </thead>
           <tbody>
@@ -461,7 +570,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
               </tr>
             ) : null}
 
-            {view.rows.map((r) => {
+            {view.rows.map((r, index) => {
               const openPnl = r.open ? r.bridge.openPnL ?? 0 : null;
               // null (field absent) contributes nothing rather than a fabricated zero.
       const closedPnl = r.bridge.closedPnL ?? 0;
@@ -478,7 +587,8 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                 <tr
                   key={`${r.ticker}-${r.claim?.strategyKey ?? "unclaimed"}`}
                   className={
-                    "border-t border-white/[0.04] [&>td]:px-3 [&>td]:py-1.5 " +
+                    "border-t border-white/5 transition-colors [&>td]:px-2 [&>td]:py-3.5 " +
+                    (index % 2 === 0 ? "bg-white/[0.01] hover:bg-white/[0.03] " : "bg-transparent hover:bg-white/[0.03] ") +
                     (!r.claim ? "bg-amber-500/[0.05]" : r.open ? "" : "opacity-70")
                   }
                 >
@@ -538,7 +648,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
             {view.missing.map((c) => (
               <tr
                 key={`missing-${c.strategyKey}-${c.position.ticker}`}
-                className="border-t border-white/[0.04] bg-rose-500/[0.05] [&>td]:px-3 [&>td]:py-1.5"
+                className="border-t border-white/[0.04] bg-rose-500/[0.05] [&>td]:px-3 [&>td]:py-3"
               >
                 <td className="font-bold text-zinc-200">{c.position.ticker}</td>
                 <td className="text-zinc-300">{c.strategyKey.toUpperCase()}</td>
@@ -558,7 +668,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         </table>
       </div>
 
-      <CaesarPanelNote>
+      <div className="hidden">
         Size, average and both P&amp;L columns come from the account —{" "}
         <span className="font-mono text-white/40">LstPrcOpenPnL</span> while the position is open and{" "}
         <span className="font-mono text-white/40">ClosedPnL</span> once it is not, so a ticker keeps its
@@ -568,7 +678,17 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         <span className="text-sky-300/70">shared</span> ticker is held by two strategies at once —
         legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
         so they are counted once into SHARED rather than added to either strategy.
-      </CaesarPanelNote>
+      </div>
     </CaesarPanel>
+    </>
+  );
+}
+
+function Metric({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div>
+      <div className="text-[8px] uppercase tracking-widest text-zinc-600">{label}</div>
+      <div className={`mt-0.5 text-[13px] font-bold ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
+    </div>
   );
 }

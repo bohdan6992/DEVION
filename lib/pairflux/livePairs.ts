@@ -142,7 +142,86 @@ export type LivePairArgs = {
   betaRange: readonly [string, string];
   sigmaRange: readonly [string, string];
   alphaRange: readonly [string, string];
+  /**
+   * The PAIR's rating floor for the class being watched — `converged / total` and the episode
+   * count, straight from signals/pairflux/summary.csv.
+   *
+   * This is the gate the replay applies (TapePairFluxEngine: `rating.Total < MinTotal`,
+   * `rating.Rate < MinRate`, both read from ByClass[cls]). The stream used to apply no pair gate at
+   * all and instead filtered each LEG by the ticker's Arbitrage rating against its benchmark ETF —
+   * a different measurement of a different thing, applied twice. Measured on 2026-09-08: of 16 923
+   * INTRA pairs only 26 had both legs surviving that, because a per-leg pass rate is squared once
+   * a pair needs both.
+   *
+   * Omit or pass 0 for no floor.
+   */
+  minRate?: number;
+  minTotal?: number;
 };
+
+/**
+ * The pair's convergence reading for an OPEN position — always computable, unlike
+ * computeLivePairs.dev.
+ *
+ * computeLivePairs drops a pair the moment neither devUp nor devDn crosses zero ("apart on mid,
+ * but the whole gap sits inside the two spreads") — correct for its own question, "is this pair
+ * enterable right now", because a gap that small cannot be opened at a profitable cross. But a
+ * position that is ALREADY OPEN needs the opposite question answered continuously: how close is
+ * the spread to the level that closes it — and that stays answerable, and in fact becomes the most
+ * important number in the position, in exactly the region computeLivePairs stops reporting.
+ *
+ * EXIT ON THE OPPOSITE SIDE. A convergence trade opened by selling A and buying B unwinds by
+ * buying A back and selling B back — the reverse crossing, not the one that opened it. So the
+ * exit reading for a leg is the executable spread on the OTHER of {devUp, devDn} than the one that
+ * would have opened this leg's own side — mirrors TapePairFluxEngine.Replay's execUp/execDn,
+ * computed unconditionally at every reading rather than gated to "outside zero".
+ *
+ * Pass the PUBLISHED pair (from the full universe, not the filtered/live one) and a QUOTE INDEX
+ * built from the UNFILTERED signal set — an open position must keep reporting its exit level
+ * regardless of a toolbar range filter that would have excluded it as a fresh entry.
+ */
+export function pairExitDeviation(
+  pair: PairFluxRow,
+  quoteByTicker: ReadonlyMap<string, Quote>,
+  unit: LivePairUnit,
+  legTicker: string,
+  legSide: "Long" | "Short",
+): { signed: number; abs: number } | null {
+  const aTicker = pair.ticker.trim().toUpperCase();
+  const bTicker = pair.partner.trim().toUpperCase();
+  const qa = quoteByTicker.get(aTicker);
+  const qb = quoteByTicker.get(bTicker);
+  if (!qa || !qb) return null;
+
+  const beta =
+    pair.beta !== null && Number.isFinite(pair.beta) && Math.abs(pair.beta) > 1e-9 ? pair.beta : 1;
+
+  const bHigh = beta >= 0 ? qb.ask : qb.bid;
+  const bLow = beta >= 0 ? qb.bid : qb.ask;
+  // Raw and UNCONDITIONAL — the one difference from computeLivePairs' devUp/devDn, which only
+  // exist as "dev" when one of them is outside zero. Both are always meaningful quantities; which
+  // one closes THIS leg's trade depends only on which one opened it.
+  const up = qa.bid - beta * bHigh;   // SHORT A(pair.ticker) / LONG B(pair.partner)
+  const dn = qa.ask - beta * bLow;    // SHORT B(pair.partner) / LONG A(pair.ticker)
+
+  const legIsA = legTicker.trim().toUpperCase() === aTicker;
+  // True when this leg's position was opened off the "up" branch — A short (this leg, if it IS a)
+  // or B long (this leg, if it is b). The unwind reads the OTHER branch.
+  const entryWasUp = legIsA ? legSide === "Short" : legSide === "Long";
+  const raw = entryWasUp ? dn : up;
+
+  const unitScale =
+    unit === "sigma" ? pair.sigma
+      : unit === "alpha" ? pair.alpha
+        : unit === "gamma" ? pair.gamma
+          : 1;
+  if (unitScale === null || unitScale === undefined || !Number.isFinite(unitScale) || Math.abs(unitScale) < 1e-9) {
+    return null;
+  }
+
+  const signed = raw / unitScale;
+  return { signed, abs: Math.abs(signed) };
+}
 
 export function computeLivePairs(args: LivePairArgs): LivePair[] {
   const { pairs, quoteByTicker, unit: zapMode, minStr, maxStr, exitStr } = args;
@@ -150,6 +229,8 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
   const [betaLo, betaHi] = args.betaRange;
   const [sigmaLo, sigmaHi] = args.sigmaRange;
   const [alphaLo, alphaHi] = args.alphaRange;
+  const minRate = Number.isFinite(args.minRate as number) ? Math.max(0, args.minRate as number) : 0;
+  const minTotal = Number.isFinite(args.minTotal as number) ? Math.max(0, Math.trunc(args.minTotal as number)) : 0;
 
   const lo = Math.abs(numOrNull(minStr) ?? 0);
   const hi = Math.abs(numOrNull(maxStr) ?? Infinity);
@@ -188,6 +269,13 @@ export function computeLivePairs(args: LivePairArgs): LivePair[] {
     const gm = p.gamma;
 
     // Pair-level gates from the toolbar, read on the pair's own published statistics.
+    //
+    // The rating floor comes first because it is the strategy's own contract: rate is
+    // converged/total for THIS pair in THIS class. A pair with no published rating for the class
+    // has no rate, and is refused rather than measured against a floor it cannot answer — the same
+    // way the replay skips a pair missing from ByClass[cls].
+    if (minTotal > 0 && (p.total ?? 0) < minTotal) continue;
+    if (minRate > 0 && (p.rate ?? -1) < minRate) continue;
     if (!inRange(p.corr, corrLo, corrHi)) continue;
     if (!inRange(p.beta === null ? null : Math.abs(p.beta), betaLo, betaHi)) continue;
     if (!inRange(sg, sigmaLo, sigmaHi)) continue;

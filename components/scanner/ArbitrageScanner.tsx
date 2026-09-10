@@ -210,6 +210,8 @@ export default function ArbitrageScanner({
     setStartCutoffTime,
     preStartTime,
     setPreStartTime,
+    entryStopTime,
+    setEntryStopTime,
     pnlMode,
     setPnlMode,
     priceMode,
@@ -1306,6 +1308,13 @@ export default function ArbitrageScanner({
           setPreStartTime(restoredPreStartTime);
           onStreamAutomationConfigChange?.({ preStartTime: restoredPreStartTime });
         }
+        if (typeof s.entryStopMinuteIdx === "number" && s.entryStopMinuteIdx >= 0) {
+          const h = Math.floor(s.entryStopMinuteIdx / 60);
+          const m = s.entryStopMinuteIdx % 60;
+          const restoredEntryStopTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          setEntryStopTime(restoredEntryStopTime);
+          onStreamAutomationConfigChange?.({ entryStopTime: restoredEntryStopTime });
+        }
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
@@ -1532,6 +1541,7 @@ export default function ArbitrageScanner({
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       preStartMinuteIdx: preStartToMinuteIdx(),
+      entryStopMinuteIdx: parseTimeToMinuteIdx(entryStopTime),
       pnlMode,
       priceMode,
       sizingMode,
@@ -2377,6 +2387,10 @@ export default function ArbitrageScanner({
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
     startCutoffTime,
     preStartTime,
+    // Same gap as PairFlux had — see its own comment on this field. Built field-by-field rather
+    // than spread from streamAutomationConfigOverride, so a field missing here is a field that
+    // silently resets on every render no matter what the user typed.
+    entryStopTime,
   }), [
     addDelayMinutes,
     closeMode,
@@ -2391,6 +2405,7 @@ export default function ArbitrageScanner({
     sizingMode,
     startCutoffTime,
     preStartTime,
+    entryStopTime,
   ]);
 
   const streamTrackedSignalsEnabled =
@@ -2420,6 +2435,7 @@ export default function ArbitrageScanner({
     toggleStreamPanicOff,
     startStreamAutomation,
     clearStreamExecutionQueue,
+    stopStreamAutomation,
     resetStreamAutomationState,
     dismissStreamActivePositions,
     submitManualStreamOrders,
@@ -2558,7 +2574,9 @@ export default function ArbitrageScanner({
         }
       } finally {
         try {
-          await clearStreamExecutionQueue();
+          // Only THIS strategy's pending orders. The queue is shared with every other
+          // strategy running on this machine, and an unscoped clear aborted theirs too.
+          await clearStreamExecutionQueue({ thisStrategyOnly: true });
         } catch {
           // best effort cleanup
         }
@@ -6528,6 +6546,7 @@ export default function ArbitrageScanner({
             onClearTickerPoint={clearStreamTickerPoint}
             onTogglePanicOff={toggleStreamPanicOff}
             onStartAutomation={startStreamAutomation}
+            onStopAutomation={stopStreamAutomation}
             onClearExecutionQueue={clearStreamExecutionQueue}
             onResetAutomationState={resetStreamAutomationState}
             onDismissActivePositions={dismissStreamActivePositions}

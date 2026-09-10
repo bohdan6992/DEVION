@@ -2,12 +2,39 @@
 
 const DEFAULT_LOCAL = "http://localhost:5197";
 
+// Each Caesar browser engine keeps SSE feeds open. Chrome's HTTP/1.1 per-origin connection limit
+// leaves only a small number of slots for ordinary Bridge requests, so serialising short polls
+// through this two-slot gate prevents a status read from being aborted behind its own traffic.
+const MAX_CONCURRENT_BRIDGE_REQUESTS = 2;
+let activeBridgeRequests = 0;
+const bridgeRequestWaiters: Array<() => void> = [];
+
+async function acquireBridgeRequestSlot(): Promise<() => void> {
+  if (activeBridgeRequests >= MAX_CONCURRENT_BRIDGE_REQUESTS) {
+    await new Promise<void>((resolve) => bridgeRequestWaiters.push(resolve));
+  }
+  activeBridgeRequests += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeBridgeRequests -= 1;
+    bridgeRequestWaiters.shift()?.();
+  };
+}
+
 function isBrowser() {
   return typeof window !== "undefined";
 }
 
 function stripTrailingSlashes(x: string) {
   return (x || "").replace(/\/+$/, "");
+}
+
+function proxyLocalBridgeRequest(input: string): string {
+  if (!isBrowser() || !input.startsWith(DEFAULT_LOCAL)) return input;
+  const path = input.slice(DEFAULT_LOCAL.length);
+  return `/api/bridge/proxy?path=${encodeURIComponent(path)}`;
 }
 
 function sanitizeBridgeBase(x: string | null | undefined): string | null {
@@ -92,4 +119,39 @@ export function bridgeUrl(path: string) {
   // normalize path
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${stripTrailingSlashes(base)}${p}`;
+}
+
+/**
+ * A bare `fetch` with no timeout, called from a `setInterval` poll, does not just hang once — the
+ * NEXT tick fires anyway (the interval does not wait for the previous call to settle) and stacks
+ * another request on top. Measured live 2026-09-09: a Caesar tab left open for hours accumulated
+ * enough of these across its half-dozen polling loops (MM status, positions x2, strategy
+ * heartbeat, automation heartbeat/state, plan) that Chrome refused EVERY subsequent request with
+ * `net::ERR_INSUFFICIENT_RESOURCES` — indistinguishable, from the operator's chair, from the
+ * bridge itself being down, even though a fresh curl to the same port answered in 3ms the whole
+ * time. This is the fix for that class of bug: every poll loop gets a hard ceiling on how long one
+ * request may stay outstanding before it is aborted and freed.
+ */
+export async function fetchWithTimeout(
+  input: string,
+  init?: RequestInit,
+  // Two persistent SSE connections (one per mounted strategy, see streamSseHub.ts) permanently
+  // occupy 2 of Chrome's 6 concurrent connections per origin (plain http, so HTTP/1.1 — no
+  // multiplexing), leaving ~4 for every short-lived poll to share. An 8s timeout let one blocked
+  // slot stay blocked for a real 8 seconds before freeing up for the next queued request —
+  // measured live 2026-09-09, this compounded into a 3+ minute heartbeat stall even after fixing
+  // the outright duplicate pollers. The bridge itself answers in single-digit milliseconds always
+  // (curl, checked repeatedly); 3s is still generous headroom and cuts the worst case by more than
+  // half.
+  timeoutMs = 3_000,
+): Promise<Response> {
+  const release = await acquireBridgeRequestSlot();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(proxyLocalBridgeRequest(input), { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    release();
+  }
 }

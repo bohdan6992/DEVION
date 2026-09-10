@@ -2,11 +2,13 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import CaesarControlBar from "./CaesarControlBar";
-import { fetchBridgePlan, pushBridgePlan, setBridgeScheduleEnabled } from "@/lib/caesar/planClient";
+import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
+import { fetchBridgePlan, pushBridgePlan, setBridgeScheduleEnabled, startStrategyNow, stopStrategyNow } from "@/lib/caesar/planClient";
 import {
   CAESAR_SEGMENTS,
   CAESAR_STRATEGIES,
@@ -36,6 +38,11 @@ import type {
   WindowFit,
 } from "@/lib/caesar/schedule";
 
+// The situation picture belongs directly below the day ruler. Its streams still mount below in
+// CaesarRunners; the shared store registry lets this chart observe them without another wrapper.
+const CaesarCharts = dynamic(() => import("./CaesarCharts"), { ssr: false });
+const CaesarPositions = dynamic(() => import("./CaesarPositions"), { ssr: false });
+
 // =========================
 // HELPERS
 // =========================
@@ -64,6 +71,8 @@ function withAlpha(hex: string, alpha: number): string {
  * rides along inside it, which is what the borderless and light themes key off.
  */
 const PANEL = CAESAR_PANEL_SURFACE;
+const GRAPH_SURFACE =
+  "scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80";
 
 const HOUR_TICKS = Array.from({ length: 25 }, (_, i) => i * 60);
 const HALF_HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60 + 30);
@@ -107,13 +116,25 @@ export default function CaesarSchedule() {
   const [scheduleError, setScheduleError] = useState(false);
   /** Set while a value came FROM the bridge, so the auto-push does not echo it straight back. */
   const remoteEchoRef = useRef(false);
+  /**
+   * The first poll right after mount races the page's other startup traffic (SSE connections
+   * opening, every other poller's own first tick) for a handful of HTTP/1.1 connections — a single
+   * missed tick there is normal contention, not the bridge being down, and the very next 30s tick
+   * almost always clears it on its own. Painting "Bridge down" on the very first miss did exactly
+   * that, every single page load, even with the bridge answering in milliseconds throughout.
+   * Requiring two misses in a row before showing the error keeps a REAL outage visible while
+   * dropping that false alarm.
+   */
+  const consecutiveFailuresRef = useRef(0);
 
   const pullSchedule = useCallback(async () => {
     const remote = await fetchBridgePlan();
     if (remote == null) {
-      setScheduleError(true);
+      consecutiveFailuresRef.current += 1;
+      if (consecutiveFailuresRef.current >= 2) setScheduleError(true);
       return;
     }
+    consecutiveFailuresRef.current = 0;
     setScheduleError(false);
     setScheduleEnabled((prev) => {
       const next = remote.plan.enabled;
@@ -211,6 +232,12 @@ export default function CaesarSchedule() {
 
   const toggleSchedule = useCallback(async () => {
     if (scheduleBusy) return;
+    // An error means the UI does not know the bridge's current switch state. Retrying the read is
+    // safe; guessing and toggling could stop a day that is already running.
+    if (scheduleError || scheduleEnabled == null) {
+      await pullSchedule();
+      return;
+    }
     const next = !(scheduleEnabled ?? false);
     setScheduleBusy(true);
     try {
@@ -227,12 +254,65 @@ export default function CaesarSchedule() {
       }
       setScheduleError(false);
       setScheduleEnabled(result.enabled);
+
+      /*
+        THE GUARANTEE. CaesarPlanService.Apply() only starts a strategy once the wall clock sits
+        inside a segment that assigns it — so this switch, on its own, does not promise "both
+        strategies are now running": press it during INTRA, with today's plan only covering
+        Arbitrage/PairFlux on PRE, and the dot lights up while neither strategy moves. That is
+        indistinguishable, from the operator's chair, from the button simply not working — and it
+        is exactly the shape of "PairFlux sent a few situations and then nothing".
+
+        So this key does not delegate that promise to the schedule's periodic tick. It starts (or
+        stops) every BROWSER-hosted strategy the plan names anywhere — pre, open, intra or post —
+        immediately, unconditionally, the moment it is pressed. The schedule switch keeps its other
+        job (segment-edge handoffs later in the day, e.g. OpenRide at OPEN); this is what makes the
+        button's own label true the instant you read it.
+      */
+      if (plan) {
+        const ids = new Set<string>();
+        for (const seg of CAESAR_SEGMENTS) {
+          for (const row of plan[seg.key] ?? []) {
+            if (!row.enabled) continue;
+            const strategy = LIVE_STRATEGIES[row.strategyKey];
+            if (strategy?.streamEngine === "browser" && strategy.bridgeStrategyId) {
+              ids.add(strategy.bridgeStrategyId);
+            }
+          }
+        }
+        await Promise.all(
+          Array.from(ids).map((id) => (next ? startStrategyNow(id) : stopStrategyNow(id)))
+        );
+      }
     } finally {
       setScheduleBusy(false);
     }
-  }, [plan, scheduleEnabled, scheduleBusy, pullSchedule]);
+  }, [plan, scheduleEnabled, scheduleBusy, scheduleError, pullSchedule]);
 
   const nowSegment = nowMin == null ? null : segmentAtAxisMinute(nowMin);
+  const chartInstances = useMemo(() => {
+    if (!plan || !nowSegment) return [];
+    return (plan[nowSegment.key] ?? []).flatMap((row) => {
+      if (!row.enabled) return [];
+      const strategy = LIVE_STRATEGIES[row.strategyKey];
+      // Browser engines are the only ones with a local action log. Bridge engines deliberately
+      // stay out, rather than showing a convincing but permanently empty history line.
+      if (!strategy || strategy.streamEngine !== "browser") return [];
+      return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority }];
+    });
+  }, [plan, nowSegment]);
+
+  // Positions can close long after their segment has ended. Keep their browser action logs in the
+  // terminal's ownership lookup, while the charts remain scoped to the current segment.
+  const positionInstances = useMemo(() => (
+    Object.values(LIVE_STRATEGIES)
+      .filter((strategy) => strategy.streamEngine === "browser")
+      .map((strategy) => ({
+        key: strategy.key,
+        instanceId: strategy.bridgeStrategyId,
+        priority: strategy.priority,
+      }))
+  ), []);
 
   // NOT min-h-screen. This used to be the only thing on the page, so filling the viewport was
   // free; it is not any more. With ~645px of content the div still stretched to 100vh, and
@@ -253,7 +333,7 @@ export default function CaesarSchedule() {
         ) : (
           <>
             {/* ---------- TIMELINE ---------- */}
-            <section className={`mt-3 p-5 ${PANEL}`}>
+            <section className={`mt-3 p-5 ${GRAPH_SURFACE}`}>
               <div className="overflow-x-auto pb-1">
                 {/* px-6 keeps the 21:00 labels at both ends of the ruler — they are centred on a
                     tick at 0% / 100% — from being clipped by the scroll container. */}
@@ -285,6 +365,15 @@ export default function CaesarSchedule() {
               </div>
             </section>
 
+            {/* A separate operational readout, directly after the clock it describes. */}
+            <CaesarCharts
+              fromMin={nowSegment?.fromMin ?? null}
+              toMin={nowSegment?.toMin ?? null}
+              nowMin={nowMin}
+              instances={chartInstances}
+            />
+            <CaesarPositions instances={positionInstances} />
+
             {/*
               OUTSIDE THE TIMELINE'S FRAME, ON THE PAGE ITSELF.
               These are not part of the plan drawing — they act ON it — so they get no panel of
@@ -298,7 +387,6 @@ export default function CaesarSchedule() {
               scheduleError={scheduleError}
               onToggleSchedule={toggleSchedule}
               onReset={() => mutate(defaultCaesarPlan())}
-              accent={nowSegment?.color ?? "#3ddc97"}
             />
 
             {/* ---------- DETAIL PANEL ---------- */}
@@ -326,7 +414,7 @@ function Header({
   nowSegment: CaesarSegment | null;
 }) {
   return (
-    <header className={`relative flex flex-wrap items-center justify-between gap-4 p-4 ${PANEL}`}>
+    <header className={`relative flex flex-wrap items-center justify-between gap-4 p-4 ${GRAPH_SURFACE}`}>
       {/* The cap is the CURRENT segment's colour, so the head of the page and the band the clock
           is standing in are the same fact stated twice. Off the data — it labels nothing on its
           own, and the badge beside the clock spells the segment out. */}

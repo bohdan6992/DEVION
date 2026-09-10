@@ -14,6 +14,7 @@ import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import { setActiveTicker, useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
 import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
+import { currentMinutesLocal, isPastSessionCutoff, parseTimeToMinutes } from "./streamEngine";
 import { useStreamStores } from "./streamStoreRegistry";
 import type {
   StreamActionLogEntry,
@@ -63,7 +64,13 @@ type ArbitrageStreamViewProps = {
   onClearTickerPoint: () => Promise<void>;
   onTogglePanicOff: (enabled: boolean) => Promise<void>;
   onStartAutomation?: () => Promise<void>;
-  onClearExecutionQueue: () => Promise<void>;
+  /**
+   * Stop THIS strategy on the bridge. Without it the stop falls back to raising panic-off, which
+   * is a property of the shared TradingApp queue and therefore freezes every other strategy on the
+   * machine as well — see setAutomationRunning.
+   */
+  onStopAutomation?: () => Promise<void>;
+  onClearExecutionQueue: (options?: { thisStrategyOnly?: boolean }) => Promise<void>;
   onResetAutomationState: () => void;
   onDismissActivePositions?: (tickers: string[]) => void;
   onForceRefresh: () => Promise<void>;
@@ -1322,6 +1329,7 @@ export default function OpenDoorStreamView({
   onClearTickerPoint,
   onTogglePanicOff,
   onStartAutomation,
+  onStopAutomation,
   onClearExecutionQueue,
   onResetAutomationState,
   onDismissActivePositions,
@@ -1478,6 +1486,18 @@ export default function OpenDoorStreamView({
     openCapReached &&
     entryReadyCount > 0 &&
     queuedIntentsCount === 0;
+  // See ArbitrageStreamView's own copy of this block for why it exists: cutoff is the one
+  // dispatch-blocking reason this panel had no counter or banner for.
+  const cutoffMinutesNow = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  const sessionStartMinutesNow = automationConfig.preStartTime
+    ? parseTimeToMinutes(automationConfig.preStartTime, 0)
+    : null;
+  const pastCutoffNow = isPastSessionCutoff(currentMinutesLocal(), cutoffMinutesNow, sessionStartMinutesNow);
+  const cutoffBlockingNewOrders =
+    automationRunning &&
+    pastCutoffNow &&
+    entryReadyCount > 0 &&
+    queuedIntentsCount === 0;
   const exitBlockedCount = streamPositionMeta.exitBlockedCount;
   const closedCount = streamPositionMeta.closedCount;
   const blockedEdgeCount = useMemo(
@@ -1498,10 +1518,15 @@ export default function OpenDoorStreamView({
 
     if (!nextRunning) {
       try {
-        await onTogglePanicOff(true);
+        // Per-strategy stop, not panic-off. panic-off belongs to the SHARED queue: raising it
+        // here stopped every strategy on the machine, and since each engine's autoEnabled
+        // includes `!panicOff`, the others went silent while still mounted and connected.
+        if (onStopAutomation) await onStopAutomation();
+        else await onTogglePanicOff(true);
       } finally {
         try {
-          await onClearExecutionQueue();
+          // This strategy's pending orders only — the queue is shared.
+          await onClearExecutionQueue({ thisStrategyOnly: true });
         } catch {
           // queue cleanup is best-effort; local stop still must happen
         }
@@ -1596,6 +1621,19 @@ export default function OpenDoorStreamView({
                 AUTO is running, but new entries are paused because open positions reached the limit:
                 {" "}
                 {intn(openCount)}/{intn(maxOpenPositions)}.
+              </div>
+            </div>
+          ) : null}
+          {cutoffBlockingNewOrders ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-amber-200">
+                Past Cutoff — No New Entries
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-amber-100/90">
+                AUTO is running and {intn(entryReadyCount)} signal{entryReadyCount === 1 ? " is" : "s are"} ENTRY
+                READY, but CUTOFF ({automationConfig.startCutoffTime}) has passed — no new positions open until
+                START is re-armed. Existing positions still add and exit normally. Push CUTOFF later if you meant
+                to keep entering.
               </div>
             </div>
           ) : null}

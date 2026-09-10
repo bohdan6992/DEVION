@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { bridgeUrl } from "../../lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import {
   deriveStreamExecutionDescriptor,
@@ -15,7 +15,9 @@ type StreamRuleBand = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POS
 type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 
 const DEFAULT_LS_PREFIX = "stream.arbitrage";
-const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 60000;
+// The bridge marks a UI host disconnected after 20s. Keep a safety margin so a Caesar-hosted
+// browser engine remains connected between polls, even if one interval is delayed.
+const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 10000;
 /**
  * How often the tab re-reads the bridge's automation flags.
  *
@@ -305,6 +307,12 @@ type StreamPageContainerProps = {
    */
   strategyPriority?: number;
   strategyLabel?: string;
+  /**
+   * When Caesar hosts this browser engine, its plan is the authority for the entry window.
+   * This is deliberately an in-memory override: visiting the standalone Stream page keeps the
+   * operator's saved CUTOFF unchanged.
+   */
+  caesarEntryStopTime?: string;
 };
 
 function StreamPageContainerInner({
@@ -317,6 +325,7 @@ function StreamPageContainerInner({
   allowedSessions,
   defaultSession = "GLOB",
   automationDefaults,
+  caesarEntryStopTime,
 }: StreamPageContainerProps) {
   const tabLsKey = `${lsKeyPrefix}.tab`;
   const sessionLsKey = `${lsKeyPrefix}.session`;
@@ -386,9 +395,17 @@ function StreamPageContainerInner({
     setAutomationConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  // See fetchWithTimeout's doc comment — an untimed poll on a setInterval that does not wait for
+  // its own previous call stacks new fetches on top of stuck ones until Chrome refuses every
+  // request on the tab with ERR_INSUFFICIENT_RESOURCES (measured live 2026-09-09).
+  const pullStateInFlightRef = useRef(false);
+  const heartbeatInFlightRef = useRef(false);
+
   const pullRemoteState = useCallback(async () => {
+    if (pullStateInFlightRef.current) return;
+    pullStateInFlightRef.current = true;
     try {
-      const response = await fetch(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
+      const response = await fetchWithTimeout(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || json?.ok === false) return;
       const state = json?.state ?? {};
@@ -431,12 +448,16 @@ function StreamPageContainerInner({
       });
     } catch {
       // keep local state if remote sync is unavailable
+    } finally {
+      pullStateInFlightRef.current = false;
     }
   }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
 
   const sendHeartbeat = useCallback(async () => {
+    if (heartbeatInFlightRef.current) return;
+    heartbeatInFlightRef.current = true;
     try {
-      await fetch(bridgeUrl("/api/stream/automation/heartbeat"), {
+      await fetchWithTimeout(bridgeUrl("/api/stream/automation/heartbeat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -447,6 +468,8 @@ function StreamPageContainerInner({
       });
     } catch {
       // heartbeat is best-effort
+    } finally {
+      heartbeatInFlightRef.current = false;
     }
   }, [streamPageClientId, strategyId]);
 
@@ -465,26 +488,45 @@ function StreamPageContainerInner({
       }
     };
 
-    void syncNow();
-    const heartbeatTimer = window.setInterval(() => {
-      void sendHeartbeat();
-    }, STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS);
-    // The schedule moves without anyone touching this tab. See STREAM_AUTOMATION_STATE_POLL_MS.
-    const stateTimer = window.setInterval(() => {
-      if (cancelled) return;
-      void pullRemoteState();
-    }, STREAM_AUTOMATION_STATE_POLL_MS);
+    // Caesar mounts Arbitrage and PairFlux at the same moment, so their two copies of this effect
+    // fire `syncNow()` in the same tick by default — a burst of simultaneous requests fighting for
+    // the same handful of HTTP/1.1 connections a persistent SSE feed per strategy already narrows
+    // (see fetchWithTimeout's doc comment). A small deterministic-per-strategy delay spreads that
+    // burst out instead of concentrating it; stable across remounts (hash of strategyId, not
+    // Math.random()) so behaviour stays reproducible between runs.
+    let hash = 0;
+    for (let i = 0; i < strategyId.length; i++) hash = (hash * 31 + strategyId.charCodeAt(i)) | 0;
+    const jitterMs = Math.abs(hash) % 1500;
+
+    const startTimer = window.setTimeout(() => {
+      void syncNow();
+    }, jitterMs);
+    let heartbeatTimer: number | null = null;
+    let stateTimer: number | null = null;
+    const armTimer = window.setTimeout(() => {
+      heartbeatTimer = window.setInterval(() => {
+        void sendHeartbeat();
+      }, STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS);
+      // The schedule moves without anyone touching this tab. See STREAM_AUTOMATION_STATE_POLL_MS.
+      stateTimer = window.setInterval(() => {
+        if (cancelled) return;
+        void pullRemoteState();
+      }, STREAM_AUTOMATION_STATE_POLL_MS);
+    }, jitterMs);
+
     window.addEventListener("focus", onVisibilityOrFocus);
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
 
     return () => {
       cancelled = true;
-      window.clearInterval(heartbeatTimer);
-      window.clearInterval(stateTimer);
+      window.clearTimeout(startTimer);
+      window.clearTimeout(armTimer);
+      if (heartbeatTimer != null) window.clearInterval(heartbeatTimer);
+      if (stateTimer != null) window.clearInterval(stateTimer);
       window.removeEventListener("focus", onVisibilityOrFocus);
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
-  }, [pullRemoteState, sendHeartbeat]);
+  }, [pullRemoteState, sendHeartbeat, strategyId]);
 
   const headerBadgeValues = ["EXECUTION", "FILTERED", shellStats.autoEnabled ? "AUTO ON" : "AUTO OFF"];
   const headerMetaLabel = `signals ${shellStats.signals.toLocaleString("en-US")} | ready ${shellStats.ready.toLocaleString("en-US")} | open ${shellStats.open.toLocaleString("en-US")}`;
@@ -507,10 +549,17 @@ function StreamPageContainerInner({
   // SIMULATOR = episodes tab: always betaMode (no real orders).
   // EXECUTOR  = analytics tab: always real orders (betaMode forced off).
   const automationConfigForTab = useMemo<StreamAutomationConfig>(
-    () => tab === "episodes"
-      ? { ...automationConfig, betaMode: true }
-      : { ...automationConfig, betaMode: false },
-    [automationConfig, tab]
+    () => ({
+      ...automationConfig,
+      betaMode: tab === "episodes",
+      // Caesar has already decided whether this strategy is allowed to run. Its segment end must
+      // therefore supersede an old standalone Stream cutoff (Arbitrage commonly persists 09:20),
+      // otherwise an active INTRA engine can produce READY signals forever without queuing orders.
+      ...(caesarEntryStopTime
+        ? { startCutoffTime: caesarEntryStopTime, entryStopTime: caesarEntryStopTime }
+        : {}),
+    }),
+    [automationConfig, caesarEntryStopTime, tab]
   );
 
   const handleControlledSessionChange = useCallback((nextSession: StreamSession) => {

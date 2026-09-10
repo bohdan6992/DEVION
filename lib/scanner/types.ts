@@ -368,6 +368,9 @@ export type PaperArbAnalyticsRequest = {
   maxBeta?: number | null;
   minSigma?: number | null;
   maxSigma?: number | null;
+  /** The pair's ALPHA. Only PairFlux publishes one; other strategies leave it null. */
+  minAlpha?: number | null;
+  maxAlpha?: number | null;
 
   minMarketCapM?: number | null;
   maxMarketCapM?: number | null;

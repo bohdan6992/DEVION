@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { bridgeUrl } from "../../lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 import OpenDoorScanner from "../scanner/OpenDoorScanner";
 import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import {
@@ -331,9 +331,17 @@ function OpenDoorStreamPageContainerInner({
     setAutomationConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  // See fetchWithTimeout's doc comment — an untimed poll on a setInterval that does not wait for
+  // its own previous call stacks new fetches on top of stuck ones until Chrome refuses every
+  // request on the tab with ERR_INSUFFICIENT_RESOURCES (measured live 2026-09-09).
+  const pullStateInFlightRef = useRef(false);
+  const heartbeatInFlightRef = useRef(false);
+
   const pullRemoteState = useCallback(async () => {
+    if (pullStateInFlightRef.current) return;
+    pullStateInFlightRef.current = true;
     try {
-      const response = await fetch(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
+      const response = await fetchWithTimeout(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
       const json = await response.json().catch(() => ({}));
       if (!response.ok || json?.ok === false) return;
       const state = json?.state ?? {};
@@ -379,12 +387,16 @@ function OpenDoorStreamPageContainerInner({
       });
     } catch {
       // keep local state if remote sync is unavailable
+    } finally {
+      pullStateInFlightRef.current = false;
     }
   }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
 
   const sendHeartbeat = useCallback(async () => {
+    if (heartbeatInFlightRef.current) return;
+    heartbeatInFlightRef.current = true;
     try {
-      await fetch(bridgeUrl("/api/stream/automation/heartbeat"), {
+      await fetchWithTimeout(bridgeUrl("/api/stream/automation/heartbeat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -399,6 +411,8 @@ function OpenDoorStreamPageContainerInner({
       });
     } catch {
       // heartbeat is best-effort
+    } finally {
+      heartbeatInFlightRef.current = false;
     }
   }, [streamPageClientId, strategyId]);
 

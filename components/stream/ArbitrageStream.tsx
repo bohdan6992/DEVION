@@ -11,6 +11,7 @@ type ArbitrageStreamProps = {
   strategyLabel?: string;
   lsKeyPrefix?: string;
   headerTitle?: string;
+  caesarEntryStopTime?: string;
 };
 
 export default function ArbitrageStream(props: ArbitrageStreamProps = {}) {

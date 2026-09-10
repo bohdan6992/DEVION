@@ -25,12 +25,13 @@
  */
 
 import dynamic from "next/dynamic";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { LIVE_STRATEGIES, type LiveStrategy } from "@/lib/strategies/registry";
 import CaesarPanel, { CAESAR_PILL, CAESAR_PILL_IDLE, CAESAR_PILL_ON } from "./CaesarPanel";
 import {
   CAESAR_SEGMENTS,
+  clockLabel,
   loadCaesarPlan,
   nyAxisMinutesNow,
   type CaesarPlan,
@@ -39,15 +40,11 @@ import {
 
 const ArbitrageStream = dynamic(() => import("../stream/ArbitrageStream"), { ssr: false });
 const PairFluxStream = dynamic(() => import("../stream/PairFluxStream"), { ssr: false });
-// Reads the account and the mounted engines' own stores; see CaesarPositions.
-const CaesarPositions = dynamic(() => import("./CaesarPositions"), { ssr: false });
 // Machine-level, not strategy-level: one bound window for the whole bridge. See CaesarWindowBinding.
 const CaesarWindowBinding = dynamic(() => import("./CaesarWindowBinding"), { ssr: false });
 // The live feed: counters and dispatches from both engines on one clock. See CaesarTerminal.
 const CaesarTerminal = dynamic(() => import("./CaesarTerminal"), { ssr: false });
 
-// The same two facts as pictures: how the segment's active situations split, and when they arrived.
-const CaesarCharts = dynamic(() => import("./CaesarCharts"), { ssr: false });
 
 /**
  * Each browser-hosted strategy's own STREAM, not its bare scanner.
@@ -75,7 +72,18 @@ const STREAMS: Record<string, React.ComponentType<any>> = {
 type Runner = {
   strategy: LiveStrategy;
   priority: number;
-  segment: CaesarSegmentKey;
+  /** The segment that assigned it, or null for one that is only still HOLDING (see `holding`). */
+  segment: CaesarSegmentKey | null;
+  /**
+   * True when the clock has left this strategy's segment but the engine is still mounted.
+   *
+   * Hosting is not permission. Whether a strategy may open anything is the bridge's per-strategy
+   * automation flag, which CaesarPlanService turns off at the segment edge; what this tab decides
+   * is only whether the engine EXISTS. Unmounting it is not the same as stopping it — an engine
+   * that has been removed cannot close what it opened, cannot sync its positions and cannot send
+   * an exit. So once mounted it stays mounted, and the plan governs entries.
+   */
+  holding: boolean;
   /**
    * Who runs it. "browser" is mounted below; "bridge" is listed but NOT mounted — it has an
    * IServerStrategy of its own and a second copy here would double every decision it makes.
@@ -100,14 +108,22 @@ export default function CaesarRunners() {
   const [nowMin, setNowMin] = useState<number | null>(null);
   const [showPanels, setShowPanels] = useState(false);
 
-  useEffect(() => { setPlan(loadCaesarPlan()); }, []);
-
   // Re-read on every edit made by the schedule above, and re-check the clock, on the same cadence
   // the schedule paints its "now" marker with.
+  //
+  // COMPARED, NOT JUST STORED. loadCaesarPlan() parses localStorage and therefore returns a fresh
+  // object every tick; setting it unconditionally changed React's identity twice a minute and
+  // re-rendered both mounted strategy trees — two full scanners — for a plan that had not moved.
+  // The serialized form is the honest change signal.
+  const planJsonRef = useRef<string>("");
   useEffect(() => {
     const tick = () => {
       setNowMin(nyAxisMinutesNow());
-      setPlan(loadCaesarPlan());
+      const next = loadCaesarPlan();
+      const json = JSON.stringify(next);
+      if (json === planJsonRef.current) return;
+      planJsonRef.current = json;
+      setPlan(next);
     };
     tick();
     const id = window.setInterval(tick, 30_000);
@@ -115,13 +131,13 @@ export default function CaesarRunners() {
   }, []);
 
   const seg = activeSegment(nowMin);
-  // The charts plot the segment, not the day, so they need its edges and not just its name.
-  const segBounds = useMemo(
-    () => CAESAR_SEGMENTS.find((s) => s.key === seg) ?? null,
+  const caesarEntryStopTime = useMemo(
+    () => seg ? clockLabel(CAESAR_SEGMENTS.find((candidate) => candidate.key === seg)?.toMin ?? 0) : undefined,
     [seg],
   );
 
-  const runners = useMemo<Runner[]>(() => {
+  /** What the PLAN assigns to the segment the clock is in right now. */
+  const segmentRunners = useMemo<Runner[]>(() => {
     if (!plan || !seg) return [];
     const out: Runner[] = [];
     for (const row of plan[seg] ?? []) {
@@ -132,12 +148,71 @@ export default function CaesarRunners() {
         strategy,
         priority: row.priority,
         segment: seg,
+        holding: false,
         host: strategy.streamEngine === "browser" ? "browser" : "bridge",
       });
     }
+    return out;
+  }, [plan, seg]);
+
+  /*
+    WHAT THIS TAB HAS TAKEN RESPONSIBILITY FOR.
+
+    Measured on 2026-09-08: the plan put Arbitrage and PairFlux on `pre` (21:00-09:00) and only
+    OpenRide on `open`. At 09:00:49 NY `stream.arbitrage` sent its last UI heartbeat and never sent
+    another, while the bridge still had it flagged autoEnabled — because the segment changed, the
+    strategy left `hosted`, and React unmounted the engine. Everything it had open at 09:00 was
+    then held by nobody: no position sync, no exit, no cutoff.
+
+    So the mounted set only ever GROWS while the plan still lists a strategy. The clock leaving a
+    segment stops new entries — that is the bridge's automation flag, applied by CaesarPlanService
+    — it does not delete the thing holding the positions. Removing the strategy from the plan does
+    unmount it, because that is an operator saying so rather than a clock edge.
+  */
+  const [held, setHeld] = useState<Record<string, number>>({});
+
+  const assignedAnywhere = useMemo(() => {
+    const set = new Set<string>();
+    if (plan) {
+      for (const s of CAESAR_SEGMENTS) {
+        for (const row of plan[s.key] ?? []) if (row.enabled) set.add(row.strategyKey);
+      }
+    }
+    return set;
+  }, [plan]);
+
+  useEffect(() => {
+    setHeld((prev) => {
+      const next: Record<string, number> = {};
+      let changed = false;
+      // Keep what is still in the plan, at its latest priority; drop what the operator removed.
+      for (const [key, priority] of Object.entries(prev)) {
+        if (assignedAnywhere.has(key)) next[key] = priority;
+        else changed = true;
+      }
+      for (const r of segmentRunners) {
+        if (r.host !== "browser") continue;
+        if (next[r.strategy.key] === r.priority) continue;
+        next[r.strategy.key] = r.priority;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [assignedAnywhere, segmentRunners]);
+
+  /** The plan's view of now, plus anything still held past its segment. */
+  const runners = useMemo<Runner[]>(() => {
+    const inSegment = new Set(segmentRunners.map((r) => r.strategy.key));
+    const out = [...segmentRunners];
+    for (const [key, priority] of Object.entries(held)) {
+      if (inSegment.has(key)) continue;
+      const strategy = LIVE_STRATEGIES[key];
+      if (!strategy || strategy.streamEngine !== "browser") continue;
+      out.push({ strategy, priority, segment: null, holding: true, host: "browser" });
+    }
     // Highest priority first, purely so the strip reads in the order ties resolve.
     return out.sort((a, b) => b.priority - a.priority);
-  }, [plan, seg]);
+  }, [segmentRunners, held]);
 
   /** The ones this tab actually mounts. Everything below the strip is driven by these alone. */
   const hosted = useMemo(() => runners.filter((r) => r.host === "browser"), [runners]);
@@ -178,9 +253,11 @@ export default function CaesarRunners() {
               <span
                 key={r.strategy.key}
                 title={
-                  here
-                    ? "Hosted by this tab — its decisions are made here."
-                    : "Run by the bridge on its own engine. Listed for completeness; this tab does not host it, and mounting a second copy would double its decisions."
+                  r.holding
+                    ? "Past its segment, still mounted. The plan has stopped its entries; the engine stays so it can still manage and close what it opened."
+                    : here
+                      ? "Hosted by this tab — its decisions are made here."
+                      : "Run by the bridge on its own engine. Listed for completeness; this tab does not host it, and mounting a second copy would double its decisions."
                 }
                 className={
                   "group inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] transition-colors " +
@@ -209,7 +286,7 @@ export default function CaesarRunners() {
                   #{r.priority}
                 </span>
                 <span className={"text-[9px] uppercase tracking-[0.18em] " + (here ? "text-emerald-200/40" : "text-zinc-600")}>
-                  {here ? "here" : "bridge"}
+                  {r.holding ? "holding" : here ? "here" : "bridge"}
                 </span>
                 <a
                   href={r.strategy.nav.stream}
@@ -249,31 +326,6 @@ export default function CaesarRunners() {
       <CaesarWindowBinding />
       </CaesarPanel>
 
-      {/*
-        The terminal is fed by the SAME runner list that mounts the engines, so a strategy can never
-        be running and absent from it, or listed and not running.
-      */}
-      <CaesarPositions
-        instances={hosted.map((r) => ({
-          key: r.strategy.key,
-          instanceId: r.strategy.bridgeStrategyId,
-          priority: r.priority,
-        }))}
-      />
-
-      {/* Third time on the same list: the shape of what the two panels above state in numbers. */}
-      <CaesarCharts
-        segment={seg}
-        fromMin={segBounds?.fromMin ?? null}
-        toMin={segBounds?.toMin ?? null}
-        nowMin={nowMin}
-        instances={hosted.map((r) => ({
-          key: r.strategy.key,
-          instanceId: r.strategy.bridgeStrategyId,
-          priority: r.priority,
-        }))}
-      />
-
       {/* Same runner list again: what is hosted, what it holds, and what it has been doing. */}
       <CaesarTerminal
         segment={seg}
@@ -303,6 +355,9 @@ export default function CaesarRunners() {
                 // From the PLAN, not the registry default: this is the number the two strategies
                 // resolve against each other by, and the schedule is where it is set.
                 strategyPriority={r.priority}
+                // Do not let a standalone Stream cutoff (e.g. Arbitrage's saved 09:20) veto a
+                // strategy Caesar has explicitly scheduled through the current segment.
+                caesarEntryStopTime={r.segment ? caesarEntryStopTime : undefined}
               />
             </div>
           );

@@ -28,12 +28,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
+import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getStreamStores } from "@/components/stream/streamStoreRegistry";
-import CaesarPanel, { CAESAR_PILL, CAESAR_PILL_IDLE, CAESAR_PILL_ON } from "./CaesarPanel";
 
 export type CaesarChartsProps = {
   instances: readonly { key: string; instanceId: string; priority: number }[];
-  segment: string | null;
   /** Segment bounds on the NY axis (0 = 21:00), for the time scale. */
   fromMin: number | null;
   toMin: number | null;
@@ -41,9 +41,9 @@ export type CaesarChartsProps = {
   nowMin: number | null;
 };
 
-/** Validated dark categorical steps. See the header. */
-const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500"] as const;
-const OTHER = "#8a8a80";
+/** Scanner's fixed mint, coral, lavender, turquoise, gold and orange analytics palette. */
+const SERIES = ["#63e6be", "#f3a6b2", "#a78bfa", "#2dd4bf", "#facc15", "#fb923c"] as const;
+const OTHER = "#fb923c";
 const SURFACE = "#0a0a0a";
 const MAX_SERIES = SERIES.length;
 
@@ -54,6 +54,18 @@ const TRACK = "rgba(255,255,255,0.055)";
 
 type Point = { min: number; count: number };
 type Series = { key: string; color: string; active: number; entered: number; points: Point[] };
+type AccountPosition = {
+  ticker?: string | null;
+  positionBp?: number | null;
+  PositionBp?: number | null;
+  isFlat?: boolean | null;
+};
+
+function isAccountActive(position: AccountPosition): boolean {
+  if (position.isFlat === true) return false;
+  const bp = Number(position.positionBp ?? position.PositionBp ?? 0);
+  return Number.isFinite(bp) && bp !== 0;
+}
 
 function clockLabel(axisMin: number): string {
   const m = ((Math.round(axisMin) + 21 * 60) % 1440 + 1440) % 1440;
@@ -70,12 +82,12 @@ function axisMinuteOf(ts: number): number {
 // DONUT GEOMETRY
 // =========================================================================================
 
-const DONUT_BOX = 188;
+const DONUT_BOX = 240;
 /** Rendered size in CSS pixels. See the note in `Donut` on why this is not a class. */
-const DONUT_PX = 196;
+const DONUT_PX = 344;
 const DONUT_C = DONUT_BOX / 2;
-const R_OUT = 74;
-const R_IN = 49;
+const R_OUT = 96;
+const R_IN = 59;
 /** How far the hovered wedge grows. Outward only, so the hole — and the total in it — never moves. */
 const R_HOVER = 5;
 /** The 2px surface gap the mark spec asks for between adjacent fills, expressed as an angle. */
@@ -160,7 +172,7 @@ function Donut({
       />
       <svg
         viewBox={`0 0 ${DONUT_BOX} ${DONUT_BOX}`}
-        className="relative w-full"
+        className="relative w-full animate-[caesar-donut-enter_700ms_cubic-bezier(0.16,1,0.3,1)_both]"
         role="img"
         aria-label={
           total > 0
@@ -168,6 +180,11 @@ function Donut({
             : "No active situations"
         }
       >
+        <defs>
+          <filter id="caesar-donut-shadow" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="0" dy="8" stdDeviation="7" floodColor={shown[0]?.color ?? "#3987e5"} floodOpacity="0.34" />
+          </filter>
+        </defs>
         {/* The track is always drawn: an empty ring reads as "nothing open", where an empty box
             reads as "this did not load". */}
         <circle
@@ -189,6 +206,8 @@ function Donut({
             fill="none"
             stroke={wedges[0].color}
             strokeWidth={R_OUT - R_IN + (hoverKey === wedges[0].key ? R_HOVER : 0)}
+            filter="url(#caesar-donut-shadow)"
+            opacity={0.9}
             onMouseEnter={() => onHover(wedges[0].key)}
             onMouseLeave={() => onHover(null)}
           />
@@ -202,13 +221,13 @@ function Donut({
                 fill={w.color}
                 // The 2px surface ring the spec asks for on overlapping marks: it keeps two
                 // touching wedges countable when the gap alone is foreshortened by the curve.
-                stroke={SURFACE}
-                strokeWidth={1}
+                stroke="none"
+                fillOpacity={0.88}
                 opacity={hoverKey && !on ? 0.42 : 1}
                 // Opacity only. The radius change is a new `d` ATTRIBUTE, and the CSS `d` property
                 // animates only path data set through CSS — listing it here would read as a
                 // transition that does not happen.
-                style={{ transition: "opacity 140ms ease" }}
+                style={{ transition: "opacity 140ms ease", filter: `drop-shadow(0 8px 8px ${w.color}55)` }}
                 onMouseEnter={() => onHover(w.key)}
                 onMouseLeave={() => onHover(null)}
               >
@@ -275,14 +294,34 @@ function Donut({
 
 // =========================================================================================
 
-export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMin }: CaesarChartsProps) {
+export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: CaesarChartsProps) {
   const [series, setSeries] = useState<Series[]>([]);
-  const [showTable, setShowTable] = useState(false);
+  const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
+  const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
   const [hoverMin, setHoverMin] = useState<number | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const plotRef = useRef<SVGSVGElement | null>(null);
 
   const instanceKey = instances.map((i) => `${i.key}:${i.instanceId}`).join(",");
+
+  // ACTIVE NOW is account truth, not the browser engine's memory. That distinction matters after
+  // Caesar or a stream remounts: existing positions have PositionBp already, but no local entry.
+  useEffect(() => {
+    let alive = true;
+    // Shares CaesarPositions' own poll of the same endpoint under the "account-positions" key
+    // instead of running a second independent 4s interval — see sharedPoll.ts's doc comment.
+    const fetchPositions = () =>
+      fetchWithTimeout(bridgeUrl("/api/execution/tradingapp/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ positions?: AccountPosition[] }>);
+    const unsubscribe = subscribeSharedPoll("account-positions", fetchPositions, 4000, (json) => {
+      if (!alive || !json) return;
+      const active = (json.positions ?? []).filter(isAccountActive);
+      setAccountPositions(active);
+      setAccountActiveCount(active.length);
+      // Errors leave the last confirmed account count in place, same as before.
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
 
   const recompute = useCallback(() => {
     const out: Series[] = [];
@@ -331,17 +370,55 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceKey, recompute]);
 
-  const totalActive = series.reduce((sum, s) => sum + s.active, 0);
+  const activeSeries = useMemo<Series[]>(() => {
+    // Until the first account response, preserve the stream-only display rather than pretending
+    // that a zero account count is confirmed.
+    if (accountActiveCount == null) return series;
+
+    const streamByKey = new Map(series.map((s) => [s.key, s]));
+    const ownersByTicker = new Map<string, string[]>();
+    for (const instance of instances) {
+      const owned = getStreamStores(instance.instanceId).position.getActiveRows();
+      for (const row of owned) {
+        const ticker = row.ticker.trim().toUpperCase();
+        if (!ticker) continue;
+        const owners = ownersByTicker.get(ticker) ?? [];
+        if (!owners.includes(instance.key)) owners.push(instance.key);
+        ownersByTicker.set(ticker, owners);
+      }
+    }
+
+    const counts = new Map<string, number>();
+    for (const position of accountPositions) {
+      const ticker = (position.ticker ?? "").trim().toUpperCase();
+      const owners = ticker ? ownersByTicker.get(ticker) ?? [] : [];
+      // Account reports one position per ticker. A ticker claimed by two streams belongs in a
+      // neutral shared slice, never twice in the ring.
+      const key = owners.length === 1 ? owners[0] : owners.length > 1 ? "shared" : "unclaimed";
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+
+    const result = series
+      .map((s) => ({ ...s, active: counts.get(s.key) ?? 0 }))
+      .filter((s) => s.active > 0);
+    const shared = counts.get("shared") ?? 0;
+    const unclaimed = counts.get("unclaimed") ?? 0;
+    if (shared > 0) result.push({ key: "shared", color: "#2dd4bf", active: shared, entered: 0, points: [] });
+    if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fb923c", active: unclaimed, entered: 0, points: [] });
+    return result;
+  }, [accountActiveCount, accountPositions, instances, series]);
+  const totalActive = activeSeries.reduce((sum, s) => sum + s.active, 0);
+  const unclaimedActive = activeSeries.find((s) => s.key === "unclaimed")?.active ?? 0;
   const totalEntered = series.reduce((sum, s) => sum + s.entered, 0);
   const maxCount = Math.max(1, ...series.map((s) => s.entered));
 
   // ---- the time scale ------------------------------------------------------------------------
-  const W = 520;
-  const H = 150;
-  const PAD_L = 26;
-  const PAD_R = 34;
-  const PAD_T = 12;
-  const PAD_B = 20;
+  const W = 920;
+  const H = 270;
+  const PAD_L = 42;
+  const PAD_R = 54;
+  const PAD_T = 24;
+  const PAD_B = 38;
   const from = fromMin ?? 0;
   const to = toMin ?? 1440;
   const span = Math.max(1, to - from);
@@ -440,26 +517,13 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
   /** Where to hang the tooltip. Past the middle it flips to the left of the crosshair. */
   const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / W) * 100;
 
-  if (instances.length === 0) return null;
+  // The account feed is useful even before a browser engine mounts, or outside a scheduled
+  // segment: a held PositionBp must never make the operational overview disappear.
+  if (instances.length === 0 && accountActiveCount == null) return null;
 
   return (
-    <CaesarPanel
-      title="Situations"
-      subtitle={segment ? `${segment} segment` : "outside every segment"}
-      accent={series[0]?.color ?? "#3987e5"}
-      className="mt-3"
-      right={
-        // The table is the non-visual route to the same numbers.
-        <button
-          type="button"
-          onClick={() => setShowTable((v) => !v)}
-          className={CAESAR_PILL + (showTable ? CAESAR_PILL_ON : CAESAR_PILL_IDLE)}
-        >
-          {showTable ? "Chart" : "Table"}
-        </button>
-      }
-    >
-      {showTable ? (
+    <>
+      {false ? (
         <table className="w-full font-mono text-[11px]">
           <thead className="bg-[#0a0a0a]/60 text-zinc-500">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:text-left [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
@@ -470,7 +534,7 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
             </tr>
           </thead>
           <tbody>
-            {series.map((s) => (
+            {activeSeries.map((s) => (
               <tr key={s.key} className="border-t border-white/[0.04] [&>td]:px-3 [&>td]:py-1.5">
                 <td className="flex items-center gap-2 text-zinc-300">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
@@ -486,25 +550,26 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
           </tbody>
         </table>
       ) : (
-        <div className="grid gap-5 px-3 py-4 lg:grid-cols-[460px_minmax(0,1fr)]">
+      <div className="mt-3 grid items-center gap-4 lg:grid-cols-[minmax(280px,1fr)_minmax(0,2fr)]">
           {/* ---------- SHARE ---------- */}
-          <figure className="m-0">
-            <figcaption className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-600">
-              Active now
+          <figure className="scanner-glass-card relative m-0 flex h-[400px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+            <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+              <span>Active account book</span>
+              <span className="text-zinc-600">{totalActive} total</span>
             </figcaption>
 
             {/* Flex, not a grid: the ring is a fixed 196px and the legend takes what is left, which
                 a fractional grid cannot express once the max-w classes are stripped. */}
-            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3">
-              <Donut series={series} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
+            <div className="mt-7 flex flex-col items-center gap-3 xl:flex-row xl:justify-center">
+              <Donut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
 
               {/* Legend — always present for two or more series, so identity is never colour alone,
                   and it is the hover surface too: pointing at a row lights its wedge. */}
               {/* Width is inline for the same reason the ring's is: a `max-w-` class would be
                   stripped, and without a cap the value column drifts half a panel away from the
                   name it belongs to. */}
-              <ul className="flex flex-col gap-1 p-0" style={{ flex: "1 1 168px", maxWidth: 236 }}>
-                {series.map((s) => {
+              <ul className="hidden" style={{ flex: "1 1 168px", maxWidth: 236 }}>
+                {activeSeries.map((s) => {
                   const on = hoverKey === s.key;
                   return (
                     <li
@@ -533,12 +598,17 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
                 })}
               </ul>
             </div>
+            <div className="hidden">
+              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Active</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{totalActive}</div></div>
+              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Entries</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{totalEntered}</div></div>
+              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Streams</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{series.length}</div></div>
+            </div>
           </figure>
 
           {/* ---------- ARRIVALS ---------- */}
-          <figure className="relative m-0">
-            <div className="flex items-baseline justify-between">
-              <figcaption className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-600">
+          <figure className="scanner-glass-card relative m-0 h-[400px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+            <div className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between">
+              <figcaption className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 Entered during the segment
               </figcaption>
               <span className="font-mono text-[10px] tabular-nums text-zinc-600">
@@ -552,22 +622,27 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
               inline for the usual reason — a `max-w-` class is stripped app-wide — and it caps the
               CONTAINER, not the svg, so the hover math (client x over container width) stays exact.
             */}
-            <div className="relative mt-2" style={{ maxWidth: 660 }}>
+            <div className="relative h-full pt-6">
               <svg
                 ref={plotRef}
                 viewBox={`0 0 ${W} ${H}`}
-                className="w-full"
+                className="block h-full w-full"
                 style={{ overflow: "visible" }}
                 onMouseMove={onMove}
                 onMouseLeave={() => setHoverMin(null)}
                 role="img"
                 aria-label="Cumulative situations entered per strategy across the segment"
               >
+                <defs>
+                  <filter id="caesar-line-shadow" x="-10%" y="-30%" width="130%" height="170%">
+                    <feDropShadow dx="0" dy="7" stdDeviation="5" floodColor="#63e6be" floodOpacity="0.42" />
+                  </filter>
+                </defs>
                 {/* Hairline, solid, recessive. */}
                 <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} stroke={AXIS} strokeWidth={1} />
                 {ticks.map((m) => (
                   <g key={m}>
-                    <line x1={x(m)} y1={PAD_T} x2={x(m)} y2={H - PAD_B} stroke={AXIS} strokeWidth={1} />
+                    <line x1={x(m)} y1={PAD_T} x2={x(m)} y2={H - PAD_B} stroke={AXIS} strokeWidth={1} strokeDasharray="2 5" />
                     {/* A tick landing on the left edge — OPEN starts exactly on the hour, so its
                         first one always does — would centre its label over the y-axis numbers. The
                         gridline stays; only the label is dropped. */}
@@ -599,6 +674,14 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
                     >
                       NOW
                     </text>
+                    {unclaimedActive > 0 && (
+                      <g transform={`translate(${x(nowMin) + 8} ${PAD_T + 8})`}>
+                        <rect width="78" height="16" rx="4" fill="rgba(243,166,178,0.14)" stroke="rgba(243,166,178,0.38)" />
+                        <text x="6" y="11" fill="#f3a6b2" fontSize="7.5" letterSpacing="0.8" fontFamily="ui-monospace, monospace">
+                          UNCLAIMED {unclaimedActive}
+                        </text>
+                      </g>
+                    )}
                   </>
                 )}
 
@@ -616,7 +699,8 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
                       onMouseEnter={() => setHoverKey(m.key)}
                       onMouseLeave={() => setHoverKey(null)}
                     >
-                      <path d={m.d} fill="none" stroke={m.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                      <path d={m.d} fill="none" stroke={m.color} strokeWidth={8} strokeOpacity={0.18} strokeLinejoin="round" strokeLinecap="round" style={{ filter: `drop-shadow(0 7px 7px ${m.color}66)` }} />
+                      <path d={m.d} fill="none" stroke={m.color} strokeOpacity={0.94} strokeWidth={2.7} strokeLinejoin="round" strokeLinecap="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1} style={{ animation: "caesar-line-reveal 900ms cubic-bezier(0.16,1,0.3,1) forwards", filter: `drop-shadow(0 0 4px ${m.color}80)` }} />
                       {/* End marker: r 4 with a 2px ring in the surface colour, so series that sit on
                           the same value stay countable instead of merging into one blob. */}
                       <circle cx={m.endX} cy={m.y} r={4} fill={m.color} stroke={SURFACE} strokeWidth={2} />
@@ -661,6 +745,15 @@ export default function CaesarCharts({ instances, segment, fromMin, toMin, nowMi
           </figure>
         </div>
       )}
-    </CaesarPanel>
+      <style jsx global>{`
+        @keyframes caesar-donut-enter {
+          from { opacity: 0; transform: scale(0.82) rotate(-12deg); }
+          to { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
+        @keyframes caesar-line-reveal {
+          to { stroke-dashoffset: 0; }
+        }
+      `}</style>
+    </>
   );
 }

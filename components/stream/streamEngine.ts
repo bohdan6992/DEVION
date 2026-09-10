@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { bridgeUrl } from "../../lib/bridgeBase";
+import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { applyExactSonarClientFilters, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
@@ -437,7 +437,7 @@ function sameNullableNumber(a: number | null | undefined, b: number | null | und
   return a === b;
 }
 
-function parseTimeToMinutes(value: string | undefined, fallbackMinutes: number): number {
+export function parseTimeToMinutes(value: string | undefined, fallbackMinutes: number): number {
   if (!value) return fallbackMinutes;
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return fallbackMinutes;
@@ -467,7 +467,7 @@ function nyMinutesAt(timestamp: number): number {
   return at.getHours() * 60 + at.getMinutes();
 }
 
-function currentMinutesLocal(): number {
+export function currentMinutesLocal(): number {
   return nyMinutesAt(Date.now());
 }
 
@@ -644,7 +644,7 @@ export function toPreRelativeMinutes(clockMinutes: number): number | null {
 //
 // PRE no longer gets a branch of its own here: it wraps exactly like any other START>CUTOFF
 // window, so the generic wrap logic already covers it. See getStrategySessionStartMinutes.
-function isPastSessionCutoff(
+export function isPastSessionCutoff(
   nowMinutes: number,
   cutoffMinutes: number,
   wrapStartMinutes: number | null = null
@@ -784,6 +784,26 @@ function readStreamActionLog(storageKey: string): StreamActionLogEntry[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Reads every persisted action-log class for one stream instance. Caesar uses this after a segment
+ * has unmounted its browser engine, when the registry store no longer has that strategy's rows.
+ */
+export function readPersistedStreamActionLog(instanceId: string): StreamActionLogEntry[] {
+  if (typeof window === "undefined") return [];
+  const scope = (instanceId ?? "").trim() || "stream.arbitrage";
+  const prefix = `${scope}.action-log.`;
+  const entries: StreamActionLogEntry[] = [];
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(prefix)) entries.push(...readStreamActionLog(key));
+    }
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+  return entries;
 }
 
 function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): StreamPosition[] {
@@ -956,10 +976,17 @@ function logLegId(entry: { ticker: string; pairKey?: string | null }): string {
   return entry.pairKey ? `${entry.ticker}|${entry.pairKey}` : entry.ticker;
 }
 
+// An action log records that we asked TradingApp to open a position; it is not proof that the
+// position still exists. Give a new order time to reach the account, then let the fresh account
+// book win so an old browser session cannot consume every entry slot forever.
+const ACCOUNT_FLAT_RECONCILIATION_GRACE_MS = 90_000;
+
 function mergeStreamPositionsWithActionLog(
   prev: StreamPosition[],
   entries: StreamActionLogEntry[],
-  dayKey = localDayKey()
+  dayKey = localDayKey(),
+  accountPositionBpByTicker: ReadonlyMap<string, number> = new Map(),
+  accountBookIsAuthoritative = false,
 ): StreamPosition[] {
   const restored = buildStreamPositionsFromActionLog(entries, dayKey);
   const restoredByTicker = new Map(restored.map((row) => [legIdentityOf(row), row]));
@@ -973,6 +1000,13 @@ function mergeStreamPositionsWithActionLog(
   const merged = new Map<string, StreamPosition>();
 
   for (const [ticker, row] of restoredByTicker) {
+    if (
+      accountBookIsAuthoritative &&
+      (accountPositionBpByTicker.get(row.ticker) ?? 0) === 0 &&
+      Date.now() - row.openedAt >= ACCOUNT_FLAT_RECONCILIATION_GRACE_MS
+    ) {
+      continue;
+    }
     const existing = prevByTicker.get(ticker) ?? null;
     merged.set(ticker, existing ? {
       ...row,
@@ -1037,7 +1071,11 @@ function mergeStreamPositionsWithActionLog(
   // syncStreamPositions, and the latch would recreate them with a new openedAt →
   // different intentId → duplicate dispatch.
   for (const [ticker, row] of prevByTicker) {
-    if (!merged.has(ticker) && row.status !== "CLOSED" && row.entryDispatchedAt != null) {
+    const isConfirmedFlatOldPosition =
+      accountBookIsAuthoritative &&
+      (accountPositionBpByTicker.get(row.ticker) ?? 0) === 0 &&
+      Date.now() - row.openedAt >= ACCOUNT_FLAT_RECONCILIATION_GRACE_MS;
+    if (!merged.has(ticker) && !isConfirmedFlatOldPosition && row.status !== "CLOSED" && row.entryDispatchedAt != null) {
       merged.set(ticker, row);
     }
   }
@@ -1075,6 +1113,61 @@ function sameDecisionRows(a: StreamDecisionRow[], b: StreamDecisionRow[]): boole
     }
   }
   return true;
+}
+
+/**
+ * A restarted browser has no action-log claim for positions that were already in the account.
+ * PositionBp is the live account authority: restore such a ticker as OPEN before latches are
+ * evaluated, so it cannot re-enter while its normal add/exit management remains available.
+ */
+function hydrateLiveActivePositions(
+  prev: StreamPosition[],
+  decisions: readonly StreamDecisionRow[]
+): StreamPosition[] {
+  const knownTickers = new Set(
+    prev.filter((row) => row.status !== "CLOSED").map((row) => row.ticker.trim().toUpperCase())
+  );
+  const now = Date.now();
+  const restored: StreamPosition[] = [];
+
+  for (const decision of decisions) {
+    const ticker = decision.ticker.trim().toUpperCase();
+    if (!ticker || decision.positionBp == null || decision.positionBp === 0 || knownTickers.has(ticker)) continue;
+
+    restored.push({
+      ticker,
+      pairKey: decision.pairKey ?? null,
+      benchmark: decision.benchmark,
+      side: decision.positionBp > 0 ? "Long" : "Short",
+      entrySignal: decision.signal,
+      lastSignal: decision.signal,
+      lastScaleSignal: decision.signal,
+      spread: decision.spread,
+      spreadBidPct: decision.spreadBidPct,
+      status: "OPEN",
+      reason: "restored active account position (PositionBp != 0)",
+      entryCount: 1,
+      belowThresholdTicks: 0,
+      belowThresholdSinceMinuteIdx: null,
+      lockedForPrint: false,
+      pendingIntent: null,
+      entryDispatchedAt: now,
+      lastDispatchedAt: now,
+      lastConfirmedActiveAt: now,
+      lastAboveAddCapAt: null,
+      openedAt: now,
+      updatedAt: now,
+      addPeakMinuteIdx: null,
+      addPeakAbs: null,
+      addPeakSigned: null,
+      confirmedAddAbs: null,
+      confirmedAddSigned: null,
+      pendingAddTrigger: null,
+    });
+    knownTickers.add(ticker);
+  }
+
+  return restored.length === 0 ? prev : [...prev, ...restored].sort((a, b) => a.ticker.localeCompare(b.ticker));
 }
 
 function syncStreamSignalLatches(
@@ -1448,7 +1541,23 @@ export function syncStreamPositions(
   dispatchingEntryTickers: ReadonlySet<string> = new Set(),
   frozenEntrySignalMap: ReadonlyMap<string, number> = new Map(),
   /** The toolbar's own maximum entry deviation, in the unit the strategy reads. See ADD_MAX_SIGMA. */
-  entryWindowMax: number | null = null
+  entryWindowMax: number | null = null,
+  /**
+   * A strategy-specific EXIT reading for an already-open position, independent of decisionMap.
+   *
+   * decisionMap only holds a row while the strategy's own entry gate still approves the ticker —
+   * for PairFlux that gate is "this pair is still enterable", which stops being true exactly when
+   * a position starts converging. Supplied, this is tried BEFORE every other exit fallback; see
+   * PairFluxScanner's pairFluxExitOverride and lib/pairflux/livePairs.pairExitDeviation.
+   */
+  exitOverride?: (position: StreamPosition) => number | null,
+  /**
+   * Cross-poll, cross-minute memory for the pair-simultaneity gate below (see "A PAIR ENTERS AS A
+   * PAIR"). Mutated in place — the caller owns a single long-lived Map (a ref) and passes the same
+   * one in every poll, so a leg's "was fully ready" moment survives past the one poll it happened
+   * on. Keyed by legIdentityOf (ticker+pairKey), valued by the minuteIdx it was last seen ready.
+   */
+  pairLegReadyMinutes: Map<string, number> = new Map()
 ): StreamPosition[] {
   const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
   const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
@@ -1510,6 +1619,11 @@ export function syncStreamPositions(
 
   if (automationConfig?.strategyModeEnabled) {
     const next: StreamPosition[] = [];
+
+    // Legs that armed an ADD / an ACTIVE exit on this pass, holding the row as it stood BEFORE
+    // the decision so the pair reconciliation below can put it back. See that block.
+    const addArmedThisPass = new Map<string, StreamPosition>();
+    const exitArmedThisPass = new Map<string, StreamPosition>();
     const seen = new Set<string>();
     const maxOpenAllowed = entryCutoffEnabled
       ? (automationConfig.maxOpenPositions ?? Number.MAX_SAFE_INTEGER)
@@ -1519,6 +1633,17 @@ export function syncStreamPositions(
       const existsInActionLog = loggedOpenTickers.has(existing.ticker);
       const raw = signalMap.get(existing.ticker);
       const rawSeen = Boolean(raw);
+      const livePositionBp = numPositionBp(raw);
+      // A position restored solely from the account must follow the account back to flat. It has
+      // no action-log CLOSE event because this engine did not open it, so retaining it here would
+      // keep add logic alive after a manual close.
+      if (
+        existing.reason === "restored active account position (PositionBp != 0)" &&
+        rawSeen &&
+        (livePositionBp == null || livePositionBp === 0)
+      ) {
+        continue;
+      }
       const filteredRaw = filteredSignalMap.get(existing.ticker);
       // Use direction-specific ZAP sigma field: zapLsigma for Long, zapSsigma for Short.
       // This matches the entry filter (applyExactSonarClientFilters σ ZAP mode) and
@@ -1572,8 +1697,21 @@ export function syncStreamPositions(
        * when the two names come back together, which is its own deviation falling to the exit
        * level, not when either leg happens to sit near its own benchmark. Reading the ticker's ZAP
        * here would hold a converged pair open and close a diverged one.
+       *
+       * pairSigned IS NOT THE RIGHT NUMBER EITHER, once the pair has actually started converging.
+       * It comes from decisionMap, which only holds a row while the pair is still ENTERABLE —
+       * exactly the computeLivePairs question, "is either devUp or devDn outside zero right now".
+       * A converging pair crosses INTO its own two-sided spread precisely while it is closing, so
+       * decisionMap loses the row at the moment the exit rule most needs to read it, and this fell
+       * back to the ticker's own ZAP (a different pair entirely) or nothing.
+       *
+       * exitOverride is what the strategy supplies instead: a reading computed straight from
+       * quotes and beta, with no "still enterable" gate, valid for as long as both legs are
+       * quoted at all. See pairExitDeviation and PairFluxScanner's pairFluxExitOverride.
        */
-      const exitSigned = pairSigned ?? exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
+      const exitOverrideSigned = exitOverride ? exitOverride(existing) : null;
+      const exitSigned =
+        exitOverrideSigned ?? pairSigned ?? exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
       const exitAbs = exitSigned == null ? signalAbs(raw) : Math.abs(exitSigned);
       const belowEndThreshold = exitAbs != null && exitAbs < endThreshold;
       const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
@@ -1764,6 +1902,8 @@ export function syncStreamPositions(
           status = "CLOSED";
           reason = `signal below end threshold ${endThreshold.toFixed(2)}`;
           pendingIntent = existing.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE";
+          // Same bookkeeping as the add above, for the same reason — see the pair reconciliation.
+          if (existing.pairKey) exitArmedThisPass.set(legIdentityOf(existing), existing);
           logStreamGateBlock("position:normalizeExitClosed", {
             ticker: existing.ticker,
             currentAbs,
@@ -1895,6 +2035,9 @@ export function syncStreamPositions(
             : now - lastDispatchOrBreach >= addDelayMs;
           const belowAddCap = confirmedAddAbs == null || confirmedAddAbs <= ADD_MAX_SIGMA;
           if (addMinuteAdvanced && confirmedAddAbs != null && confirmedAddAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
+            // Remember the pre-add row: a pair adds on both legs or on neither, and the
+            // reconciliation after this loop needs somewhere to put a lone add back.
+            if (existing.pairKey) addArmedThisPass.set(legIdentityOf(existing), existing);
             entryCount += 1;
             pendingAddTrigger = trigger;
             lastScaleSignal = confirmedAddSigned;
@@ -1962,6 +2105,94 @@ export function syncStreamPositions(
       seen.add(legIdentityOf(existing));
     }
 
+    /**
+     * A PAIR ADDS AS A PAIR, AND EXITS AS A PAIR.
+     *
+     * The entry path already has this rule (pairReadyKeys, below) but the two decisions taken
+     * while a position is OPEN did not, and they are per-leg for different reasons:
+     *
+     *   ADD  — the trigger itself is symmetric (both legs read ONE deviation through
+     *          exitOverride/pairSigned and anchor on the same signed entry value), so the legs
+     *          agree on the arithmetic. What they do not share is `existing.pendingIntent` and
+     *          `lastDispatchedAt`: a leg whose previous order is still in flight, or whose
+     *          dispatch failed, is not add-eligible while its partner is. The add then lands on
+     *          one side only and the position stops being a hedge.
+     *
+     *   EXIT — `spreadBlocked` is priced off THAT leg's own book (line ~1672), so a wide quote on
+     *          one name closes the other alone. That is the same failure the entry rule was
+     *          written for, arriving at the other end of the trade.
+     *
+     * Both revert to HOLD rather than to force the partner: for an add, holding means the pair
+     * simply keeps the size it has and re-arms on the next bar that still clears the trigger
+     * (lastScaleSignal is deliberately NOT advanced, so the same trigger is met again); for an
+     * exit, holding means keeping the hedge on rather than standing naked in one name.
+     *
+     * A lone leg — a pair whose partner never opened, or already closed — is still allowed to
+     * EXIT (getting flat is always safe) but never to ADD.
+     *
+     * The 09:20 print exit is deliberately untouched: it is a session event, not a threshold, and
+     * stranding a position through it to preserve a hedge is the worse outcome.
+     */
+    if (addArmedThisPass.size > 0 || exitArmedThisPass.size > 0) {
+      const liveLegsByPair = new Map<string, number>();
+      for (const row of next) {
+        if (!row.pairKey) continue;
+        const legId = legIdentityOf(row);
+        // Legs that are closing on THIS pass still count — they are what the pair is made of.
+        if (row.status === "CLOSED" && !exitArmedThisPass.has(legId)) continue;
+        liveLegsByPair.set(row.pairKey, (liveLegsByPair.get(row.pairKey) ?? 0) + 1);
+      }
+      const armedByPair = (armed: Map<string, StreamPosition>) => {
+        const m = new Map<string, number>();
+        for (const row of next) {
+          if (!row.pairKey) continue;
+          if (!armed.has(legIdentityOf(row))) continue;
+          m.set(row.pairKey, (m.get(row.pairKey) ?? 0) + 1);
+        }
+        return m;
+      };
+      const addsByPair = armedByPair(addArmedThisPass);
+      const exitsByPair = armedByPair(exitArmedThisPass);
+
+      for (let i = 0; i < next.length; i++) {
+        const row = next[i];
+        if (!row.pairKey) continue;
+        const legId = legIdentityOf(row);
+        const legs = liveLegsByPair.get(row.pairKey) ?? 0;
+
+        const prevAdd = addArmedThisPass.get(legId);
+        if (prevAdd && (legs < 2 || (addsByPair.get(row.pairKey) ?? 0) < legs)) {
+          next[i] = {
+            ...row,
+            entryCount: prevAdd.entryCount,
+            lastScaleSignal: prevAdd.lastScaleSignal,
+            pendingAddTrigger: prevAdd.pendingAddTrigger ?? null,
+            pendingIntent: null,
+            reason: legs < 2
+              ? "add held | partner leg not open"
+              : "add held | partner leg did not arm this bar",
+          };
+          logStreamGateBlock("add:partnerNotArmed", {
+            ticker: row.ticker, pairKey: row.pairKey, legs, armed: addsByPair.get(row.pairKey) ?? 0,
+          });
+          continue;
+        }
+
+        const prevExit = exitArmedThisPass.get(legId);
+        if (prevExit && legs >= 2 && (exitsByPair.get(row.pairKey) ?? 0) < legs) {
+          next[i] = {
+            ...row,
+            status: "OPEN",
+            pendingIntent: null,
+            reason: "exit held | partner leg cannot exit — keeping the hedge",
+          };
+          logStreamGateBlock("exit:partnerBlocked", {
+            ticker: row.ticker, pairKey: row.pairKey, legs, armed: exitsByPair.get(row.pairKey) ?? 0,
+          });
+        }
+      }
+    }
+
     let openCount = next.filter((row) =>
       row.status === "OPEN" ||
       row.status === "PRINT_PENDING" ||
@@ -1977,10 +2208,30 @@ export function syncStreamPositions(
      *
      * A leg counts as satisfied when it is ready to enter on THIS pass, or when it already holds a
      * position — the second case only so a pair that somehow half-opened can still be completed.
+     *
+     * WITHIN A MINUTE, NOT WITHIN A POLL. The two legs of a pair share one deviation, but each
+     * leg's own BLOCKED_SPREAD/BLOCKED_EDGE gate is priced off THAT ticker's own book — so one leg
+     * can blink blocked for a poll or two while the other sits ENTRY_READY the whole time.
+     * Requiring both on the literal same pass (the original fix for SFNC/AUB) starved a pair whose
+     * legs never happened to land on one poll together: PairFlux measured live 2026-09-09, two
+     * pairs sitting ENTRY_READY on both legs for 20+ minutes with zero entries, because the two
+     * legs' momentary blocks never lined up empty at once.
+     *
+     * pairLegReadyMinutes remembers the last minute each leg was FULLY ready (latch hold-window
+     * complete, decision ENTRY_READY) — mutated here, read back here, surviving past the poll it
+     * was recorded on. A leg still counts toward its pair if it was fully ready in the current
+     * minute OR the one just before: tight enough that a two-MINUTE gap (the original SFNC/AUB
+     * failure) still cannot recur, loose enough that a one-poll blink no longer starves the pair.
      */
     const pairReadyKeys = new Set<string>();
+    // Lifted out of the block below so the dispatch loop's own partnerAlreadyOpen check (further
+    // down) can reuse this SAME map instead of re-scanning `next` with `.some()` once per latch —
+    // that was an O(latches x next) full rescan per candidate, harmless at a handful of open
+    // positions but scaling quadratically exactly during a burst of many simultaneous candidates
+    // (measured live 2026-09-09: 60+ tickers becoming ENTRY_READY within the same minute). One pass
+    // over `next` here, O(1) Set lookups everywhere it's read.
+    const legsByPair = new Map<string, Set<string>>();
     {
-      const legsByPair = new Map<string, Set<string>>();
       const noteLeg = (pairKey: string, ticker: string) => {
         const set = legsByPair.get(pairKey);
         if (set) set.add(ticker);
@@ -1994,8 +2245,25 @@ export function syncStreamPositions(
         if (!hasCompletedStreamHoldWindow(l.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
         const d = decisionMap.get(legIdentityOf(l));
         if (!d || d.status !== "ENTRY_READY") continue;
+        pairLegReadyMinutes.set(legIdentityOf(l), nowMinuteIdx);
         noteLeg(l.pairKey, l.ticker);
       }
+      // The memory: a leg fully ready within the last minute counts too, even if THIS poll caught
+      // it mid-blink. Stale entries (more than a couple minutes old) are dropped so the map does
+      // not grow for the rest of the session.
+      pairLegReadyMinutes.forEach((readyMinute, legId) => {
+        if (readyMinute < nowMinuteIdx - 2) {
+          pairLegReadyMinutes.delete(legId);
+          return;
+        }
+        if (readyMinute < nowMinuteIdx - 1) return; // remembered, but too stale to count now
+        // legId is legIdentityOf's own "ticker|pairKey" — recovered directly rather than looked
+        // up in `latches`, which may no longer hold this leg (its latch can have been recreated
+        // with a fresh qualifiedSince by the time this memory entry is read back).
+        const firstPipe = legId.indexOf("|");
+        if (firstPipe <= 0) return; // no pairKey encoded — a single-leg strategy's own leg id
+        noteLeg(legId.slice(firstPipe + 1), legId.slice(0, firstPipe));
+      });
       for (const [key, tickers] of legsByPair) {
         if (tickers.size >= 2) pairReadyKeys.add(key);
       }
@@ -2017,9 +2285,12 @@ export function syncStreamPositions(
       // Checked per leg, a pair arriving with one slot left would open its first half and have the
       // second refused here — the exact naked position the pair gating exists to prevent. The
       // partner already being open means the slot is spent, so then one is enough.
-      const partnerAlreadyOpen = latch.pairKey != null && next.some(
-        (r) => r.pairKey === latch.pairKey && r.ticker !== latch.ticker && r.status !== "CLOSED",
-      );
+      //
+      // O(1) via legsByPair (built once above from `next`) instead of an O(next.length) `.some()`
+      // scan per latch — see its own comment for why that mattered.
+      const openTickersForPair = latch.pairKey != null ? legsByPair.get(latch.pairKey) : undefined;
+      const partnerAlreadyOpen = !!openTickersForPair &&
+        (openTickersForPair.size > 1 || !openTickersForPair.has(latch.ticker));
       const slotsNeeded = latch.pairKey && !partnerAlreadyOpen ? 2 : 1;
       if (openCount + slotsNeeded > maxOpenAllowed) {
         logStreamGateBlock("positions:maxOpen", { ticker: latch.ticker, openCount, maxOpenAllowed, slotsNeeded });
@@ -2268,7 +2539,12 @@ export function buildStreamOrderIntents(
         priceRef: row.side === "Long" ? "ASK" : "BID",
         status: "QUEUED",
         reason:
-          `${automationConfig?.hedgeMode === "hedged" ? "hedged" : "unhedged"} aggressive entry | ${automationConfig?.sizingMode === "TIER" ? `tiers ${automationConfig?.sizeValue}` : `usd ${automationConfig?.sizeValue}`}${automationConfig?.scaleMode === "scale_in" ? ` | step ${automationConfig?.dilutionStep}` : ""}`,
+          // Size is deliberately NOT quoted here. The order is a TradingApp hotkey and carries no
+          // quantity, so printing "usd 1000" made the action log assert a size the stream never
+          // sent — the traded amount is whatever that hotkey is configured for in TradingApp.
+          // notionalUsd on the log rows below is the same story: the toolbar's setting, recorded
+          // so a line can be tied back to the panel state, never a report of what was filled.
+          `${automationConfig?.hedgeMode === "hedged" ? "hedged" : "unhedged"} aggressive entry${automationConfig?.scaleMode === "scale_in" ? ` | step ${automationConfig?.dilutionStep}` : ""}`,
         createdAt: now,
       });
     } else if (row.status === "BLOCKED_SPREAD" || row.status === "BLOCKED_EDGE") {
@@ -2496,6 +2772,16 @@ export type StreamSignalsRequestOverride = {
    */
   omitTickerRanges?: boolean;
   /**
+   * Skip the per-TICKER rating floor in the server query.
+   *
+   * `minRate`/`minTotal` there mean "this ticker against its benchmark ETF". On PairFlux the rating
+   * that decides a trade belongs to the PAIR and to the class — signals/pairflux/summary.csv,
+   * `converged / total` — and computeLivePairs applies it to the pair's own published figures.
+   * Sending the ticker floor as well removes LEGS before a pair can form, and because a pair needs
+   * both legs the pass rate is squared: measured 26 of 16 923 INTRA pairs surviving on 2026-09-08.
+   */
+  omitTickerRating?: boolean;
+  /**
    * Ask the server for the WHOLE universe rather than only the rows it already considers
    * candidates. A strategy that decides on a live reading — OpenFade fades a deviation band — has
    * to see every ticker, because the ones the server pre-filtered away are exactly the ones whose
@@ -2520,6 +2806,13 @@ type UseStreamEngineArgs = {
   signalExpand?: (row: ArbitrageSignal) => ArbitrageSignal[];
   /** Optional strategy-specific reading for a decision row. See StreamDecisionOverride. */
   decisionOverride?: StreamDecisionOverride;
+  /**
+   * Optional strategy-specific EXIT reading for an already-open position. See syncStreamPositions'
+   * own exitOverride parameter for why this exists and cannot simply reuse decisionOverride: a
+   * decision is only computed for a ticker the entry gate still approves, and PairFlux positions
+   * routinely converge PAST that gate.
+   */
+  exitOverride?: (position: StreamPosition) => number | null;
   /**
    * What to send when CUTOFF is reached.
    *
@@ -2663,6 +2956,7 @@ export function useStreamEngine({
   signalGate,
   signalExpand,
   decisionOverride,
+  exitOverride,
   cutoffAction = "print-close-pair",
   entryIntentTypes,
   signalsRequest,
@@ -2764,6 +3058,7 @@ export function useStreamEngine({
   const [streamSentOrdersCount, setStreamSentOrdersCount] = useState<number>(0);
   const [streamManualExecutionBusy, setStreamManualExecutionBusy] = useState<boolean>(false);
   const [executionRevision, setExecutionRevision] = useState(0);
+  const [accountPositionBookRevision, setAccountPositionBookRevision] = useState(0);
   const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
   const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
   const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
@@ -2800,6 +3095,10 @@ export function useStreamEngine({
   const streamActionLogRef = useRef<StreamActionLogEntry[]>(streamActionLog);
   const localRefreshTimerRef = useRef<number | null>(null);
   const streamExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(streamExecutionStore.getSnapshot());
+  // Only explicit, fresh account rows participate in reconciliation. Missing data is unknown,
+  // never interpreted as flat.
+  const accountPositionBpByTickerRef = useRef<Map<string, number>>(new Map());
+  const hasFreshAccountPositionBookRef = useRef(false);
   const executionSnapshotSignatureRef = useRef<string>("");
   const actionLogVersionRef = useRef(0);
   const lastStatusRefreshAtRef = useRef<number>(0);
@@ -2842,6 +3141,9 @@ export function useStreamEngine({
     lastSignedMap: Map<string, number>;
   } | null>(null);
   const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
+  // Cross-poll memory for syncStreamPositions' pair-simultaneity gate — see its own doc. One
+  // long-lived Map, mutated in place inside syncStreamPositions itself.
+  const pairLegReadyMinutesRef = useRef<Map<string, number>>(new Map());
   // Tickers that dropped out of the entry window (sigma < startAbs or > startAbsMax)
   // during the current minute: ticker → minuteIdx when exit occurred. Used to force
   // qualifiedSince = current minute boundary when the latch is recreated in the same
@@ -2906,7 +3208,13 @@ export function useStreamEngine({
     actionLogVersionRef.current += 1;
     streamActionLogRef.current = nextLog;
     setStreamActionLog(nextLog);
-    setStreamPositions((prev) => mergeStreamPositionsWithActionLog(prev, nextLog, localDayKey()));
+    setStreamPositions((prev) => mergeStreamPositionsWithActionLog(
+      prev,
+      nextLog,
+      localDayKey(),
+      accountPositionBpByTickerRef.current,
+      hasFreshAccountPositionBookRef.current,
+    ));
     setStreamOrderIntents((prev) => prev.filter((intent) => {
       if (
         entryLoggedTickers.has(legIdentityOf(intent)) &&
@@ -2974,8 +3282,16 @@ export function useStreamEngine({
   }, [flushConfirmedPendingActionLogEntries]);
 
   const openLoggedTickers = useMemo(
-    () => buildOpenTickersFromActionLog(streamActionLog, currentDayKey),
-    [currentDayKey, streamActionLog]
+    () => {
+      const open = buildOpenTickersFromActionLog(streamActionLog, currentDayKey);
+      if (hasFreshAccountPositionBookRef.current) {
+        for (const ticker of open) {
+          if ((accountPositionBpByTickerRef.current.get(ticker) ?? 0) === 0) open.delete(ticker);
+        }
+      }
+      return open;
+    },
+    [accountPositionBookRevision, currentDayKey, streamActionLog]
   );
 
   const primarySignalsStreamUrl = useMemo(() => buildSignalsStreamUrl({
@@ -2984,8 +3300,8 @@ export function useStreamEngine({
     mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
     ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
     zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-    minRate: signalsRequest?.minRate ?? ratingMinRate ?? ratingRule.minRate,
-    minTotal: signalsRequest?.minTotal ?? ratingMinTotal ?? ratingRule.minTotal,
+    minRate: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minRate ?? ratingMinRate ?? ratingRule.minRate),
+    minTotal: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minTotal ?? ratingMinTotal ?? ratingRule.minTotal),
     // Active mode: lower server threshold to endAbs so decaying signals (sigma in [endAbs, startAbs)) are returned.
     // Passive mode: endAbs is not a sigma threshold (exit = gap reversal) — keep server threshold at startAbs.
     startAbs: signalsRequest?.omitStartAbs
@@ -3169,9 +3485,15 @@ export function useStreamEngine({
 
   useEffect(() => {
     setStreamPositions((prev) => {
-      return mergeStreamPositionsWithActionLog(prev, streamActionLog, currentDayKey);
+      return mergeStreamPositionsWithActionLog(
+        prev,
+        streamActionLog,
+        currentDayKey,
+        accountPositionBpByTickerRef.current,
+        hasFreshAccountPositionBookRef.current,
+      );
     });
-  }, [currentDayKey, streamActionLog]);
+  }, [accountPositionBookRevision, currentDayKey, streamActionLog]);
 
   const refreshExecutionStatus = useCallback(async (force = false): Promise<TradingAppExecutionSnapshot | null> => {
     const now = Date.now();
@@ -3184,10 +3506,29 @@ export function useStreamEngine({
     }
     try {
       statusRefreshInFlightRef.current = true;
-      const response = await fetch(tradingAppBridgeUrl("/status"), { cache: "no-store" });
+      const response = await fetchWithTimeout(tradingAppBridgeUrl("/status"), { cache: "no-store" });
       if (!response.ok) return null;
       const json = await response.json();
       const snapshot = json as TradingAppExecutionSnapshot;
+      const positionsResponse = await fetchWithTimeout(tradingAppBridgeUrl("/positions"), { cache: "no-store" });
+      const positionsJson = positionsResponse.ok ? await positionsResponse.json().catch(() => null) : null;
+      const ageSeconds = toNum(positionsJson?.ageSeconds);
+      if (Array.isArray(positionsJson?.positions) && ageSeconds != null && ageSeconds >= 0 && ageSeconds <= 15) {
+        const nextBook = new Map<string, number>();
+        for (const position of positionsJson.positions) {
+          const ticker = String(position?.ticker ?? "").trim().toUpperCase();
+          const positionBp = toNum(position?.positionBp);
+          if (ticker && positionBp != null) nextBook.set(ticker, positionBp);
+        }
+        const currentBook = accountPositionBpByTickerRef.current;
+        const changed = currentBook.size !== nextBook.size || Array.from(nextBook).some(([ticker, bp]) => currentBook.get(ticker) !== bp);
+        const becameAuthoritative = !hasFreshAccountPositionBookRef.current;
+        hasFreshAccountPositionBookRef.current = true;
+        if (changed || becameAuthoritative) {
+          accountPositionBpByTickerRef.current = nextBook;
+          setAccountPositionBookRevision((revision) => revision + 1);
+        }
+      }
       lastStatusRefreshAtRef.current = now;
       const signature = JSON.stringify(snapshot);
       if (signature !== executionSnapshotSignatureRef.current) {
@@ -3205,7 +3546,7 @@ export function useStreamEngine({
   }, []);
 
   const bindStreamActiveWindow = useCallback(async () => {
-    const response = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
+    const response = await fetchWithTimeout(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -3217,7 +3558,7 @@ export function useStreamEngine({
   }, [refreshExecutionStatus]);
 
   const bindStreamWindows = useCallback(async () => {
-    const activeResponse = await fetch(tradingAppBridgeUrl("/bind-active-window"), {
+    const activeResponse = await fetchWithTimeout(tradingAppBridgeUrl("/bind-active-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -3226,7 +3567,7 @@ export function useStreamEngine({
       throw new Error(activeJson?.error || `Failed to bind Market Maker window (${activeResponse.status})`);
     }
 
-    const mainResponse = await fetch(tradingAppBridgeUrl("/bind-main-window"), {
+    const mainResponse = await fetchWithTimeout(tradingAppBridgeUrl("/bind-main-window"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -3261,7 +3602,7 @@ export function useStreamEngine({
 
   const refreshStreamBookReading = useCallback(async () => {
     try {
-      const response = await fetch(tradingAppBridgeUrl("/book-reading"));
+      const response = await fetchWithTimeout(tradingAppBridgeUrl("/book-reading"));
       const json = await response.json().catch(() => ({}));
       if (response.ok && json?.ok !== false) setStreamBookReadingState(Boolean(json?.bookReading));
     } catch {
@@ -3282,7 +3623,7 @@ export function useStreamEngine({
   }, []);
 
   const clearStreamBoundWindow = useCallback(async () => {
-    const response = await fetch(tradingAppBridgeUrl("/bound-window"), {
+    const response = await fetchWithTimeout(tradingAppBridgeUrl("/bound-window"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -3297,7 +3638,7 @@ export function useStreamEngine({
   }, [refreshExecutionStatus]);
 
   const captureStreamTickerPoint = useCallback(async () => {
-    const response = await fetch(tradingAppBridgeUrl("/capture-ticker-point"), {
+    const response = await fetchWithTimeout(tradingAppBridgeUrl("/capture-ticker-point"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
@@ -3321,7 +3662,7 @@ export function useStreamEngine({
   }, [refreshExecutionStatus]);
 
   const clearStreamTickerPoint = useCallback(async () => {
-    const response = await fetch(tradingAppBridgeUrl("/ticker-point"), {
+    const response = await fetchWithTimeout(tradingAppBridgeUrl("/ticker-point"), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -3344,21 +3685,88 @@ export function useStreamEngine({
     }
   }, [refreshExecutionStatus]);
 
+  // START NAMES ITS STRATEGY.
+  //
+  // Omitting strategyId is the MACHINE form of this endpoint: StreamAutomationControlService.Start
+  // then loops over every key it has ever seen and switches all of them on — OpenDoor, Day Two,
+  // OpenFade, OpenRide and any stale key left in automation-state.json. Pressing START on one
+  // stream started strategies nobody had opened, each of which then began dispatching as soon as
+  // a host existed for it.
   const startStreamAutomation = useCallback(async () => {
     const response = await fetch(bridgeUrl("/api/stream/automation/start"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: "workspace" }),
+      body: JSON.stringify({ source: "workspace", strategyId }),
     });
     const json = await response.json().catch(() => ({}));
     await refreshExecutionStatus(true);
     if (!response.ok || json?.ok === false) {
       throw new Error(json?.error || `Failed to start automation (${response.status})`);
     }
-  }, [refreshExecutionStatus]);
+  }, [refreshExecutionStatus, strategyId]);
 
-  const clearStreamExecutionQueue = useCallback(async () => {
-    const response = await fetch(tradingAppBridgeUrl("/queue"), {
+  // STOP NAMES IT TOO — and does NOT reach for panic-off.
+  //
+  // The stream panel's stop used to be `POST /panic-off?enabled=true`, which is a property of the
+  // SHARED TradingApp queue: it makes EnqueueAsync throw for every strategy on the machine, and
+  // every engine's autoEnabled includes `!panicOff`. So stopping one strategy silently froze the
+  // other one — it stayed mounted, connected and heartbeating, and simply never sent again.
+  //
+  // The strategy-scoped stop is the correct instrument: the bridge flips only this strategy's
+  // flags, drops only this strategy's pending orders, and re-derives panic-off from whether
+  // ANYTHING is still running (SyncPanicOffLocked). With one strategy up that is identical to the
+  // old behaviour; with two it stops the one that was asked for.
+  const stopStreamAutomation = useCallback(async () => {
+    const response = await fetch(bridgeUrl("/api/stream/automation/stop"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "workspace", strategyId }),
+    });
+    const json = await response.json().catch(() => ({}));
+    await refreshExecutionStatus(true);
+    if (!response.ok || json?.ok === false) {
+      throw new Error(json?.error || `Failed to stop automation (${response.status})`);
+    }
+  }, [refreshExecutionStatus, strategyId]);
+
+  // ONE QUEUE, SEVERAL STRATEGIES.
+  //
+  // The TradingApp queue is machine-wide: every strategy instance enqueues into it. An unscoped
+  // clear therefore aborts orders this strategy never created — measured under Caesar, where
+  // pressing STOP on one strategy dropped the other one's pending entries mid-boundary.
+  //
+  // `thisStrategyOnly` narrows it to intents this instance produced. Intent ids are namespaced by
+  // strategyId (see buildStreamOrderIntents), which is the same prefix the bridge itself uses when
+  // a strategy stops. The unscoped form is kept for the operator's own "clear queue" button, where
+  // clearing everything is the point.
+  /**
+   * Bridge strategy ids OTHER than this one that are currently running.
+   *
+   * Used by the CUTOFF path, which is the one place this engine reaches for a TradingApp hotkey
+   * that is not scoped to a ticker. Returns [] on any failure, which makes the caller behave
+   * exactly as it did before this check existed.
+   */
+  const runningStrategiesOtherThan = useCallback(async (selfId: string): Promise<string[]> => {
+    try {
+      const response = await fetch(bridgeUrl("/api/stream/automation/states"), { cache: "no-store" });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || json?.ok === false) return [];
+      const rows: any[] = Array.isArray(json?.states) ? json.states : [];
+      return rows
+        .filter((row) => row?.autoEnabled === true && row?.strategyModeEnabled === true)
+        .map((row) => String(row?.strategyId ?? ""))
+        .filter((id) => id && id.toLowerCase() !== selfId.toLowerCase());
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const clearStreamExecutionQueue = useCallback(async (options?: { thisStrategyOnly?: boolean }) => {
+    const scoped = options?.thisStrategyOnly === true && Boolean(strategyId);
+    const path = scoped
+      ? `/queue?intentIdPrefix=${encodeURIComponent(`${strategyId}|`)}`
+      : "/queue";
+    const response = await fetchWithTimeout(tradingAppBridgeUrl(path), {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     });
@@ -3367,7 +3775,7 @@ export function useStreamEngine({
     if (!response.ok || json?.ok === false) {
       throw new Error(json?.error || `Failed to clear TradingApp queue (${response.status})`);
     }
-  }, [refreshExecutionStatus]);
+  }, [refreshExecutionStatus, strategyId]);
 
   const resetStreamAutomationState = useCallback(() => {
     // Always safe: reset UI state. The dispatch loop uses a snapshot taken at loop start,
@@ -3444,7 +3852,7 @@ export function useStreamEngine({
     setStreamManualExecutionBusy(true);
     try {
       for (const ticker of tickers) {
-        const response = await fetch(tradingAppBridgeUrl("/queue"), {
+        const response = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3636,6 +4044,12 @@ export function useStreamEngine({
       return row;
     });
 
+    // PositionBp is the account's live truth. An active ticker is managed as an existing
+    // position (adds/exits), never shown or latched as a fresh entry candidate after a restart.
+    const entryDecisions = decisionsWithWindowGuard.filter(
+      (row) => row.positionBp == null || row.positionBp === 0
+    );
+
     // Track display qualification time for minHoldCandles filter (always active, no automation needed).
     // Mirrors Scanner's consecutive-candle logic: timer resets if signal exits [startAbs, startAbsMax] for >60s.
     const nowForDisplay = Date.now();
@@ -3733,7 +4147,7 @@ export function useStreamEngine({
       if (nowForDisplay - lastSeen > 60_000) signalDisplayedRef.current.delete(k);
     });
 
-    const displayDecisions = decisionsWithWindowGuard
+    const displayDecisions = entryDecisions
       .filter(row => {
         const absSignal = Math.abs(row.signal ?? 0);
         // Never show above startAbsMax
@@ -3800,7 +4214,7 @@ export function useStreamEngine({
       }
     }
 
-    const decisionsForAutomation = decisionsWithWindowGuard;
+    const decisionsForAutomation = entryDecisions;
     const wantsPrime = primeImmediateEntriesRef.current;
     const nextLatches = syncStreamSignalLatches(
       streamSignalLatches,
@@ -3868,8 +4282,17 @@ export function useStreamEngine({
         windowExitMinuteRef.current.set(legIdentityOf(row), currentMinuteIdx);
       }
     }
-    const positionsBaseline = mergeStreamPositionsWithActionLog(streamPositions, streamActionLog, currentDayKey);
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsForAutomation, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap, startAbsMax ?? null);
+    const positionsBaseline = hydrateLiveActivePositions(
+      mergeStreamPositionsWithActionLog(
+        streamPositions,
+        streamActionLog,
+        currentDayKey,
+        accountPositionBpByTickerRef.current,
+        hasFreshAccountPositionBookRef.current,
+      ),
+      decisionsWithWindowGuard
+    );
+    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsWithWindowGuard, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap, startAbsMax ?? null, exitOverride, pairLegReadyMinutesRef.current);
     // Clear latch history for tickers whose positions just closed.
     // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
     // which would cause STREAM to fire much faster than SCANNER (which requires fresh
@@ -3888,7 +4311,7 @@ export function useStreamEngine({
       hasCompletedStreamHoldWindow(l.qualifiedSince, now2MinuteIdx, minHoldMinutesForDisplay)
     );
     let nextPositions = nextPositionsBase;
-    let intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
+    let intents = buildStreamOrderIntents(decisionsWithWindowGuard, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
 
     if (
       autoEnabledNow &&
@@ -3906,7 +4329,7 @@ export function useStreamEngine({
         minuteSnapshotRef.current?.lastSignedMap,
         decisionsForAutomation,
       );
-      intents = buildStreamOrderIntents(decisionsForAutomation, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
+      intents = buildStreamOrderIntents(decisionsWithWindowGuard, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
     }
 
     const qualified = qualifiedLatches.length;
@@ -3918,7 +4341,7 @@ export function useStreamEngine({
       const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
       const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
       const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
-      const decisionMap2 = new Map(decisionsForAutomation.map(d => [legIdentityOf(d), d]));
+      const decisionMap2 = new Map(decisionsWithWindowGuard.map(d => [legIdentityOf(d), d]));
       const positionMap2 = new Map(nextPositions.map(p => [legIdentityOf(p), p]));
       console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
       console.group(`  INTENTS (${intents.length}):`);
@@ -3946,7 +4369,7 @@ export function useStreamEngine({
     }
 
     const decisionsChanged = streamDecisionStore.applySnapshot(displayDecisions);
-    streamSignalStore.applySnapshot(filtered);
+    streamSignalStore.applySnapshot(filtered.filter((row) => !isActiveByPositionBp(row)));
     // The automation ticker runs every second even on a quiet market. Only move the UI's
     // UPDATED indicator when a visible decision row actually changed.
     if (decisionsChanged) {
@@ -4175,6 +4598,16 @@ export function useStreamEngine({
     await registerStrategyRef.current(true);
   }, []);
 
+  // LIFECYCLE. Keyed on identity ALONE, because the cleanup hands back every ticker lease this
+  // strategy holds — including the ones protecting positions that are still open.
+  //
+  // This used to also depend on priority, signal class, label and betaMode, so changing any of
+  // them tore the registration down and released the locks. Under Caesar that is not a theoretical
+  // path: the plan gives a strategy its priority PER SEGMENT, so crossing a segment boundary
+  // changed the number and dropped every lease the strategy was holding at that moment — leaving
+  // its open symbols claimable by another strategy on the opposite side.
+  //
+  // Those four are re-asserted by the effect below instead, which re-registers without releasing.
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -4192,7 +4625,17 @@ export function useStreamEngine({
         void (async () => {
           const result = await heartbeatStreamStrategy(strategyId);
           if (cancelled) return;
-          if (result && result.registered === false) await register();
+          // The plain heartbeat keeps the strategy record alive but deliberately carries no
+          // client id, so it cannot refresh ownership. A Caesar tab could therefore remain a
+          // non-owner forever after an old stream tab disappeared: it kept calculating READY
+          // signals while `autoEnabledNow` refused to build intents. Register is an idempotent
+          // upsert: it refreshes OUR owner lease when we own it, claims it only after a stale
+          // owner expires, and never steals it from a live tab.
+          if (!result || result.registered === false) {
+            await register();
+            return;
+          }
+          await register();
         })();
       },
     });
@@ -4204,7 +4647,18 @@ export function useStreamEngine({
       // strategy that is simply switched off keeps its symbols locked for another 90 seconds.
       void releaseAllStreamTickers(strategyId);
     };
-  }, [automationConfig?.betaMode, enabled, resolvedInstance.label, signalClass, strategyId, strategyPriority]);
+  }, [enabled, strategyId]);
+
+  // Re-assert what the ARBITER reads when it changes. Register is an upsert on the bridge: it
+  // updates priority, class and label in place and rewrites the priority onto leases this
+  // strategy already holds, so the locks survive the change instead of being handed back.
+  const registrationSignature = `${strategyPriority}|${signalClass}|${resolvedInstance.label}|${automationConfig?.betaMode === true}`;
+  useEffect(() => {
+    if (!enabled) return;
+    void registerStrategyRef.current();
+    // registrationSignature is the whole dependency: it is what the bridge stores about us.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, strategyId, registrationSignature]);
 
   useEffect(() => {
     if (!enabled || !ocrEnabled) return;
@@ -4388,11 +4842,112 @@ export function useStreamEngine({
               positionsSnapshot.find((p) => p.status !== "CLOSED" && p.status !== "PENDING_ENTRY")?.ticker ??
               positionsSnapshot[0]?.ticker ??
               "SPY";
+            /*
+              THE CUTOFF HOTKEYS ARE THE ONE THING HERE THAT IS NOT SCOPED TO A TICKER.
+
+              Ctrl+Q -> Ctrl+O and Ctrl+E close EVERY open position in TradingApp, not just this
+              strategy's — the comments below the pair say so, and the bookkeeping that follows
+              marks every one of this strategy's positions closed because of it.
+
+              With one strategy running that is exactly right. With two it is destructive, and it
+              lands inside the pre-market window rather than at its edge: Arbitrage's cutoff
+              defaults to 09:20 while PairFlux runs to 09:30, so the strategy that finishes first
+              flattens the book of the one that is still trading — and the survivor never learns,
+              because its own action log still shows those positions open, its position cap stays
+              full of ghosts, and it takes no further entries.
+
+              So when anything else is running, close this strategy's OWN positions one ticker at
+              a time instead. That is the same ExitPrint the engine sends for an ordinary print
+              exit, which IS ticker-scoped: the executor types the symbol before firing the key,
+              and the ordinary exit path releases exactly one lease. The global pair is kept for
+              the case it is correct for — this strategy being the only one running.
+            */
+            const contenders = await runningStrategiesOtherThan(strategyId);
+            const scopedCutoff = contenders.length > 0;
+
+            if (scopedCutoff) {
+              console.log(
+                `[CUTOFF] ${contenders.join(", ")} still running — closing only ${strategyId} positions, ` +
+                `not the global ${cutoffAction === "exit-all" ? "Ctrl+E" : "Ctrl+Q/Ctrl+O"}`
+              );
+              logStreamGateBlock("cutoff:scopedToStrategy", {
+                strategyId,
+                contenders: contenders.join(","),
+                openPositions: openLoggedPositions.length,
+              });
+
+              // Both legs of every open position: on a hedged strategy the partner is a real
+              // position too, and the global close would have taken it.
+              const closeTickers: string[] = [];
+              for (const row of positionsSnapshot) {
+                if (row.status === "CLOSED" || row.status === "PENDING_ENTRY") continue;
+                if (!closeTickers.includes(row.ticker)) closeTickers.push(row.ticker);
+                const partner = row.benchmark;
+                if (
+                  automationConfig?.hedgeMode === "hedged" &&
+                  partner && partner !== "UNKNOWN" && partner !== "PRINT" && partner !== row.ticker &&
+                  !closeTickers.includes(partner)
+                ) {
+                  closeTickers.push(partner);
+                }
+              }
+
+              // Simulation must stay a simulation. The global branches below queue real orders
+              // even in beta mode; that is pre-existing behaviour and not changed here, but new
+              // code has no reason to repeat it.
+              if (automationConfig?.betaMode !== true) {
+                for (const ticker of closeTickers) {
+                  const responseS = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      // strategyId-prefixed like every other intent this engine makes, so a stop
+                      // or a scoped queue clear can still find and drop it.
+                      intentId: `${strategyId}|cutoff-scoped|${cutoffKey}|${ticker}`,
+                      ticker,
+                      type: "ExitPrint",
+                      note: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"} (scoped: ${contenders.join(",")} still running)`,
+                      source: "stream-auto",
+                      signalClass: signalClass ?? null,
+                    }),
+                  });
+                  const jsonS = await responseS.json().catch(() => ({}));
+                  if (!responseS.ok || jsonS?.ok === false) {
+                    throw new Error(jsonS?.error || `Failed to queue scoped cutoff close for ${ticker} (${responseS.status})`);
+                  }
+                }
+              }
+              console.log(`[CUTOFF] scoped print-close queued for ${closeTickers.length} ticker(s)`);
+
+              void releaseAllStreamTickers(strategyId);
+
+              if (openLoggedPositions.length > 0) {
+                const dispatchAtS = Date.now();
+                const closeEntriesS: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
+                  id: `${row.ticker}|CLOSE|${dispatchAtS}`,
+                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
+                  ticker: row.ticker,
+                  pairKey: row.pairKey ?? null,
+                  benchmark: row.benchmark,
+                  side: row.side,
+                  kind: "CLOSE" as const,
+                  deviation: row.lastSignal ?? row.entrySignal,
+                  at: dispatchAtS,
+                  intent: "CLOSE_ALL_PRINT" as const,
+                  reason: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"} (scoped)`,
+                }));
+                appendStreamActionLogEntries(closeEntriesS);
+              }
+              // Same reason the exit-all branch returns: the global Ctrl+Q -> Ctrl+O pair below
+              // must not run after a scoped close, or the very thing this branch exists to avoid
+              // happens anyway. Remaining intents are picked up on the next tick.
+              return;
+            }
             // OpenDoor ends its session with ONE hotkey (Ctrl+E) rather than the Ctrl+Q -> Ctrl+O
             // pair. Same trigger — the operator's CUTOFF time — but a different key and no second
             // leg, so the pair's 1s wait and its print-close bookkeeping are skipped entirely.
-            if (cutoffAction === "exit-all") {
-              const responseE = await fetch(tradingAppBridgeUrl("/queue"), {
+            else if (cutoffAction === "exit-all") {
+              const responseE = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -4443,7 +4998,7 @@ export function useStreamEngine({
               return;
             }
 
-            const response = await fetch(tradingAppBridgeUrl("/queue"), {
+            const response = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -4470,7 +5025,7 @@ export function useStreamEngine({
             // Ctrl+O then print-closes everything open — one sequential pair, and the 1s gap is
             // what gives TradingApp time to act on the first before the second lands.
             await new Promise((resolve) => setTimeout(resolve, 1000));
-            const responseO = await fetch(tradingAppBridgeUrl("/queue"), {
+            const responseO = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -4621,7 +5176,7 @@ export function useStreamEngine({
           type: string;
           note: string;
         }) => {
-          const response = await fetch(tradingAppBridgeUrl("/queue"), {
+          const response = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -4630,6 +5185,7 @@ export function useStreamEngine({
               type: payload.type,
               note: payload.note,
               source: "stream-auto",
+              priority: strategyPriority,
               signalClass: signalClass ?? null,
               delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
               delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
@@ -4743,6 +5299,56 @@ export function useStreamEngine({
               // Deliberately NOT marked as dispatched: if the winner's entry never materialises
               // and the ticker frees up while the signal is still valid, the next tick may retry.
               continue;
+            }
+
+            // BOTH LEGS, OR NEITHER.
+            //
+            // Arbitration used to cover intent.ticker alone, so the SECOND leg went to TradingApp
+            // with no lease at all. On PairFlux that leg is not a detail — it is a full position of
+            // equal notional — and on Arbitrage it is the beta hedge. Either way, with two
+            // strategies live on the same pre-market universe nothing stopped one of them taking
+            // the opposite side of a symbol the other was already holding through its partner leg:
+            // the account ends up flat on that name having paid two spreads, and both strategies
+            // believe they have a position.
+            //
+            // The partner is claimed on the side it will actually be sent on — the OPPOSITE of the
+            // ticker leg for an entry, which is exactly the case the arbiter exists to catch (same
+            // side is not a conflict; see StreamStrategyRegistry.Claim).
+            //
+            // A denial here aborts the WHOLE intent. Sending the ticker leg alone would leave a
+            // naked single leg, which is strictly worse than not trading: on PairFlux it is an
+            // unhedged directional bet the strategy never asked for.
+            if (hedgeRequired && intent.benchmark) {
+              const partnerLease = await acquireStreamTicker({
+                strategyId,
+                ticker: intent.benchmark,
+                side: intent.side === "Long" ? "Short" : "Long",
+                intentId: hedgeIntentId,
+                ensureRegistered: () => registerStrategyRef.current(),
+              });
+              if (!partnerLease.granted) {
+                console.log(`[LEASE DENIED] ${intent.benchmark} (partner leg of ${intent.ticker}) — ${partnerLease.reason}`);
+                logStreamGateBlock("dispatch:partnerLeaseDenied", {
+                  ticker: intent.benchmark,
+                  primaryTicker: intent.ticker,
+                  strategyId,
+                  priority: strategyPriority,
+                  reason: partnerLease.reason,
+                  sequence: intent.sequence,
+                });
+                // Hand the ticker leg back — we took it a moment ago and are not going to use it,
+                // and a committed lease blocks everyone else until it is released or times out.
+                // ONLY on a first entry: on an ADD the strategy already holds a live position in
+                // this symbol, and releasing there would drop the lock that protects it.
+                if (!isAdd) {
+                  void releaseStreamTicker({
+                    strategyId,
+                    ticker: intent.ticker,
+                    reason: "partner leg denied — entry abandoned",
+                  });
+                }
+                continue;
+              }
             }
           }
 
@@ -5014,6 +5620,16 @@ export function useStreamEngine({
           } else if (isExitIntent && correspondingPosition) {
             // Position is being closed — hand the ticker back so another strategy can take it.
             void releaseStreamTicker({ strategyId, ticker: intent.ticker, reason: "position closed" });
+            // And the PARTNER leg with it. The entry now claims both legs, so releasing only the
+            // ticker would leave the partner's lease committed for the rest of the session and
+            // block every other strategy from a symbol nobody is holding any more.
+            if (hedgeRequired && intent.benchmark) {
+              void releaseStreamTicker({
+                strategyId,
+                ticker: intent.benchmark,
+                reason: "partner leg closed",
+              });
+            }
             _dispatchActionLog([{
               id: `${intent.ticker}|CLOSE|${dispatchAt}`,
               dayKey: currentTradingDayKey(strategySessionStartMinutes),
@@ -5225,6 +5841,7 @@ export function useStreamEngine({
     clearStreamTickerPoint,
     toggleStreamPanicOff,
     startStreamAutomation,
+    stopStreamAutomation,
     clearStreamExecutionQueue,
     resetStreamAutomationState,
     dismissStreamActivePositions,

@@ -33,6 +33,12 @@ export type ScannerFilterState = {
   dilutionMode: PaperArbDilutionMode;
   dilutionStep: number;
   endAbs: number;
+  /**
+   * ENTRY STOP: after this time no new positions are taken, leaving CUTOFF free to also serve as
+   * the exit trigger. Empty means "not set" — the caller falls back to startCutoffTime, exactly
+   * the way the panel already reads it (see ExecutionSettingsPanel's entryStopValue).
+   */
+  entryStopTime: string;
   episodesRows: PaperArbClosedDto[];
   episodesSort: { key: EpisodeSortKey; dir: SortDir };
   equityCurveMode: "Daily" | "Trade";
@@ -101,6 +107,8 @@ export type ScannerFilterState = {
   maxPreMktVolNF: string;
   maxRoundLot: string;
   maxSigma: string;
+  /** The pair's ALPHA — its median converged peak. Fourth of the pair statistics. */
+  maxAlpha: string;
   maxSpread: string;
   maxSpreadBps: string;
   maxTCls: string;
@@ -152,6 +160,7 @@ export type ScannerFilterState = {
   minPreMktVolNF: string;
   minRoundLot: string;
   minSigma: string;
+  minAlpha: string;
   minSpread: string;
   minSpreadBps: string;
   minTCls: string;
@@ -272,6 +281,7 @@ export type ScannerFilterSetters = {
   setDilutionMode: React.Dispatch<React.SetStateAction<PaperArbDilutionMode>>;
   setDilutionStep: React.Dispatch<React.SetStateAction<number>>;
   setEndAbs: React.Dispatch<React.SetStateAction<number>>;
+  setEntryStopTime: React.Dispatch<React.SetStateAction<string>>;
   setEpisodesRows: React.Dispatch<React.SetStateAction<PaperArbClosedDto[]>>;
   setEpisodesSort: React.Dispatch<React.SetStateAction<{ key: EpisodeSortKey; dir: SortDir }>>;
   setEquityCurveMode: React.Dispatch<React.SetStateAction<"Daily" | "Trade">>;
@@ -334,6 +344,7 @@ export type ScannerFilterSetters = {
   setMaxPreMktVolNF: React.Dispatch<React.SetStateAction<string>>;
   setMaxRoundLot: React.Dispatch<React.SetStateAction<string>>;
   setMaxSigma: React.Dispatch<React.SetStateAction<string>>;
+  setMaxAlpha: React.Dispatch<React.SetStateAction<string>>;
   setMaxSpread: React.Dispatch<React.SetStateAction<string>>;
   setMaxSpreadBps: React.Dispatch<React.SetStateAction<string>>;
   setMaxTCls: React.Dispatch<React.SetStateAction<string>>;
@@ -385,6 +396,7 @@ export type ScannerFilterSetters = {
   setMinPreMktVolNF: React.Dispatch<React.SetStateAction<string>>;
   setMinRoundLot: React.Dispatch<React.SetStateAction<string>>;
   setMinSigma: React.Dispatch<React.SetStateAction<string>>;
+  setMinAlpha: React.Dispatch<React.SetStateAction<string>>;
   setMinSpread: React.Dispatch<React.SetStateAction<string>>;
   setMinSpreadBps: React.Dispatch<React.SetStateAction<string>>;
   setMinTCls: React.Dispatch<React.SetStateAction<string>>;

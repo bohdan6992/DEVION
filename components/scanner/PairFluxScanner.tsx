@@ -24,9 +24,9 @@ import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { subscribeToStreamSse } from "../stream/streamSseHub";
 import { buildSignalsStreamUrl } from "@/lib/signals/url";
 import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "@/lib/pairflux/client";
-import { buildQuoteIndex, computeLivePairs } from "@/lib/pairflux/livePairs";
-import { buildPairFluxGateMap, expandPairFluxSignal, matchPairFluxGate, pairFluxLegsFor } from "@/lib/pairflux/gate";
-import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
+import { buildQuoteIndex, computeLivePairs, pairExitDeviation, type LivePairUnit } from "@/lib/pairflux/livePairs";
+import { buildPairFluxGateMap, expandPairFluxSignal, matchPairFluxGate, pairFluxLegsFor, pairKeyOf } from "@/lib/pairflux/gate";
+import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, type StreamPosition, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
@@ -39,6 +39,7 @@ import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
 import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
+import { benchLegExcluded } from "../../lib/pairflux/legFilters";
 import {
   SECTOR_CORR_DEFAULT,
   SECTOR_CORR_MAX,
@@ -234,6 +235,8 @@ export default function PairFluxScanner({
     setStartCutoffTime,
     preStartTime,
     setPreStartTime,
+    entryStopTime,
+    setEntryStopTime,
     pnlMode,
     setPnlMode,
     priceMode,
@@ -357,6 +360,10 @@ export default function PairFluxScanner({
     maxBeta,
     setMaxBeta,
     minSigma,
+    minAlpha,
+    setMinAlpha,
+    maxAlpha,
+    setMaxAlpha,
     setMinSigma,
     maxSigma,
     setMaxSigma,
@@ -1381,6 +1388,13 @@ export default function PairFluxScanner({
           setPreStartTime(restoredPreStartTime);
           onStreamAutomationConfigChange?.({ preStartTime: restoredPreStartTime });
         }
+        if (typeof s.entryStopMinuteIdx === "number" && s.entryStopMinuteIdx >= 0) {
+          const h = Math.floor(s.entryStopMinuteIdx / 60);
+          const m = s.entryStopMinuteIdx % 60;
+          const restoredEntryStopTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+          setEntryStopTime(restoredEntryStopTime);
+          onStreamAutomationConfigChange?.({ entryStopTime: restoredEntryStopTime });
+        }
         if (s.pnlMode === "RawOnly" || s.pnlMode === "Hedged") setPnlMode(s.pnlMode);
         if (s.priceMode === "LastPrint" || s.priceMode === "BidAsk") setPriceMode(s.priceMode);
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
@@ -1507,6 +1521,7 @@ export default function PairFluxScanner({
         applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
         applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
+        applyStr(s.minAlpha, setMinAlpha); applyStr(s.maxAlpha, setMaxAlpha);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
         applyStr(s.minRoundLot, setMinRoundLot); applyStr(s.maxRoundLot, setMaxRoundLot);
         applyStr(s.minAdv20, setMinAdv20); applyStr(s.maxAdv20, setMaxAdv20);
@@ -1607,6 +1622,7 @@ export default function PairFluxScanner({
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
       preStartMinuteIdx: preStartToMinuteIdx(),
+      entryStopMinuteIdx: parseTimeToMinuteIdx(entryStopTime),
       pnlMode,
       priceMode,
       sizingMode,
@@ -1657,6 +1673,8 @@ export default function PairFluxScanner({
       maxBeta,
       minSigma,
       maxSigma,
+      minAlpha,
+      maxAlpha,
       minMarketCapM,
       maxMarketCapM,
       minRoundLot,
@@ -1788,7 +1806,7 @@ export default function PairFluxScanner({
       qTicker, qSide, listMode, showIgnore, showApply, showPin, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
-      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
+      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
       minSpreadBps, maxSpreadBps, minGap, maxGap, minGapPct, maxGapPct, minClsToClsPct,
@@ -1891,6 +1909,8 @@ export default function PairFluxScanner({
     maxBeta: setMaxBeta,
     minSigma: setMinSigma,
     maxSigma: setMaxSigma,
+    minAlpha: setMinAlpha,
+    maxAlpha: setMaxAlpha,
     minAdv20: setMinAdv20,
     maxAdv20: setMaxAdv20,
     minAdv20NF: setMinAdv20NF,
@@ -2230,8 +2250,15 @@ export default function PairFluxScanner({
         type: ratingType ?? "any",
         mode: scopeModeForSnapshot,
         ratingMode,
-        minRate: streamRatingRule.minRate,
-        minTotal: streamRatingRule.minTotal,
+        // Deliberately 0/0, the same way the OpenDoor Sonar neutralises this floor.
+        //
+        // MINRATE/MINTOTAL on the toolbar mean the PAIR's rating for the class on this strategy —
+        // signals/pairflux/summary.csv, converged/total — and computeLivePairs now applies them
+        // there. This snapshot filters SIGNALS, one ticker at a time, where the same two numbers
+        // would mean the ticker's rating against its benchmark ETF: a different measurement, and
+        // applied to each leg separately it squares away the pair. It is enforced once, on the pair.
+        minRate: 0,
+        minTotal: 0,
         tickersFilterNorm: splitListUpper(tickersText).join(","),
         listMode,
         ignoreSet: new Set(splitListUpper(ignoreTickersText)),
@@ -2500,6 +2527,12 @@ export default function PairFluxScanner({
     betaMode: streamAutomationConfigOverride?.betaMode ?? false,
     startCutoffTime,
     preStartTime,
+    // Was missing entirely — this object is built field-by-field rather than spread from
+    // streamAutomationConfigOverride, so entryStopTime silently fell out on every render: typing
+    // into ENTRY reached onStreamAutomationConfigChange and localStorage just fine, but the very
+    // next render rebuilt this object without the field, and ExecutionSettingsPanel's own fallback
+    // (entryStopTime || startCutoffTime) read the missing value as "unset" and showed CUTOFF back.
+    entryStopTime,
   }), [
     addDelayMinutes,
     closeMode,
@@ -2514,6 +2547,7 @@ export default function PairFluxScanner({
     sizingMode,
     startCutoffTime,
     preStartTime,
+    entryStopTime,
   ]);
 
   const streamTrackedSignalsEnabled =
@@ -2568,8 +2602,13 @@ export default function PairFluxScanner({
     mode: (streamExactSonarFilterSnapshot?.mode ?? "all") as any,
     ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
     zapMode: (streamExactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-    minRate: streamRatingRule.minRate,
-    minTotal: streamRatingRule.minTotal,
+    // No server-side rating floor either, and for the same reason as the sigma one below: it is a
+    // per-TICKER figure, while the gate that decides a PairFlux trade is the pair's own rating for
+    // the class. Kept at 0 here so this subscription stays identical to the engine's, which sets
+    // omitTickerRating — a leg present in one and missing from the other is the "partner leg
+    // missing" case all over again.
+    minRate: 0,
+    minTotal: 0,
     // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
     // would narrow the universe before the pair can even be formed. Both legs must arrive.
     startAbs: undefined,
@@ -2606,24 +2645,77 @@ export default function PairFluxScanner({
     [pfSignals, streamExactSonarFilterSnapshot],
   );
 
+  /**
+   * The unit the toolbar reads deviation in, translated to computeLivePairs' vocabulary.
+   *
+   * Pulled out so the ENTRY reading (pfLivePairs, below) and the EXIT reading
+   * (pairFluxExitOverride, further down) are guaranteed to agree on what "the deviation" means —
+   * two places deriving the same ternary independently is exactly how the entry side and the exit
+   * side end up reading two different units without anyone changing either one on purpose.
+   */
+  const pairFluxUnit: LivePairUnit = devUnit === "sigma" ? "sigma"
+    : devUnit === "alpha" ? "alpha"
+    : devUnit === "gamma" ? "gamma"
+    : "pct";
+
   /** The pairs that are APART right now, read exactly as the Sonar reads them. */
   const pfLivePairs = useMemo(() => computeLivePairs({
     pairs: pfPairs,
     quoteByTicker: buildQuoteIndex(pfQuotableSignals),
-    unit: devUnit === "sigma" ? "sigma"
-      : devUnit === "alpha" ? "alpha"
-      : devUnit === "gamma" ? "gamma"
-      : "pct",
+    unit: pairFluxUnit,
     minStr: String(startAbs),
     maxStr: startAbsMax ?? "",
     exitStr: String(endAbs),
     corrRange: [minCorr, maxCorr],
     betaRange: [minBeta, maxBeta],
     sigmaRange: [minSigma, maxSigma],
-    // The scanner toolbar has no alpha range of its own; alpha still gates through the unit.
-    alphaRange: ["", ""],
-  }), [pfPairs, pfQuotableSignals, devUnit, startAbs, startAbsMax, endAbs,
-       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+    alphaRange: [minAlpha, maxAlpha],
+    // MINRATE / MINTOTAL, read on the PAIR for this class — the same floor the replay applies.
+    minRate: streamRatingRule.minRate,
+    minTotal: streamRatingRule.minTotal,
+  }), [pfPairs, pfQuotableSignals, pairFluxUnit, startAbs, startAbsMax, endAbs,
+       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
+       streamRatingRule.minRate, streamRatingRule.minTotal]);
+
+  /**
+   * The published universe, keyed by pair identity rather than by either leg — so an OPEN
+   * position can find its own pair's beta/sigma/alpha/gamma even after that pair has converged
+   * out of pfLivePairs (see pairExitDeviation). pfPairs already carries the full class, not the
+   * live-only subset, so nothing here depends on the pair still being enterable.
+   */
+  const pfPairsByKey = useMemo(() => {
+    const m = new Map<string, PairFluxRow>();
+    for (const row of pfPairs) m.set(pairKeyOf(row.ticker, row.partner), row);
+    return m;
+  }, [pfPairs]);
+
+  /**
+   * Quotes for EVERY published leg, unfiltered by the toolbar's own ranges.
+   *
+   * pfQuotableSignals (above) is deliberately narrowed by the client filter chain — that is
+   * correct for deciding what may be ENTERED. An open position must keep reporting its exit level
+   * regardless of a filter change made after it opened; reading the toolbar-filtered set here
+   * would silently stop pricing the exit the moment a leg fell outside a range the user only meant
+   * to apply to new entries.
+   */
+  const pfQuoteIndexAll = useMemo(() => buildQuoteIndex(pfSignals), [pfSignals]);
+
+  /**
+   * The strategy's own EXIT reading for an already-open position — see syncStreamPositions'
+   * exitOverride and pairExitDeviation's own doc for why this cannot reuse the entry-side
+   * decisionMap. Returns null (falls back to the engine's own defaults) for a position with no
+   * pairKey, a pair the published universe no longer carries, or a leg with no live quote.
+   */
+  const pairFluxExitOverride = useCallback(
+    (position: StreamPosition): number | null => {
+      if (!position.pairKey) return null;
+      const pair = pfPairsByKey.get(position.pairKey);
+      if (!pair) return null;
+      const reading = pairExitDeviation(pair, pfQuoteIndexAll, pairFluxUnit, position.ticker, position.side);
+      return reading?.signed ?? null;
+    },
+    [pfPairsByKey, pfQuoteIndexAll, pairFluxUnit],
+  );
 
   /**
    * BOTH LEGS, ONE EVENT. The ahead leg is approved to be SOLD and the lagging leg to be BOUGHT,
@@ -2709,6 +2801,7 @@ export default function PairFluxScanner({
     toggleStreamPanicOff,
     startStreamAutomation,
     clearStreamExecutionQueue,
+    stopStreamAutomation,
     resetStreamAutomationState,
     dismissStreamActivePositions,
     submitManualStreamOrders,
@@ -2719,11 +2812,12 @@ export default function PairFluxScanner({
     signalGate: pairFluxStreamGate,
     decisionOverride: pairFluxDecisionOverride,
     signalExpand: pairFluxSignalExpand,
+    exitOverride: pairFluxExitOverride,
     // The universe must arrive whole: a pair needs BOTH legs, and the server's own candidate set
     // is built from a per-ticker sigma rule this strategy does not use.
     // corr/beta/sigma are PAIR statistics here, and computeLivePairs already applies the
     // toolbar's ranges to the pair's own values — see omitTickerRanges.
-    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true, omitTickerRanges: true },
+    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true, omitTickerRanges: true, omitTickerRating: true },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     trackedSignalsEnabled: streamTrackedSignalsEnabled,
@@ -2740,15 +2834,19 @@ export default function PairFluxScanner({
     minHoldCandles,
     ratingMode,
     session,
-    ratingMinRate: streamRatingRule.minRate,
-    ratingMinTotal: streamRatingRule.minTotal,
+    // Also not passed: these are the ticker's own Arbitrage session rating, and MINRATE / MINTOTAL
+    // on this toolbar mean the PAIR's rate and total — computeLivePairs applies them there.
+    // `omitTickerRating` below already zeroes them in the URL; withholding them here means there is
+    // no per-ticker rating anywhere in the stream's inputs to be picked up by accident.
     tickersCsv: splitListUpper(tickersText).join(",") || undefined,
-    minCorr: optNumOrNull(minCorr),
-    maxCorr: optNumOrNull(maxCorr),
-    minBeta: optNumOrNull(minBeta),
-    maxBeta: optNumOrNull(maxBeta),
-    minSigma: optNumOrNull(minSigma),
-    maxSigma: optNumOrNull(maxSigma),
+    // NOT PASSED, DELIBERATELY. These six are the engine's PER-TICKER corr / beta / sigma bounds,
+    // meaning a stock against its benchmark ETF. On this strategy the same four boxes hold the
+    // PAIR's own statistics, and computeLivePairs already applies them there — see corrRange /
+    // betaRange / sigmaRange / alphaRange on the live pair build.
+    //
+    // `omitTickerRanges` on signalsRequest below already stopped them reaching the server, so this
+    // is not a second fix: it removes the values from the stream's world entirely, so there is
+    // nothing left that could be read per ticker by a later edit.
     sideFilter: sideFilter || undefined,
     filterConfig: streamFilterConfig,
     exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
@@ -2855,7 +2953,9 @@ export default function PairFluxScanner({
         }
       } finally {
         try {
-          await clearStreamExecutionQueue();
+          // Only THIS strategy's pending orders. The queue is shared with every other
+          // strategy running on this machine, and an unscoped clear aborted theirs too.
+          await clearStreamExecutionQueue({ thisStrategyOnly: true });
         } catch {
           // best effort cleanup
         }
@@ -3012,6 +3112,8 @@ export default function PairFluxScanner({
       maxBeta: optNumOrNull(maxBeta),
       minSigma: optNumOrNull(minSigma),
       maxSigma: optNumOrNull(maxSigma),
+      minAlpha: optNumOrNull(minAlpha),
+      maxAlpha: optNumOrNull(maxAlpha),
 
       // shared min/max filters
       minAdv20: rangeValueOrNull("adv20", minAdv20),
@@ -3192,6 +3294,8 @@ export default function PairFluxScanner({
       maxBeta: optNumOrNull(maxBeta),
       minSigma: optNumOrNull(minSigma),
       maxSigma: optNumOrNull(maxSigma),
+      minAlpha: optNumOrNull(minAlpha),
+      maxAlpha: optNumOrNull(maxAlpha),
 
       minMarketCapM: rangeValueOrNull("marketcapm", minMarketCapM),
       maxMarketCapM: rangeValueOrNull("marketcapm", maxMarketCapM),
@@ -3857,7 +3961,10 @@ export default function PairFluxScanner({
         group,
         parameterKeys: loadAllScopeKeys ? undefined : groupKeys,
         timeoutMs: groupTimeoutMs,
-        bucketCount: group === "ZAP THRESHOLDS" ? 6 : undefined,
+        // No group gets its own bin count. ZAP THRESHOLDS was pinned to 6 here with no reason
+        // recorded, so the BUCKETS box did nothing for it: typing 24 still drew six ranges, while
+        // every other group obeyed. `undefined` means "use what the user set", like the rest.
+        bucketCount: undefined,
       });
     }
 
@@ -4145,8 +4252,8 @@ export default function PairFluxScanner({
   const _maxBetaV = optNumOrNull(maxBeta);
   const _minSigmaV = optNumOrNull(minSigma);
   const _maxSigmaV = optNumOrNull(maxSigma);
-
-  const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
+  const _minAlphaV = optNumOrNull(minAlpha);
+  const _maxAlphaV = optNumOrNull(maxAlpha);
 
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
@@ -4164,36 +4271,66 @@ export default function PairFluxScanner({
     if (rowExcludedByBorrow(row, excludeItb, excludeHard)) return false;
     // CORR: not "this ticker reports" but "this ticker moves with one that does".
     if (excludeCorr && rowExcludedByCorr(row, sectorCorr.excluded)) return false;
-    const ticker = String(row.ticker ?? "").trim().toUpperCase();
-    const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
+    // ...and all three again for the HEDGE leg. A pair is one trade on two names, so a partner
+    // that is hard to borrow, reports today, or moves with a name that does disqualifies the pair
+    // exactly as the ticker leg would. The rest of the toolbar is judged on the bridge, which now
+    // runs the same static-meta filter over the partner before the pair is replayed.
+    if (benchLegExcluded(row, {
+      requireHasReport,
+      excludeHasReport,
+      excludeItb,
+      excludeHard,
+      excludeCorr,
+      corrExcluded: sectorCorr.excluded,
+      session: reportSessionForRow(row),
+    })) return false;
+    // ρ / β / σ / α ARE THE PAIR'S, AND ONLY THE PAIR'S.
+    //
+    // Read straight off the row, where the engine puts the published constants for this (pair,
+    // class) AFTER EnrichFrom precisely so the tape's same-named columns cannot overwrite them.
+    // The shared `getOptimizerFallbackValue` used here before walks a chain that ends at
+    // `arbitrageTickerMetaByTicker` — the TICKER's correlation, beta and sigma against its
+    // benchmark ETF, a different measurement about a different pair of things. For a pair whose
+    // constant the notebook could not fit that fallback did not leave the row unjudged, it judged
+    // it on the wrong number.
+    //
+    // A missing constant now fails any bound that was set, matching the bridge exactly: a pair
+    // that cannot be measured on ρ is not a pair that passes an ρ filter.
+    const pairStat = (key: "corr" | "beta" | "sigma") => {
+      const raw = (row as any)?.[key];
+      const n = typeof raw === "number" ? raw : Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
 
     if (_minCorrV != null || _maxCorrV != null) {
-      const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
-      if (value == null) {
-        // Meta not yet loaded — don't reject; filter will re-apply once meta arrives
-        if (!_metaLoaded) { /* pass through */ } else return false;
-      } else {
-        if (_minCorrV != null && value < _minCorrV) return false;
-        if (_maxCorrV != null && value > _maxCorrV) return false;
-      }
+      const value = pairStat("corr");
+      if (value == null) return false;
+      if (_minCorrV != null && value < _minCorrV) return false;
+      if (_maxCorrV != null && value > _maxCorrV) return false;
     }
     if (_minBetaV != null || _maxBetaV != null) {
-      const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
-      if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
-      } else {
-        if (_minBetaV != null && value < _minBetaV) return false;
-        if (_maxBetaV != null && value > _maxBetaV) return false;
-      }
+      // Magnitude, as everywhere else — the box asks how much partner hedges one ticker, and the
+      // sign only says which way the legs move. computeLivePairs and the bridge both use |beta|.
+      const raw = pairStat("beta");
+      const value = raw == null ? null : Math.abs(raw);
+      if (value == null) return false;
+      if (_minBetaV != null && value < _minBetaV) return false;
+      if (_maxBetaV != null && value > _maxBetaV) return false;
     }
     if (_minSigmaV != null || _maxSigmaV != null) {
-      const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
-      if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
-      } else {
-        if (_minSigmaV != null && value < _minSigmaV) return false;
-        if (_maxSigmaV != null && value > _maxSigmaV) return false;
-      }
+      const value = pairStat("sigma");
+      if (value == null) return false;
+      if (_minSigmaV != null && value < _minSigmaV) return false;
+      if (_maxSigmaV != null && value > _maxSigmaV) return false;
+    }
+    if (_minAlphaV != null || _maxAlphaV != null) {
+      // Alpha has no tape column at all — only a pair has one — so it is read the same way.
+      const raw = (row as any)?.alpha ?? (row as any)?.Alpha;
+      const n = typeof raw === "number" ? raw : Number(raw);
+      const value = Number.isFinite(n) ? n : null;
+      if (value == null) return false;
+      if (_minAlphaV != null && value < _minAlphaV) return false;
+      if (_maxAlphaV != null && value > _maxAlphaV) return false;
     }
 
     return true;
@@ -4270,7 +4407,7 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4340,7 +4477,7 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -4920,7 +5057,12 @@ export default function PairFluxScanner({
         definition.label,
         definition.group,
         optimizerBucketCount,
-        arbitrageTickerMetaByTicker,
+        // NO per-ticker meta. ρ/β/σ on a PairFlux row are the pair's published constants for this
+        // class; handing the ticker's benchmark statistics in as a fallback would bucket a pair
+        // whose own constant is missing by a number measured about something else, and the Scope
+        // card would then read as if the pair had been judged on it. Null keeps the read on the
+        // row, which is where the bridge put the pair's values.
+        undefined,
         optimizerBinMode
       );
 
@@ -5833,6 +5975,7 @@ export default function PairFluxScanner({
             { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
             { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
             { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+            { label: "α", title: "Alpha — the pair's median converged peak, pp", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
           ].map((field) => (
             <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
               <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
@@ -5994,6 +6137,7 @@ export default function PairFluxScanner({
               { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
               { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
               { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+              { label: "α", title: "Alpha — the pair's median converged peak, pp", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
             ].map((field) => (
               <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
                 <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
@@ -6447,7 +6591,7 @@ export default function PairFluxScanner({
                     setZapMode("sigma");
                     setMetric("SigmaZap");
                   }}
-                  title="Start deviation in SIGMAS — the spread divided by this pair's own deviation"
+                  title="Start deviation in SIGMAS — the spread divided by the LARGEST deviation this pair still RETURNS from, its published sigma. 1.00 is that level exactly. A pair with no such level drops out of the list in this mode, the same way it does in gamma."
                   className={clsx(
                     `${FILTER_PILL} gap-1`,
                     devUnit === "sigma"
@@ -6845,6 +6989,7 @@ export default function PairFluxScanner({
             onClearTickerPoint={clearStreamTickerPoint}
             onTogglePanicOff={toggleStreamPanicOff}
             onStartAutomation={startStreamAutomation}
+            onStopAutomation={stopStreamAutomation}
             onClearExecutionQueue={clearStreamExecutionQueue}
             onResetAutomationState={resetStreamAutomationState}
             onDismissActivePositions={dismissStreamActivePositions}
