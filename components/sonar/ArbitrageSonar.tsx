@@ -343,7 +343,8 @@ const RANGE_VALUE_GETTERS = {
 } as const;
 
 const strEquityType = (s: any) => getStrAny(s, ["equityType", "EquityType", "eqType", "EqType"], "");
-const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount"]);
+// NewsCnt / LstClsNewsCnt are what the feed actually sends (see _newsCount in lib/signals/signal).
+const numNews = (s: any) => getNumAny(s, ["news", "News", "newsCount", "NewsCount", "NewsCnt", "LstClsNewsCnt"]);
 const boolIsPTP = (s: any) => getBoolAny(s, ["isPTP", "IsPTP", "ptp", "PTP"]);
 const boolIsSSR = (s: any) => getBoolAny(s, ["isSSR", "IsSSR", "ssr", "SSR"]);
 const boolIsETF = (s: any) => getBoolAny(s, ["etf", "ETF", "isEtf", "IsEtf", "isETF", "IsETF"]);
@@ -1897,7 +1898,10 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
       if (eqt && eqt.includes("etf")) continue;
     }
     if (f.excludeCrap) {
-      const px = numLastClose(s);
+      // YESTERDAY's close first, the definition the scanner's tape flag uses
+      // (TapeWriter: IsCrap = YCls < 5). numLastClose reads LstCls first, which moves during the
+      // session, so a name trading through $5 was CRAP on one surface and not on the other.
+      const px = getNumAny(s, ["YCls", "yCls"]) ?? numLastClose(s);
       if (px != null && px < 5) continue;
     }
     // Borrow availability (B5ETB) — one reader shared with the Scanner, which receives the same

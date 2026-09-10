@@ -4571,6 +4571,22 @@ export function useStreamEngine({
   const [dispatchOwner, setDispatchOwner] = useState<{ isOwner: boolean; ownerClientId: string | null }>(
     { isOwner: true, ownerClientId: null },
   );
+  /**
+   * WHY this engine is not the owner, which the boolean above cannot say.
+   *
+   * A failed registration and a lost one both leave isOwner false — deliberately, since a page
+   * that cannot confirm it owns the strategy must not send. But they are opposite situations for
+   * the operator. "other" means a live client (normally Caesar) holds dispatch and SEND FROM HERE
+   * takes it. "unreachable" means the register call never got an answer at all, so nobody may be
+   * hosting — and pressing the button only repeats the call that just failed.
+   *
+   * The two were shown as one banner, "another client is hosting this strategy". Measured
+   * 2026-09-10: the bridge's registry was EMPTY while that banner was on screen, because the
+   * TradingTool dev server was down. Live signals still arrived — EventSource connects to the
+   * bridge directly — but every fetch goes through /api/bridge/proxy on the dead Next server, so
+   * registration failed, the page reported a host that did not exist, and the button did nothing.
+   */
+  const [dispatchState, setDispatchState] = useState<"owner" | "other" | "unreachable" | "pending">("pending");
   const dispatchOwnerRef = useRef(true);
   dispatchOwnerRef.current = dispatchOwner.isOwner;
 
@@ -4590,12 +4606,21 @@ export function useStreamEngine({
         ? prev
         : { isOwner: result.isOwner, ownerClientId: result.ownerClientId },
     );
+    setDispatchState(!result.registered ? "unreachable" : result.isOwner ? "owner" : "other");
+    // Mirror into the ref now rather than on the next render, so a caller awaiting this call (the
+    // SEND FROM HERE button) reads the answer it just got instead of the one before it.
+    dispatchOwnerRef.current = result.isOwner;
     return result.registered;
   };
 
-  /** Take dispatch over from a client that still holds it. Only ever called from a user action. */
-  const takeDispatchOwnership = useCallback(async () => {
-    await registerStrategyRef.current(true);
+  /**
+   * Take dispatch over from a client that still holds it. Only ever called from a user action.
+   * Resolves to whether this engine owns dispatch afterwards, so the button can say it failed
+   * instead of silently leaving the banner where it was.
+   */
+  const takeDispatchOwnership = useCallback(async (): Promise<boolean> => {
+    const reached = await registerStrategyRef.current(true);
+    return reached && dispatchOwnerRef.current;
   }, []);
 
   // LIFECYCLE. Keyed on identity ALONE, because the cleanup hands back every ticker lease this
@@ -5852,6 +5877,9 @@ export function useStreamEngine({
      * — normally the Caesar tab — is hosting it; everything is still computed and shown.
      */
     streamDispatchOwner: dispatchOwner.isOwner,
+    /** "other" = a live client holds it; "unreachable" = registration got no answer. See dispatchState. */
+    streamDispatchState: dispatchState,
+    streamDispatchOwnerClientId: dispatchOwner.ownerClientId,
     takeDispatchOwnership,
   };
 }

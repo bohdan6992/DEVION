@@ -356,8 +356,16 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     return null;
   })();
 
+  // The feed sends `meta.NewsCnt` / `meta.LstClsNewsCnt` — capitalised. Only the camel-case
+  // spellings were read here, so this was 0 for every signal and the NEWS toggle removed nothing
+  // on any live surface, while the scanner (TapeWriter: HasNews = (NewsCnt ?? LstClsNewsCnt) > 0)
+  // removed every name with news. Same precedence as the tape now: today's count, then since close.
   const _newsCount =
-    toNum(meta?.newsCnt ?? meta?.newsCount ?? meta?.news ?? raw?.newsCnt ?? raw?.news ?? raw?.newsCount ?? raw?.NewsCount) ?? 0;
+    toNum(
+      meta?.NewsCnt ?? meta?.newsCnt ?? meta?.newsCount ?? meta?.news ??
+      raw?.NewsCnt ?? raw?.newsCnt ?? raw?.news ?? raw?.newsCount ?? raw?.NewsCount ??
+      meta?.LstClsNewsCnt ?? meta?.lstClsNewsCnt ?? raw?.LstClsNewsCnt,
+    ) ?? 0;
 
   const _isPTP = toBool(raw?.isPtp ?? raw?.isPTP ?? raw?.IsPTP ?? meta?.isPtp ?? meta?.isPTP ?? meta?.IsPTP);
   const _isSSR = toBool(raw?.isSsr ?? raw?.isSSR ?? raw?.IsSSR ?? meta?.isSsr ?? meta?.isSSR ?? meta?.IsSSR);

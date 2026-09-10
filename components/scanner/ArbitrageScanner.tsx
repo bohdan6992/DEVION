@@ -66,6 +66,7 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import DispatchOwnerBanner from "../stream/DispatchOwnerBanner";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -2441,6 +2442,8 @@ export default function ArbitrageScanner({
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
     streamDispatchOwner,
+    streamDispatchState,
+    streamDispatchOwnerClientId,
     takeDispatchOwnership,
   } = useStreamEngine({
     enabled: primaryPanel === "stream",
@@ -6513,22 +6516,11 @@ export default function ArbitrageScanner({
 
         {/* CONTENT */}
         {primaryPanel === "stream" && !streamDispatchOwner && (
-          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5">
-            <div className="font-mono text-[11px] text-amber-200">
-              <span className="font-bold uppercase tracking-[0.18em]">Settings only</span>
-              <span className="ml-2 text-amber-200/70">
-                another client is hosting this strategy — Caesar, normally. Everything below is live
-                and every setting you change is saved and picked up there. This page will not send.
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => { void takeDispatchOwnership(); }}
-              className="shrink-0 rounded-md border border-amber-400/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-400/10"
-            >
-              Send from here
-            </button>
-          </div>
+          <DispatchOwnerBanner
+            state={streamDispatchState}
+            ownerClientId={streamDispatchOwnerClientId}
+            onTakeOwnership={takeDispatchOwnership}
+          />
         )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView

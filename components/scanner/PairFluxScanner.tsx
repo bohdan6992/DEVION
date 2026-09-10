@@ -74,6 +74,7 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import DispatchOwnerBanner from "../stream/DispatchOwnerBanner";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -1456,7 +1457,8 @@ export default function PairFluxScanner({
         if (typeof s.showPin === "boolean") setShowPin(s.showPin);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
-        if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
+        // PairFlux has no BIN/BINS mode. A layout saved while one was selectable restores as SESSION.
+        setRatingMode("SESSION");
         if (typeof s.topMode === "boolean") setTopMode(s.topMode);
         if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
         if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
@@ -2259,15 +2261,13 @@ export default function PairFluxScanner({
         // applied to each leg separately it squares away the pair. It is enforced once, on the pair.
         minRate: 0,
         minTotal: 0,
-        tickersFilterNorm: splitListUpper(tickersText).join(","),
+        tickersFilterNorm: listMode === "apply" ? splitListUpper(tickersText).join(",") : "",
         listMode,
         ignoreSet: new Set(splitListUpper(ignoreTickersText)),
         applySet: new Set(splitListUpper(tickersText)),
         pinMap,
         bounds: {
-        Corr: mm("corr", minCorr, maxCorr),
-        Beta: mm("beta", minBeta, maxBeta),
-        Sigma: mm("sigma", minSigma, maxSigma),
+        // No Corr/Beta/Sigma here — see corrMin below.
         ADV20: mm("adv20", minAdv20, maxAdv20),
         ADV20NF: mm("adv20nf", minAdv20NF, maxAdv20NF),
         ADV90: mm("adv90", minAdv90, maxAdv90),
@@ -2327,12 +2327,26 @@ export default function PairFluxScanner({
       sectorEnabled,
       filterReport: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
       equityType: "",
-      corrMin: minCorr,
-      corrMax: maxCorr,
-      betaMin: minBeta,
-      betaMax: maxBeta,
-      sigmaMin: minSigma,
-      sigmaMax: maxSigma,
+      /**
+       * EMPTY ON PURPOSE. ρ / β / σ on this toolbar are the PAIR's published statistics, and
+       * computeLivePairs enforces them on the pair (corrRange / betaRange / sigmaRange).
+       *
+       * This snapshot filters SIGNALS — one ticker at a time — and the shared filter reads these
+       * six fields as that ticker's OWN correlation, beta and sigma against its benchmark ETF
+       * (getCorrValue & co. read `best.corr` / `meta.corr`). Passed through, every leg of every
+       * pair had to clear the pair's bound on a measurement about a different pair of things, and
+       * a leg that failed took its pair out of the quote index. The scanner never did this — the
+       * replay reads the pair's constants only — so the two surfaces traded different universes.
+       * Measured on the live INTRA feed 2026-09-10 with MINCORR 0.7: 885 pairs with both legs
+       * quoted pass on the pair's corr (what the scanner keeps), 331 survive once each leg's own
+       * ETF corr must also be >= 0.7. The stream was silently dropping 63% of the pairs.
+       */
+      corrMin: "",
+      corrMax: "",
+      betaMin: "",
+      betaMax: "",
+      sigmaMin: "",
+      sigmaMax: "",
       zapMode: zapMode,
       zapShowAbs: startAbs,
         /**
@@ -2612,10 +2626,11 @@ export default function PairFluxScanner({
     // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
     // would narrow the universe before the pair can even be formed. Both legs must arrive.
     startAbs: undefined,
-    tickers: splitListUpper(tickersText).join(",") || undefined,
+    // Only in APPLY mode — see the engine's tickersCsv below.
+    tickers: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : undefined,
     limit: 5000,
     includeAll: true,
-  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText,
+  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText, listMode,
        streamExactSonarFilterSnapshot, ratingMode, metric]);
 
   useEffect(() => {
@@ -2807,6 +2822,8 @@ export default function PairFluxScanner({
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
     streamDispatchOwner,
+    streamDispatchState,
+    streamDispatchOwnerClientId,
     takeDispatchOwnership,
   } = useStreamEngine({
     signalGate: pairFluxStreamGate,
@@ -2838,7 +2855,13 @@ export default function PairFluxScanner({
     // on this toolbar mean the PAIR's rate and total — computeLivePairs applies them there.
     // `omitTickerRating` below already zeroes them in the URL; withholding them here means there is
     // no per-ticker rating anywhere in the stream's inputs to be picked up by accident.
-    tickersCsv: splitListUpper(tickersText).join(",") || undefined,
+    /**
+     * The APPLY box restricts the feed only while APPLY is the list mode — the scanner's rule
+     * (requestScopedTickers). It was sent whenever the box held any text, so names left in it after
+     * switching to IGN or off still narrowed the stream to that handful while the scanner read the
+     * whole universe. And a pair needs both legs in the feed, so this cut pairs, not just tickers.
+     */
+    tickersCsv: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : undefined,
     // NOT PASSED, DELIBERATELY. These six are the engine's PER-TICKER corr / beta / sigma bounds,
     // meaning a stock against its benchmark ETF. On this strategy the same four boxes hold the
     // PAIR's own statistics, and computeLivePairs already applies them there — see corrRange /
@@ -4237,13 +4260,20 @@ export default function PairFluxScanner({
     [listMode, ignoreSet]
   );
 
-  const listModeAllowsTicker = (tkRaw: string | null | undefined) => {
+  const listModeAllowsTicker = (tkRaw: string | null | undefined, partnerRaw?: string | null) => {
     const tk = tickerKey(tkRaw);
     if (!tk) return false;
-    if (listMode === "ignore") return !ignoreSet.has(tk);
-    if (listMode === "apply") return applySet.has(tk);
-    if (listMode === "pin") return pinSet.has(tk);
-    return true;
+    const one = (k: string) => {
+      if (listMode === "ignore") return !ignoreSet.has(k);
+      if (listMode === "apply") return applySet.has(k);
+      if (listMode === "pin") return pinSet.has(k);
+      return true;
+    };
+    if (!one(tk)) return false;
+    // A pair row is judged on BOTH names, as the stream judges each leg's signal. The bridge now
+    // applies the same allow/deny list to the partner; this keeps the table right between refetches.
+    const partner = tickerKey(partnerRaw);
+    return partner ? one(partner) : true;
   };
 
   const _minCorrV = optNumOrNull(minCorr);
@@ -4343,7 +4373,7 @@ export default function PairFluxScanner({
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return activeRows.filter((r) => {
-      if (!listModeAllowsTicker(r.ticker)) return false;
+      if (!listModeAllowsTicker(r.ticker, (r as any).benchTicker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
       if (qSide) {
         const s = normalizeSide(r.side);
@@ -4415,7 +4445,7 @@ export default function PairFluxScanner({
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return episodesRows.filter((r) => {
-      if (!listModeAllowsTicker(r.ticker)) return false;
+      if (!listModeAllowsTicker(r.ticker, (r as any).benchTicker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
       if (qSide) {
         const s = normalizeSide(r.side);
@@ -5882,24 +5912,11 @@ export default function PairFluxScanner({
             )}
           </div>
 
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
-              <button
-                key={modeKey}
-                type="button"
-                onClick={() => setRatingMode(modeKey)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
-                    ? "accent-soft"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                {modeKey}
-              </button>
-            ))}
-          </div>
-
+          {/* No SESSION / BIN / BINS selector: PairFlux has ONE rating, the pair's per-class
+              rate/total, and nothing binned by deviation. With BIN/BINS selected the replay was sent
+              no rating rules at all while the stream still enforced MINRATE/MINTOTAL on every pair, so
+              the two surfaces judged different universes. ratingMode now stays SESSION (the hook's
+              default, and what the filter restore forces). */}
           <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -6045,24 +6062,6 @@ export default function PairFluxScanner({
 
         {false && tab === "analytics" && (
           <div className="mb-3 flex flex-wrap justify-end gap-3">
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
-                <button
-                  key={modeKey}
-                  type="button"
-                  onClick={() => setRatingMode(modeKey)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    ratingMode === modeKey
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {modeKey}
-                </button>
-              ))}
-            </div>
-
             <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
               <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
               <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -6955,22 +6954,11 @@ export default function PairFluxScanner({
 
         {/* CONTENT */}
         {primaryPanel === "stream" && !streamDispatchOwner && (
-          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5">
-            <div className="font-mono text-[11px] text-amber-200">
-              <span className="font-bold uppercase tracking-[0.18em]">Settings only</span>
-              <span className="ml-2 text-amber-200/70">
-                another client is hosting this strategy — Caesar, normally. Everything below is live
-                and every setting you change is saved and picked up there. This page will not send.
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => { void takeDispatchOwnership(); }}
-              className="shrink-0 rounded-md border border-amber-400/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-400/10"
-            >
-              Send from here
-            </button>
-          </div>
+          <DispatchOwnerBanner
+            state={streamDispatchState}
+            ownerClientId={streamDispatchOwnerClientId}
+            onTakeOwnership={takeDispatchOwnership}
+          />
         )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView
