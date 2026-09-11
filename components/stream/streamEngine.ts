@@ -4582,9 +4582,12 @@ export function useStreamEngine({
    *
    * The two were shown as one banner, "another client is hosting this strategy". Measured
    * 2026-09-10: the bridge's registry was EMPTY while that banner was on screen, because the
-   * TradingTool dev server was down. Live signals still arrived — EventSource connects to the
-   * bridge directly — but every fetch goes through /api/bridge/proxy on the dead Next server, so
-   * registration failed, the page reported a host that did not exist, and the button did nothing.
+   * TradingTool dev server was down and every fetch was, at the time, routed through a Next.js
+   * proxy route that only worked on the SAME machine as the bridge. That proxy is gone as of
+   * 2026-09-11 (it broke a Vercel-hosted page talking to a local bridge, which is the normal
+   * deployment) — every fetch here goes straight from this browser tab to the bridge, same as
+   * EventSource always did. "unreachable" now means the bridge itself did not answer: down, the
+   * wrong base URL, or a rejected CORS origin.
    */
   const [dispatchState, setDispatchState] = useState<"owner" | "other" | "unreachable" | "pending">("pending");
   const dispatchOwnerRef = useRef(true);

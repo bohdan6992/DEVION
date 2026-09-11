@@ -31,12 +31,6 @@ function stripTrailingSlashes(x: string) {
   return (x || "").replace(/\/+$/, "");
 }
 
-function proxyLocalBridgeRequest(input: string): string {
-  if (!isBrowser() || !input.startsWith(DEFAULT_LOCAL)) return input;
-  const path = input.slice(DEFAULT_LOCAL.length);
-  return `/api/bridge/proxy?path=${encodeURIComponent(path)}`;
-}
-
 function sanitizeBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
   if (!raw) return null;
@@ -132,6 +126,16 @@ export function bridgeUrl(path: string) {
  * time. This is the fix for that class of bug: every poll loop gets a hard ceiling on how long one
  * request may stay outstanding before it is aborted and freed.
  */
+/**
+ * REVERTED 2026-09-11: this used to rewrite a `localhost` URL to `/api/bridge/proxy`, a Next.js
+ * API route that re-issued the fetch server-side. That works only when the Next server itself runs
+ * on the SAME machine as the bridge (`npm run dev`) - on a Vercel deployment the route runs on
+ * Vercel's servers, where `localhost` is not the operator's PC, so every request failed and the
+ * page reported "bridge not reached" no matter what was actually running locally. Back to a direct
+ * browser fetch; CORS on the bridge already allows any *.vercel.app origin (Program.cs). If the
+ * Chrome connection-exhaustion problem below resurfaces on a machine that also runs the bridge
+ * locally, the fix is a public tunnel + NEXT_PUBLIC_BRIDGE_API, not resurrecting this proxy.
+ */
 export async function fetchWithTimeout(
   input: string,
   init?: RequestInit,
@@ -149,7 +153,7 @@ export async function fetchWithTimeout(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(proxyLocalBridgeRequest(input), { ...init, signal: controller.signal });
+    return await fetch(input, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
     release();

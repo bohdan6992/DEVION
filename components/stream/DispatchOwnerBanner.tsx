@@ -11,10 +11,11 @@ import { useState } from "react";
  * EMPTY while this banner was on screen — and the SEND FROM HERE button merely repeated the call
  * that had just failed, so it looked broken.
  *
- * The usual cause of "unreachable" is the TradingTool dev server being down: live signals keep
- * arriving because EventSource talks to the bridge directly, but every fetch (register, heartbeat,
- * ticker claim/commit) is routed through /api/bridge/proxy on the Next server. So the page looks
- * alive and cannot send.
+ * Every fetch (register, heartbeat, ticker claim/commit) goes straight from this browser tab to
+ * the bridge — see fetchWithTimeout in lib/bridgeBase.ts, reverted 2026-09-11 off a same-machine
+ * proxy that broke this on Vercel. So "unreachable" now means the BRIDGE itself did not answer:
+ * it is down, the base URL (?bridge= / NEXT_PUBLIC_BRIDGE_API) is wrong, or its CORS policy
+ * rejected this page's origin — not a dev server, which no longer sits on this path at all.
  */
 export default function DispatchOwnerBanner({
   state,
@@ -63,7 +64,7 @@ export default function DispatchOwnerBanner({
             <span className="ml-2 text-rose-200/70">
               {state === "pending"
                 ? "registering this strategy with the bridge. This page will not send until the bridge answers."
-                : "this page could not register with the bridge, so it will not send. Nobody is necessarily hosting — usually the TradingTool server (npm run dev) is down while live signals still stream directly. Start it and reload."}
+                : "this page could not register with the bridge, so it will not send. Nobody is necessarily hosting — the bridge itself did not answer: it may be down, the base URL (?bridge= or NEXT_PUBLIC_BRIDGE_API) may be wrong, or it rejected this page's origin. Retry once that is fixed."}
             </span>
           </>
         ) : (
