@@ -2269,6 +2269,17 @@ export function syncStreamPositions(
       }
     }
 
+    // Rows already in `next` before ANY latch is considered this pass — i.e. legs that are
+    // genuinely an open/pending position from a PRIOR cycle, not merely "ready" this instant.
+    // Used below to tell "partner already open, one leg is enough" apart from "partner never
+    // fired at all" — legsByPair (above) blends in a one-minute READINESS memory for pairReadyKeys
+    // and is deliberately loose; reusing it here would just re-derive the bug this pass exists to
+    // catch.
+    const preLatchNextLen = next.length;
+    // Legs that clear every gate and get pushed as a fresh PENDING_ENTRY in THIS pass, by pair.
+    // See the reconciliation right after this loop.
+    const freshEntryFires = new Map<string, Array<{ ticker: string; partnerTicker: string; index: number }>>();
+
     for (const latch of latches) {
       if (seen.has(legIdentityOf(latch))) continue;
       if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
@@ -2366,8 +2377,62 @@ export function syncStreamPositions(
         openedAt: latch.qualifiedSince,
         updatedAt: now,
       });
+      if (latch.pairKey) {
+        const arr = freshEntryFires.get(latch.pairKey) ?? [];
+        arr.push({ ticker: latch.ticker, partnerTicker: latch.benchmark, index: next.length - 1 });
+        freshEntryFires.set(latch.pairKey, arr);
+      }
       openCount += 1;
       seen.add(legIdentityOf(latch));
+    }
+
+    /**
+     * A PAIR ENTERS AS A PAIR — closing the gap `pairReadyKeys` leaves open.
+     *
+     * pairReadyKeys says the PAIR may be considered at all, from a one-minute memory of each leg's
+     * OWN readiness (deliberately loose — see its own comment, 2026-09-09). But each latch above is
+     * STILL gated on `latchDecision.status === "ENTRY_READY"` read from THIS poll's decisionMap, not
+     * from that memory. A leg that was ready a moment ago and has since flickered to
+     * BLOCKED_SPREAD/BLOCKED_EDGE fails its OWN check and is skipped — while its partner, still
+     * ENTRY_READY right now, sails through alone: pairReadyKeys already said yes. Measured live
+     * 2026-09-11: MUU/KORU logged one ENTRY row (MUU) with no KORU counterpart, and TradingApp
+     * shows MUU bought with no KORU order at all — a naked, unhedged leg.
+     *
+     * Same shape as the ADD/EXIT reconciliation above, for a fresh entry instead of an open
+     * position: a lone leg is reverted UNLESS its partner also fired this pass, or was already an
+     * open/pending position from before this loop (preLatchNextLen) — that second case is the
+     * legitimate "completing a half-open pair" path the slotsNeeded=1 branch above expects to feed.
+     */
+    if (freshEntryFires.size > 0) {
+      const openLegsByPair = new Map<string, Set<string>>();
+      for (let i = 0; i < preLatchNextLen; i++) {
+        const row = next[i];
+        if (!row.pairKey || row.status === "CLOSED") continue;
+        const set = openLegsByPair.get(row.pairKey);
+        if (set) set.add(row.ticker);
+        else openLegsByPair.set(row.pairKey, new Set([row.ticker]));
+      }
+      const revertIndices: number[] = [];
+      for (const [pairKey, fires] of freshEntryFires) {
+        const firedTickers = new Set(fires.map((f) => f.ticker));
+        const openLegs = openLegsByPair.get(pairKey);
+        for (const f of fires) {
+          const partnerCovered = firedTickers.has(f.partnerTicker) || (openLegs?.has(f.partnerTicker) ?? false);
+          if (!partnerCovered) revertIndices.push(f.index);
+        }
+      }
+      if (revertIndices.length > 0) {
+        for (const idx of revertIndices) {
+          const row = next[idx];
+          logStreamGateBlock("entry:partnerNotFiring", {
+            ticker: row.ticker, pairKey: row.pairKey, benchmark: row.benchmark,
+          });
+          seen.delete(legIdentityOf(row));
+          openCount -= 1;
+        }
+        // Descending so earlier indices stay valid as later ones are spliced out.
+        for (const idx of [...revertIndices].sort((a, b) => b - a)) next.splice(idx, 1);
+      }
     }
 
     return next
