@@ -7,6 +7,13 @@ import clsx from "clsx";
 
 
 import { matchOpenDoorGate, readOpenDoorGateValues } from "@/lib/opendoor/gate";
+import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import {
+  fetchOpenDoorSonarSnapshot,
+  pushOpenDoorSonarLiveParams,
+  toOpenDoorSonarLiveParams,
+  type OpenDoorSonarRow,
+} from "@/lib/sonar/openDoorSnapshotClient";
 import { useUi } from "@/components/UiProvider";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import PresetPicker from "@/components/presets/PresetPicker";
@@ -1548,7 +1555,9 @@ export type SonarExactFilterSnapshot = {
   betaMax: string;
   sigmaMin: string;
   sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
+  // Carries whatever the scanner's shared ZapMode holds. OpenDoor draws no gamma/alpha reading
+  // of its own; the value only has to survive the trip to the stream engine.
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
   zapGoldAbs: number;
@@ -2202,6 +2211,11 @@ export default function OpenDoorSonar() {
     openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
     openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
   ]);
+
+  /** What OpenDoorSonarSnapshotService's OpenDoorLiveEngine call approved this poll — the fetch
+   * effect lives further down (with the params push), since it needs setError, declared below. */
+  const [openDoorSonarRows, setOpenDoorSonarRows] = useState<OpenDoorSonarRow[]>([]);
+
   const [corrMin, setCorrMin] = useState("");
   const [corrMax, setCorrMax] = useState("");
   const [betaMin, setBetaMin] = useState("");
@@ -3935,16 +3949,81 @@ export default function OpenDoorSonar() {
       }));
   }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
 
-  // OpenDoor: only tickers whose live parameters land in a matching good bin — split into
-  // two columns, SHORT (down) on the left, LONG (up) on the right. This replaces the generic
-  // benchmark/beta grid below (still present, just disabled) as Sonar's primary OpenDoor view.
+  /**
+   * The toolbar, to the bridge — same debounce/hydration-guard pattern the Arbitrage/PairFlux
+   * Sonar panels already use. OpenDoorSonarSnapshotService reuses the SAME OpenDoorLiveEngine the
+   * Stream tab trades on, so this is the exact params object OpenDoorServerStrategy would build,
+   * just from the Sonar's own toolbar instead of the Stream tab's. Placed here, not beside
+   * matchOpenDoor above, because it needs the full filter toolbar state declared further down.
+   */
+  useEffect(() => {
+    if (!uiHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushOpenDoorSonarLiveParams(toOpenDoorSonarLiveParams({
+        exitClass: openDoorExitClass,
+        useStack: openDoorUseStack,
+        useBench: openDoorUseBench,
+        useDevSig: openDoorUseDevSig,
+        upMinRate: openDoorUpMinRate,
+        upMinTotal: openDoorUpMinTotal,
+        upMinMove: openDoorUpMinMove,
+        downMinRate: openDoorDownMinRate,
+        downMinTotal: openDoorDownMinTotal,
+        downMinMove: openDoorDownMinMove,
+        filters: {
+          listMode, ignoreSet, applySet, pinMap, activeMode,
+          includeUSA, includeChina, selCountries, countryEnabled,
+          selExchanges, exchangeEnabled, selSectors, sectorEnabled,
+          bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
+          excludeReport, excludeETF, excludeCrap, filterReport, equityType,
+        },
+        source: "opendoor-sonar",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    openDoorExitClass, openDoorUseStack, openDoorUseBench, openDoorUseDevSig,
+    openDoorUpMinRate, openDoorUpMinTotal, openDoorUpMinMove,
+    openDoorDownMinRate, openDoorDownMinTotal, openDoorDownMinMove,
+    listMode, ignoreSet, applySet, pinMap, activeMode,
+    includeUSA, includeChina, selCountries, countryEnabled,
+    selExchanges, exchangeEnabled, selSectors, sectorEnabled,
+    bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
+    excludeReport, excludeETF, excludeCrap, filterReport, equityType,
+  ]);
+
+  useEffect(() => {
+    let alive = true;
+    const unsubscribe = subscribeSharedPoll("sonar-opendoor-snapshot", fetchOpenDoorSonarSnapshot, 6_000, (value, err) => {
+      if (!alive) return;
+      if (err) return; // keep the last approved rows rather than blanking the panel on one bad poll
+      if (value?.timedOut) {
+        setError("Bridge fetch timed out — no live feed reachable. Values below are the last received snapshot.");
+        return;
+      }
+      setOpenDoorSonarRows(value?.rows ?? []);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  // OpenDoor: which tickers pass, now decided server-side (OpenDoorSonarSnapshotService, the SAME
+  // OpenDoorLiveEngine the Stream tab trades on) instead of matchOpenDoor's client-side bin check
+  // — split into two columns, SHORT (down) on the left, LONG (up) on the right. This replaces the
+  // generic benchmark/beta grid below (still present, just disabled) as Sonar's primary OpenDoor
+  // view. matchOpenDoor/matchOpenDoorGate are left in place above (not removed), same "public
+  // export, do not prune" stance taken for applyExactSonarClientFilters elsewhere in this file.
+  const itemsByTicker = useMemo(() => {
+    const map = new Map<string, ArbitrageSignal>();
+    for (const s of items) map.set(String(s.ticker ?? "").toUpperCase().trim(), s);
+    return map;
+  }, [items]);
   const openDoorMatchedDown = useMemo(
-    () => items.filter((s) => matchOpenDoor(s).down),
-    [items, matchOpenDoor]
+    () => openDoorSonarRows.filter((r) => r.side === "Short"),
+    [openDoorSonarRows]
   );
   const openDoorMatchedUp = useMemo(
-    () => items.filter((s) => matchOpenDoor(s).up),
-    [items, matchOpenDoor]
+    () => openDoorSonarRows.filter((r) => r.side === "Long"),
+    [openDoorSonarRows]
   );
 
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
@@ -5142,33 +5221,26 @@ export default function OpenDoorSonar() {
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {col.rows.map((s) => {
-                      const row = openDoorBestByTicker[String(s.ticker ?? "").toUpperCase().trim()];
-                      const prefix = openDoorAdvancedMode ? "adv_" : "";
-                      const c = openDoorExitClass;
-                      const devVal = col.dir === "up" ? toNum(s.zapLsigma) : toNum(s.zapSsigma);
-                      const rateVals = ["stack", "bench", "dev"]
-                        .map((p) => toNum(row?.[`${prefix}${p}_${c}_best_${col.dir}_rate`]))
-                        .filter((v): v is number => v != null);
-                      const bestRate = rateVals.length ? Math.max(...rateVals) : null;
+                    {col.rows.map((r) => {
+                      const s = itemsByTicker.get(r.ticker.toUpperCase().trim());
                       return (
                         <div
-                          key={s.ticker}
+                          key={r.ticker}
                           className="flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2"
                         >
                           <div className="flex items-baseline gap-2">
-                            <span className="font-mono text-sm font-bold text-zinc-100">{s.ticker}</span>
-                            <span className="font-mono text-[10px] text-zinc-500 uppercase">{s.benchmark}</span>
+                            <span className="font-mono text-sm font-bold text-zinc-100">{r.ticker}</span>
+                            <span className="font-mono text-[10px] text-zinc-500 uppercase">{r.bench}</span>
                             {(() => {
-                              const rep = String((s as any).Report ?? (s as any).report ?? (s as any).meta?.Report ?? "").trim();
+                              const rep = String((s as any)?.Report ?? (s as any)?.report ?? (s as any)?.meta?.Report ?? "").trim();
                               return rep && rep.toUpperCase() !== "NO"
                                 ? <span className="font-mono text-[10px] text-pink-400">REP {rep}</span>
                                 : null;
                             })()}
                           </div>
                           <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
-                            {devVal != null && <span>DevSig {devVal.toFixed(2)}</span>}
-                            {bestRate != null && <span className={col.accent}>rate {(bestRate * 100).toFixed(0)}%</span>}
+                            {r.devSig != null && <span>DevSig {r.devSig.toFixed(2)}</span>}
+                            {r.gateRate != null && <span className={col.accent}>rate {(r.gateRate * 100).toFixed(0)}%</span>}
                           </div>
                         </div>
                       );

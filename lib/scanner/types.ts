@@ -11,7 +11,7 @@ export type PaperListMode = "off" | "ignore" | "apply" | "pin";
 
 // "delta" is ALPHA and "gamma" is GAMMA — the names are historical on the first, deliberate on
 // the second. See LivePairUnit for what each divides by.
-export type ZapMode = "off" | "zap" | "sigma" | "delta" | "gamma";
+export type ZapMode = "off" | "zap" | "sigma" | "delta" | "gamma" | "alpha";
 
 export type SortDir = "asc" | "desc";
 
@@ -32,7 +32,9 @@ export type EpisodeSortKey =
   | "closeMode"
   | "minHold";
 
-export type PaperArbMetric = "SigmaZap" | "ZapPct";
+// GammaZap / AlphaZap divide the percentage reading by the ticker's own published constant.
+// The tape has no column for either; the bridge supplies the divisors with the run.
+export type PaperArbMetric = "SigmaZap" | "ZapPct" | "GammaZap" | "AlphaZap";
 
 export type PaperArbSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT" | "GLOB";
 

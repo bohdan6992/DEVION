@@ -35,6 +35,12 @@ export type StreamLogEntry = {
   sigmaZap: number | null;
   zapSsigma: number | null;   // normalized short sigma
   zapLsigma: number | null;   // normalized long sigma
+  // The same two readings divided by the ticker's GAMMA and ALPHA instead of its sigma.
+  // Optional: an older log entry simply has none, and the column shows a dash.
+  zapSgamma?: number | null;
+  zapLgamma?: number | null;
+  zapSalpha?: number | null;
+  zapLalpha?: number | null;
   // ZAP in % (raw pct, not sigma)
   zapPct: number | null;
   // Stock bid/ask vs last close %
@@ -265,7 +271,8 @@ const CSV_HEADERS = [
   "intentId", "isHedge", "latchBounces", "latchOrigin", "exitSigmaAbs",
   "event", "status", "betaMode", "session", "ruleBand", "signalClass", "ratingMode", "ratingType",
   "ticker", "bench", "side",
-  "sigmaZap", "sigmaAbs", "zapSsigma", "zapLsigma", "zapPct",
+  "sigmaZap", "sigmaAbs", "zapSsigma", "zapLsigma",
+  "zapSgamma", "zapLgamma", "zapSalpha", "zapLalpha", "zapPct",
   "bidPct", "askPct", "benchBidPct", "benchAskPct",
   "corr", "beta", "stockSigma", "rating", "ratingTotal",
   "filtersOk",
@@ -346,6 +353,10 @@ export function streamLogToCsv(entries: StreamLogEntry[]): string {
       e.sigmaZap != null ? Math.abs(e.sigmaZap).toFixed(4) : "",
       fmt4(e.zapSsigma),
       fmt4(e.zapLsigma),
+      fmt4(e.zapSgamma ?? null),
+      fmt4(e.zapLgamma ?? null),
+      fmt4(e.zapSalpha ?? null),
+      fmt4(e.zapLalpha ?? null),
       fmt4(e.zapPct),
       fmt4(e.bidPct),
       fmt4(e.askPct),

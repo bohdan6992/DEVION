@@ -37,6 +37,13 @@ export type ArbitrageSignal = {
   zapSsigma?: number | null;
   zapL?: number | null;
   zapLsigma?: number | null;
+  /** The same deviation divided by the ticker's GAMMA instead of its sigma. Null when the
+   *  ticker has no gamma - 41% of them have none, and that is an answer, not missing data. */
+  zapSgamma?: number | null;
+  zapLgamma?: number | null;
+  /** And divided by the ticker's ALPHA. Not the print-median delta - a different quantity. */
+  zapSalpha?: number | null;
+  zapLalpha?: number | null;
 
   shortCandidate?: boolean;
   longCandidate?: boolean;
@@ -341,6 +348,10 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
 
   const zapSsigma = toNum(raw.zapSsigma ?? meta?.zapSsigma);
   const zapLsigma = toNum(raw.zapLsigma ?? meta?.zapLsigma);
+  const zapSgamma = toNum(raw.zapSgamma ?? meta?.zapSgamma);
+  const zapLgamma = toNum(raw.zapLgamma ?? meta?.zapLgamma);
+  const zapSalpha = toNum(raw.zapSalpha ?? meta?.zapSalpha);
+  const zapLalpha = toNum(raw.zapLalpha ?? meta?.zapLalpha);
 
   const best = raw?.best ?? raw?.Best ?? null;
 
@@ -425,8 +436,12 @@ export function normalizeSignal(raw: any): ArbitrageSignal | null {
     sig,
     zapS,
     zapSsigma,
+    zapSgamma,
+    zapSalpha,
     zapL,
     zapLsigma,
+    zapLgamma,
+    zapLalpha,
     shortCandidate,
     longCandidate,
     kind,

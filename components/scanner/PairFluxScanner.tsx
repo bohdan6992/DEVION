@@ -25,6 +25,7 @@ import { subscribeToStreamSse } from "../stream/streamSseHub";
 import { buildSignalsStreamUrl } from "@/lib/signals/url";
 import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "@/lib/pairflux/client";
 import { buildQuoteIndex, computeLivePairs, pairExitDeviation, type LivePairUnit } from "@/lib/pairflux/livePairs";
+import { pushPairFluxLiveParams, toPairFluxLiveParams } from "@/lib/pairflux/liveParamsClient";
 import { buildPairFluxGateMap, expandPairFluxSignal, matchPairFluxGate, pairFluxLegsFor, pairKeyOf } from "@/lib/pairflux/gate";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, type StreamPosition, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
@@ -2562,6 +2563,56 @@ export default function PairFluxScanner({
     startCutoffTime,
     preStartTime,
     entryStopTime,
+  ]);
+
+  /**
+   * The toolbar, to the bridge — PairFlux's own server-side home for the pair-spread entry rule.
+   *
+   * Same debounce and hydration guard as Arbitrage's own push: every keystroke in a threshold
+   * field would otherwise be its own PUT, and pushing before the saved filters are restored would
+   * overwrite the operator's own settings with whatever the page's defaults happened to render
+   * first. It still fires once on mount (once hydrated), or a bridge nobody has pushed to keeps
+   * running on inert defaults — a floor of 0 and no exit level — until somebody touches a control.
+   */
+  useEffect(() => {
+    if (!filtersHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushPairFluxLiveParams(toPairFluxLiveParams({
+        automation: effectiveStreamAutomationConfig,
+        session,
+        unit: devUnit,
+        minDeviation: startAbs,
+        maxDeviation: startAbsMax,
+        exitAt: endAbs,
+        minRate: streamRatingRule.minRate,
+        minTotal: streamRatingRule.minTotal,
+        corr: [minCorr, maxCorr],
+        beta: [minBeta, maxBeta],
+        sigma: [minSigma, maxSigma],
+        alpha: [minAlpha, maxAlpha],
+        sonar: streamExactSonarFilterSnapshot,
+        source: "pairflux-scanner",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    effectiveStreamAutomationConfig,
+    session,
+    devUnit,
+    startAbs,
+    startAbsMax,
+    endAbs,
+    streamRatingRule.minRate,
+    streamRatingRule.minTotal,
+    minCorr,
+    maxCorr,
+    minBeta,
+    maxBeta,
+    minSigma,
+    maxSigma,
+    minAlpha,
+    maxAlpha,
+    streamExactSonarFilterSnapshot,
   ]);
 
   const streamTrackedSignalsEnabled =

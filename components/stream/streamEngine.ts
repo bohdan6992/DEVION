@@ -405,7 +405,9 @@ export type StreamFilterBuilderArgs = {
     sectors: string[];
   };
   reportMode: "YES" | "NO" | "ALL";
-  zapMode: "sigma" | "zap";
+  /** "off" leaves the zap gate out of the V1 config entirely — the caller's threshold is in a unit
+   *  this engine cannot read (gamma, alpha), so it must not cut on the raw column instead. */
+  zapMode: "sigma" | "zap" | "off";
   zapThresholdAbs: number;
 };
 
@@ -1377,12 +1379,24 @@ export function buildStreamFilterConfig(args: StreamFilterBuilderArgs): Arbitrag
   };
 }
 
+/** Gamma and alpha are the same percentage reading as ZapPct, divided by a per-ticker constant
+ *  the bridge publishes with the signal. A ticker without that constant has no reading here. */
+/** The sonar filter snapshot names the reading, not the metric; they differ only in spelling. */
+function _zapModeForMetric(m: StreamDecisionMetric): "sigma" | "zap" | "gamma" | "alpha" {
+  if (m === "SigmaZap") return "sigma";
+  if (m === "GammaZap") return "gamma";
+  if (m === "AlphaZap") return "alpha";
+  return "zap";
+}
+
+export type StreamDecisionMetric = "SigmaZap" | "ZapPct" | "GammaZap" | "AlphaZap";
+
 export function computeStreamDecisionRows(
   signals: ArbitrageSignal[],
   maxSpreadValue: unknown,
   automationConfig?: StreamAutomationConfig,
   bookSnapshot?: MarketMakerBookSnapshot | null,
-  metric: "SigmaZap" | "ZapPct" = "SigmaZap",
+  metric: StreamDecisionMetric = "SigmaZap",
   decisionOverride?: StreamDecisionOverride
 ): StreamDecisionRow[] {
   const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
@@ -1397,7 +1411,11 @@ export function computeStreamDecisionRows(
       ? override.signal
       : metric === "SigmaZap"
         ? (side === "Long" ? toNum(row.zapLsigma) : toNum(row.zapSsigma))
-        : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
+        : metric === "GammaZap"
+          ? (side === "Long" ? toNum(row.zapLgamma) : toNum(row.zapSgamma))
+          : metric === "AlphaZap"
+            ? (side === "Long" ? toNum(row.zapLalpha) : toNum(row.zapSalpha))
+            : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
     if (signal == null) return []; // no data for this mode/direction → not a candidate
     const bid = toNum(row.Bid ?? row.bidStock ?? row.bid);
     const ask = toNum(row.Ask ?? row.askStock ?? row.ask);
@@ -2907,7 +2925,7 @@ type UseStreamEngineArgs = {
   signalClass: string;
   ruleBand?: string | null;
   ratingType: string | null | undefined;
-  metric: "SigmaZap" | "ZapPct";
+  metric: StreamDecisionMetric;
   ratingRule: { minRate: number; minTotal: number };
   startAbs?: number | null;
   startAbsMax?: number | null;
@@ -3364,7 +3382,7 @@ export function useStreamEngine({
     type: (ratingType ?? "any") as any,
     mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
     ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-    zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
+    zapMode: (exactSonarFilterSnapshot?.zapMode ?? _zapModeForMetric(metric)) as any,
     minRate: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minRate ?? ratingMinRate ?? ratingRule.minRate),
     minTotal: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minTotal ?? ratingMinTotal ?? ratingRule.minTotal),
     // Active mode: lower server threshold to endAbs so decaying signals (sigma in [endAbs, startAbs)) are returned.
@@ -3417,7 +3435,7 @@ export function useStreamEngine({
       type: (ratingType ?? "any") as any,
       mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
       ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-      zapMode: (exactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
+      zapMode: (exactSonarFilterSnapshot?.zapMode ?? _zapModeForMetric(metric)) as any,
       minRate: 0,
       minTotal: 1,
       tickers: activeTrackedTickers.join(","),
@@ -4471,6 +4489,10 @@ export function useStreamEngine({
         signal: decision.signal,
         zapLsigma: toNum(sig?.zapLsigma) ?? null,
         zapSsigma: toNum(sig?.zapSsigma) ?? null,
+        zapLgamma: toNum(sig?.zapLgamma) ?? null,
+        zapSgamma: toNum(sig?.zapSgamma) ?? null,
+        zapLalpha: toNum(sig?.zapLalpha) ?? null,
+        zapSalpha: toNum(sig?.zapSalpha) ?? null,
         zapL: toNum(sig?.zapL) ?? null,
         zapS: toNum(sig?.zapS) ?? null,
         spread: decision.spread,
@@ -5543,6 +5565,10 @@ export function useStreamEngine({
               : (toNum(_rawSig?.zapSsigma) ?? correspondingDecision?.signal ?? null),
             zapSsigma: _rawSig?.zapSsigma ?? null,
             zapLsigma: _rawSig?.zapLsigma ?? null,
+            zapSgamma: _rawSig?.zapSgamma ?? null,
+            zapLgamma: _rawSig?.zapLgamma ?? null,
+            zapSalpha: _rawSig?.zapSalpha ?? null,
+            zapLalpha: _rawSig?.zapLalpha ?? null,
             zapPct: _rawSig ? (_isLong ? (_rawSig.zapL ?? null) : (_rawSig.zapS ?? null)) : null,
             bidPct: _rawSig ? toNum(_rawSig["BidLstClsΔ%"]) : null,
             askPct: _rawSig ? toNum(_rawSig["AskLstClsΔ%"]) : null,
@@ -5792,6 +5818,10 @@ export function useStreamEngine({
               sigmaZap: hedgeIsLong ? (toNum(hedgeRaw?.zapLsigma) ?? null) : (toNum(hedgeRaw?.zapSsigma) ?? null),
               zapSsigma: toNum(hedgeRaw?.zapSsigma) ?? null,
               zapLsigma: toNum(hedgeRaw?.zapLsigma) ?? null,
+              zapSgamma: toNum(hedgeRaw?.zapSgamma) ?? null,
+              zapLgamma: toNum(hedgeRaw?.zapLgamma) ?? null,
+              zapSalpha: toNum(hedgeRaw?.zapSalpha) ?? null,
+              zapLalpha: toNum(hedgeRaw?.zapLalpha) ?? null,
               zapPct: hedgeRaw ? (hedgeIsLong ? (hedgeRaw.zapL ?? null) : (hedgeRaw.zapS ?? null)) : null,
               bidPct: hedgeRaw ? toNum(hedgeRaw["BidLstClsΔ%"]) : null,
               askPct: hedgeRaw ? toNum(hedgeRaw["AskLstClsΔ%"]) : null,

@@ -92,6 +92,13 @@ import {
 } from "@/lib/signals/signal";
 import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
 import { getLiveStrategy } from "@/lib/strategies/registry";
+import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import {
+  fetchArbitrageSonarSnapshot,
+  pushArbitrageSonarLiveParams,
+  toArbitrageSonarLiveParams,
+  type SonarSignalRow,
+} from "@/lib/sonar/arbitrageSnapshotClient";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
 const SONAR_NAV = getLiveStrategy("arbitrage")!.nav;
@@ -389,7 +396,7 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
 
 const getSignalMetricAbs = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off"
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off"
 ): number | null => {
   if (zapMode === "off") return null;
   const dir = s.direction;
@@ -399,9 +406,17 @@ const getSignalMetricAbs = (
       ? dir === "down"
         ? toNum(s.zapS)
         : toNum(s.zapL)
-      : dir === "down"
-        ? toNum(s.zapSsigma)
-        : toNum(s.zapLsigma);
+      : zapMode === "gamma"
+        ? dir === "down"
+          ? toNum(s.zapSgamma)
+          : toNum(s.zapLgamma)
+        : zapMode === "alpha"
+        ? dir === "down"
+          ? toNum(s.zapSalpha)
+          : toNum(s.zapLalpha)
+        : dir === "down"
+          ? toNum(s.zapSsigma)
+          : toNum(s.zapLsigma);
   return raw == null ? null : Math.abs(raw);
 };
 
@@ -429,7 +444,7 @@ const hasTodayReport = (s: ArbitrageSignal): boolean => rowReportAffectsTodaySes
 
 const isSignalGoldActive = (
   s: ArbitrageSignal,
-  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off",
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off",
   zapGoldAbs: number
 ): boolean => {
   const absM = getSignalMetricAbs(s, zapMode);
@@ -1327,7 +1342,7 @@ interface SignalCardProps {
   flashClass: (ticker: string, side: "short" | "long") => string;
   compact?: boolean;
 
-  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off";
   zapShowAbs: number;    // NEW
   zapSilverAbs: number;  // NEW
   zapGoldAbs: number;    // NEW (only ACTIVE)
@@ -1360,8 +1375,13 @@ const SignalCard: React.FC<SignalCardProps> = ({
   const z = isShort ? toNum(s.zapS) : toNum(s.zapL);
   const zs = isShort ? toNum(s.zapSsigma) : toNum(s.zapLsigma);
 
+  const zg = isShort ? toNum(s.zapSgamma) : toNum(s.zapLgamma);
+  const za = isShort ? toNum(s.zapSalpha) : toNum(s.zapLalpha);
+
   const metric =
     zapMode === "zap" ? z :
+    zapMode === "gamma" ? zg :
+    zapMode === "alpha" ? za :
     zapMode === "sigma" || zapMode === "delta" ? zs :
     null;
 
@@ -1377,7 +1397,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
   const deltaBase = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
   const minShowAbs = zapMode === "delta"
     ? deltaBase + Math.max(0.05, Number(zapShowAbs ?? 0))
-    : Math.max(zapMode === "sigma" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
+    : Math.max(zapMode === "sigma" || zapMode === "gamma" || zapMode === "alpha" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
 
   const isBelowShow =
     !posActive &&
@@ -1652,7 +1672,7 @@ export type SonarExactFilterSnapshot = {
   betaMax: string;
   sigmaMin: string;
   sigmaMax: string;
-  zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
+  zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
   zapGoldAbs: number;
@@ -1954,6 +1974,17 @@ export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExa
             const v = toNum(s.zapL);
             if (v == null || v > -zapThr) continue;
           }
+        } else if (f.zapMode === "alpha") {
+          // Same rule as gamma: no alpha means no divisor, so the ticker leaves the list.
+          const v = isShort ? toNum(s.zapSalpha) : toNum(s.zapLalpha);
+          if (v == null) continue;
+          if (isShort ? v < zapThr : v > -zapThr) continue;
+        } else if (f.zapMode === "gamma") {
+          // No gamma means no divisor, so the reading does not exist. Your call: such tickers
+          // are hidden in this mode rather than shown unfiltered.
+          const v = isShort ? toNum(s.zapSgamma) : toNum(s.zapLgamma);
+          if (v == null) continue;
+          if (isShort ? v < zapThr : v > -zapThr) continue;
         } else if (f.zapMode === "delta") {
           const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
           const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
@@ -2528,7 +2559,7 @@ export default function ArbitrageSonar() {
 
   const [bpCls, setBpCls] = useState<ArbClass>("global");
 
-  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "gamma" | "off">("zap");
+  const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "gamma" | "alpha" | "off">("zap");
 
   // 3 inputs:
   // 1) filter/display threshold (single, depends on zapMode)
@@ -2985,7 +3016,7 @@ export default function ArbitrageSonar() {
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
         // zap/sort
-        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "off") setZapMode(s.zapMode);
+        if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "gamma" || s?.zapMode === "alpha" || s?.zapMode === "off") setZapMode(s.zapMode);
         if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
         if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
         if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
@@ -3767,6 +3798,46 @@ export default function ArbitrageSonar() {
     filtersRef.current = snapshot;
   }, [snapshot]);
 
+  /**
+   * The toolbar, to the bridge — same debounce/hydration-guard pattern the Stream tabs already use
+   * (lib/arbitrage/liveParamsClient.ts). Sonar's toolbar was never pushed anywhere before this.
+   */
+  useEffect(() => {
+    if (!uiHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushArbitrageSonarLiveParams(toArbitrageSonarLiveParams({
+        snapshot,
+        source: "arbitrage-sonar",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [snapshot]);
+
+  /**
+   * What the bridge's ArbitrageSonarSnapshotService approved this poll — a set of (ticker, side)
+   * keys, not full rows. The panel still renders full-fidelity ArbitrageSignal objects (allItems,
+   * from the existing live feed below) for SignalDetailPanel's ~30 extra fields; only the FILTER
+   * DECISION moves to the backend, which is the actual "activity moved to the backend" change here.
+   */
+  const [sonarApprovedKeys, setSonarApprovedKeys] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const unsubscribe = subscribeSharedPoll("sonar-arbitrage-snapshot", fetchArbitrageSonarSnapshot, 6_000, (value, err) => {
+      if (!alive) return;
+      if (err) return; // keep the last approved set rather than blanking the panel on one bad poll
+      if (value?.timedOut) {
+        // Empty rows here mean "the bridge's own fetch timed out", not "nothing passed" — the
+        // existing feed-disconnect banner already says exactly this, so it is reused rather than
+        // inventing a second one.
+        setError("Bridge fetch timed out — no live feed reachable. Values below are the last received snapshot.");
+        return;
+      }
+      const rows: SonarSignalRow[] = value?.rows ?? [];
+      setSonarApprovedKeys(new Set(rows.map((r) => `${r.ticker.toUpperCase()}|${r.side}`)));
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
   /* =========================
      Filters (fast single-pass)
   ========================= */
@@ -3777,9 +3848,10 @@ export default function ArbitrageSonar() {
     return true;
   };
 
-  const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
-    return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
-  }, []);
+  // Filtering itself now happens server-side (ArbitrageSonarSnapshotService) — see
+  // sonarApprovedKeys below, which the live feed's rows are intersected against instead of being
+  // run through applyExactSonarClientFilters (still exported above; kept, not removed, since it
+  // is this module's public export and nothing here can rule out an external caller).
   const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
 
@@ -3792,7 +3864,7 @@ export default function ArbitrageSonar() {
     // GAMMA is a PairFlux-only scale and the server has no such rating mode, so it travels as
     // "zap". That loses nothing: the server's zapMode only picks which per-ticker rating bins
     // to read, and gamma divides a PAIR spread — a quantity the signals endpoint never sees.
-    zapMode: snapshot.zapMode === "gamma" ? "zap" : snapshot.zapMode,
+    zapMode: (snapshot.zapMode === "gamma" || snapshot.zapMode === "alpha") ? "zap" : snapshot.zapMode,
     minRate: snapshot.minRate,
     minTotal: snapshot.minTotal,
     tickers: snapshot.tickersFilterNorm || undefined,
@@ -3853,14 +3925,21 @@ export default function ArbitrageSonar() {
     });
   }, [streamReconnectVersion, streamSignalsUrl]);
 
-  // Re-apply client filters immediately on any local filter change.
+  // The filter decision now comes from the bridge (sonarApprovedKeys, polled above) — this only
+  // intersects it with the live feed's full-fidelity rows. `null` (no poll landed yet) keeps the
+  // panel showing nothing rather than a stale, un-filtered flash of the whole universe.
   useEffect(() => {
     if (isEditingRef.current) return;
-    const filtered = applyAllClientFilters(allItems, snapshot);
+    const filtered = sonarApprovedKeys == null
+      ? []
+      : allItems.filter((s) => {
+          const side = s.direction === "down" ? "Short" : "Long";
+          return sonarApprovedKeys.has(`${String(s.ticker ?? "").toUpperCase()}|${side}`);
+        });
     startTransition(() => {
       setItems(filtered);
     });
-  }, [allItems, snapshot, applyAllClientFilters, isEditing]);
+  }, [allItems, sonarApprovedKeys, isEditing]);
 
   /* =========================
     Flash Logic (stable, cleanup-safe)
@@ -4954,6 +5033,34 @@ export default function ArbitrageSonar() {
                 title="Use sigma threshold above direction-specific median print plus the first input delta"
               >
                 <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setZapMode((m) => (m === "gamma" ? "off" : "gamma"))}
+                className={[
+                  `${SONAR_FILTER_INNER_PILL} gap-1`,
+                  zapMode === "gamma"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+                ].join(" ")}
+                title="Deviation in GAMMAS - the ticker's PRE reversal level. Measured on the pre-market but applied all session; tickers without a gamma are hidden in this mode."
+              >
+                <span className="leading-none" style={{ textTransform: "none" }}>γ ZAP</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setZapMode((m) => (m === "alpha" ? "off" : "alpha"))}
+                className={[
+                  `${SONAR_FILTER_INNER_PILL} gap-1`,
+                  zapMode === "alpha"
+                    ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+                ].join(" ")}
+                title="Deviation in ALPHAS - the level this ticker reaches both often and far. Not the same as Δ ZAP, which divides by the five-day median print. Tickers without an alpha are hidden in this mode."
+              >
+                <span className="leading-none" style={{ textTransform: "none" }}>α ZAP</span>
               </button>
 
               {/* 1) show/filter threshold (single) */}

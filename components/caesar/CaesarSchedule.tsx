@@ -42,6 +42,7 @@ import type {
 // CaesarRunners; the shared store registry lets this chart observe them without another wrapper.
 const CaesarCharts = dynamic(() => import("./CaesarCharts"), { ssr: false });
 const CaesarPositions = dynamic(() => import("./CaesarPositions"), { ssr: false });
+const CaesarBridgeDecisions = dynamic(() => import("./CaesarBridgeDecisions"), { ssr: false });
 
 // =========================
 // HELPERS
@@ -373,6 +374,7 @@ export default function CaesarSchedule() {
               instances={chartInstances}
             />
             <CaesarPositions instances={positionInstances} />
+            <CaesarBridgeDecisions />
 
             {/*
               OUTSIDE THE TIMELINE'S FRAME, ON THE PAGE ITSELF.

@@ -130,6 +130,11 @@ export default function PairFluxDivergence({
   betaRange,
   sigmaRange,
   alphaRange,
+  // When set, this REPLACES the internal computeLivePairs call — the bridge's own
+  // PairFluxSonarSnapshotService already computed the same thing server-side (identical math,
+  // ported and tested). `pairs`/`quoteByTicker` are still built locally either way: they back the
+  // header's "how many pairs were lost to exactly one leg" coverage count, not the divergence math.
+  rowsOverride,
 }: {
   signals: ArbitrageSignal[];
   cls: PairFluxClass;
@@ -141,6 +146,7 @@ export default function PairFluxDivergence({
   betaRange: readonly [string, string];
   sigmaRange: readonly [string, string];
   alphaRange: readonly [string, string];
+  rowsOverride?: LivePair[] | null;
 }) {
   const [open, setOpen] = useState(true);
   const [pairs, setPairs] = useState<PairFluxRow[]>([]);
@@ -175,7 +181,7 @@ export default function PairFluxDivergence({
   const [sigmaLo, sigmaHi] = sigmaRange;
   const [alphaLo, alphaHi] = alphaRange;
 
-  const rows = useMemo<LivePair[]>(
+  const computedRows = useMemo<LivePair[]>(
     () => computeLivePairs({
       pairs,
       quoteByTicker,
@@ -190,6 +196,7 @@ export default function PairFluxDivergence({
     }),
     [pairs, quoteByTicker, zapMode, zapMin, zapMax, zapExit, corrRange, betaRange, sigmaRange, alphaRange],
   );
+  const rows = rowsOverride ?? computedRows;
 
   /**
    * Benchmark columns, each split into the Sonar's beta buckets. Nothing is capped — the toolbar

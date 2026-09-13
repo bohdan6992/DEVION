@@ -22,6 +22,7 @@ import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
+import { pushArbitrageLiveParams, toArbitrageLiveParams } from "../../lib/arbitrage/liveParamsClient";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
@@ -77,6 +78,17 @@ const STRATEGY = defineScannerStrategy({
   // single stack-vs-bench deviation (OpenFade, OpenDoor), and would be empty dropdowns here.
   excludeScopeParameters: ["entryDevSig", "entryDevPct"],
 });
+
+// The ZAP unit pills, one row of the toolbar. They are a RADIO over the metric plus an on/off for
+// the threshold inputs, which is why they used to fight each other: five hand-copied handlers, and
+// three of them reset the metric to SigmaZap on their way out. One table, one handler.
+const ZAP_UNITS: { mode: Exclude<ZapMode, "off">; metric: PaperArbMetric; label: string; title: string }[] = [
+  { mode: "zap", metric: "ZapPct", label: "% ZAP", title: "Thresholds in PERCENT — the raw deviation off the tape." },
+  { mode: "sigma", metric: "SigmaZap", label: "σ ZAP", title: "Thresholds in SIGMAS — the ticker's own dispersion." },
+  { mode: "delta", metric: "SigmaZap", label: "Δ ZAP", title: "Require start sigma to be above direction-specific print median plus the first input delta" },
+  { mode: "gamma", metric: "GammaZap", label: "γ ZAP", title: "Thresholds in GAMMAS — the ticker's PRE reversal level. Tickers with no gamma produce no signal in this metric." },
+  { mode: "alpha", metric: "AlphaZap", label: "α ZAP", title: "Thresholds in ALPHAS — the level the ticker reaches often and far. Not Δ ZAP, which uses the five-day median print." },
+];
 
 // =========================
 // MAIN PAGE
@@ -1270,7 +1282,7 @@ export default function ArbitrageScanner({
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
         if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
-        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta") setZapMode(s.zapMode);
+        if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta" || s.zapMode === "gamma" || s.zapMode === "alpha") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
         if (s.dateMode === "day" || s.dateMode === "last" || s.dateMode === "range") setDateMode(s.dateMode);
@@ -1287,7 +1299,7 @@ export default function ArbitrageScanner({
             setInternalRuleBand(restoredBand);
           }
         }
-        if (s.metric === "SigmaZap" || s.metric === "ZapPct") setMetric(s.metric);
+        if (s.metric === "SigmaZap" || s.metric === "ZapPct" || s.metric === "GammaZap" || s.metric === "AlphaZap") setMetric(s.metric);
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
         if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
         if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
@@ -2082,7 +2094,10 @@ export default function ArbitrageScanner({
         sectors,
       },
       reportMode: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
-      zapMode: metric === "SigmaZap" ? "sigma" : "zap",
+      // The V1 filter engine reads only the raw Zap and SigmaZap columns. Under gamma/alpha the
+      // threshold is in a unit it cannot compute, so this pre-filter stands down rather than cut on
+      // the wrong scale — the reading is applied where it is known, in the stream decision rows.
+      zapMode: metric === "SigmaZap" ? "sigma" : metric === "ZapPct" ? "zap" : "off",
       zapThresholdAbs: startAbs,
     });
   }, [
@@ -2408,6 +2423,44 @@ export default function ArbitrageScanner({
     preStartTime,
     entryStopTime,
   ]);
+
+  /**
+   * The toolbar, to the bridge.
+   *
+   * Debounced because every keystroke in a threshold field would otherwise be its own PUT, and
+   * guarded by the hydration flag so a pre-restore render cannot push defaults over what the
+   * operator saved. It must still fire ONCE on mount, or a bridge that has never been pushed to
+   * keeps running on its own inert defaults until somebody happens to touch a control — and inert
+   * defaults mean the server engine watches the session and does nothing.
+   */
+  useEffect(() => {
+    if (!filtersHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushArbitrageLiveParams(toArbitrageLiveParams({
+        automation: effectiveStreamAutomationConfig,
+        filters: streamFilterConfig,
+        sonar: streamExactSonarFilterSnapshot,
+        maxSpread,
+        addMaxDeviation: startAbsMax,
+        signalsClass: streamSignalClass,
+        signalsType: ratingType,
+        signalsMinRate: streamRatingRule.minRate,
+        signalsMinTotal: streamRatingRule.minTotal,
+        source: "arbitrage-scanner",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    effectiveStreamAutomationConfig,
+    streamFilterConfig,
+    streamExactSonarFilterSnapshot,
+    maxSpread,
+    startAbsMax,
+    streamSignalClass,
+    ratingType,
+    streamRatingRule,
+  ]);
+
 
   const streamTrackedSignalsEnabled =
     !isStreamOnlyShell ||
@@ -5153,10 +5206,17 @@ export default function ArbitrageScanner({
     });
   };
 
+  // Keeps the lit pill honest when the METRIC is changed by something other than a pill — a
+  // restored snapshot, a preset. It used to read "ZapPct -> zap, everything else -> sigma", which
+  // was true while there were two metrics and became a trap with four: clicking gamma or alpha set
+  // the metric, this fired on the change, and slammed the mode back to sigma. Only the delta pill
+  // was spared, by name. Now the mapping is the pill table, and a mode already agreeing with the
+  // metric is left alone — that is what keeps delta on delta, since delta reads SigmaZap too.
   useEffect(() => {
     setZapMode((prev) => {
-      if (prev === "delta" && metric === "SigmaZap") return "delta";
-      return metric === "ZapPct" ? "zap" : "sigma";
+      if (prev === "off") return prev; // an explicitly dropped gate is not a disagreement
+      if (ZAP_UNITS.find((u) => u.mode === prev)?.metric === metric) return prev;
+      return ZAP_UNITS.find((u) => u.metric === metric)?.mode ?? "sigma";
     });
   }, [metric]);
 
@@ -6128,67 +6188,39 @@ export default function ArbitrageScanner({
               <>
 
               <div className={`ml-auto ${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (zapMode === "zap") {
-                      setZapMode("off");
-                      setMetric("SigmaZap");
-                    } else {
-                      setZapMode("zap");
-                      setMetric("ZapPct");
-                    }
-                  }}
-                  className={clsx(
-                    `${FILTER_PILL} gap-1`,
-                    zapMode === "zap"
-                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                  )}
-                >
-                  <span className="leading-none" style={{ textTransform: "none" }}>% ZAP</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (zapMode === "sigma") {
-                      setZapMode("off");
-                    } else {
-                      setZapMode("sigma");
-                      setMetric("SigmaZap");
-                    }
-                  }}
-                  className={clsx(
-                    `${FILTER_PILL} gap-1`,
-                    zapMode === "sigma"
-                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                  )}
-                >
-                  <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (zapMode === "delta") {
-                      setZapMode("off");
-                    } else {
-                      setZapMode("delta");
-                      setMetric("SigmaZap");
-                    }
-                  }}
-                  className={clsx(
-                    `${FILTER_PILL} gap-1`,
-                    zapMode === "delta"
-                      ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                      : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                  )}
-                  title="Require start sigma to be above direction-specific print median plus the first input delta"
-                >
-                  <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
-                </button>
+                {ZAP_UNITS.map((u) => {
+                  const on = zapMode === u.mode;
+                  // The unit the RUN is in, even while the gate is off — otherwise turning the gate
+                  // off leaves the backtest reading gammas with nothing on screen saying so.
+                  // Delta is excluded: it shares SigmaZap with the sigma pill, so marking both
+                  // would ring two buttons for one unit. Delta is a gate on top of sigma, not a
+                  // unit of its own.
+                  const carries = !on && zapMode === "off" && metric === u.metric && u.mode !== "delta";
+                  return (
+                    <button
+                      key={u.mode}
+                      type="button"
+                      onClick={() => {
+                        // Pressing the lit one only drops the gate; it must NEVER rewrite the
+                        // metric, which is what made every other button spring back to sigma.
+                        if (on) { setZapMode("off"); return; }
+                        setZapMode(u.mode);
+                        setMetric(u.metric);
+                      }}
+                      className={clsx(
+                        `${FILTER_PILL} gap-1`,
+                        on
+                          ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                          : carries
+                            ? "bg-transparent border-violet-400/60 text-violet-200"
+                            : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
+                      )}
+                      title={u.title}
+                    >
+                      <span className="leading-none" style={{ textTransform: "none" }}>{u.label}</span>
+                    </button>
+                  );
+                })}
 
                 <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
                   <input

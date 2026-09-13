@@ -93,6 +93,19 @@ import {
 import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import PairFluxDivergence from "@/components/pairflux/PairFluxDivergence";
+import type { LivePair } from "@/lib/pairflux/livePairs";
+import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import {
+  fetchArbitrageSonarSnapshot,
+  pushArbitrageSonarLiveParams,
+  toArbitrageSonarLiveParams,
+  type SonarSignalRow,
+} from "@/lib/sonar/arbitrageSnapshotClient";
+import {
+  fetchPairFluxSonarSnapshot,
+  pushPairFluxSonarLiveParams,
+  toPairFluxSonarLiveParams,
+} from "@/lib/sonar/pairfluxSnapshotClient";
 import type { PairFluxClass } from "@/lib/pairflux/client";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
@@ -3803,6 +3816,83 @@ export default function PairFluxSonar() {
     filtersRef.current = snapshot;
   }, [snapshot]);
 
+  /**
+   * The bucket grid's toolbar, to the bridge — same push as ArbitrageSonar's, reused as-is since
+   * the bucket grid here is the identical Arbitrage-shaped screen (corr/beta/sigma already blanked
+   * in `snapshot` for this path, see its own comment above).
+   */
+  useEffect(() => {
+    if (!uiHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushArbitrageSonarLiveParams(toArbitrageSonarLiveParams({
+        snapshot,
+        source: "pairflux-sonar-grid",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [snapshot]);
+
+  /** Same window as ArbitrageSonar's — the bucket grid's own approved (ticker, side) set. */
+  const [sonarApprovedKeys, setSonarApprovedKeys] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const unsubscribe = subscribeSharedPoll("sonar-pairflux-grid-snapshot", fetchArbitrageSonarSnapshot, 6_000, (value, err) => {
+      if (!alive) return;
+      if (err) return;
+      if (value?.timedOut) {
+        setError("Bridge fetch timed out — no live feed reachable. Values below are the last received snapshot.");
+        return;
+      }
+      const rows: SonarSignalRow[] = value?.rows ?? [];
+      setSonarApprovedKeys(new Set(rows.map((r) => `${r.ticker.toUpperCase()}|${r.side}`)));
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  /**
+   * PairFluxDivergence's own toolbar (cls/unit/min/max/exit/corr/beta/sigma/alpha) — genuinely
+   * separate params from the bucket grid's above, since PairFluxDivergence reads a PAIR's own
+   * stats, not a per-ticker one. No rating floor here: fetchPairFluxRatings/computeLivePairs are
+   * called today with no minRate/minTotal at all in this panel, faithfully carried forward as 0/0
+   * rather than inventing a floor the toolbar has no control for.
+   */
+  useEffect(() => {
+    if (!uiHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushPairFluxSonarLiveParams(toPairFluxSonarLiveParams({
+        cls: pfCls,
+        unit: pfZapMode,
+        minDeviation: pfZapMin,
+        maxDeviation: pfZapMax,
+        exitAt: pfZapExit,
+        minRate: 0,
+        minTotal: 0,
+        corr: [corrMin, corrMax],
+        beta: [betaMin, betaMax],
+        sigma: [sigmaMin, sigmaMax],
+        alpha: [alphaMin, alphaMax],
+        sonar: snapshot as SonarExactFilterSnapshot,
+        source: "pairflux-sonar-divergence",
+      }));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit, corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax, snapshot]);
+
+  const [pairFluxSonarPairs, setPairFluxSonarPairs] = useState<LivePair[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const unsubscribe = subscribeSharedPoll("sonar-pairflux-divergence-snapshot", fetchPairFluxSonarSnapshot, 6_000, (value, err) => {
+      if (!alive) return;
+      if (err) return;
+      if (value?.timedOut) {
+        setError("Bridge fetch timed out — no live feed reachable. Values below are the last received snapshot.");
+        return;
+      }
+      setPairFluxSonarPairs(value?.pairs ?? []);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
   /* =========================
      Filters (fast single-pass)
   ========================= */
@@ -3813,9 +3903,10 @@ export default function PairFluxSonar() {
     return true;
   };
 
-  const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
-    return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
-  }, []);
+  // Filtering itself now happens server-side (ArbitrageSonarSnapshotService, reused for this
+  // bucket grid) — see sonarApprovedKeys above. applyExactSonarClientFilters (still exported
+  // above) is kept, not removed: this module's public export, and nothing here rules out an
+  // external caller.
   const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
 
@@ -3892,14 +3983,21 @@ export default function PairFluxSonar() {
     });
   }, [streamReconnectVersion, streamSignalsUrl]);
 
-  // Re-apply client filters immediately on any local filter change.
+  // The filter decision now comes from the bridge (sonarApprovedKeys, polled above) — this only
+  // intersects it with the live feed's full-fidelity rows, which PairFluxDivergence still needs
+  // for its own quoteByTicker/coverage diagnostics.
   useEffect(() => {
     if (isEditingRef.current) return;
-    const filtered = applyAllClientFilters(allItems, snapshot);
+    const filtered = sonarApprovedKeys == null
+      ? []
+      : allItems.filter((s) => {
+          const side = s.direction === "down" ? "Short" : "Long";
+          return sonarApprovedKeys.has(`${String(s.ticker ?? "").toUpperCase()}|${side}`);
+        });
     startTransition(() => {
       setItems(filtered);
     });
-  }, [allItems, snapshot, applyAllClientFilters, isEditing]);
+  }, [allItems, sonarApprovedKeys, isEditing]);
 
   /* =========================
     Flash Logic (stable, cleanup-safe)
@@ -5599,6 +5697,7 @@ export default function PairFluxSonar() {
             betaRange={[betaMin, betaMax]}
             sigmaRange={[sigmaMin, sigmaMax]}
             alphaRange={[alphaMin, alphaMax]}
+            rowsOverride={pairFluxSonarPairs}
           />
         )}
 

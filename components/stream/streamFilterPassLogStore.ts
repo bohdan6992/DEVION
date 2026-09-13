@@ -19,6 +19,12 @@ export type StreamFilterPassEntry = {
   // Signal metrics at first qualification
   signal: number | null;       // direction-specific sigma (zapLsigma or zapSsigma)
   zapLsigma: number | null;
+  // Same two readings against the ticker's GAMMA and ALPHA. Optional: entries written before
+  // those constants existed simply carry none.
+  zapSgamma?: number | null;
+  zapLgamma?: number | null;
+  zapSalpha?: number | null;
+  zapLalpha?: number | null;
   zapSsigma: number | null;
   zapL: number | null;
   zapS: number | null;

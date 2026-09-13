@@ -1141,6 +1141,10 @@ function computeStreamExitPnl(entries: ReturnType<typeof useStreamLogEntries>, e
 }
 
 export function StreamSimLog() {
+  // Which constant the two ZAP columns are divided by. Sigma is what they always showed, so
+  // it stays the default and nothing moves for anyone who does not touch this.
+  const [zapUnit, setZapUnit] = useState<"sigma" | "gamma" | "alpha">("sigma");
+  const zapUnitMark = zapUnit === "sigma" ? "σ" : zapUnit === "gamma" ? "γ" : "α";
   const entries = useStreamLogEntries();
   const reversed = useMemo(() => [...entries].reverse(), [entries]);
 
@@ -1197,6 +1201,27 @@ export function StreamSimLog() {
           <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Simulation Log</span>
           <span className="text-[10px] font-mono text-zinc-600">{entries.length} entries</span>
         </div>
+        <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
+          {([
+            { k: "sigma", m: "σ", t: "ZAP divided by the ticker's sigma" },
+            { k: "gamma", m: "γ", t: "ZAP divided by the ticker's gamma — its PRE reversal level. Blank when the ticker has none." },
+            { k: "alpha", m: "α", t: "ZAP divided by the ticker's alpha — the level it reaches often and far. Blank when the ticker has none." },
+          ] as const).map((u) => (
+            <button
+              key={u.k}
+              type="button"
+              title={u.t}
+              onClick={() => setZapUnit(u.k)}
+              className={[
+                "rounded-md px-2 py-1 font-mono text-[10px] transition",
+                zapUnit === u.k ? "bg-violet-500 text-white" : "text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
+              ].join(" ")}
+            >
+              {u.m}
+            </button>
+          ))}
+        </div>
+
         <button
           type="button"
           onClick={() => downloadStreamLog(entries)}
@@ -1225,8 +1250,8 @@ export function StreamSimLog() {
               <th className="text-left">Side</th>
               <th className="text-left text-cyan-300">DecisionCtx</th>
               <th className="text-right text-violet-400">σZap</th>
-              <th className="text-right text-violet-300">ZAPL</th>
-              <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right text-violet-300">{`ZAPL ${zapUnitMark}`}</th>
+              <th className="text-right text-violet-300">{`ZAPS ${zapUnitMark}`}</th>
               <th className="text-right text-rose-300" title="Opposite-side σ at EXIT — cover trigger value">ExitσAbs</th>
               <th className="text-right">Tick%</th>
               <th className="text-right">Bench%</th>
@@ -1278,8 +1303,12 @@ export function StreamSimLog() {
                   <td><SideBadge side={e.side} /></td>
                   <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
                   <td className="text-right tabular-nums text-violet-300">{fmt2(e.sigmaZap)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapLsigma)}</td>
-                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapSsigma)}</td>
+                  <td className="text-right tabular-nums text-violet-200">
+                    {fmt2(zapUnit === "sigma" ? e.zapLsigma : zapUnit === "gamma" ? (e.zapLgamma ?? null) : (e.zapLalpha ?? null))}
+                  </td>
+                  <td className="text-right tabular-nums text-violet-200">
+                    {fmt2(zapUnit === "sigma" ? e.zapSsigma : zapUnit === "gamma" ? (e.zapSgamma ?? null) : (e.zapSalpha ?? null))}
+                  </td>
                   <td className={clsx("text-right tabular-nums", isExit && e.exitSigmaAbs != null ? "text-rose-300 font-semibold" : "text-zinc-700")}>{isExit && e.exitSigmaAbs != null ? e.exitSigmaAbs.toFixed(2) : "·"}</td>
                   <td className={clsx("text-right tabular-nums", tickPct != null && tickPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(tickPct)}</td>
                   <td className={clsx("text-right tabular-nums", benchPct != null && benchPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(benchPct)}</td>
