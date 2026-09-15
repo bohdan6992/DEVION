@@ -16,7 +16,11 @@ function safeObj(value: unknown): Record<string, any> | null {
     : null;
 }
 
+/** `Number(null)`/`Number("")` are both `0`, not NaN — guard explicitly so an explicit JSON
+ * null (a nullable C# double serializes that way) or a blank string reads as "absent", not 0. */
 function optNum(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }

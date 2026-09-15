@@ -41,7 +41,15 @@ export type OpenDoorSonarFilterSource = {
 const upper = (values?: Iterable<string> | null): string[] =>
   Array.from(values ?? []).map((v) => String(v).trim().toUpperCase()).filter(Boolean);
 
+/**
+ * `Number(null)` and `Number("")` are BOTH `0` in JS, not NaN — reading either the naive way turns
+ * every untouched bound box into a live `{min:0, max:0}` filter instead of "unset" (see the
+ * identical fix and full explanation in lib/arbitrage/liveParamsClient.ts's own `num`, which fed
+ * exactly this bug into the Arbitrage/PairFlux Sonar cutover).
+ */
 const num = (value: unknown): number | undefined => {
+  if (value == null) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
 };

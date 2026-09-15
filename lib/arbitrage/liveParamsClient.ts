@@ -109,7 +109,16 @@ export type ArbitrageServerSonarFilters = {
 const upper = (values?: Iterable<string> | null): string[] =>
   Array.from(values ?? []).map((v) => String(v).trim().toUpperCase()).filter(Boolean);
 
+/**
+ * `Number(null)` and `Number("")` are BOTH `0` in JS — a finite number, not NaN. Reading either as
+ * "unset" the naive way (`Number.isFinite(n) ? n : null`) instead turns every untouched min/max box
+ * into a live `{min:0, max:0}` bound, rejecting almost every row (a real ticker's Corr/Beta/ADV20/
+ * etc. is essentially never exactly 0). Null/undefined/blank must short-circuit to "unset" BEFORE
+ * the numeric parse, same as the client's own `toNum` in lib/signals/signal.ts.
+ */
 const num = (value: unknown): number | null => {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };

@@ -123,7 +123,10 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
     priority: 100,
     api: { paperBase: "/api/paper/arbitrage", signalsBase: "/api/arbitrage" },
-    streamEngine: "browser",
+    // Flipped from "browser" 2026-09-15: ArbitrageServerStrategy is a real IServerStrategy
+    // (Program.cs) and shadow is off — the bridge decides and dispatches on its own now, so Caesar
+    // no longer needs to mount the full browser engine just to have something to host.
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.arb", sonarPrefix: "bridge.arb", streamPrefix: "stream.arbitrage" },
     ratingClasses: {
       dimension: "SESSION",
@@ -255,7 +258,10 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // directional strategies win the claim instead keeps that case from arising at all.
     priority: 10,
     api: { paperBase: "/api/paper/pairflux", signalsBase: "/api/arbitrage" },
-    streamEngine: "browser",
+    // Flipped from "browser" 2026-09-15: PairFluxServerStrategy is a real IServerStrategy
+    // (Program.cs) and shadow is off — the bridge decides and dispatches on its own now, so Caesar
+    // no longer needs to mount the full browser engine just to have something to host.
+    streamEngine: "bridge",
     storage: { scannerPrefix: "paper.pairflux", sonarPrefix: "bridge.pairflux", streamPrefix: "stream.pairflux" },
     // PairFlux rates a pair per class the notebook cuts (see OriON-strategies/notebooks/
     // PairFlux.ipynb): PRE 21:00-09:30, OPEN 09:00-10:00, INTRA 10:00-16:00. Same

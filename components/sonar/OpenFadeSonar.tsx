@@ -4029,11 +4029,15 @@ export default function OpenFadeSonar() {
   // Sonar's primary OpenFade view. matchOpenDoor is left in place above (not removed), same
   // "public export, do not prune" stance taken for applyExactSonarClientFilters elsewhere in this
   // file.
+  // allItems, not items: the backend already decided which tickers pass (openFadeSonarRows), so
+  // this is purely a display lookup for a ticker already known to qualify — reading the client's
+  // own re-filtered `items` would silently blank the REP badge for any ticker the (now-dead, but
+  // still-computed) client filter chain would itself have excluded.
   const itemsByTicker = useMemo(() => {
     const map = new Map<string, ArbitrageSignal>();
-    for (const s of items) map.set(String(s.ticker ?? "").toUpperCase().trim(), s);
+    for (const s of allItems) map.set(String(s.ticker ?? "").toUpperCase().trim(), s);
     return map;
-  }, [items]);
+  }, [allItems]);
   const openDoorMatchedDown = useMemo(
     () => openFadeSonarRows.filter((r) => r.side === "Short"),
     [openFadeSonarRows]
@@ -4046,7 +4050,11 @@ export default function OpenFadeSonar() {
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
-  const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
+  // Also true from the backend rows directly: benchBlocks (the dead bucket grid) is still built
+  // from the client's own, now-vestigial filter chain, so relying on it alone could show the
+  // "filtered out" empty-state banner ABOVE a real, populated matched list from the bridge.
+  const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0))
+    || openDoorMatchedUp.length > 0 || openDoorMatchedDown.length > 0;
   const rawSignalCount = allItems.length;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
   const filteredOutByClientFilters = !loading && !error && !hasAny && rawSignalCount > 0;

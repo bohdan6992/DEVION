@@ -98,6 +98,7 @@ import {
   pushArbitrageSonarLiveParams,
   toArbitrageSonarLiveParams,
   type SonarSignalRow,
+  type SonarFilterFunnel,
 } from "@/lib/sonar/arbitrageSnapshotClient";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
@@ -3820,6 +3821,9 @@ export default function ArbitrageSonar() {
    * DECISION moves to the backend, which is the actual "activity moved to the backend" change here.
    */
   const [sonarApprovedKeys, setSonarApprovedKeys] = useState<Set<string> | null>(null);
+  // Per-stage rejection counts from the bridge's own filter chain — populated even when it zeroes
+  // everything out, precisely so "0 visible" has an answer besides re-reading every toolbar toggle.
+  const [sonarFunnel, setSonarFunnel] = useState<SonarFilterFunnel | null>(null);
   useEffect(() => {
     let alive = true;
     const unsubscribe = subscribeSharedPoll("sonar-arbitrage-snapshot", fetchArbitrageSonarSnapshot, 6_000, (value, err) => {
@@ -3834,6 +3838,7 @@ export default function ArbitrageSonar() {
       }
       const rows: SonarSignalRow[] = value?.rows ?? [];
       setSonarApprovedKeys(new Set(rows.map((r) => `${r.ticker.toUpperCase()}|${r.side}`)));
+      setSonarFunnel(value?.funnel ?? null);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -4283,6 +4288,9 @@ export default function ArbitrageSonar() {
     if (excludeReport) hints.push("ex REPORT");
     if (excludeETF) hints.push("ex ETF");
     if (excludeCrap) hints.push("ex < $5");
+    if (excludeItb) hints.push("ex ITB");
+    if (excludeHard) hints.push("ex HARD-to-borrow");
+    if (excludeCorr) hints.push(`ex CORR peers ${sectorCorr.excluded.size}`);
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
     if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
@@ -4290,7 +4298,11 @@ export default function ArbitrageSonar() {
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
     if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
-    return hints.slice(0, 8);
+    // BIN/BINS are not ported server-side yet — the Sonar snapshot always rates SESSION-only, a
+    // known gap (see the handoff doc). Surfacing it here so "0 visible" is not mistaken for a bug
+    // when the real cause is a rating mode silently substituted underneath the operator's choice.
+    if (ratingMode !== "SESSION") hints.push(`${ratingMode} requested, served SESSION`);
+    return hints.slice(0, 10);
   }, [
     activeMode,
     applySet.size,
@@ -4304,6 +4316,9 @@ export default function ArbitrageSonar() {
     excludeCrap,
     excludeDividend,
     excludeETF,
+    excludeHard,
+    excludeItb,
+    excludeCorr,
     excludeNews,
     excludePTP,
     excludeReport,
@@ -4316,6 +4331,8 @@ export default function ArbitrageSonar() {
     preMhVolNFMax,
     preMhVolNFMin,
     rangeModes,
+    ratingMode,
+    sectorCorr.excluded,
     sectorEnabled,
     selCountries,
     selExchanges,
@@ -5669,6 +5686,12 @@ export default function ArbitrageSonar() {
                   <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                     raw {rawSignalCount} | visible 0 | filtered {filteredOutSignalCount}
                   </div>
+                  {sonarFunnel && sonarFunnel.raw !== rawSignalCount && (
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-rose-300">
+                      Bridge's own query saw only {sonarFunnel.raw} candidates, not {rawSignalCount} — its saved
+                      class/type/rate/total params are out of sync with what this toolbar shows right now.
+                    </div>
+                  )}
                 </div>
                 <div className="mx-auto max-w-3xl text-[11px] uppercase tracking-[0.16em] text-zinc-500">
                   Current class/type/mode still return data from the bridge, so the active SONAR UI filters or saved preset are hiding all rows.
@@ -5683,6 +5706,37 @@ export default function ArbitrageSonar() {
                         {hint}
                       </span>
                     ))}
+                  </div>
+                )}
+                {sonarFunnel && (
+                  <div className="mx-auto max-w-3xl space-y-1">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">
+                      Bridge's own filter chain — where the {sonarFunnel.raw} candidates actually died
+                    </div>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {([
+                        ["ticker", sonarFunnel.rejectedByTicker],
+                        ["active/inactive", sonarFunnel.rejectedByActivity],
+                        ["ign/apply/pin list", sonarFunnel.rejectedByList],
+                        ["ρ/β/σ/bounds range", sonarFunnel.rejectedByRange],
+                        ["rating floor", sonarFunnel.rejectedByRating],
+                        ["top window", sonarFunnel.rejectedByTopWindow],
+                        ["exclude flags", sonarFunnel.rejectedByExclude],
+                        ["geography", sonarFunnel.rejectedByGeo],
+                        ["report mode", sonarFunnel.rejectedByReport],
+                        ["equity type", sonarFunnel.rejectedByEquityType],
+                        ["zap threshold", sonarFunnel.rejectedByZap],
+                      ] as const)
+                        .filter(([, n]) => n > 0)
+                        .map(([label, n]) => (
+                          <span
+                            key={label}
+                            className="rounded-lg border border-sky-500/20 bg-sky-500/[0.06] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-sky-200"
+                          >
+                            {label}: {n}
+                          </span>
+                        ))}
+                    </div>
                   </div>
                 )}
                 <div className="flex flex-wrap items-center justify-center gap-2">

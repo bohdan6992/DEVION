@@ -102,6 +102,30 @@ export async function heartbeatStreamStrategy(strategyId: string): Promise<{ reg
 }
 
 /**
+ * Whether the SERVER-SIDE engine (ServerEngineControlService) has been given real dispatch
+ * authority for this strategy — i.e. shadow mode is off. See ServerStrategyRunner.TickAsync: even
+ * with shadow off, the bridge still stands down while a browser tab owns dispatch
+ * (StreamStrategyRegistry.GetDispatchOwner), so a tab must stop competing for ownership once this
+ * returns false, or flipping shadow off server-side changes nothing observable.
+ *
+ * Returns `true` (shadow on) for anything this cannot positively rule out — unreachable bridge,
+ * malformed response, or a strategyId the engine does not know — so the SAFE default is always
+ * "the tab keeps dispatching," never "assume the bridge has it."
+ */
+export async function fetchServerEngineShadowMode(strategyId: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(bridgeUrl("/api/stream/caesar/engine"), { cache: "no-store" });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.ok === false) return true;
+    const map = json?.engine?.strategyShadowMode;
+    const value = map && typeof map === "object" ? map[strategyId] : undefined;
+    return value !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Phase 1 — reserve the ticker and open/join the arbitration window.
  * granted=false means do not send: someone else already owns or outranks this claim.
  */

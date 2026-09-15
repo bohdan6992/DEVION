@@ -30,7 +30,14 @@ const num = (value: unknown): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 };
+/**
+ * `Number(null)` and `Number("")` are BOTH `0` in JS, not NaN — reading either the naive way turns
+ * an untouched min/max box into a live `{min:0, max:0}` bound instead of "unset" (see the full
+ * explanation in lib/arbitrage/liveParamsClient.ts's own `num`, which had the identical bug).
+ */
 const numOrNull = (value: unknown): number | null => {
+  if (value == null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
@@ -103,6 +110,8 @@ export type PairFluxSonarSnapshot = {
   /** True when the bridge's own fetch timed out (no live feed) — pairs is empty, not "nothing apart". */
   timedOut: boolean;
   pairs: LivePair[];
+  /** Per-stage rejection counts from the leg filter — see ArbitrageSonarSnapshot's twin. Null on timeout. */
+  funnel: import("./arbitrageSnapshotClient").SonarFilterFunnel | null;
 };
 
 export function fetchPairFluxSonarSnapshot(): Promise<PairFluxSonarSnapshot> {

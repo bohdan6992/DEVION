@@ -19,6 +19,7 @@ import { subscribeToStreamSse } from "./streamSseHub";
 import { startStreamTicker } from "./streamTicker";
 import {
   acquireStreamTicker,
+  fetchServerEngineShadowMode,
   heartbeatStreamStrategy,
   registerStreamStrategy,
   releaseAllStreamTickers,
@@ -3503,12 +3504,19 @@ export function useStreamEngine({
   const scheduleLocalRefresh = useCallback(() => {
     if (!enabled || typeof window === "undefined") return;
     if (localRefreshTimerRef.current != null) return;
+    // 180ms keeps a dispatching tab's decisions current with the tape. Once the bridge holds real
+    // authority for this strategy, this tab is a monitor only (see bridgeHasAuthorityRef) — nothing
+    // here fires an order, so a slower redraw costs nothing but saves the full recompute (candidate
+    // rows, latches, positions, and for PairFlux the pair-expanded universe — tens of thousands of
+    // rows vs. Arbitrage's flat ticker list) from re-running on every SSE tick, which is what made
+    // the PairFlux tab visibly lag once it stopped being the one actually deciding anything.
+    const delayMs = bridgeHasAuthorityRef.current ? 1000 : 180;
     localRefreshTimerRef.current = window.setTimeout(() => {
       localRefreshTimerRef.current = null;
       void refreshRef.current?.({ refreshBridge: false }).catch((error: any) => {
         onErrorRef.current?.(error?.message ?? String(error));
       });
-    }, 180);
+    }, delayMs);
   }, [enabled]);
 
   // Subscribes through the shared hub instead of owning an EventSource: several strategy
@@ -4077,6 +4085,12 @@ export function useStreamEngine({
       // Not the owner: decide, latch and display exactly as before, but build no intents. See
       // dispatchClientIdRef — this is what keeps a second page from double-sending.
       dispatchOwnerRef.current &&
+      // The bridge has confirmed real (non-shadow) dispatch authority for this strategy — stop
+      // building intents from here THE MOMENT this is learned, rather than waiting for the stale
+      // dispatchOwnerRef above to catch up (registerStrategyRef stops re-asserting ownership once
+      // this is true, but that only releases the lease after the arbiter's own TTL). See
+      // bridgeHasAuthorityRef and fetchServerEngineShadowMode.
+      !bridgeHasAuthorityRef.current &&
       !(executionSnapshot?.panicOff ?? false);
     const currentCount = filtered.length;
     const prevCount = prevFilteredCountRef.current;
@@ -4680,8 +4694,36 @@ export function useStreamEngine({
   const dispatchOwnerRef = useRef(true);
   dispatchOwnerRef.current = dispatchOwner.isOwner;
 
+  /**
+   * True once the BRIDGE has confirmed real (non-shadow) dispatch authority for this strategy —
+   * see fetchServerEngineShadowMode / ServerEngineControlService.IsShadow. Defaults false (this
+   * tab keeps competing for ownership) until a poll positively says otherwise; any failure to
+   * reach the bridge falls back to false too, so an unreachable bridge never silently stops this
+   * tab from dispatching.
+   */
+  const bridgeHasAuthorityRef = useRef(false);
+
   const registerStrategyRef = useRef<(takeOwnership?: boolean) => Promise<boolean>>(async () => false);
   registerStrategyRef.current = async (takeOwnership = false) => {
+    if (bridgeHasAuthorityRef.current && !takeOwnership) {
+      // The bridge now has real dispatch authority for this strategy — stand down instead of
+      // re-registering, so THIS registration lapses via the arbiter's own TTL (90s,
+      // StreamStrategyRegistry) instead of being kept alive by our own heartbeat. Deliberately not
+      // an explicit unregister/release call here: that would also hand back every ticker lease
+      // this engine holds RIGHT NOW, including ones protecting positions still open, and the TTL
+      // path avoids that race entirely — ServerPositionTracker tracks open positions from real
+      // TradingApp account state, never from these leases, so the slower handoff costs nothing.
+      //
+      // takeOwnership=true (the operator's own "take dispatch back" button) deliberately bypasses
+      // this: a human explicitly reclaiming control is a safety escape hatch, not something this
+      // automatic cede should silently swallow.
+      setDispatchOwner((prev) => (prev.isOwner === false && prev.ownerClientId === null
+        ? prev
+        : { isOwner: false, ownerClientId: null }));
+      setDispatchState("other");
+      dispatchOwnerRef.current = false;
+      return false;
+    }
     const result = await registerStreamStrategy({
       strategyId,
       label: resolvedInstance.label,
@@ -4712,6 +4754,28 @@ export function useStreamEngine({
     const reached = await registerStrategyRef.current(true);
     return reached && dispatchOwnerRef.current;
   }, []);
+
+  // Polls whether the BRIDGE has taken real dispatch authority for this strategy (shadow off) —
+  // see bridgeHasAuthorityRef. Independent of the registration lifecycle below: this keeps polling
+  // even while this tab is not the owner, because the moment the answer flips is exactly the
+  // moment this tab must stop trying to become the owner again.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      const shadow = await fetchServerEngineShadowMode(strategyId);
+      if (cancelled) return;
+      bridgeHasAuthorityRef.current = !shadow;
+    };
+
+    void poll();
+    const ticker = startStreamTicker({ intervalMs: 20_000, onTick: () => void poll() });
+    return () => {
+      cancelled = true;
+      ticker.stop();
+    };
+  }, [enabled, strategyId]);
 
   // LIFECYCLE. Keyed on identity ALONE, because the cleanup hands back every ticker lease this
   // strategy holds — including the ones protecting positions that are still open.

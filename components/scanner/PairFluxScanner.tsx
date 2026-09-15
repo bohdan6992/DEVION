@@ -2631,7 +2631,18 @@ export default function PairFluxScanner({
   // different things. Everything below feeds ONE function, lib/pairflux/livePairs, which is the
   // same function the Sonar's divergence panel renders from.
 
-  /** The published pair universe for the class being watched. */
+  /**
+   * The published pair universe for the class being watched, pre-filtered server-side by the
+   * toolbar's own MINRATE/MINTOTAL floor — the same floor computeLivePairs applies again below on
+   * whatever survives here. Used to fetch the whole class unfiltered (up to ~17k INTRA pairs) and
+   * re-scan all of it on every quote tick; the rating floor cuts that to whatever actually clears
+   * the bar (usually a few hundred), which is the set that can ever become a live pair anyway.
+   *
+   * TRADEOFF: an already-OPEN position's pair can fall out of this array if the floor is raised
+   * mid-session, blanking its exit-deviation display (pairFluxExitOverride/pfPairsByKey below) until
+   * the next class/floor reload. That is display-only — real exits run on the bridge's own
+   * PairFluxServerStrategy/ServerPositionTracker, which reads live TradingApp state, not this array.
+   */
   const [pfPairs, setPfPairs] = useState<PairFluxRow[]>([]);
   useEffect(() => {
     if (primaryPanel !== "stream") return;
@@ -2641,6 +2652,8 @@ export default function PairFluxScanner({
         const res = await fetchPairFluxRatings({
           cls: (session.toLowerCase() as PairFluxClass),
           includeInverted: false,
+          minRate: streamRatingRule.minRate,
+          minTotal: streamRatingRule.minTotal,
           limit: 20000,
         });
         if (alive) setPfPairs(res.rows ?? []);
@@ -2649,7 +2662,40 @@ export default function PairFluxScanner({
       }
     })();
     return () => { alive = false; };
-  }, [primaryPanel, session]);
+  }, [primaryPanel, session, streamRatingRule.minRate, streamRatingRule.minTotal]);
+
+  /**
+   * Every leg that can still matter, once pfPairs is already narrowed by the rating floor above.
+   *
+   * WHY THIS EXISTS. Arbitrage's own signal fetch is pre-narrowed server-side (its own toolbar
+   * ranges apply directly to a per-ticker candidate set). PairFlux never could do that the same way
+   * — corr/beta/sigma/rate/total here are PAIR statistics, and a leg failing some per-ticker bound
+   * says nothing about whether ITS PAIR still qualifies — so both signal fetches below (pfSignals
+   * and the engine's own signalsRequest) were asking for the WHOLE published universe every time,
+   * unfiltered, "just in case" a leg was needed. That is what made PairFlux's per-tick payload and
+   * per-tick recompute so much larger than Arbitrage's for the same feed.
+   *
+   * Once pfPairs is cut down by MINRATE/MINTOTAL, the set of tickers that could ever appear in a
+   * live pair is exactly {ticker, partner} of what survived — nothing outside that set can ever
+   * price a pair this floor allows. So this is a SAFE narrowing, not an approximation: the
+   * computed live pairs are identical to fetching everything and filtering after, just far cheaper
+   * to fetch and to scan. Same open-position display tradeoff as pfPairs itself — see its comment.
+   */
+  const pfPairTickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of pfPairs) {
+      if (p.ticker) set.add(p.ticker.trim().toUpperCase());
+      if (p.partner) set.add(p.partner.trim().toUpperCase());
+    }
+    return Array.from(set).sort();
+  }, [pfPairs]);
+  // Falls back to `undefined` (fetch everything, today's behaviour) in two cases: pfPairs hasn't
+  // loaded yet — so the feed isn't wrongly starved for the few seconds before the first ratings
+  // response lands — and a floor loose enough (e.g. MINRATE/MINTOTAL near 0) that the "narrowed"
+  // list is no longer meaningfully smaller than the universe, where a many-thousand-ticker CSV in
+  // a URL is its own liability rather than the optimization this exists to be.
+  const pfPairTickersCsv =
+    pfPairTickers.length > 0 && pfPairTickers.length <= 1500 ? pfPairTickers.join(",") : undefined;
 
   /**
    * The live rows. Same hub the engine itself subscribes to, so this opens no second connection
@@ -2677,18 +2723,46 @@ export default function PairFluxScanner({
     // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
     // would narrow the universe before the pair can even be formed. Both legs must arrive.
     startAbs: undefined,
-    // Only in APPLY mode — see the engine's tickersCsv below.
-    tickers: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : undefined,
+    // APPLY mode's explicit list wins when set (a human narrowed it on purpose); otherwise fall
+    // back to pfPairTickersCsv — every leg that can still be part of a pair clearing the rating
+    // floor, not the whole published universe. See pfPairTickers' doc comment above.
+    tickers: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : pfPairTickersCsv,
     limit: 5000,
     includeAll: true,
   }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText, listMode,
-       streamExactSonarFilterSnapshot, ratingMode, metric]);
+       streamExactSonarFilterSnapshot, ratingMode, metric, pfPairTickersCsv]);
 
+  // Mirrors streamDispatchState into a ref so the SSE callback below reads the CURRENT value
+  // without needing it in the effect's deps — putting it there would tear down and resubscribe the
+  // EventSource every time dispatch ownership changes, for no reason. Assigned below, once
+  // streamDispatchState itself exists (useStreamEngine is called further down this component).
+  const pfDispatchStateRef = useRef<string>("pending");
+  const pfSignalsFlushTimerRef = useRef<number | null>(null);
+  const pfSignalsLatestRef = useRef<any[]>([]);
   useEffect(() => {
     if (primaryPanel !== "stream") { setPfSignals([]); return; }
-    return subscribeToStreamSse(pfSignalsUrl, (state) => {
-      setPfSignals(state.signals ?? []);
+    const unsubscribe = subscribeToStreamSse(pfSignalsUrl, (state) => {
+      pfSignalsLatestRef.current = state.signals ?? [];
+      // This tab is not the one dispatching whenever another client (normally the bridge, once it
+      // holds real authority) owns the strategy — see streamDispatchState. Every message here still
+      // re-derives computeLivePairs / the pair-expanded decision set, so an un-throttled setState on
+      // every SSE tick was recomputing that on every market tick purely to redraw a page nobody is
+      // trading from. A dispatching tab keeps a near-immediate 200ms flush; a view-only one gets 1s,
+      // same reasoning as scheduleLocalRefresh's throttle in streamEngine.ts.
+      if (pfSignalsFlushTimerRef.current != null) return;
+      const delayMs = pfDispatchStateRef.current === "other" ? 1000 : 200;
+      pfSignalsFlushTimerRef.current = window.setTimeout(() => {
+        pfSignalsFlushTimerRef.current = null;
+        setPfSignals(pfSignalsLatestRef.current);
+      }, delayMs);
     });
+    return () => {
+      unsubscribe();
+      if (pfSignalsFlushTimerRef.current != null) {
+        window.clearTimeout(pfSignalsFlushTimerRef.current);
+        pfSignalsFlushTimerRef.current = null;
+      }
+    };
   }, [primaryPanel, pfSignalsUrl]);
 
   /**
@@ -2911,8 +2985,13 @@ export default function PairFluxScanner({
      * (requestScopedTickers). It was sent whenever the box held any text, so names left in it after
      * switching to IGN or off still narrowed the stream to that handful while the scanner read the
      * whole universe. And a pair needs both legs in the feed, so this cut pairs, not just tickers.
+     *
+     * Outside APPLY, this used to fall through to `undefined` — the engine's OWN internal signal
+     * feed asking for the entire published universe on every tick, same as pfSignalsUrl above did
+     * before pfPairTickersCsv. Same fix, same reasoning: narrow to legs that can still be part of a
+     * pair clearing the rating floor, not the whole universe.
      */
-    tickersCsv: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : undefined,
+    tickersCsv: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : pfPairTickersCsv,
     // NOT PASSED, DELIBERATELY. These six are the engine's PER-TICKER corr / beta / sigma bounds,
     // meaning a stock against its benchmark ETF. On this strategy the same four boxes hold the
     // PAIR's own statistics, and computeLivePairs already applies them there — see corrRange /
@@ -2943,6 +3022,9 @@ export default function PairFluxScanner({
     onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
+  // See pfDispatchStateRef's declaration above, near the pfSignals SSE subscription: assigned here
+  // rather than there because streamDispatchState only exists after this call.
+  pfDispatchStateRef.current = streamDispatchState;
   const streamInstance = useStreamInstance();
   const filterPassLogStore = useStreamStores().filterPassLog;
   const streamSignalMeta = useStreamSignalMeta();

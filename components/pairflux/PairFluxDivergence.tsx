@@ -181,8 +181,14 @@ export default function PairFluxDivergence({
   const [sigmaLo, sigmaHi] = sigmaRange;
   const [alphaLo, alphaHi] = alphaRange;
 
-  const computedRows = useMemo<LivePair[]>(
-    () => computeLivePairs({
+  // computeLivePairs is the actual divergence math PairFluxSonarSnapshotService already ran
+  // server-side — skipped entirely (not just discarded after running) whenever a backend snapshot
+  // is available, so the client is never doing that work twice. It still runs as the fallback for
+  // the two cases rowsOverride can legitimately be null: before the first poll lands, and while the
+  // bridge fetch is timing out.
+  const rows = useMemo<LivePair[]>(() => {
+    if (rowsOverride) return rowsOverride;
+    return computeLivePairs({
       pairs,
       quoteByTicker,
       unit: zapMode,
@@ -193,10 +199,8 @@ export default function PairFluxDivergence({
       betaRange,
       sigmaRange,
       alphaRange,
-    }),
-    [pairs, quoteByTicker, zapMode, zapMin, zapMax, zapExit, corrRange, betaRange, sigmaRange, alphaRange],
-  );
-  const rows = rowsOverride ?? computedRows;
+    });
+  }, [rowsOverride, pairs, quoteByTicker, zapMode, zapMin, zapMax, zapExit, corrRange, betaRange, sigmaRange, alphaRange]);
 
   /**
    * Benchmark columns, each split into the Sonar's beta buckets. Nothing is capped — the toolbar

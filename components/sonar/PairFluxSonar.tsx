@@ -106,6 +106,7 @@ import {
   pushPairFluxSonarLiveParams,
   toPairFluxSonarLiveParams,
 } from "@/lib/sonar/pairfluxSnapshotClient";
+import type { SonarFilterFunnel } from "@/lib/sonar/arbitrageSnapshotClient";
 import type { PairFluxClass } from "@/lib/pairflux/client";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
@@ -3879,6 +3880,9 @@ export default function PairFluxSonar() {
   }, [pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit, corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax, alphaMin, alphaMax, snapshot]);
 
   const [pairFluxSonarPairs, setPairFluxSonarPairs] = useState<LivePair[] | null>(null);
+  // Per-stage rejection counts from the leg filter — not yet surfaced in this panel's own UI
+  // (unlike ArbitrageSonar's), but captured so a future empty-state banner here has it for free.
+  const [pairFluxSonarFunnel, setPairFluxSonarFunnel] = useState<SonarFilterFunnel | null>(null);
   useEffect(() => {
     let alive = true;
     const unsubscribe = subscribeSharedPoll("sonar-pairflux-divergence-snapshot", fetchPairFluxSonarSnapshot, 6_000, (value, err) => {
@@ -3889,6 +3893,7 @@ export default function PairFluxSonar() {
         return;
       }
       setPairFluxSonarPairs(value?.pairs ?? []);
+      setPairFluxSonarFunnel(value?.funnel ?? null);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -4342,6 +4347,9 @@ export default function PairFluxSonar() {
     if (excludeReport) hints.push("ex REPORT");
     if (excludeETF) hints.push("ex ETF");
     if (excludeCrap) hints.push("ex < $5");
+    if (excludeItb) hints.push("ex ITB");
+    if (excludeHard) hints.push("ex HARD-to-borrow");
+    if (excludeCorr) hints.push(`ex CORR peers ${sectorCorr.excluded.size}`);
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
     if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
@@ -4349,7 +4357,11 @@ export default function PairFluxSonar() {
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
     if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
-    return hints.slice(0, 8);
+    // BIN/BINS are not ported server-side yet — the Sonar snapshot always rates SESSION-only, a
+    // known gap (see the handoff doc). Surfacing it here so "0 visible" is not mistaken for a bug
+    // when the real cause is a rating mode silently substituted underneath the operator's choice.
+    if (ratingMode !== "SESSION") hints.push(`${ratingMode} requested, served SESSION`);
+    return hints.slice(0, 10);
   }, [
     activeMode,
     alphaMax,
@@ -4365,6 +4377,9 @@ export default function PairFluxSonar() {
     excludeCrap,
     excludeDividend,
     excludeETF,
+    excludeHard,
+    excludeItb,
+    excludeCorr,
     excludeNews,
     excludePTP,
     excludeReport,
@@ -4377,6 +4392,8 @@ export default function PairFluxSonar() {
     preMhVolNFMax,
     preMhVolNFMin,
     rangeModes,
+    ratingMode,
+    sectorCorr.excluded,
     sectorEnabled,
     selCountries,
     selExchanges,

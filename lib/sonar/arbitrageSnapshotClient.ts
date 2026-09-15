@@ -32,6 +32,27 @@ export type SonarSignalRow = {
   total: number | null;
 };
 
+/**
+ * Per-stage rejection counts from SonarSignalFilter — built so "0 visible" has an answer besides
+ * re-reading the toolbar: when every row dies at the SAME stage, that stage is the toggle actually
+ * responsible, not whichever one looks most suspicious.
+ */
+export type SonarFilterFunnel = {
+  raw: number;
+  rejectedByTicker: number;
+  rejectedByActivity: number;
+  rejectedByList: number;
+  rejectedByRange: number;
+  rejectedByRating: number;
+  rejectedByTopWindow: number;
+  rejectedByExclude: number;
+  rejectedByGeo: number;
+  rejectedByReport: number;
+  rejectedByEquityType: number;
+  rejectedByZap: number;
+  passed: number;
+};
+
 export type ArbitrageSonarSnapshot = {
   requestedRatingMode: string;
   /** What was actually served — SESSION always, today. See the handoff doc's BIN/BINS note. */
@@ -39,6 +60,8 @@ export type ArbitrageSonarSnapshot = {
   /** True when the bridge's own fetch timed out (no live feed) — rows is empty, not "no matches". */
   timedOut: boolean;
   rows: SonarSignalRow[];
+  /** Null on a timeout (nothing ran). */
+  funnel: SonarFilterFunnel | null;
 };
 
 const num = (value: unknown): number => {
