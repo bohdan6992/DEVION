@@ -8,7 +8,15 @@ import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import CaesarControlBar from "./CaesarControlBar";
 import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
-import { fetchBridgePlan, pushBridgePlan, setBridgeScheduleEnabled, startStrategyNow, stopStrategyNow } from "@/lib/caesar/planClient";
+import {
+  fetchBridgeEngineStatus,
+  fetchBridgePlan,
+  pushBridgePlan,
+  setBridgeEngineEnabled,
+  setBridgeScheduleEnabled,
+  startStrategyNow,
+  stopStrategyNow,
+} from "@/lib/caesar/planClient";
 import {
   CAESAR_SEGMENTS,
   CAESAR_STRATEGIES,
@@ -105,6 +113,13 @@ export default function CaesarSchedule() {
    * `null` until the bridge answers, so the button never claims a state it has not confirmed.
    */
   const [scheduleEnabled, setScheduleEnabled] = useState<boolean | null>(null);
+  /**
+   * One level below Schedule: ServerEngineControlService's own master switch. Off, nothing ticks
+   * anywhere — not even to compute a candidate for preview — and it ships off by default, persisted
+   * per machine, so a fresh deploy silently starts every strategy at "never ticked" with no error
+   * banner (every request still succeeds; it just always answers empty). See setBridgeEngineEnabled.
+   */
+  const [engineEnabled, setEngineEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     setPlan(loadCaesarPlan());
@@ -119,6 +134,8 @@ export default function CaesarSchedule() {
    */
   const [scheduleBusy, setScheduleBusy] = useState(false);
   const [scheduleError, setScheduleError] = useState(false);
+  const [engineBusy, setEngineBusy] = useState(false);
+  const [engineError, setEngineError] = useState(false);
   /** Set while a value came FROM the bridge, so the auto-push does not echo it straight back. */
   const remoteEchoRef = useRef(false);
   /**
@@ -156,6 +173,44 @@ export default function CaesarSchedule() {
     const id = window.setInterval(() => { void pullSchedule(); }, 30_000);
     return () => window.clearInterval(id);
   }, [pullSchedule]);
+
+  const pullEngine = useCallback(async () => {
+    const status = await fetchBridgeEngineStatus();
+    if (status == null) {
+      setEngineError(true);
+      return;
+    }
+    setEngineError(false);
+    setEngineEnabled(status.enabled);
+  }, []);
+
+  useEffect(() => {
+    void pullEngine();
+    const id = window.setInterval(() => { void pullEngine(); }, 30_000);
+    return () => window.clearInterval(id);
+  }, [pullEngine]);
+
+  const toggleEngine = useCallback(async () => {
+    if (engineBusy) return;
+    if (engineError || engineEnabled == null) {
+      await pullEngine();
+      return;
+    }
+    const next = !engineEnabled;
+    setEngineBusy(true);
+    try {
+      const result = await setBridgeEngineEnabled(next);
+      if (result == null) {
+        setEngineError(true);
+        await pullEngine();
+        return;
+      }
+      setEngineError(false);
+      setEngineEnabled(result.enabled);
+    } finally {
+      setEngineBusy(false);
+    }
+  }, [engineEnabled, engineBusy, engineError, pullEngine]);
 
   useEffect(() => {
     const tick = () => setNowMin(nyAxisMinutesNow());
@@ -398,6 +453,10 @@ export default function CaesarSchedule() {
               scrolled sideways.
             */}
             <CaesarControlBar
+              engineEnabled={engineEnabled}
+              engineBusy={engineBusy}
+              engineError={engineError}
+              onToggleEngine={toggleEngine}
               scheduleEnabled={scheduleEnabled}
               scheduleBusy={scheduleBusy}
               scheduleError={scheduleError}

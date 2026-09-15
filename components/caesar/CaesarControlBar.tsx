@@ -1,12 +1,13 @@
 "use client";
 
 /**
- * The three controls that actually start the day, on one row under the timeline.
+ * The controls that actually start the day, on one row under the timeline.
  *
  * They used to be in three places: the schedule switch and the reset button in the page header,
  * the Market Maker bind three panels further down inside "Live engines". That is the wrong shape
  * for what they are — a pre-flight checklist, run in order, once, before anything trades:
  *
+ *   0. turn the engine on             — without it NOTHING ticks anywhere, not even preview
  *   1. bind the Market Maker window   — without it hotkeys go to whatever has focus
  *   2. start the schedule             — without it CaesarPlanService returns on its first line
  *   3. (reset the plan)               — the escape hatch, deliberately last and quietest
@@ -14,6 +15,15 @@
  * Under the timeline is where that belongs — but OUTSIDE its frame, on the page itself: they act
  * on the plan rather than being part of it, and the two things you look at before pressing START
  * are still both on screen at once.
+ *
+ * WHY ENGINE IS SEPARATE FROM SCHEDULE. ServerEngineControlService.Enabled gates the very first
+ * line of ServerStrategyRunner.TickAsync — off, no strategy ever ticks, so every candidate screen
+ * reads "never ticked" and stays that way, with no error banner anywhere (every request the UI
+ * makes still succeeds; it just always answers empty). It ships off by default and is persisted
+ * per machine, so a fresh deploy to a machine that has never had this flipped looks exactly like a
+ * broken bridge until someone finds this switch — which, before this button existed, had no UI at
+ * all and required a raw POST. Schedule (below) is one level up: it only decides whether the
+ * ENGINE'S ticks are allowed to start/stop real automation, so it means nothing while this is off.
  *
  * STYLE. Soft glass keys, not outlined buttons: a flat translucent white fill that lifts on hover,
  * one radius, one height, icons at 1.5px stroke. START is the same key stretched to hold a word,
@@ -27,6 +37,10 @@ import { useMarketMakerWindow } from "./useMarketMakerWindow";
 
 export type CaesarControlBarProps = {
   /** null until the bridge answers — the switch never claims a state it has not confirmed. */
+  engineEnabled: boolean | null;
+  engineBusy: boolean;
+  engineError: boolean;
+  onToggleEngine: () => void;
   scheduleEnabled: boolean | null;
   scheduleBusy: boolean;
   scheduleError: boolean;
@@ -45,6 +59,13 @@ export type CaesarControlBarProps = {
  */
 const RUNNING_RED = "#f43f5e";
 
+/**
+ * Deliberately not RUNNING_RED: the engine being on does not mean real money is moving (that is
+ * still Schedule's job below) — it means the tick loop is alive and candidate screens populate.
+ * A calmer "system is alive" colour keeps the two questions visually distinct.
+ */
+const ENGINE_ON = "#38bdf8";
+
 const KEY =
   "group relative flex h-9 items-center justify-center rounded-xl border border-white/[0.06] bg-white/[0.06] text-zinc-300 transition-all duration-150 hover:bg-white/[0.12] hover:text-white active:scale-[0.97] disabled:pointer-events-none disabled:opacity-35";
 
@@ -55,6 +76,16 @@ function IconCrosshair(p: React.SVGProps<SVGSVGElement>) {
       <circle cx="12" cy="12" r="6" />
       <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
       <path d="M12 2v3.4M12 18.6V22M2 12h3.4M18.6 12H22" />
+    </svg>
+  );
+}
+
+/** Power glyph: the engine's own master switch. */
+function IconPower(p: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width={14} height={14} {...p}>
+      <path d="M12 3v8" />
+      <path d="M7 5.5a8 8 0 1 0 10 0" />
     </svg>
   );
 }
@@ -70,6 +101,10 @@ function IconReset(p: React.SVGProps<SVGSVGElement>) {
 }
 
 export default function CaesarControlBar({
+  engineEnabled,
+  engineBusy,
+  engineError,
+  onToggleEngine,
   scheduleEnabled,
   scheduleBusy,
   scheduleError,
@@ -78,6 +113,7 @@ export default function CaesarControlBar({
 }: CaesarControlBarProps) {
   const mm = useMarketMakerWindow();
   const running = scheduleEnabled === true;
+  const engineOn = engineEnabled === true;
 
   /*
    * "Bridge down" with the bridge itself answering curl in 3ms, CORS clean, was traced to
@@ -96,6 +132,41 @@ export default function CaesarControlBar({
     <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
       {/* ---- the keys ---- */}
       <div className="flex items-center gap-2">
+        {/*
+          ENGINE. The master switch one level below Schedule — see the file header for why it is
+          separate. Off, nothing below it (Schedule, MM bind, any candidate screen) can produce
+          anything, so this is deliberately the first key in the row.
+        */}
+        <button
+          type="button"
+          onClick={onToggleEngine}
+          disabled={engineBusy || (engineEnabled == null && !engineError)}
+          title={
+            engineError
+              ? `The bridge did not answer at ${resolvedBridgeBase} — this shows the last value it confirmed, not what you asked for. If that address is wrong, clear localStorage["bridgeApiBase"] or drop the ?bridge= param and reload.`
+              : engineOn
+                ? "Engine running: strategies tick and their candidate screens populate. Click to stop the tick loop entirely — nothing will tick anywhere, not even for preview."
+                : "Engine off: nothing ticks anywhere, so every strategy reads \"never ticked\" with no error shown — this is the master switch underneath Schedule. Click to start the tick loop."
+          }
+          className={KEY + " gap-2 px-3 font-mono text-[11px] font-bold uppercase tracking-[0.16em]"}
+          style={
+            engineError
+              ? { color: "#fda4af", backgroundColor: "rgba(253,164,175,0.10)", borderColor: "rgba(253,164,175,0.24)" }
+              : engineOn
+                ? { color: ENGINE_ON, backgroundColor: `${ENGINE_ON}1c`, borderColor: `${ENGINE_ON}44` }
+                : undefined
+          }
+        >
+          <IconPower />
+          {engineBusy || engineEnabled == null
+            ? "…"
+            : engineError
+              ? "Retry bridge"
+              : engineOn
+                ? "Engine on"
+                : "Engine off"}
+        </button>
+
         {/*
           MARKET MAKER. One button, two meanings, because the bind has exactly two states and a
           second button for the other one is how you end up clearing a window you meant to rebind.
@@ -208,6 +279,16 @@ export default function CaesarControlBar({
           Beside them, not under them: three buttons whose state you have to hover to read is how
           a day starts with an unbound window. */}
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px]">
+        <span className="flex items-center gap-1.5">
+          <span className="uppercase tracking-[0.16em] text-zinc-600">Engine</span>
+          <span
+            className={engineError ? "text-rose-300/80" : engineOn ? "text-sky-300/80" : "text-amber-300/80"}
+            title={engineError ? `resolved base: ${resolvedBridgeBase}` : undefined}
+          >
+            {engineEnabled == null ? "reading…" : engineError ? `unreachable (${resolvedBridgeBase})` : engineOn ? "ticking" : "off — nothing ticks, not even preview"}
+          </span>
+        </span>
+        <span className="text-white/10">·</span>
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="uppercase tracking-[0.16em] text-zinc-600">MM</span>
           <span

@@ -117,6 +117,34 @@ export async function setBridgeScheduleEnabled(enabled: boolean): Promise<Bridge
   return result?.plan ?? null;
 }
 
+export type BridgeEngineStatus = {
+  enabled: boolean;
+  polls: number;
+  ticks: number;
+};
+
+/**
+ * The engine's own master switch (ServerEngineControlService.Enabled) — one level below the
+ * Schedule switch above. Off, ServerStrategyRunner.TickAsync returns on its very first line: no
+ * strategy ever ticks, not even to compute a candidate for preview. It ships off by default
+ * (appsettings' ServerStrategyEngine.Enabled) and is persisted per machine under
+ * %APPDATA%\Axion\state\stream\engine-control.json — a fresh deploy to a machine that has never
+ * had this flipped starts with it off, which reads as "no signals anywhere" with no error banner,
+ * because every request the UI makes still succeeds; it just always answers empty.
+ */
+export async function fetchBridgeEngineStatus(): Promise<BridgeEngineStatus | null> {
+  const result = await request<{ engine: BridgeEngineStatus }>("/api/stream/caesar/engine");
+  return result?.engine ?? null;
+}
+
+export async function setBridgeEngineEnabled(enabled: boolean): Promise<BridgeEngineStatus | null> {
+  const result = await request<{ engine: BridgeEngineStatus }>("/api/stream/caesar/engine", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+  return result?.engine ?? null;
+}
+
 /**
  * Starts one strategy DIRECTLY, bypassing the schedule's own segment check.
  *
