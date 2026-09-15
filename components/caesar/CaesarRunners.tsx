@@ -28,7 +28,6 @@ import dynamic from "next/dynamic";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { LIVE_STRATEGIES, type LiveStrategy } from "@/lib/strategies/registry";
-import CaesarPanel, { CAESAR_PILL, CAESAR_PILL_IDLE, CAESAR_PILL_ON } from "./CaesarPanel";
 import {
   CAESAR_SEGMENTS,
   clockLabel,
@@ -40,8 +39,6 @@ import {
 
 const ArbitrageStream = dynamic(() => import("../stream/ArbitrageStream"), { ssr: false });
 const PairFluxStream = dynamic(() => import("../stream/PairFluxStream"), { ssr: false });
-// Machine-level, not strategy-level: one bound window for the whole bridge. See CaesarWindowBinding.
-const CaesarWindowBinding = dynamic(() => import("./CaesarWindowBinding"), { ssr: false });
 // The live feed: counters and dispatches from both engines on one clock. See CaesarTerminal.
 const CaesarTerminal = dynamic(() => import("./CaesarTerminal"), { ssr: false });
 
@@ -106,7 +103,6 @@ function activeSegment(nowMin: number | null): CaesarSegmentKey | null {
 export default function CaesarRunners() {
   const [plan, setPlan] = useState<CaesarPlan | null>(null);
   const [nowMin, setNowMin] = useState<number | null>(null);
-  const [showPanels, setShowPanels] = useState(false);
 
   // Re-read on every edit made by the schedule above, and re-check the clock, on the same cadence
   // the schedule paints its "now" marker with.
@@ -217,116 +213,9 @@ export default function CaesarRunners() {
   /** The ones this tab actually mounts. Everything below the strip is driven by these alone. */
   const hosted = useMemo(() => runners.filter((r) => r.host === "browser"), [runners]);
 
-  const missing = hosted.filter((r) => !STREAMS[r.strategy.key]);
-
   return (
-    /*
-      ONE STACK, NOT ONE BOX INSIDE ANOTHER. These used to be nested: every panel below rendered
-      inside the "live engines" section, which drew a frame around four frames. They are siblings
-      now, on a single rhythm, exactly like the panels on a stream board.
-    */
     <div className="mt-3 space-y-3">
-      <CaesarPanel
-        title="Live engines"
-        subtitle={seg ? `${seg} segment` : "outside every segment"}
-        accent="#199e70"
-        right={
-          <button
-            type="button"
-            onClick={() => setShowPanels((v) => !v)}
-            className={CAESAR_PILL + (showPanels ? CAESAR_PILL_ON : CAESAR_PILL_IDLE)}
-          >
-            {showPanels ? "Hide panels" : "Show panels"}
-          </button>
-        }
-      >
-      <div className="space-y-2 px-3 py-3">
-      <div className="flex flex-wrap gap-2">
-        {runners.length === 0 ? (
-          <span className="font-mono text-[11px] text-zinc-600">
-            Nothing assigned to this segment that Caesar has to host — the bridge runs the rest.
-          </span>
-        ) : (
-          runners.map((r) => {
-            const here = r.host === "browser";
-            return (
-              <span
-                key={r.strategy.key}
-                title={
-                  r.holding
-                    ? "Past its segment, still mounted. The plan has stopped its entries; the engine stays so it can still manage and close what it opened."
-                    : here
-                      ? "Hosted by this tab — its decisions are made here."
-                      : "Run by the bridge on its own engine. Listed for completeness; this tab does not host it, and mounting a second copy would double its decisions."
-                }
-                className={
-                  "group inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] transition-colors " +
-                  (here
-                    ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-200 shadow-[0_0_22px_-12px_rgba(52,211,153,0.9)] hover:bg-emerald-500/[0.13]"
-                    : "border-white/[0.07] bg-black/25 text-zinc-400 hover:bg-white/[0.05]")
-                }
-              >
-                {/* The dot PULSES only when this tab is the thing keeping the engine alive — that
-                    is the one state where closing the tab changes what the day does. */}
-                <span className="relative flex h-1.5 w-1.5 shrink-0">
-                  {here && (
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-                  )}
-                  <span
-                    className={"relative inline-flex h-1.5 w-1.5 rounded-full " + (here ? "bg-emerald-400" : "bg-zinc-600")}
-                  />
-                </span>
-                <span className="font-bold tracking-[0.12em]">{r.strategy.key.toUpperCase()}</span>
-                <span
-                  className={
-                    "rounded px-1 py-px text-[9px] tabular-nums " +
-                    (here ? "bg-emerald-400/10 text-emerald-200/70" : "bg-white/[0.04] text-zinc-600")
-                  }
-                >
-                  #{r.priority}
-                </span>
-                <span className={"text-[9px] uppercase tracking-[0.18em] " + (here ? "text-emerald-200/40" : "text-zinc-600")}>
-                  {r.holding ? "holding" : here ? "here" : "bridge"}
-                </span>
-                <a
-                  href={r.strategy.nav.stream}
-                  className={
-                    "text-[9px] uppercase tracking-[0.14em] underline-offset-2 hover:underline " +
-                    (here ? "text-emerald-200/45 hover:text-emerald-100" : "text-zinc-600 hover:text-zinc-300")
-                  }
-                >
-                  configure
-                </a>
-              </span>
-            );
-          })
-        )}
-      </div>
-
-      {runners.length > hosted.length && (
-        <div className="font-mono text-[10px] text-zinc-600">
-          {runners.length - hosted.length} of {runners.length} run on the bridge&apos;s own engine and
-          are not hosted by this tab — they keep running with no browser open at all.
-        </div>
-      )}
-
-      {missing.length > 0 && (
-        <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2 font-mono text-[11px] text-amber-300/80">
-          No scanner wired for: {missing.map((m) => m.strategy.key).join(", ")} — assigned, but Caesar
-          cannot host it.
-        </div>
-      )}
-
-      </div>
-
-      {/*
-        The window binding sits ABOVE the positions: nothing below it can be executed until a window
-        is bound, so it is the first thing to be wrong and the first thing to check.
-      */}
-      <CaesarWindowBinding />
-      </CaesarPanel>
-
-      {/* Same runner list again: what is hosted, what it holds, and what it has been doing. */}
+      {/* What is hosted, what it holds, and what it has been doing. */}
       <CaesarTerminal
         segment={seg}
         instances={hosted.map((r) => ({
@@ -336,12 +225,7 @@ export default function CaesarRunners() {
         }))}
       />
 
-      {/*
-        MOUNTED EITHER WAY. `hidden` keeps the panels out of the way without unmounting them: React
-        keeps the effects, so the engines keep deciding. Unmounting to tidy the page would stop the
-        very thing this component exists to run.
-      */}
-      <div className={showPanels ? "space-y-3" : "hidden"}>
+      <div className="space-y-3">
         {hosted.map((r) => {
           const Stream = STREAMS[r.strategy.key];
           if (!Stream) return null;

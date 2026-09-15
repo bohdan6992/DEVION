@@ -22,12 +22,10 @@ import {
   conflictingPriorities,
   defaultCaesarPlan,
   loadCaesarPlan,
-  minuteIdxLabel,
   nyAxisMinutesNow,
   rankAssignments,
   saveCaesarPlan,
   segmentAtAxisMinute,
-  segmentRangeLabel,
   windowFit,
 } from "@/lib/caesar/schedule";
 import type {
@@ -96,6 +94,12 @@ export default function CaesarSchedule() {
   const [selected, setSelected] = useState<CaesarSegmentKey>("intra");
   const [pickerFor, setPickerFor] = useState<CaesarSegmentKey | null>(null);
   const [nowMin, setNowMin] = useState<number | null>(null);
+  /**
+   * The per-segment cards (and the connector lines into them) are collapsed by default — the
+   * timeline alone is the normal, everyday view, and the cards are detail an operator opens
+   * deliberately rather than something that has to be scrolled past every time the page loads.
+   */
+  const [cardsExpanded, setCardsExpanded] = useState(false);
   /**
    * The bridge's master switch: whether the stored plan is allowed to start and stop strategies.
    * `null` until the bridge answers, so the button never claims a state it has not confirmed.
@@ -341,30 +345,65 @@ export default function CaesarSchedule() {
                 <div className="min-w-[1128px] px-6">
                   <Ruler />
                   <SessionBar selected={selected} nowMin={nowMin} onSelect={setSelected} />
-                  <Connectors selected={selected} />
 
-                  {/* ---------- SEGMENT CARDS ---------- */}
-                  <div className="grid grid-cols-4 gap-3">
-                    {CAESAR_SEGMENTS.map((seg) => (
-                      <SegmentCard
-                        key={seg.key}
-                        seg={seg}
-                        rows={plan[seg.key]}
-                        selected={selected === seg.key}
-                        isNow={nowSegment?.key === seg.key}
-                        pickerOpen={pickerFor === seg.key}
-                        onSelect={() => setSelected(seg.key)}
-                        onTogglePicker={() => setPickerFor((cur) => (cur === seg.key ? null : seg.key))}
-                        onAdd={(strategyKey) => addStrategy(seg.key, strategyKey)}
-                        onRemove={(strategyKey) => removeStrategy(seg.key, strategyKey)}
-                        onPriority={(strategyKey, value) => setPriority(seg.key, strategyKey, value)}
-                        onToggle={(strategyKey) => toggleStrategy(seg.key, strategyKey)}
-                      />
-                    ))}
+                  {/* Collapsed by default — expand to see/edit the per-segment strategy cards. */}
+                  <div className="mt-1 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setCardsExpanded((v) => !v)}
+                      title={cardsExpanded ? "Hide segment windows" : "Show segment windows"}
+                      aria-expanded={cardsExpanded}
+                      className="flex items-center gap-1.5 rounded px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-white/35 transition-colors hover:bg-white/10 hover:text-white/70"
+                    >
+                      <span className={`inline-block transition-transform duration-200 ${cardsExpanded ? "rotate-180" : ""}`}>
+                        ▾
+                      </span>
+                      {cardsExpanded ? "Hide segments" : "Segments"}
+                    </button>
                   </div>
+
+                  {cardsExpanded && (
+                    <>
+                      <Connectors selected={selected} />
+
+                      {/* ---------- SEGMENT CARDS ---------- */}
+                      <div className="grid grid-cols-4 gap-3">
+                        {CAESAR_SEGMENTS.map((seg) => (
+                          <SegmentCard
+                            key={seg.key}
+                            seg={seg}
+                            rows={plan[seg.key]}
+                            selected={selected === seg.key}
+                            isNow={nowSegment?.key === seg.key}
+                            pickerOpen={pickerFor === seg.key}
+                            onSelect={() => setSelected(seg.key)}
+                            onTogglePicker={() => setPickerFor((cur) => (cur === seg.key ? null : seg.key))}
+                            onAdd={(strategyKey) => addStrategy(seg.key, strategyKey)}
+                            onRemove={(strategyKey) => removeStrategy(seg.key, strategyKey)}
+                            onPriority={(strategyKey, value) => setPriority(seg.key, strategyKey, value)}
+                            onToggle={(strategyKey) => toggleStrategy(seg.key, strategyKey)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </section>
+
+            {/*
+              Right after the timeline itself — these act ON the plan the ruler draws, not part of
+              the drawing, so they get no panel of their own. Out of the `overflow-x-auto` div
+              (which ends with the section above), so they stay put when the 1128px ruler is
+              scrolled sideways.
+            */}
+            <CaesarControlBar
+              scheduleEnabled={scheduleEnabled}
+              scheduleBusy={scheduleBusy}
+              scheduleError={scheduleError}
+              onToggleSchedule={toggleSchedule}
+              onReset={() => mutate(defaultCaesarPlan())}
+            />
 
             {/* A separate operational readout, directly after the clock it describes. */}
             <CaesarCharts
@@ -375,24 +414,6 @@ export default function CaesarSchedule() {
             />
             <CaesarPositions instances={positionInstances} />
             <CaesarBridgeDecisions />
-
-            {/*
-              OUTSIDE THE TIMELINE'S FRAME, ON THE PAGE ITSELF.
-              These are not part of the plan drawing — they act ON it — so they get no panel of
-              their own and sit in the gap between the timeline and the detail below, aligned to the
-              same left edge as both. Out of the `overflow-x-auto` div too, so they stay put when
-              the 1128px ruler is scrolled sideways.
-            */}
-            <CaesarControlBar
-              scheduleEnabled={scheduleEnabled}
-              scheduleBusy={scheduleBusy}
-              scheduleError={scheduleError}
-              onToggleSchedule={toggleSchedule}
-              onReset={() => mutate(defaultCaesarPlan())}
-            />
-
-            {/* ---------- DETAIL PANEL ---------- */}
-            <DetailPanel plan={plan} selected={selected} onSelect={setSelected} />
           </>
         )}
       </div>
@@ -1052,189 +1073,3 @@ function StrategyPicker({
   );
 }
 
-// =========================
-// DETAIL PANEL
-// =========================
-
-function DetailPanel({
-  plan,
-  selected,
-  onSelect,
-}: {
-  plan: CaesarPlan;
-  selected: CaesarSegmentKey;
-  onSelect: (key: CaesarSegmentKey) => void;
-}) {
-  const seg = CAESAR_SEGMENTS.find((s) => s.key === selected)!;
-  const rows = useMemo(() => rankAssignments(plan[selected]), [plan, selected]);
-  const conflicts = useMemo(() => conflictingPriorities(plan[selected]), [plan, selected]);
-
-
-  return (
-    <section className={`mt-3 ${PANEL}`}>
-      {/* Segment tabs */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-white/[0.07] p-2">
-        {CAESAR_SEGMENTS.map((s) => {
-          const active = s.key === selected;
-          return (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => onSelect(s.key)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold tracking-[0.12em] transition-colors"
-              style={{
-                backgroundColor: active ? withAlpha(s.color, 0.14) : "transparent",
-                color: active ? s.color : "rgba(255,255,255,0.4)",
-              }}
-            >
-              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />
-              {s.label}
-              <span className="font-mono text-[10px] opacity-60">{plan[s.key].length}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* The share-of-day figure was arithmetic anyone can do from the span, so only the span stays. */}
-      <div className="flex flex-wrap items-baseline gap-x-4 px-4 pt-2">
-        <span className="text-[12px] font-bold" style={{ color: seg.color }}>
-          {seg.label}
-        </span>
-        <span className="font-mono text-[11px] tabular-nums text-white/55">{segmentRangeLabel(seg)}</span>
-      </div>
-
-      {rows.length === 0 ? (
-        <div className="px-4 py-6 text-center text-[11px] text-white/35">
-          Nothing assigned to {seg.label}.
-        </div>
-      ) : (
-        <div className="overflow-x-auto px-2 pb-3 pt-2">
-          <table className="w-full min-w-[720px] border-collapse">
-            <thead>
-              <tr className="text-left text-[9px] font-bold uppercase tracking-[0.15em] text-white/45">
-                <th className="px-2 py-2">Rank</th>
-                <th className="px-2 py-2">Strategy</th>
-                <th className="px-2 py-2">Priority</th>
-                <th className="px-2 py-2">State</th>
-                <th className="px-2 py-2">Window</th>
-                <th className="px-2 py-2">Pages</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => {
-                const strategy = CAESAR_STRATEGY_BY_KEY[row.strategyKey];
-                if (!strategy) return null;
-                const fit = windowFit(strategy, seg);
-                const conflicted = row.enabled && conflicts.has(row.priority);
-                return (
-                  <tr
-                    key={row.strategyKey}
-                    className={`border-t border-white/[0.05] text-[11px] ${row.enabled ? "" : "opacity-45"}`}
-                  >
-                    <td className="px-2 py-2">
-                      <span
-                        className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10px] font-black tabular-nums ${
-                          row.enabled && index === 0
-                            ? "bg-amber-400/20 text-amber-300"
-                            : "bg-white/[0.06] text-white/40"
-                        }`}
-                      >
-                        {row.enabled ? `#${index + 1}` : "—"}
-                      </span>
-                    </td>
-
-                    {/*
-                      This row is where the NAME lives — the chips above are icons only, so one
-                      place has to spell them out. The description does not: it is a sentence about
-                      the strategy, not about this assignment, and it doubled the row height.
-                    */}
-                    <td className="px-2 py-2" title={strategy.description}>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px]">{strategy.icon}</span>
-                        {strategy.nav ? (
-                          <Link
-                            href={strategy.nav.stream}
-                            className="font-semibold text-zinc-100 hover:underline"
-                            style={{ textDecorationColor: seg.color }}
-                          >
-                            {strategy.name}
-                          </Link>
-                        ) : (
-                          <span className="font-semibold text-white/70">{strategy.name}</span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td className="px-2 py-2 font-mono tabular-nums text-zinc-100">
-                      {row.priority}
-                      {conflicted && <span className="ml-1.5 text-[9px] font-bold text-amber-300">TIE</span>}
-                    </td>
-
-                    <td className="px-2 py-2">
-                      <span
-                        className="rounded px-1.5 py-0.5 text-[9px] font-bold tracking-[0.1em]"
-                        style={{
-                          backgroundColor: row.enabled ? withAlpha(seg.color, 0.15) : "transparent",
-                          color: row.enabled ? seg.color : "rgba(255,255,255,0.35)",
-                          boxShadow: row.enabled ? "none" : "inset 0 0 0 1px rgba(255,255,255,0.12)",
-                        }}
-                      >
-                        {row.enabled ? "ACTIVE" : "OFF"}
-                      </span>
-                    </td>
-
-                    <td className="px-2 py-2 font-mono text-[11px] tabular-nums">
-                      <span className={fit === "full" ? "text-white/70" : "text-amber-300"}>
-                        {strategy.window
-                          ? `${minuteIdxLabel(strategy.window.fromMinuteIdx)} – ${minuteIdxLabel(
-                              strategy.window.toMinuteIdx
-                            )}`
-                          : "—"}
-                      </span>
-                      {fit !== "full" && (
-                        <span className="ml-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-amber-300/70">
-                          {fit === "none" ? "outside" : "partial"}
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="px-2 py-2">
-                      {strategy.nav ? (
-                        <div className="flex items-center gap-1.5">
-                          {(
-                            [
-                              ["Stream", strategy.nav.stream],
-                              ["Scanner", strategy.nav.scanner],
-                              ["Sonar", strategy.nav.sonar],
-                            ] as const
-                          ).map(([label, href]) => (
-                            <Link
-                              key={label}
-                              href={href}
-                              className="rounded bg-white/[0.05] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-white/50 transition-colors hover:bg-white/[0.12] hover:text-white"
-                            >
-                              {label}
-                            </Link>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-white/45">not implemented</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div className="border-t border-white/[0.06] px-4 py-2.5 text-[10px] text-white/30">
-        Priority mirrors the <span className="font-mono">strategyPriority</span> each stream passes to the bridge —
-        higher wins when two strategies claim the same ticker at the same minute boundary. With the schedule ON this
-        plan DOES drive the day: the bridge starts and stops each strategy on its segment, and the engines that have no
-        bridge-side engine of their own are hosted below, so no stream page needs to stay open.
-      </div>
-    </section>
-  );
-}

@@ -58,12 +58,26 @@ type StreamEngineSnapshot = {
   asOfMinuteIdx: number | null;
   candidates: StreamCandidateRow[];
   positions: StreamOpenPosition[];
+  /**
+   * Why the last tick found zero candidates, or null once it found any — see
+   * ServerStrategyRunner.MarkOutOfPlan / RecordNoData. The exact string below is the one MarkOutOfPlan
+   * sets when the operator's own plan toggle for this strategy is off (or the clock left its
+   * segment) — everything else that can land here is a real "ticked, found nothing" reading, not a
+   * disabled state, so only this one string drives the grayed-out treatment.
+   */
+  noDataReason: string | null;
 };
+
+const OUT_OF_PLAN_REASON = "not currently assigned/enabled by the Caesar plan";
 
 type SnapshotResponse = { ok: boolean; snapshot: StreamEngineSnapshot };
 type AllPositionsResponse = { ok: boolean; positions: StreamOpenPosition[] };
 
-const POLL_MS = 6_000;
+// Tightened from 6s: the backend now force-re-evaluates immediately on a plan edit, schedule
+// toggle, or Start/Stop (ServerStrategyRunner.ForceReEvaluate) — this poll is the other half of
+// "the operator sees it right away". A plain GET against an already-computed snapshot (no strategy
+// evaluation happens here), so tightening it costs one small request more per cycle, not more work.
+const POLL_MS = 2_000;
 
 /** Countdown/target-time for a fixed exit — "in Ns" while pending, "Ns ago" once past (queued, not yet dispatched). */
 function fmtFixedExit(fixedExitAtUtc: string | null): { text: string; tone: string } {
@@ -145,6 +159,39 @@ function useAllPositions() {
   return { positions, error, asOfUtc };
 }
 
+type CaesarPlanRunningResponse = { ok: boolean; running: Record<string, boolean> };
+
+/**
+ * Which strategy ids the Caesar plan currently assigns and enables for the segment the clock is
+ * in right now — the same `ShouldRun` verdict CaesarPlanController.GetPlan already computes, keyed
+ * by bridge strategy id (e.g. "stream.opendoor"). Used to show only the OpenDoor-family strategies
+ * that are actually live on this segment, instead of all four all the time.
+ */
+function useCaesarPlanRunning() {
+  const [running, setRunning] = useState<Record<string, boolean> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchRunning = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/plan"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<CaesarPlanRunningResponse>)
+        .then((body) => body.running ?? {});
+    const unsubscribe = subscribeSharedPoll("bridge-caesar-plan-running", fetchRunning, POLL_MS, (value, err) => {
+      if (!alive) return;
+      if (err) {
+        setError(err);
+      } else {
+        setRunning(value);
+        setError(null);
+      }
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  return { running, error };
+}
+
 function AgeBadge({ asOfUtc }: { asOfUtc: string | null }) {
   // Absolute timestamp, not a server-computed age — recomputed from Date.now() on every poll tick
   // (6s granularity), close enough to tell "live" from "stalled" without a per-second re-render.
@@ -171,110 +218,181 @@ function AgeBadge({ asOfUtc }: { asOfUtc: string | null }) {
   );
 }
 
-function CandidatesTable({ rows }: { rows: StreamCandidateRow[] }) {
-  if (rows.length === 0) {
-    return <div className="px-3 py-6 text-center font-mono text-[11px] text-zinc-600">no candidates this minute</div>;
-  }
+// Same visual language as the Stream tab's own ACTIVE/SIGNALS cards (ArbitrageStreamView.tsx's
+// StreamDecisionTable): a rounded card, a header bar with a mono uppercase title plus a count
+// badge, a sticky grid header row where every column carries its own accent color, and zebra-
+// striped body rows. Caesar's own columns differ (Pair/Latch/Reason instead of Stream's
+// add-ladder fields), so this is the same TREATMENT applied to Caesar's own data, not a literal
+// copy of Stream's column set.
+const CANDIDATES_GRID_COLS =
+  "minmax(0,0.7fr) minmax(0,0.9fr) minmax(0,0.6fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,0.7fr) minmax(0,0.9fr) minmax(0,0.7fr) minmax(0,1.3fr)";
+const POSITIONS_GRID_COLS =
+  "minmax(0,0.8fr) minmax(0,0.9fr) minmax(0,0.6fr) minmax(0,0.6fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,1.5fr)";
+
+// Same fixed height + internal scroll as the Stream tab's own ACTIVE/SIGNALS cards
+// (ArbitrageStreamView.tsx's STREAM_PANEL_HEIGHT) — the card itself never grows with row count,
+// the row list scrolls inside it instead.
+const PANEL_HEIGHT = "h-[320px]";
+
+function PanelCard({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: React.ReactNode;
+}) {
   return (
-    <table className="w-full min-w-[640px] text-xs font-mono">
-      <thead className="bg-[#0a0a0a]/55 text-zinc-500">
-        <tr className="[&>th]:px-3 [&>th]:py-1.5 [&>th]:text-left [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.12em]">
-          <th>Ticker</th>
-          <th>Pair</th>
-          <th>Side</th>
-          <th className="text-right">Signal</th>
-          <th className="text-right">Spread</th>
-          <th className="text-right">Net edge</th>
-          <th>Status</th>
-          <th>Latch</th>
-          <th className="truncate">Reason</th>
-        </tr>
-      </thead>
-      <tbody className="[&>tr>td]:px-3 [&>tr>td]:py-1">
-        {rows.map((r, i) => (
-          <tr key={`${r.ticker}|${r.pairKey ?? ""}|${i}`} className="border-t border-white/[0.04]">
-            <td className="font-bold text-zinc-200">{r.ticker}</td>
-            <td className="text-zinc-500">{r.pairKey ?? "—"}</td>
-            <td className={sideTone(r.side)}>{r.side}</td>
-            <td className="text-right tabular-nums text-zinc-300">{fmt(r.signal)}</td>
-            <td className="text-right tabular-nums text-zinc-400">{fmt(r.spread)}</td>
-            <td className="text-right tabular-nums text-zinc-300">{fmt(r.netEdge)}</td>
-            <td className={statusTone(r.status)}>{r.status}</td>
-            <td className={r.readyToEnter ? "text-emerald-300" : r.latched ? "text-amber-300" : "text-zinc-600"}>
-              {r.readyToEnter ? "ready" : r.latched ? "holding" : "—"}
-            </td>
-            <td className="truncate text-zinc-600">{r.reason}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className={`scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] ${PANEL_HEIGHT}`}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">{title}</div>
+        <div className="font-mono text-[10px] uppercase text-zinc-500">{count}</div>
+      </div>
+      <div className="flex-1 overflow-y-auto">{children}</div>
+    </div>
+  );
+}
+
+function CandidatesTable({ rows }: { rows: StreamCandidateRow[] }) {
+  return (
+    <PanelCard title="Signals" count={rows.length}>
+      <div
+        className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap"
+        style={{ display: "grid", gridTemplateColumns: CANDIDATES_GRID_COLS }}
+      >
+        <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+        <div className="px-2 py-2.5 text-left text-sky-300/70">Pair</div>
+        <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+        <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
+        <div className="px-2 py-2.5 text-right text-amber-400/80">Spread</div>
+        <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
+        <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
+        <div className="px-2 py-2.5 text-left text-pink-400/80">Latch</div>
+        <div className="px-2 py-2.5 text-left text-zinc-500">Reason</div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="p-8 text-center text-xs font-mono text-zinc-500">no candidates this minute</div>
+      ) : (
+        <div className="text-xs font-mono">
+          {rows.map((r, i) => (
+            <div
+              key={`${r.ticker}|${r.pairKey ?? ""}|${i}`}
+              className={`items-center border-t border-white/5 transition-colors [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap ${i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent"} hover:bg-white/[0.03]`}
+              style={{ display: "grid", gridTemplateColumns: CANDIDATES_GRID_COLS }}
+            >
+              <div className="px-2 py-2.5 font-semibold text-zinc-100">{r.ticker}</div>
+              <div className="px-2 py-2.5 text-zinc-400">{r.pairKey ?? "—"}</div>
+              <div className={`px-2 py-2.5 ${sideTone(r.side)}`}>{r.side}</div>
+              <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.signal)}</div>
+              <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.spread)}</div>
+              <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.netEdge)}</div>
+              <div className={`px-2 py-2.5 ${statusTone(r.status)}`}>{r.status}</div>
+              <div className={`px-2 py-2.5 ${r.readyToEnter ? "text-emerald-300" : r.latched ? "text-amber-300" : "text-zinc-600"}`}>
+                {r.readyToEnter ? "ready" : r.latched ? "holding" : "—"}
+              </div>
+              <div className="px-2 py-2.5 text-zinc-600">{r.reason}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </PanelCard>
   );
 }
 
 function PositionsTable({ rows }: { rows: StreamOpenPosition[] }) {
-  if (rows.length === 0) {
-    return <div className="px-3 py-4 text-center font-mono text-[11px] text-zinc-600">no open positions</div>;
-  }
   return (
-    <table className="w-full min-w-[560px] text-xs font-mono">
-      <thead className="bg-[#0a0a0a]/55 text-zinc-500">
-        <tr className="[&>th]:px-3 [&>th]:py-1.5 [&>th]:text-left [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.12em]">
-          <th>Ticker</th>
-          <th>Pair</th>
-          <th>Side</th>
-          <th className="text-right">Adds</th>
-          <th>Dispatched</th>
-          <th>Fixed exit</th>
-          <th>Last reason</th>
-        </tr>
-      </thead>
-      <tbody className="[&>tr>td]:px-3 [&>tr>td]:py-1">
-        {rows.map((p, i) => {
-          const fixedExit = fmtFixedExit(p.fixedExitAtUtc);
-          return (
-            <tr key={`${p.ticker}|${p.pairKey ?? ""}|${i}`} className="border-t border-white/[0.04]">
-              <td className="font-bold text-zinc-200">{p.ticker}</td>
-              <td className="text-zinc-500">{p.pairKey ?? "—"}</td>
-              <td className={sideTone(p.side)}>{p.side}</td>
-              <td className="text-right tabular-nums text-zinc-400">{Math.max(0, p.entryCount - 1)}</td>
-              <td className={p.entryDispatched ? "text-zinc-400" : "text-amber-300"}>
-                {p.entryDispatched ? "yes" : "shadow only"}
-              </td>
-              <td className={fixedExit.tone}>{fixedExit.text}</td>
-              <td className="truncate text-zinc-600">{p.lastReason}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <PanelCard title="Positions" count={rows.length}>
+      <div
+        className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap"
+        style={{ display: "grid", gridTemplateColumns: POSITIONS_GRID_COLS }}
+      >
+        <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+        <div className="px-2 py-2.5 text-left text-sky-300/70">Pair</div>
+        <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+        <div className="px-2 py-2.5 text-right text-amber-400/80">Adds</div>
+        <div className="px-2 py-2.5 text-left text-emerald-300/80">Dispatched</div>
+        <div className="px-2 py-2.5 text-left text-teal-300/80">Fixed exit</div>
+        <div className="px-2 py-2.5 text-left text-zinc-500">Last reason</div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="p-8 text-center text-xs font-mono text-zinc-500">no open positions</div>
+      ) : (
+        <div className="text-xs font-mono">
+          {rows.map((p, i) => {
+            const fixedExit = fmtFixedExit(p.fixedExitAtUtc);
+            return (
+              <div
+                key={`${p.ticker}|${p.pairKey ?? ""}|${i}`}
+                className={`items-center border-t border-white/5 transition-colors [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap ${i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent"} hover:bg-white/[0.03]`}
+                style={{ display: "grid", gridTemplateColumns: POSITIONS_GRID_COLS }}
+              >
+                <div className="px-2 py-2.5 font-semibold text-zinc-100">{p.ticker}</div>
+                <div className="px-2 py-2.5 text-zinc-400">{p.pairKey ?? "—"}</div>
+                <div className={`px-2 py-2.5 ${sideTone(p.side)}`}>{p.side}</div>
+                <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{Math.max(0, p.entryCount - 1)}</div>
+                <div className={`px-2 py-2.5 ${p.entryDispatched ? "text-zinc-400" : "text-amber-300"}`}>
+                  {p.entryDispatched ? "yes" : "shadow only"}
+                </div>
+                <div className={`px-2 py-2.5 ${fixedExit.tone}`}>{fixedExit.text}</div>
+                <div className="px-2 py-2.5 text-zinc-600">{p.lastReason}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </PanelCard>
+  );
+}
+
+/**
+ * The one header every strategy card in this window uses — label, an optional "disabled" badge,
+ * and the age badge on the right. Every strategy (Arbitrage/PairFlux with a candidate screen, the
+ * OpenDoor family with only positions) renders this exact row so the cards read as one family of
+ * tiles rather than two different components glued together.
+ */
+function StrategyCardHeader({
+  label,
+  outOfPlan,
+  asOfUtc,
+}: {
+  label: string;
+  outOfPlan: boolean;
+  asOfUtc: string | null;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-1">
+      <span className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-400">{label}</span>
+      <div className="flex items-center gap-2">
+        {outOfPlan && (
+          <span className="rounded border border-zinc-600/40 bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            disabled — nothing sent
+          </span>
+        )}
+        <AgeBadge asOfUtc={asOfUtc} />
+      </div>
+    </div>
   );
 }
 
 function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflux"; label: string }) {
   const { snapshot, error } = useStreamEngineSnapshot(strategy);
+  // Only this exact reason means "the operator's own plan toggle is off" — any other noDataReason
+  // is a real "ticked, found nothing" answer and must not read as disabled.
+  const outOfPlan = snapshot?.noDataReason === OUT_OF_PLAN_REASON;
 
   return (
-    <div className="border-t border-white/[0.05] first:border-t-0">
-      <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/30 px-3 py-1.5">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-400">{label}</span>
-        <div className="flex items-center gap-2">
-          {snapshot && (
-            <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-              {snapshot.candidates.length} candidates · {snapshot.positions.length} open
-            </span>
-          )}
-          <AgeBadge asOfUtc={snapshot?.asOfUtc ?? null} />
-        </div>
-      </div>
+    <div className={`min-w-0 space-y-2 p-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
+      <StrategyCardHeader label={label} outOfPlan={outOfPlan} asOfUtc={snapshot?.asOfUtc ?? null} />
 
       {error && (
-        <div className="mx-3 my-2 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
         </div>
       )}
 
       {!error && (
-        <div className="overflow-x-auto">
+        <div className="space-y-2">
           <CandidatesTable rows={snapshot?.candidates ?? []} />
           <PositionsTable rows={snapshot?.positions ?? []} />
         </div>
@@ -295,30 +413,26 @@ const OPEN_DOOR_FAMILY: Record<string, string> = {
  * continuously re-evaluated deviation), so positions are the whole live picture for this family.
  * One shared poll, grouped by strategy, rather than four separate per-strategy sections — none of
  * the four has anything else to show.
+ *
+ * Only shown once the Caesar plan actually assigns+enables it on the current segment (or it still
+ * holds an open position, so an exit is never hidden just because the segment moved on) — a
+ * strategy that is off the plan is not a "0 open" row here, it is simply absent, same treatment as
+ * Arbitrage/PairFlux going gray for the same reason above.
  */
 function OpenDoorFamilySection() {
   const { positions, error, asOfUtc } = useAllPositions();
+  const { running } = useCaesarPlanRunning();
   const family = (positions ?? []).filter((p) => p.strategyId in OPEN_DOOR_FAMILY);
-  const grouped = Object.keys(OPEN_DOOR_FAMILY).map((strategyId) => ({
-    strategyId,
-    label: OPEN_DOOR_FAMILY[strategyId],
-    rows: family.filter((p) => p.strategyId === strategyId),
-  }));
+  const grouped = Object.keys(OPEN_DOOR_FAMILY)
+    .map((strategyId) => ({
+      strategyId,
+      label: OPEN_DOOR_FAMILY[strategyId],
+      rows: family.filter((p) => p.strategyId === strategyId),
+    }))
+    .filter((g) => g.rows.length > 0 || running?.[g.strategyId] === true);
 
   return (
     <div className="border-t border-white/[0.05]">
-      <div className="flex items-center justify-between gap-3 bg-[#0a0a0a]/30 px-3 py-1.5">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-          OpenDoor family — entry + fixed-time exit
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-            {family.length} open
-          </span>
-          <AgeBadge asOfUtc={asOfUtc} />
-        </div>
-      </div>
-
       {error && (
         <div className="mx-3 my-2 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
@@ -330,14 +444,25 @@ function OpenDoorFamilySection() {
       )}
 
       {!error && positions != null && (
-        <div className="overflow-x-auto">
-          {grouped.map(({ strategyId, label, rows }) => (
-            <div key={strategyId} className="border-t border-white/[0.03] first:border-t-0">
-              <div className="px-3 py-1 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">{label}</div>
-              <PositionsTable rows={rows} />
-            </div>
-          ))}
-        </div>
+        grouped.length === 0 ? (
+          <div className="px-3 py-4 text-center font-mono text-[11px] text-zinc-600">
+            nothing assigned to the current segment
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 p-2 lg:grid-cols-2">
+            {grouped.map(({ strategyId, label, rows }) => {
+              // Grayed the same way Arbitrage/PairFlux are above: shown (because it still holds a
+              // position) but the plan is not currently sending it anything new.
+              const outOfPlan = running?.[strategyId] !== true;
+              return (
+                <div key={strategyId} className={`min-w-0 space-y-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
+                  <StrategyCardHeader label={label} outOfPlan={outOfPlan} asOfUtc={asOfUtc} />
+                  <PositionsTable rows={rows} />
+                </div>
+              );
+            })}
+          </div>
+        )
       )}
     </div>
   );
@@ -346,8 +471,15 @@ function OpenDoorFamilySection() {
 export default function CaesarBridgeDecisions() {
   return (
     <CaesarPanel title="Bridge Decisions" subtitle="what the server engine sees" accent="#a78bfa" terminal className="mt-3">
-      <StrategySection strategy="arbitrage" label="Arbitrage" />
-      <StrategySection strategy="pairflux" label="PairFlux" />
+      {/* Side by side above the OpenDoor-family strip below — the two strategies an operator
+          watches together, so neither has to scroll past the other to see both at once. Each
+          table keeps its own overflow-x-auto, so a narrow column scrolls its rows sideways
+          rather than squeezing them; the divider collapses to a horizontal one when the two
+          strategies stack on a narrow screen instead of sitting side by side. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-white/[0.05] border-t border-white/[0.05]">
+        <StrategySection strategy="arbitrage" label="Arbitrage" />
+        <StrategySection strategy="pairflux" label="PairFlux" />
+      </div>
       <OpenDoorFamilySection />
     </CaesarPanel>
   );
