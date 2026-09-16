@@ -485,12 +485,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
             const total = strategy.openPnl + strategy.closedPnl;
             return (
               <div key={key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-                <div className="flex items-baseline justify-between font-mono">
-                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
-                  <span className="text-[10px] text-zinc-600">#{strategy.priority}</span>
-                </div>
-                <div className="mt-1 font-mono text-[10px] text-zinc-500">
-                  {strategy.open} open <span className="ml-2 text-emerald-300/80">{strategy.long}L</span><span className="ml-2 text-rose-300/80">{strategy.short}S</span>
+                <div className="flex items-baseline justify-between gap-2 font-mono">
+                  <div className="flex items-baseline gap-2.5 overflow-hidden">
+                    <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{key}</span>
+                    <span className="shrink-0 text-[10px] text-zinc-500">
+                      {strategy.open} open <span className="ml-1 text-emerald-300/80">{strategy.long}L</span><span className="ml-1 text-rose-300/80">{strategy.short}S</span>
+                    </span>
+                  </div>
+                  <span className="shrink-0 text-[10px] text-zinc-600">#{strategy.priority}</span>
                 </div>
                 <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-2.5 font-mono tabular-nums">
                   <Metric label="Total" value={total} tone={pnlTone(total)} />

@@ -500,26 +500,28 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   }, [from, to, span]);
 
   /**
-   * A step line, honestly spaced by the CLOCK — corrected 2026-09-16 after equal-width-by-rank
-   * spacing (briefly tried) made the chart lie about when things happened: every step's HEIGHT is
-   * already equal on its own (each entry is +1, nothing to fix there), but its WIDTH has to be
-   * the real time between entries, or a burst of five in one minute and five spread over an hour
-   * would draw identically. This is the honest version: each point sits at `x(p.min)`, its actual
-   * NY minute.
+   * The line, honestly spaced by the CLOCK, corner-to-corner — corrected 2026-09-16 twice over:
+   * first the spacing (equal-width-by-rank made the chart lie about WHEN things happened; each
+   * point now sits at `x(p.min)`, its real NY minute), then the shape. A full step (a flat tread
+   * to the new x, THEN a vertical riser to the new count) draws two corners per entry and reads
+   * as a staircase — "квадратним" (blocky). Connecting each entry's own APEX straight to the
+   * next one instead is one corner per entry, and rounded (see cornerRadiusFor) it reads as a
+   * rise, not a wall. The only flats left are the two that are actually true: nothing happened
+   * before the first entry, and nothing has happened since the last one — those still hold at
+   * their real value rather than fabricating a rise across dead time.
    */
   const stepsFor = useCallback((s: Series): [number, number][] => {
     const startX = x(from);
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
     if (s.points.length === 0) return [[startX, y(0)], [endX, y(0)]];
 
-    const corners: [number, number][] = [[x(Math.max(from, s.points[0].min)), y(0)]];
-    let prev = 0;
+    const firstPx = x(Math.max(from, s.points[0].min));
+    const corners: [number, number][] = [[startX, y(0)], [firstPx, y(0)]];
     for (const p of s.points) {
       const px = x(Math.min(Math.max(p.min, from), to));
-      corners.push([px, y(prev)], [px, y(p.count)]);
-      prev = p.count;
+      corners.push([px, y(p.count)]);
     }
-    corners.push([endX, y(prev)]);
+    corners.push([endX, y(s.points[s.points.length - 1].count)]);
     return corners;
   }, [from, to, nowMin, x, y]);
 
