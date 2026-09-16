@@ -380,60 +380,54 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   }, [view.rows, strategySort]);
 
   const strategyTotals = (
-    <section className="mt-3 space-y-3">
+    <section className="mt-3 rounded-xl border border-[#a78bfa]/20 bg-black/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
       {/*
-        GRAND TOTAL, AS ITS OWN HEADER. Every strategy's own bucket, plus the shared and unclaimed
-        tickers no single strategy's card counts — the one number that answers "how is the whole
-        account doing" without adding up the cards below by hand, so it gets top billing (its own
-        banner, bigger type) rather than sitting inside the card grid as one more tile.
+        ONE BLOCK: the section's own header carries the grand total (every strategy's own bucket,
+        plus the shared/unclaimed tickers no single card counts) right beside its label, so the
+        one number that answers "how is the whole account doing" is read in the same glance as the
+        section title — not a separate banner above it, and not a card competing with the others
+        below for the same kind of attention.
       */}
-      <div className="rounded-2xl border border-[#a78bfa]/25 bg-[#a78bfa]/[0.07] px-5 py-4 shadow-xl">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="font-mono text-[13px] font-bold uppercase tracking-[0.2em] text-violet-200">
-            Grand Total
-          </span>
-          <span className="font-mono text-[11px] uppercase tracking-widest text-violet-200/50">
-            {view.openCount} open across the account
-          </span>
+      <div className="flex flex-wrap items-baseline justify-between gap-4 border-b border-white/[0.06] pb-3">
+        <div className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
+          Strategy P&amp;L
+          <span className="ml-2 font-normal tracking-normal text-zinc-600">{view.openCount} open across the account</span>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-4 border-t border-[#a78bfa]/20 pt-3">
-          <BigMetric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
-          <BigMetric label="Open" value={view.grandOpenPnl} tone={pnlTone(view.grandOpenPnl)} />
-          <BigMetric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
+        <div className="flex items-baseline gap-6">
+          <HeaderMetric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
+          <HeaderMetric label="Open" value={view.grandOpenPnl} tone={pnlTone(view.grandOpenPnl)} />
+          <HeaderMetric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/[0.06] bg-black/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <div className="mb-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">Strategy P&amp;L</div>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from(view.perStrategy.entries())
-            // Idle — nothing open, nothing realised today — is not worth its own card. instances
-            // (and so perStrategy) still covers every registered strategy regardless of the
-            // current segment, on purpose (a position can close long after its segment ends), so
-            // filtering HERE — what to show — rather than upstream — what to track — is what keeps
-            // that intact while still decluttering a card grid that used to list four strategies
-            // at "0 · +0.00" next to the two actually doing anything.
-            .filter(([, strategy]) => strategy.open > 0 || strategy.closedCount > 0)
-            .map(([key, strategy]) => {
-              const total = strategy.openPnl + strategy.closedPnl;
-              return (
-                <div key={key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-                  <div className="flex items-baseline justify-between font-mono">
-                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
-                    <span className="text-[10px] text-zinc-600">#{strategy.priority}</span>
-                  </div>
-                  <div className="mt-1 font-mono text-[10px] text-zinc-500">
-                    {strategy.open} open <span className="ml-2 text-emerald-300/80">{strategy.long}L</span><span className="ml-2 text-rose-300/80">{strategy.short}S</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-2 font-mono tabular-nums">
-                    <Metric label="Total" value={total} tone={pnlTone(total)} />
-                    <Metric label="Open" value={strategy.openPnl} tone={pnlTone(strategy.openPnl)} />
-                    <Metric label="Closed" value={strategy.closedPnl} tone={pnlTone(strategy.closedPnl)} />
-                  </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from(view.perStrategy.entries())
+          // Idle — nothing open, nothing realised today — is not worth its own card. instances
+          // (and so perStrategy) still covers every registered strategy regardless of the
+          // current segment, on purpose (a position can close long after its segment ends), so
+          // filtering HERE — what to show — rather than upstream — what to track — is what keeps
+          // that intact while still decluttering a card grid that used to list four strategies
+          // at "0 · +0.00" next to the two actually doing anything.
+          .filter(([, strategy]) => strategy.open > 0 || strategy.closedCount > 0)
+          .map(([key, strategy]) => {
+            const total = strategy.openPnl + strategy.closedPnl;
+            return (
+              <div key={key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+                <div className="flex items-baseline justify-between font-mono">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
+                  <span className="text-[10px] text-zinc-600">#{strategy.priority}</span>
                 </div>
-              );
-            })}
-        </div>
+                <div className="mt-1 font-mono text-[10px] text-zinc-500">
+                  {strategy.open} open <span className="ml-2 text-emerald-300/80">{strategy.long}L</span><span className="ml-2 text-rose-300/80">{strategy.short}S</span>
+                </div>
+                <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-2.5 font-mono tabular-nums">
+                  <Metric label="Total" value={total} tone={pnlTone(total)} />
+                  <Metric label="Open" value={strategy.openPnl} tone={pnlTone(strategy.openPnl)} />
+                  <Metric label="Closed" value={strategy.closedPnl} tone={pnlTone(strategy.closedPnl)} />
+                </div>
+              </div>
+            );
+          })}
       </div>
     </section>
   );
@@ -759,17 +753,17 @@ function Metric({ label, value, tone }: { label: string; value: number; tone: st
   return (
     <div>
       <div className="text-[8px] uppercase tracking-widest text-zinc-600">{label}</div>
-      <div className={`mt-0.5 text-[13px] font-bold ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
+      <div className={`mt-0.5 font-mono text-lg font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
     </div>
   );
 }
 
-/** Metric's larger twin, for the Grand Total banner — the one number worth reading from across the room. */
-function BigMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
+/** Metric's larger twin, for the Grand Total figures sitting beside the section's own header. */
+function HeaderMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
-    <div>
+    <div className="text-right">
       <div className="text-[9px] uppercase tracking-widest text-violet-200/50">{label}</div>
-      <div className={`mt-1 font-mono text-3xl font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
+      <div className={`mt-0.5 font-mono text-2xl font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
     </div>
   );
 }
