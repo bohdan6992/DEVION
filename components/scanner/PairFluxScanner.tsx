@@ -5762,7 +5762,10 @@ export default function PairFluxScanner({
 
   useEffect(() => {
     setZapMode((prev) => {
-      if (prev === "delta" && metric === "SigmaZap") return "delta";
+      // α and γ both read on the SigmaZap metric, same as plain σ — without naming them here too,
+      // this effect (which also fires right after restore, since `metric` differs from its
+      // pre-restore default) silently dropped a restored/clicked γ DEV back to σ DEV.
+      if ((prev === "delta" || prev === "gamma") && metric === "SigmaZap") return prev;
       return metric === "ZapPct" ? "zap" : "sigma";
     });
   }, [metric]);
