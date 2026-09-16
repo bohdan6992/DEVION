@@ -1879,7 +1879,12 @@ export default function OpenDoorScanner({
         if (typeof s.corrThresholdInput === "string") setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
         if (typeof s.includeChina === "boolean") setIncludeChina(s.includeChina);
-  }, [controlledRuleBand, controlledSession, controlledTab, routeLocksPrimaryPanel]);
+    // useFilterRestore documents itself as a ONE-TIME read before first paint. These deps used to
+    // include the controlled-mode props, which meant every PRE/OPEN/INTRA click on the Stream page
+    // (session is controlled from there) re-ran the whole ~200-field restore and could stomp a
+    // just-changed control (e.g. the DEV-unit button) with the last value written to storage,
+    // if that write hadn't landed yet — the saved state "jumping" back after an unrelated click.
+  }, []);
 
   // Declared here rather than beside the CORR memo below: persistedFilters reads it during
   // render, so it has to exist before that.
