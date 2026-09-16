@@ -14,10 +14,13 @@
  * The arrivals are counts over time, which is a line — one per strategy, on one axis.
  *
  * WHAT "APPEARED" MEANS. The line is the CUMULATIVE count of entries the strategy actually took
- * during the segment, read from its own action log. That log carries real timestamps and survives a
- * reload; the live stores only know the present, so anything drawn from them would be a history
- * invented at mount and lost on refresh. Situations that were considered and not taken are counted
- * by the terminal above, not here — this line is about what happened.
+ * today, real dispatch or shadow — see ServerStrategyRunner.GetEntryLog on the bridge. This used to
+ * read a BROWSER TAB's local action log, on the theory that the bridge engines had nothing of the
+ * kind to chart. That was true the day it was written and has not been true since Arbitrage and
+ * PairFlux migrated server-side: every strategy Caesar hosts today runs on the bridge, so that
+ * source had gone permanently, silently empty — "0 total" forever, not because nothing happened but
+ * because nothing was ever asked. Situations that were considered and not taken are counted by the
+ * terminal above, not here — this line is about what happened.
  *
  * COLOUR. Categorical, by strategy identity, assigned in fixed order and never cycled: a filter
  * that changes how many strategies are shown must not repaint the survivors. The four dark steps
@@ -30,7 +33,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { getStreamStores } from "@/components/stream/streamStoreRegistry";
 
 export type CaesarChartsProps = {
   instances: readonly { key: string; instanceId: string; priority: number }[];
@@ -60,6 +62,18 @@ type AccountPosition = {
   PositionBp?: number | null;
   isFlat?: boolean | null;
 };
+
+/** One of the bridge's own tracked positions — see CaesarPlanController's StreamOpenPositionDto. */
+type BridgePosition = {
+  strategyId: string;
+  ticker: string;
+  entryDispatched: boolean;
+};
+
+type BridgePositionsResponse = { ok: boolean; positions: BridgePosition[] };
+
+/** GET api/stream/caesar/entries: bridge strategy id -> that strategy's own entry timestamps today. */
+type EntryLogResponse = { ok: boolean; tradingDateNy: string; entries: Record<string, string[]> };
 
 function isAccountActive(position: AccountPosition): boolean {
   if (position.isFlat === true) return false;
@@ -295,16 +309,15 @@ function Donut({
 // =========================================================================================
 
 export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: CaesarChartsProps) {
-  const [series, setSeries] = useState<Series[]>([]);
   const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
   const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
+  const [bridgePositions, setBridgePositions] = useState<BridgePosition[]>([]);
+  const [bridgeEntries, setBridgeEntries] = useState<Record<string, string[]>>({});
   const [hoverMin, setHoverMin] = useState<number | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const plotRef = useRef<SVGSVGElement | null>(null);
 
-  const instanceKey = instances.map((i) => `${i.key}:${i.instanceId}`).join(",");
-
-  // ACTIVE NOW is account truth, not the browser engine's memory. That distinction matters after
+  // ACTIVE NOW is account truth, not any engine's own memory. That distinction matters after
   // Caesar or a stream remounts: existing positions have PositionBp already, but no local entry.
   useEffect(() => {
     let alive = true;
@@ -323,76 +336,87 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     return () => { alive = false; unsubscribe(); };
   }, []);
 
-  const recompute = useCallback(() => {
-    const out: Series[] = [];
-    instances.forEach((inst, index) => {
-      const stores = getStreamStores(inst.instanceId);
-      // The SAME rows the ACTIVE table shows — not a second definition of "active" derived from
-      // raw positions. A chart that counted `status !== "CLOSED"` would include entries that were
-      // decided but never dispatched, and would then disagree with the table right beside it.
-      const active = stores.position.getActiveRows().length;
-
-      // One step per ENTRY, in time order, carried forward as a running total.
-      const entries = stores.log
-        .getEntries()
-        .filter((e) => e.event === "ENTRY")
-        .sort((a, b) => a.ts - b.ts);
-
-      const points: Point[] = [];
-      let running = 0;
-      for (const e of entries) {
-        running += 1;
-        points.push({ min: axisMinuteOf(e.ts), count: running });
-      }
-
-      out.push({
-        key: inst.key,
-        color: index < MAX_SERIES ? SERIES[index] : OTHER,
-        active,
-        entered: running,
-        points,
-      });
-    });
-    setSeries(out);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceKey]);
-
+  // Which strategy holds which ticker, straight from the bridge's own tracker — shares
+  // CaesarBridgeDecisions' identical poll under the same key rather than running a second one.
   useEffect(() => {
-    recompute();
-    const unsubs: Array<() => void> = [];
-    for (const inst of instances) {
-      const s = getStreamStores(inst.instanceId);
-      unsubs.push(s.position.subscribe(recompute));
-      unsubs.push(s.log.subscribe(recompute));
+    let alive = true;
+    const fetchAll = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<BridgePositionsResponse>)
+        .then((body) => body.positions);
+    const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, 2000, (value, err) => {
+      if (!alive) return;
+      if (!err && value) setBridgePositions(value);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  // Every strategy's own entry timestamps today — see ServerStrategyRunner.GetEntryLog. This is
+  // cumulative history, not a live figure, so a slower poll than the two above is honest and cheap.
+  useEffect(() => {
+    let alive = true;
+    const fetchEntries = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/entries"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<EntryLogResponse>)
+        .then((body) => body.entries);
+    const unsubscribe = subscribeSharedPoll("bridge-entries-log", fetchEntries, 10_000, (value, err) => {
+      if (!alive) return;
+      if (!err && value) setBridgeEntries(value);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  const series = useMemo<Series[]>(() => instances.map((inst, index) => {
+    // One step per ENTRY, in time order, carried forward as a running total.
+    const orderedAt = (bridgeEntries[inst.instanceId] ?? [])
+      .map((iso) => new Date(iso).getTime())
+      .filter((ts) => Number.isFinite(ts))
+      .sort((a, b) => a - b);
+
+    const points: Point[] = [];
+    let running = 0;
+    for (const ts of orderedAt) {
+      running += 1;
+      points.push({ min: axisMinuteOf(ts), count: running });
     }
-    const id = window.setInterval(recompute, 5000);
-    return () => { for (const u of unsubs) u(); window.clearInterval(id); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceKey, recompute]);
+
+    // Real (dispatched, not shadow) positions the bridge currently tracks for this strategy — the
+    // account-truth recompute below overrides this the moment the account poll answers; this is
+    // only what shows before that first response lands.
+    const active = bridgePositions.filter((p) => p.strategyId === inst.instanceId && p.entryDispatched).length;
+
+    return {
+      key: inst.key,
+      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      active,
+      entered: running,
+      points,
+    };
+  }), [instances, bridgeEntries, bridgePositions]);
 
   const activeSeries = useMemo<Series[]>(() => {
-    // Until the first account response, preserve the stream-only display rather than pretending
+    // Until the first account response, preserve the bridge-only display rather than pretending
     // that a zero account count is confirmed.
     if (accountActiveCount == null) return series;
 
-    const streamByKey = new Map(series.map((s) => [s.key, s]));
     const ownersByTicker = new Map<string, string[]>();
-    for (const instance of instances) {
-      const owned = getStreamStores(instance.instanceId).position.getActiveRows();
-      for (const row of owned) {
-        const ticker = row.ticker.trim().toUpperCase();
-        if (!ticker) continue;
-        const owners = ownersByTicker.get(ticker) ?? [];
-        if (!owners.includes(instance.key)) owners.push(instance.key);
-        ownersByTicker.set(ticker, owners);
-      }
+    for (const position of bridgePositions) {
+      // Shadow-only: nothing in the real account to own, so it must never claim a real holding.
+      if (!position.entryDispatched) continue;
+      const ticker = position.ticker.trim().toUpperCase();
+      if (!ticker) continue;
+      const instance = instances.find((i) => i.instanceId === position.strategyId);
+      if (!instance) continue;
+      const owners = ownersByTicker.get(ticker) ?? [];
+      if (!owners.includes(instance.key)) owners.push(instance.key);
+      ownersByTicker.set(ticker, owners);
     }
 
     const counts = new Map<string, number>();
     for (const position of accountPositions) {
       const ticker = (position.ticker ?? "").trim().toUpperCase();
       const owners = ticker ? ownersByTicker.get(ticker) ?? [] : [];
-      // Account reports one position per ticker. A ticker claimed by two streams belongs in a
+      // Account reports one position per ticker. A ticker claimed by two strategies belongs in a
       // neutral shared slice, never twice in the ring.
       const key = owners.length === 1 ? owners[0] : owners.length > 1 ? "shared" : "unclaimed";
       counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -406,7 +430,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     if (shared > 0) result.push({ key: "shared", color: "#2dd4bf", active: shared, entered: 0, points: [] });
     if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fb923c", active: unclaimed, entered: 0, points: [] });
     return result;
-  }, [accountActiveCount, accountPositions, instances, series]);
+  }, [accountActiveCount, accountPositions, bridgePositions, instances, series]);
   const totalActive = activeSeries.reduce((sum, s) => sum + s.active, 0);
   const unclaimedActive = activeSeries.find((s) => s.key === "unclaimed")?.active ?? 0;
   const totalEntered = series.reduce((sum, s) => sum + s.entered, 0);

@@ -355,9 +355,13 @@ export default function CaesarSchedule() {
     return (plan[nowSegment.key] ?? []).flatMap((row) => {
       if (!row.enabled) return [];
       const strategy = LIVE_STRATEGIES[row.strategyKey];
-      // Browser engines are the only ones with a local action log. Bridge engines deliberately
-      // stay out, rather than showing a convincing but permanently empty history line.
-      if (!strategy || strategy.streamEngine !== "browser") return [];
+      if (!strategy) return [];
+      // Every strategy today runs on the bridge, not in a browser tab — CaesarCharts reads its
+      // entries and open positions from the bridge itself (GET api/stream/caesar/entries and
+      // /positions), keyed by this same bridgeStrategyId. This used to be filtered to
+      // streamEngine === "browser" only, on the theory that a bridge engine had no action log to
+      // chart — true, but it meant the chart read NOTHING for any strategy that had migrated
+      // server-side, which by now is all six: "0 total" forever, not because nothing happened.
       return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority }];
     });
   }, [plan, nowSegment]);
