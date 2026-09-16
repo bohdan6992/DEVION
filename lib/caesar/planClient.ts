@@ -121,6 +121,8 @@ export type BridgeEngineStatus = {
   enabled: boolean;
   polls: number;
   ticks: number;
+  /** Bridge strategy id -> whether it is currently shadow (record-only) or live (real dispatch). */
+  strategyShadowMode: Record<string, boolean>;
 };
 
 /**
@@ -141,6 +143,20 @@ export async function setBridgeEngineEnabled(enabled: boolean): Promise<BridgeEn
   const result = await request<{ engine: BridgeEngineStatus }>("/api/stream/caesar/engine", {
     method: "POST",
     body: JSON.stringify({ enabled }),
+  });
+  return result?.engine ?? null;
+}
+
+/**
+ * Per-strategy shadow override: true records only (no real order), false dispatches for real,
+ * null clears the override back to the machine's own default. This used to have no UI control at
+ * all — the only way to flip a strategy from shadow to live was a raw POST, awkward or impossible
+ * on a machine reached only through the deployed (Vercel) frontend with no terminal open on it.
+ */
+export async function setBridgeStrategyShadow(strategyId: string, shadowMode: boolean | null): Promise<BridgeEngineStatus | null> {
+  const result = await request<{ engine: BridgeEngineStatus }>("/api/stream/caesar/engine", {
+    method: "POST",
+    body: JSON.stringify({ strategy: strategyId, shadowMode }),
   });
   return result?.engine ?? null;
 }

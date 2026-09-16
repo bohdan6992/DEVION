@@ -14,6 +14,7 @@ import {
   pushBridgePlan,
   setBridgeEngineEnabled,
   setBridgeScheduleEnabled,
+  setBridgeStrategyShadow,
   startStrategyNow,
   stopStrategyNow,
 } from "@/lib/caesar/planClient";
@@ -120,6 +121,15 @@ export default function CaesarSchedule() {
    * banner (every request still succeeds; it just always answers empty). See setBridgeEngineEnabled.
    */
   const [engineEnabled, setEngineEnabled] = useState<boolean | null>(null);
+  /**
+   * Per-strategy shadow override, read alongside the engine's own status — `null` (not `false`)
+   * until the bridge answers, same reasoning as scheduleEnabled/engineEnabled above: a toggle must
+   * never claim a state it has not confirmed. Only Arbitrage/PairFlux get a control for this (the
+   * two strategies an operator actually promotes out of shadow one at a time); the OpenDoor family
+   * stays wherever the plan already has it.
+   */
+  const [shadowByStrategy, setShadowByStrategy] = useState<Record<string, boolean> | null>(null);
+  const [shadowBusyId, setShadowBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     setPlan(loadCaesarPlan());
@@ -182,7 +192,24 @@ export default function CaesarSchedule() {
     }
     setEngineError(false);
     setEngineEnabled(status.enabled);
+    setShadowByStrategy(status.strategyShadowMode ?? {});
   }, []);
+
+  const toggleShadow = useCallback(async (strategyId: string) => {
+    if (shadowBusyId != null || shadowByStrategy == null) return;
+    const current = shadowByStrategy[strategyId] ?? true;
+    setShadowBusyId(strategyId);
+    try {
+      const result = await setBridgeStrategyShadow(strategyId, !current);
+      if (result == null) {
+        await pullEngine();
+        return;
+      }
+      setShadowByStrategy(result.strategyShadowMode ?? {});
+    } finally {
+      setShadowBusyId(null);
+    }
+  }, [shadowBusyId, shadowByStrategy, pullEngine]);
 
   useEffect(() => {
     void pullEngine();
@@ -461,6 +488,9 @@ export default function CaesarSchedule() {
               engineBusy={engineBusy}
               engineError={engineError}
               onToggleEngine={toggleEngine}
+              shadowByStrategy={shadowByStrategy}
+              shadowBusyId={shadowBusyId}
+              onToggleShadow={toggleShadow}
               scheduleEnabled={scheduleEnabled}
               scheduleBusy={scheduleBusy}
               scheduleError={scheduleError}
