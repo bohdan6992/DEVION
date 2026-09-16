@@ -500,51 +500,54 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   }, [from, to, span]);
 
   /**
-   * A step line, each step an equal width apart — not spaced by the clock.
-   *
-   * Plotted at the real minute, a burst of entries reads as a near-vertical wall and a quiet
-   * stretch before it reads as one very long tread — measured live 2026-09-16, a slow trickle
-   * then a late rush made the first few situations invisible against the ones that followed. The
-   * count of things that happened is what this line exists to show, not how bunched in time they
-   * were, so every entry gets the SAME horizontal share of the segment. The first tread and the
-   * "now" marker still land on the segment's real start and now — the axis stays honest — but
-   * what happens between them is spaced by RANK. This also means N situations always fit: each
-   * one's share is 1/N of the same span, so it shrinks on its own as N grows instead of needing a
-   * separate "too many, zoom out" case.
+   * A step line, honestly spaced by the CLOCK — corrected 2026-09-16 after equal-width-by-rank
+   * spacing (briefly tried) made the chart lie about when things happened: every step's HEIGHT is
+   * already equal on its own (each entry is +1, nothing to fix there), but its WIDTH has to be
+   * the real time between entries, or a burst of five in one minute and five spread over an hour
+   * would draw identically. This is the honest version: each point sits at `x(p.min)`, its actual
+   * NY minute.
    */
   const stepsFor = useCallback((s: Series): [number, number][] => {
     const startX = x(from);
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
     if (s.points.length === 0) return [[startX, y(0)], [endX, y(0)]];
 
-    const n = s.points.length;
-    const stepWidth = (endX - startX) / n;
-    const corners: [number, number][] = [[startX, y(0)]];
+    const corners: [number, number][] = [[x(Math.max(from, s.points[0].min)), y(0)]];
     let prev = 0;
-    for (let i = 0; i < n; i++) {
-      const px = startX + (i + 1) * stepWidth;
-      corners.push([px, y(prev)], [px, y(s.points[i].count)]);
-      prev = s.points[i].count;
+    for (const p of s.points) {
+      const px = x(Math.min(Math.max(p.min, from), to));
+      corners.push([px, y(prev)], [px, y(p.count)]);
+      prev = p.count;
     }
+    corners.push([endX, y(prev)]);
     return corners;
   }, [from, to, nowMin, x, y]);
 
-  /** How far a corner rounds off before it would visibly eat into its own step. */
-  const cornerRadiusFor = useCallback((s: Series) => {
-    const startX = x(from);
-    const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    const n = Math.max(1, s.points.length);
-    const stepWidth = (endX - startX) / n;
+  /**
+   * How far a corner rounds off — bounded by the TIGHTEST real gap between two of this series' own
+   * points, not a fixed guess, so a burst of entries seconds apart never rounds far enough to eat
+   * into its own neighbour.
+   */
+  const cornerRadiusFor = useCallback((corners: readonly [number, number][]) => {
+    let minGap = Infinity;
+    for (let i = 1; i < corners.length; i++) {
+      const gap = Math.abs(corners[i][0] - corners[i - 1][0]);
+      if (gap > 0.01 && gap < minGap) minGap = gap;
+    }
     const unitHeight = (H - PAD_T - PAD_B) / maxCount;
-    return Math.max(1.5, Math.min(7, stepWidth * 0.42, unitHeight * 0.42));
-  }, [from, to, nowMin, x, maxCount]);
+    if (!Number.isFinite(minGap)) minGap = unitHeight;
+    return Math.max(1.5, Math.min(7, minGap * 0.42, unitHeight * 0.42));
+  }, [maxCount]);
 
   /**
    * The line itself, corners rounded off — a small curve through each turn instead of the turn.
-   * A right angle read as a spike rather than a rise, more so once equal-width steps put them
-   * shoulder to shoulder; this is what "зроби ріст плавнішим" asked for.
+   * A right angle read as a spike rather than a rise; this is what "зроби ріст плавнішим" asked
+   * for, kept when the spacing itself was corrected back to real time.
    */
-  const pathFor = useCallback((s: Series) => roundedPolyline(stepsFor(s), cornerRadiusFor(s)), [stepsFor, cornerRadiusFor]);
+  const pathFor = useCallback((s: Series) => {
+    const corners = stepsFor(s);
+    return roundedPolyline(corners, cornerRadiusFor(corners));
+  }, [stepsFor, cornerRadiusFor]);
 
   /**
    * The same line, closed down to the baseline — the shape a gradient fill paints INTO, so the
