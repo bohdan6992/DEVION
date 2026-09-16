@@ -215,15 +215,8 @@ export default function CaesarRunners() {
 
   return (
     <div className="mt-3 space-y-3">
-      {/* What is hosted, what it holds, and what it has been doing. */}
-      <CaesarTerminal
-        segment={seg}
-        instances={hosted.map((r) => ({
-          key: r.strategy.key,
-          instanceId: r.strategy.bridgeStrategyId,
-          priority: r.priority,
-        }))}
-      />
+      {/* Every strategy's own log, straight from the bridge — not scoped to what this tab hosts. */}
+      <CaesarTerminal segment={seg} />
 
       <div className="space-y-3">
         {hosted.map((r) => {

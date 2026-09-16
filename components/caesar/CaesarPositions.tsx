@@ -80,7 +80,43 @@ type BridgeTrackedPosition = {
   lastReason: string;
 };
 
-type BridgeTrackedPositionsResponse = { ok: boolean; positions: BridgeTrackedPosition[] };
+/** Ticker -> strategy id(s) that closed it today — see ServerPositionTracker.GetClosedOwners. */
+type ClosedOwners = Record<string, string[]>;
+
+type BridgeTrackedPositionsResponse = { ok: boolean; positions: BridgeTrackedPosition[]; closedOwners?: ClosedOwners };
+
+/**
+ * A synthetic claim for a ticker the bridge no longer tracks (it closed) but remembers who
+ * traded it. Only `strategyKey` and `status`/`reason` are ever actually read for a closed row —
+ * see the Ent/Status/Reason columns below — so this does not need real add-grid numbers, which
+ * the bridge does not keep past the close anyway.
+ */
+function closedClaim(): StreamPosition {
+  const now = Date.now();
+  return {
+    ticker: "",
+    pairKey: null,
+    benchmark: "",
+    side: "Long",
+    entrySignal: null,
+    lastSignal: null,
+    lastScaleSignal: null,
+    spread: null,
+    spreadBidPct: null,
+    status: "CLOSED",
+    reason: "closed — attributed from the bridge's own memory of who traded it",
+    entryCount: 1,
+    belowThresholdTicks: 0,
+    lockedForPrint: false,
+    pendingIntent: null,
+    entryDispatchedAt: null,
+    lastDispatchedAt: null,
+    lastConfirmedActiveAt: null,
+    lastAboveAddCapAt: null,
+    openedAt: now,
+    updatedAt: now,
+  };
+}
 
 /**
  * A bridge-tracked position, as this panel's STRATEGY join needs it. Only the fields the table
@@ -162,6 +198,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
+  const [closedOwners, setClosedOwners] = useState<ClosedOwners>({});
   /**
    * 0 = the table's own default order (open first, then ticker/strategy — see `view.rows`'s own
    * sort). 1/-1 = sorted by strategy, ascending/descending; a third click on the header returns
@@ -198,13 +235,13 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   // panel's STRATEGY column read UNCLAIMED for everything, always, regardless of what actually
   // opened the position. Shares CaesarBridgeDecisions'/CaesarCharts' identical poll under the same
   // key rather than running a fourth independent one against the same endpoint.
-  //
-  // CLOSED positions are NOT reconstructed here (the old browser action-log fallback is gone with
-  // it): the bridge only tracks currently-open positions, so a closed ticker's claim is lost the
-  // moment it closes, same as it already was — this fixes the STRATEGY column for what is open,
-  // not money attribution after a close, which was never sourced from here either.
   useEffect(() => {
     let alive = true;
+    // NOT the full response body: CaesarBridgeDecisions/CaesarCharts already subscribe to this
+    // exact key expecting the fetcher to resolve to `positions` alone — subscribeSharedPoll runs
+    // only the FIRST subscriber's fetcher for a given key, so changing this component's shape
+    // here would silently hand the other two a value they do not expect, or vice versa depending
+    // on mount order. closedOwners rides the same endpoint but its OWN poll key below instead.
     const fetchAll = () =>
       fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
         .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
@@ -217,6 +254,29 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           return strategy ? [{ strategyKey: strategy.key, position: positionFromBridge(p) }] : [];
         }),
       );
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  /**
+   * Who closed a ticker today — a SEPARATE poll key from the one above, even though it is the
+   * exact same URL: subscribeSharedPoll runs only the first subscriber's fetcher for a given key,
+   * so this cannot ride "bridge-all-positions" without also changing what that key resolves to
+   * for CaesarBridgeDecisions/CaesarCharts. One extra request every 2s is the cost of that safety.
+   *
+   * Without this, a position that CLOSES drops out of `/positions` entirely — the only thing the
+   * claims poll above reads — so a closed ticker read UNCLAIMED no matter how sure the operator
+   * was which strategy had traded it (2026-09-16: GDXU, a closed PairFlux trade).
+   */
+  useEffect(() => {
+    let alive = true;
+    const fetchClosedOwners = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
+        .then((body) => body.closedOwners ?? {});
+    const unsubscribe = subscribeSharedPoll("bridge-closed-owners", fetchClosedOwners, 2000, (value, err) => {
+      if (!alive || err || !value) return;
+      setClosedOwners(value);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -237,6 +297,18 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       const list = claimsByTicker.get(t);
       if (list) list.push(c);
       else claimsByTicker.set(t, [c]);
+    }
+
+    // Filled in only for a ticker with NO live claim above — an open position's own claim is
+    // always the truth; this is what is left once the bridge has forgotten the open one.
+    for (const [ticker, strategyKeys] of Object.entries(closedOwners)) {
+      const t = ticker.trim().toUpperCase();
+      if (!t || claimsByTicker.has(t)) continue;
+      const claimed = strategyKeys.flatMap((id) => {
+        const strategy = getLiveStrategyByBridgeId(id);
+        return strategy ? [{ strategyKey: strategy.key, position: closedClaim() }] : [];
+      });
+      if (claimed.length > 0) claimsByTicker.set(t, claimed);
     }
 
     const relevant = (snapshot?.positions ?? []).filter(isRelevant);
@@ -355,7 +427,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       grandOpenPnl, grandClosedPnl,
       openCount, rowCount: countedTickers.size,
     };
-  }, [claims, snapshot, instances]);
+  }, [claims, closedOwners, snapshot, instances]);
 
   const age = snapshot?.ageSeconds;
   const stale = age != null && age >= 0 && age > 30;

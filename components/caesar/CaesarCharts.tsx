@@ -92,6 +92,46 @@ function axisMinuteOf(ts: number): number {
   return ((d.getHours() * 60 + d.getMinutes()) - 21 * 60 + 1440) % 1440;
 }
 
+function dist(x0: number, y0: number, x1: number, y1: number): number {
+  return Math.hypot(x1 - x0, y1 - y0);
+}
+
+/** The point `d` units from (x0,y0) along the segment toward (x1,y1). */
+function towards(x0: number, y0: number, x1: number, y1: number, d: number): [number, number] {
+  const len = dist(x0, y0, x1, y1);
+  if (len <= 1e-6) return [x0, y0];
+  const t = Math.min(1, d / len);
+  return [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+}
+
+/**
+ * A polyline with every sharp corner eased into a small curve instead — a standard trick for
+ * softening a right-angle path without changing where it actually turns: pull back `radius`
+ * along each side of the corner, then draw a quadratic curve through the original corner point
+ * between those two pulled-back points. Degenerates to plain line segments if radius is 0 or
+ * there is nothing to round.
+ */
+function roundedPolyline(points: readonly [number, number][], radius: number): string {
+  if (points.length === 0) return "";
+  if (points.length < 3 || radius <= 0) {
+    return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ");
+  }
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x0, y0] = points[i - 1];
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[i + 1];
+    const r1 = Math.min(radius, dist(x0, y0, x1, y1) / 2);
+    const r2 = Math.min(radius, dist(x1, y1, x2, y2) / 2);
+    const [ax, ay] = towards(x1, y1, x0, y0, r1);
+    const [bx, by] = towards(x1, y1, x2, y2, r2);
+    d += ` L ${ax} ${ay} Q ${x1} ${y1} ${bx} ${by}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last[0]} ${last[1]}`;
+  return d;
+}
+
 // =========================================================================================
 // DONUT GEOMETRY
 // =========================================================================================
@@ -459,26 +499,64 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     return out;
   }, [from, to, span]);
 
-  /** A step line: the count holds until the next entry, which is what a running total does. */
-  const pathFor = useCallback((s: Series) => {
-    // A strategy that has entered nothing yet is drawn flat along zero, not omitted. Omitting it
-    // makes "running, no entries" and "not running" look identical, and the legend beside it then
-    // names a series the plot does not contain.
-    if (s.points.length === 0) {
-      const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-      return `M ${x(from)} ${y(0)} L ${endX} ${y(0)}`;
-    }
-    const parts: string[] = [`M ${x(Math.max(from, s.points[0].min))} ${y(0)}`];
-    let prev = 0;
-    for (const p of s.points) {
-      const px = x(Math.min(Math.max(p.min, from), to));
-      parts.push(`L ${px} ${y(prev)}`, `L ${px} ${y(p.count)}`);
-      prev = p.count;
-    }
+  /**
+   * A step line, each step an equal width apart — not spaced by the clock.
+   *
+   * Plotted at the real minute, a burst of entries reads as a near-vertical wall and a quiet
+   * stretch before it reads as one very long tread — measured live 2026-09-16, a slow trickle
+   * then a late rush made the first few situations invisible against the ones that followed. The
+   * count of things that happened is what this line exists to show, not how bunched in time they
+   * were, so every entry gets the SAME horizontal share of the segment. The first tread and the
+   * "now" marker still land on the segment's real start and now — the axis stays honest — but
+   * what happens between them is spaced by RANK. This also means N situations always fit: each
+   * one's share is 1/N of the same span, so it shrinks on its own as N grows instead of needing a
+   * separate "too many, zoom out" case.
+   */
+  const stepsFor = useCallback((s: Series): [number, number][] => {
+    const startX = x(from);
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    parts.push(`L ${endX} ${y(prev)}`);
-    return parts.join(" ");
+    if (s.points.length === 0) return [[startX, y(0)], [endX, y(0)]];
+
+    const n = s.points.length;
+    const stepWidth = (endX - startX) / n;
+    const corners: [number, number][] = [[startX, y(0)]];
+    let prev = 0;
+    for (let i = 0; i < n; i++) {
+      const px = startX + (i + 1) * stepWidth;
+      corners.push([px, y(prev)], [px, y(s.points[i].count)]);
+      prev = s.points[i].count;
+    }
+    return corners;
   }, [from, to, nowMin, x, y]);
+
+  /** How far a corner rounds off before it would visibly eat into its own step. */
+  const cornerRadiusFor = useCallback((s: Series) => {
+    const startX = x(from);
+    const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
+    const n = Math.max(1, s.points.length);
+    const stepWidth = (endX - startX) / n;
+    const unitHeight = (H - PAD_T - PAD_B) / maxCount;
+    return Math.max(1.5, Math.min(7, stepWidth * 0.42, unitHeight * 0.42));
+  }, [from, to, nowMin, x, maxCount]);
+
+  /**
+   * The line itself, corners rounded off — a small curve through each turn instead of the turn.
+   * A right angle read as a spike rather than a rise, more so once equal-width steps put them
+   * shoulder to shoulder; this is what "зроби ріст плавнішим" asked for.
+   */
+  const pathFor = useCallback((s: Series) => roundedPolyline(stepsFor(s), cornerRadiusFor(s)), [stepsFor, cornerRadiusFor]);
+
+  /**
+   * The same line, closed down to the baseline — the shape a gradient fill paints INTO, so the
+   * glow only ever sits under the line, fading out toward zero, never above it.
+   */
+  const areaPathFor = useCallback((s: Series) => {
+    const line = pathFor(s);
+    if (!line) return "";
+    const startX = x(from);
+    const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
+    return `${line} L ${endX} ${y(0)} L ${startX} ${y(0)} Z`;
+  }, [pathFor, from, to, nowMin, x, y]);
 
   /**
    * Line, marker, and a label position that has been pushed clear of its neighbours.
@@ -490,11 +568,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
    */
   const endMarks = useMemo(() => {
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    const marks = series.map((s) => ({
+    const marks = series.map((s, i) => ({
       key: s.key,
       color: s.color,
       entered: s.entered,
       d: pathFor(s),
+      areaD: areaPathFor(s),
+      gradientId: `caesar-arrival-fill-${i}`,
       endX,
       y: y(s.entered),
       labelY: y(s.entered),
@@ -517,7 +597,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       if (order[i].labelY > ceiling) order[i].labelY = ceiling;
     }
     return marks;
-  }, [series, from, to, nowMin, x, y, pathFor]);
+  }, [series, from, to, nowMin, x, y, pathFor, areaPathFor]);
 
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = plotRef.current;
@@ -661,6 +741,22 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                   <filter id="caesar-line-shadow" x="-10%" y="-30%" width="130%" height="170%">
                     <feDropShadow dx="0" dy="7" stdDeviation="5" floodColor="#63e6be" floodOpacity="0.42" />
                   </filter>
+                  {/*
+                    ONE GRADIENT PER SERIES, in objectBoundingBox units (the SVG default) so each
+                    fades from its OWN peak (y1 0%, near the line) down to its OWN baseline
+                    (y2 100%) regardless of how tall that series' own step reaches — no per-series
+                    coordinate math needed, the shape's own bounding box does it. Never painted
+                    above the line: the fill it feeds is closed DOWN to the baseline only
+                    (areaPathFor), so the glow only ever reads as sitting under the step, not
+                    around it.
+                  */}
+                  {endMarks.map((m) => (
+                    <linearGradient key={m.gradientId} id={m.gradientId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={m.color} stopOpacity="0.38" />
+                      <stop offset="55%" stopColor={m.color} stopOpacity="0.12" />
+                      <stop offset="100%" stopColor={m.color} stopOpacity="0" />
+                    </linearGradient>
+                  ))}
                 </defs>
                 {/* Hairline, solid, recessive. */}
                 <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} stroke={AXIS} strokeWidth={1} />
@@ -723,6 +819,8 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                       onMouseEnter={() => setHoverKey(m.key)}
                       onMouseLeave={() => setHoverKey(null)}
                     >
+                      {/* The long, fading glow under the step — never above it, see the gradient's own note. */}
+                      <path d={m.areaD} fill={`url(#${m.gradientId})`} stroke="none" />
                       <path d={m.d} fill="none" stroke={m.color} strokeWidth={8} strokeOpacity={0.18} strokeLinejoin="round" strokeLinecap="round" style={{ filter: `drop-shadow(0 7px 7px ${m.color}66)` }} />
                       <path d={m.d} fill="none" stroke={m.color} strokeOpacity={0.94} strokeWidth={2.7} strokeLinejoin="round" strokeLinecap="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1} style={{ animation: "caesar-line-reveal 900ms cubic-bezier(0.16,1,0.3,1) forwards", filter: `drop-shadow(0 0 4px ${m.color}80)` }} />
                       {/* End marker: r 4 with a 2px ring in the surface colour, so series that sit on
