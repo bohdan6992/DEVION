@@ -31,7 +31,7 @@ import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
 import type { StreamPosition } from "@/components/stream/streamEngine";
-import CaesarPanel from "./CaesarPanel";
+import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 
 type BridgePosition = {
   ticker: string;
@@ -65,7 +65,12 @@ export type CaesarPositionsProps = {
   instances: readonly { key: string; instanceId: string; priority: number }[];
 };
 
-type Claim = { strategyKey: string; position: StreamPosition };
+/**
+ * beta/corr/sigma live OUTSIDE `position` on purpose: StreamPosition is the shared browser type
+ * (components/stream/streamEngine.ts) and extending it would ripple into every stream page that
+ * uses it, for three fields only this panel ever reads.
+ */
+type Claim = { strategyKey: string; position: StreamPosition; beta: number | null; corr: number | null; sigma: number | null };
 
 /** One of the bridge's own tracked positions — see CaesarPlanController's StreamOpenPositionDto. */
 type BridgeTrackedPosition = {
@@ -78,6 +83,10 @@ type BridgeTrackedPosition = {
   entryCount: number;
   openedAtUtc: string;
   lastReason: string;
+  /** The ratings-table stats behind the position — see TrackedPosition's own doc comment on the bridge. */
+  beta: number | null;
+  corr: number | null;
+  sigma: number | null;
 };
 
 /** Ticker -> strategy id(s) that closed it today — see ServerPositionTracker.GetClosedOwners. */
@@ -205,6 +214,8 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
    * to the default rather than only ever flipping between the two directions.
    */
   const [strategySort, setStrategySort] = useState<0 | 1 | -1>(0);
+  /** Clicking a strategy card narrows the list below to just its own rows; clicking the header (or the same card again) clears it. */
+  const [cardFilter, setCardFilter] = useState<string | null>(null);
 
   // ---- the account, polled -------------------------------------------------------------------
   const alive = useRef(true);
@@ -251,7 +262,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       setClaims(
         value.flatMap((p) => {
           const strategy = getLiveStrategyByBridgeId(p.strategyId);
-          return strategy ? [{ strategyKey: strategy.key, position: positionFromBridge(p) }] : [];
+          return strategy
+            ? [{ strategyKey: strategy.key, position: positionFromBridge(p), beta: p.beta, corr: p.corr, sigma: p.sigma }]
+            : [];
         }),
       );
     });
@@ -306,7 +319,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       if (!t || claimsByTicker.has(t)) continue;
       const claimed = strategyKeys.flatMap((id) => {
         const strategy = getLiveStrategyByBridgeId(id);
-        return strategy ? [{ strategyKey: strategy.key, position: closedClaim() }] : [];
+        return strategy ? [{ strategyKey: strategy.key, position: closedClaim(), beta: null, corr: null, sigma: null }] : [];
       });
       if (claimed.length > 0) claimsByTicker.set(t, claimed);
     }
@@ -429,8 +442,6 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     };
   }, [claims, closedOwners, snapshot, instances]);
 
-  const age = snapshot?.ageSeconds;
-  const stale = age != null && age >= 0 && age > 30;
   const pnlTone = (value: number) => value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-zinc-500";
 
   const grandTotal = view.grandOpenPnl + view.grandClosedPnl;
@@ -438,8 +449,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   // UNCLAIMED always sorts to the bottom regardless of direction — it is not "before" or "after"
   // a real strategy name alphabetically, it is a separate category the operator checks last.
   const sortedRows = useMemo(() => {
-    if (strategySort === 0) return view.rows;
-    const withOrder = view.rows.map((r, i) => ({ r, i }));
+    const rows = cardFilter ? view.rows.filter((r) => r.claim?.strategyKey === cardFilter) : view.rows;
+    if (strategySort === 0) return rows;
+    const withOrder = rows.map((r, i) => ({ r, i }));
     withOrder.sort((a, b) => {
       const ak = a.r.claim?.strategyKey ?? "";
       const bk = b.r.claim?.strategyKey ?? "";
@@ -451,19 +463,30 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     return withOrder.map((x) => x.r);
   }, [view.rows, strategySort]);
 
-  const strategyTotals = (
-    <section className="mt-3 rounded-xl border border-[#a78bfa]/20 bg-black/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+  return (
+    <div className={CAESAR_PANEL_SURFACE + " mt-3"}>
       {/*
-        ONE BLOCK: the section's own header carries the grand total (every strategy's own bucket,
-        plus the shared/unclaimed tickers no single card counts) right beside its label, so the
-        one number that answers "how is the whole account doing" is read in the same glance as the
-        section title — not a separate banner above it, and not a card competing with the others
-        below for the same kind of attention.
+        ONE BLOCK. Used to be two — a "Strategy P&L" section and a separately-framed "Active"
+        panel right under it, each with its own idea of a header (one had per-strategy totals in
+        its OWN title bar's `right` slot, duplicating the cards a few pixels above it). Merged: one
+        header (click it to clear the filter below), one row of clickable cards (click one to see
+        only ITS rows in the table), one table.
       */}
-      <div className="flex flex-wrap items-baseline justify-between gap-4 border-b border-white/[0.06] pb-3">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setCardFilter(null)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setCardFilter(null); }}
+        title="Click to clear the strategy filter and show every situation"
+        className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl transition-colors hover:bg-white/[0.02]"
+      >
         <div className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-          Strategy P&amp;L
-          <span className="ml-2 font-normal tracking-normal text-zinc-600">{view.openCount} open across the account</span>
+          Active
+          <span className="ml-2 font-normal tracking-normal text-zinc-600">
+            {snapshot?.account ? `acct ${snapshot.account} · ` : ""}
+            {view.openCount} open across the account
+            {cardFilter && <> · filtered to {cardFilter}</>}
+          </span>
         </div>
         <div className="flex items-baseline gap-6">
           <HeaderMetric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
@@ -472,7 +495,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         </div>
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-2 border-t border-white/[0.06] p-3 sm:grid-cols-2 xl:grid-cols-3">
         {Array.from(view.perStrategy.entries())
           // Idle — nothing open, nothing realised today — is not worth its own card. instances
           // (and so perStrategy) still covers every registered strategy regardless of the
@@ -483,8 +506,22 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           .filter(([, strategy]) => strategy.open > 0 || strategy.closedCount > 0)
           .map(([key, strategy]) => {
             const total = strategy.openPnl + strategy.closedPnl;
+            const active = cardFilter === key;
             return (
-              <div key={key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+              <div
+                key={key}
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); setCardFilter((f) => (f === key ? null : key)); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setCardFilter((f) => (f === key ? null : key)); } }}
+                title={active ? `Click to show every strategy again` : `Click to show only ${key}'s own situations`}
+                className={
+                  "scanner-glass-card cursor-pointer rounded-2xl border px-3 py-2.5 shadow-xl transition-all duration-300 " +
+                  (active
+                    ? "border-white/30 bg-[#0a0a0a]/80"
+                    : "border-white/[0.06] bg-[#0a0a0a]/60 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80")
+                }
+              >
                 <div className="flex items-baseline justify-between gap-2 font-mono">
                   <div className="flex items-baseline gap-2.5 overflow-hidden">
                     <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{key}</span>
@@ -503,50 +540,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
             );
           })}
       </div>
-    </section>
-  );
 
-  return (
-    <>
-      {strategyTotals}
-    <CaesarPanel
-      title="Active"
-      subtitle={snapshot?.account ? `acct ${snapshot.account}` : "account —"}
-      accent="#fb923c"
-      terminal
-      className="mt-3"
-      right={
-        <>
-          {Array.from(view.perStrategy.entries()).map(([key, strategy]) => {
-            const total = strategy.openPnl + strategy.closedPnl;
-            return (
-              <span
-                key={key}
-                className={
-                  "font-mono text-[10px] uppercase tracking-widest " +
-                  (total > 0 ? "text-emerald-300" : total < 0 ? "text-rose-300" : "text-zinc-500")
-                }
-              >
-                {key} {total >= 0 ? "+" : ""}{fmt(total)}
-              </span>
-            );
-          })}
-          <span
-            className={
-              "rounded-lg border px-2 py-1 font-mono text-[10px] uppercase tracking-widest " +
-              (stale
-                ? "border-amber-500/25 bg-amber-500/[0.08] text-amber-300"
-                : "border-white/[0.06] bg-black/25 text-zinc-500")
-            }
-          >
-            {age == null ? "no read yet" : age < 0 ? "never read" : `read ${fmt(age, 0)}s ago`}
-          </span>
-          <span className="rounded-lg border border-white/[0.06] bg-black/25 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-            {view.openCount} open · {view.rowCount - view.openCount} closed
-          </span>
-        </>
-      }
-    >
       {error && (
         <div className="mx-3 mt-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
@@ -567,119 +561,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         </div>
       )}
 
-      {/* ---- distribution by strategy ---- */}
-      <section className="hidden">
-        <div className="px-1 pb-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">
-          Strategy P&amp;L
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {instances.length === 0 ? (
-          <span className="font-mono text-[11px] text-zinc-600">No strategy hosted on this segment.</span>
-        ) : (
-          Array.from(view.perStrategy.entries()).map(([key, s]) => (
-            <div
-              key={key}
-              className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80"
-            >
-              <div className="flex items-baseline justify-between font-mono">
-                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-200">{key}</span>
-                <span className="text-[10px] text-zinc-600">#{s.priority}</span>
-              </div>
-              <div className="mt-1 flex items-baseline gap-3 font-mono text-[11px]">
-                <span className="text-zinc-300">{s.open} open</span>
-                <span className="text-emerald-300/80">{s.long}L</span>
-                <span className="text-rose-300/80">{s.short}S</span>
-                {s.adds > 0 && <span className="text-sky-300/70">+{s.adds} adds</span>}
-                {s.closedCount > 0 && <span className="text-zinc-500">{s.closedCount} closed</span>}
-              </div>
-              {/*
-                TOTAL is what the strategy has made today: realised plus what is still at risk.
-                The two are also shown apart, because they are not the same claim — one is banked,
-                the other is a mark that moves every tick.
-              */}
-              <div
-                className={
-                  "mt-2 font-mono text-[15px] font-bold tabular-nums " +
-                  (s.openPnl + s.closedPnl > 0
-                    ? "text-emerald-400"
-                    : s.openPnl + s.closedPnl < 0
-                      ? "text-rose-400"
-                      : "text-zinc-500")
-                }
-              >
-                <span className="mr-2 text-[8px] font-normal uppercase tracking-widest text-zinc-600">total</span>
-                {s.openPnl + s.closedPnl >= 0 ? "+" : ""}
-                {fmt(s.openPnl + s.closedPnl)}
-              </div>
-              <div className="mt-0.5 flex items-baseline gap-3 font-mono text-[10px] tabular-nums">
-                <span className="text-zinc-600">
-                  open{" "}
-                  <span className={s.openPnl > 0 ? "text-emerald-400/80" : s.openPnl < 0 ? "text-rose-400/80" : "text-zinc-500"}>
-                    {s.openPnl >= 0 ? "+" : ""}{fmt(s.openPnl)}
-                  </span>
-                </span>
-                <span className="text-zinc-600">
-                  closed{" "}
-                  <span className={s.closedPnl > 0 ? "text-emerald-400/80" : s.closedPnl < 0 ? "text-rose-400/80" : "text-zinc-500"}>
-                    {s.closedPnl >= 0 ? "+" : ""}{fmt(s.closedPnl)}
-                  </span>
-                </span>
-              </div>
-            </div>
-          ))
-        )}
-
-        {view.sharedCount > 0 && (
-          <div className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-[#2dd4bf]/25 bg-[#2dd4bf]/[0.07] px-3 py-2 shadow-xl transition-all duration-300 hover:border-[#2dd4bf]/45">
-            <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-sky-200">
-              Shared
-            </div>
-            <div className="mt-1 font-mono text-[11px] text-sky-200/70">
-              {view.sharedCount} ticker{view.sharedCount === 1 ? "" : "s"} held by more than one strategy
-            </div>
-            <div
-              className={
-                "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
-                (view.sharedOpenPnl + view.sharedClosedPnl >= 0 ? "text-emerald-400" : "text-rose-400")
-              }
-            >
-              {view.sharedOpenPnl + view.sharedClosedPnl >= 0 ? "+" : ""}
-              {fmt(view.sharedOpenPnl + view.sharedClosedPnl)}
-            </div>
-            <div className="mt-0.5 font-mono text-[10px] tabular-nums text-sky-200/50">
-              open {fmt(view.sharedOpenPnl)} · closed {fmt(view.sharedClosedPnl)}
-            </div>
-          </div>
-        )}
-
-        {view.unclaimedCount > 0 && (
-          <div className="scanner-glass-card min-w-[190px] flex-1 rounded-2xl border border-[#fb923c]/25 bg-[#fb923c]/[0.07] px-3 py-2 shadow-xl transition-all duration-300 hover:border-[#fb923c]/45">
-            <div className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-amber-200">
-              Unclaimed
-            </div>
-            <div className="mt-1 font-mono text-[11px] text-amber-200/70">
-              {view.unclaimedCount} ticker{view.unclaimedCount === 1 ? "" : "s"} — no hosted strategy owns these
-            </div>
-            <div
-              className={
-                "mt-0.5 font-mono text-[15px] font-bold tabular-nums " +
-                (view.unclaimedOpenPnl + view.unclaimedClosedPnl >= 0 ? "text-emerald-400" : "text-rose-400")
-              }
-            >
-              {view.unclaimedOpenPnl + view.unclaimedClosedPnl >= 0 ? "+" : ""}
-              {fmt(view.unclaimedOpenPnl + view.unclaimedClosedPnl)}
-            </div>
-            <div className="mt-0.5 font-mono text-[10px] tabular-nums text-amber-200/50">
-              open {fmt(view.unclaimedOpenPnl)} · closed {fmt(view.unclaimedClosedPnl)}
-            </div>
-          </div>
-        )}
-        </div>
-      </section>
-
-      {/* ---- the terminal ---- */}
-      <div className="mt-3 max-h-[320px] overflow-auto">
-        <table className="w-full min-w-[860px] text-xs font-mono">
+      {/* ---- the table ---- */}
+      <div className="max-h-[320px] overflow-auto border-t border-white/[0.06]">
+        <table className="w-full min-w-[1180px] text-xs font-mono">
           <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-zinc-300 backdrop-blur-xl">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
               <th className="text-left text-zinc-200">Ticker</th>
@@ -691,6 +575,10 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                 Strategy {strategySort === 1 ? "▲" : strategySort === -1 ? "▼" : ""}
               </th>
               <th className="text-left text-violet-300/80">Side</th>
+              <th className="text-right text-sky-300/80">Signal</th>
+              <th className="text-right text-fuchsia-300/70">Beta</th>
+              <th className="text-right text-fuchsia-300/70">Corr</th>
+              <th className="text-right text-fuchsia-300/70">Sigma</th>
               <th className="text-right text-violet-300">Size</th>
               <th className="text-right text-amber-400/80">Avg</th>
               <th className="text-right text-emerald-300/80">Open P&amp;L</th>
@@ -703,7 +591,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           <tbody>
             {view.rows.length === 0 && view.missing.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-3 py-8 text-center text-zinc-600">
+                <td colSpan={14} className="px-3 py-8 text-center text-zinc-600">
                   Nothing open.
                 </td>
               </tr>
@@ -741,6 +629,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                         shared
                       </span>
                     )}
+                    {!r.claim && (
+                      <span
+                        className="ml-1.5 rounded bg-amber-500/15 px-1 text-[9px] font-bold uppercase tracking-[0.1em] text-amber-300"
+                        title="The account holds it, no strategy admits to it — manual, or left from a session whose engine is no longer mounted."
+                      >
+                        unclaimed
+                      </span>
+                    )}
                   </td>
                   <td className={r.claim ? "text-zinc-300" : "text-amber-300"}>
                     {r.claim ? r.claim.strategyKey.toUpperCase() : "UNCLAIMED"}
@@ -748,6 +644,16 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                   <td className={side === "Short" ? "text-rose-300" : "text-emerald-300"}>
                     {r.open ? side || "—" : <span className="text-zinc-600">flat</span>}
                   </td>
+                  {/*
+                    SIGNAL/BETA/CORR/SIGMA — the strategy's own ratings-table stats behind this
+                    exact position, not a generic market number: Arbitrage's own vs its benchmark,
+                    PairFlux's own pair-level (same value on both legs). Null (not "0") when the
+                    bridge itself has never seen a reading with them, e.g. right after an entry.
+                  */}
+                  <td className="text-right tabular-nums text-zinc-400">{fmt(r.claim?.position.entrySignal)}</td>
+                  <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(r.claim?.beta)}</td>
+                  <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(r.claim?.corr)}</td>
+                  <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(r.claim?.sigma)}</td>
                   <td className="text-right tabular-nums text-zinc-300">
                     {r.open ? fmtInt(r.bridge.posSize) : <span className="text-zinc-700">—</span>}
                   </td>
@@ -794,6 +700,10 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                 <td className={c.position.side === "Short" ? "text-rose-300" : "text-emerald-300"}>
                   {c.position.side}
                 </td>
+                <td className="text-right tabular-nums text-zinc-400">{fmt(c.position.entrySignal)}</td>
+                <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.beta)}</td>
+                <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.corr)}</td>
+                <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.sigma)}</td>
                 <td className="text-right text-rose-300">not in account</td>
                 <td className="text-right text-zinc-600">—</td>
                 <td className="text-right text-zinc-600">—</td>
@@ -818,8 +728,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
         so they are counted once into SHARED rather than added to either strategy.
       </div>
-    </CaesarPanel>
-    </>
+    </div>
   );
 }
 
