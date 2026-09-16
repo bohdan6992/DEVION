@@ -25,13 +25,12 @@
  * could offer would be a model of the trade rather than the trade.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { getStreamStores } from "@/components/stream/streamStoreRegistry";
-import { readPersistedStreamActionLog } from "@/components/stream/streamEngine";
-import type { StreamActionLogEntry, StreamPosition } from "@/components/stream/streamEngine";
+import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
+import type { StreamPosition } from "@/components/stream/streamEngine";
 import CaesarPanel from "./CaesarPanel";
 
 type BridgePosition = {
@@ -68,34 +67,50 @@ export type CaesarPositionsProps = {
 
 type Claim = { strategyKey: string; position: StreamPosition };
 
+/** One of the bridge's own tracked positions — see CaesarPlanController's StreamOpenPositionDto. */
+type BridgeTrackedPosition = {
+  strategyId: string;
+  ticker: string;
+  pairKey: string | null;
+  side: "Long" | "Short";
+  entryDispatched: boolean;
+  entrySignal: number | null;
+  entryCount: number;
+  openedAtUtc: string;
+  lastReason: string;
+};
+
+type BridgeTrackedPositionsResponse = { ok: boolean; positions: BridgeTrackedPosition[] };
+
 /**
- * A browser stream restores only OPEN rows. The action log persists CLOSE records, so it is the
- * durable source for a strategy claim after a bridge or browser restart.
+ * A bridge-tracked position, as this panel's STRATEGY join needs it. Only the fields the table
+ * below actually reads are filled from real data; everything else here is add-grid bookkeeping
+ * this panel never shows, so a fixed, honest placeholder is more honest than inventing one.
  */
-function positionFromActionLog(entry: StreamActionLogEntry): StreamPosition {
-  const closed = entry.kind === "CLOSE";
+function positionFromBridge(p: BridgeTrackedPosition): StreamPosition {
+  const openedAt = Date.parse(p.openedAtUtc) || Date.now();
   return {
-    ticker: entry.ticker,
-    pairKey: entry.pairKey ?? null,
-    benchmark: entry.benchmark,
-    side: entry.side,
-    entrySignal: entry.deviation,
-    lastSignal: entry.deviation,
-    lastScaleSignal: entry.deviation,
+    ticker: p.ticker,
+    pairKey: p.pairKey,
+    benchmark: "",
+    side: p.side,
+    entrySignal: p.entrySignal,
+    lastSignal: p.entrySignal,
+    lastScaleSignal: p.entrySignal,
     spread: null,
     spreadBidPct: null,
-    status: closed ? "CLOSED" : "OPEN",
-    reason: entry.reason ?? (closed ? "restored close from action log" : "restored entry from action log"),
-    entryCount: entry.entryCount ?? entry.sequence ?? 1,
+    status: "OPEN",
+    reason: p.lastReason || (p.entryDispatched ? "tracked by the bridge" : "shadow only"),
+    entryCount: p.entryCount,
     belowThresholdTicks: 0,
     lockedForPrint: false,
     pendingIntent: null,
-    entryDispatchedAt: entry.at,
-    lastDispatchedAt: entry.at,
-    lastConfirmedActiveAt: entry.at,
+    entryDispatchedAt: p.entryDispatched ? openedAt : null,
+    lastDispatchedAt: openedAt,
+    lastConfirmedActiveAt: openedAt,
     lastAboveAddCapAt: null,
-    openedAt: entry.at,
-    updatedAt: entry.at,
+    openedAt,
+    updatedAt: openedAt,
   };
 }
 
@@ -147,6 +162,12 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
+  /**
+   * 0 = the table's own default order (open first, then ticker/strategy — see `view.rows`'s own
+   * sort). 1/-1 = sorted by strategy, ascending/descending; a third click on the header returns
+   * to the default rather than only ever flipping between the two directions.
+   */
+  const [strategySort, setStrategySort] = useState<0 | 1 | -1>(0);
 
   // ---- the account, polled -------------------------------------------------------------------
   const alive = useRef(true);
@@ -170,51 +191,35 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     return () => { alive.current = false; unsubscribe(); };
   }, []);
 
-  // ---- what each mounted engine says it holds -------------------------------------------------
+  // ---- which strategy holds what, straight from the bridge's own tracker ----------------------
   //
-  // Subscribed imperatively rather than with a hook per store: the set of hosted strategies changes
-  // with the segment, and a hook cannot be called in a loop over a list that changes length.
-  const instanceKey = instances.map((i) => `${i.key}:${i.instanceId}`).join(",");
-  const recompute = useCallback(() => {
-    const out: Claim[] = [];
-    for (const inst of instances) {
-      const stores = getStreamStores(inst.instanceId);
-      const rows = stores.position.getRows();
-      const claimedTickers = new Set<string>();
-      for (const position of rows) {
-        // CLOSED rows are kept on purpose: they are how a realised result stays attributed to the
-        // strategy that made it. Dropping them left every closed ticker UNCLAIMED by the close.
-        out.push({ strategyKey: inst.key, position });
-        claimedTickers.add(position.ticker.trim().toUpperCase());
-      }
-
-      // On restart `position` contains only re-opened positions. Reconstruct missing closed rows
-      // from the stream's persisted action log, one latest event per ticker.
-      const latestByTicker = new Map<string, StreamActionLogEntry>();
-      const persistedLog = readPersistedStreamActionLog(inst.instanceId);
-      for (const entry of [...stores.actionLog.getRows(), ...persistedLog]) {
-        const ticker = entry.ticker.trim().toUpperCase();
-        if (!ticker) continue;
-        const previous = latestByTicker.get(ticker);
-        if (!previous || entry.at > previous.at) latestByTicker.set(ticker, entry);
-      }
-      for (const [ticker, entry] of latestByTicker) {
-        if (!claimedTickers.has(ticker)) out.push({ strategyKey: inst.key, position: positionFromActionLog(entry) });
-      }
-    }
-    setClaims(out);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceKey]);
-
+  // Used to read this from each mounted engine's own browser-local store. That store is empty for
+  // every strategy that runs server-side — which by now is all six the plan can assign — so this
+  // panel's STRATEGY column read UNCLAIMED for everything, always, regardless of what actually
+  // opened the position. Shares CaesarBridgeDecisions'/CaesarCharts' identical poll under the same
+  // key rather than running a fourth independent one against the same endpoint.
+  //
+  // CLOSED positions are NOT reconstructed here (the old browser action-log fallback is gone with
+  // it): the bridge only tracks currently-open positions, so a closed ticker's claim is lost the
+  // moment it closes, same as it already was — this fixes the STRATEGY column for what is open,
+  // not money attribution after a close, which was never sourced from here either.
   useEffect(() => {
-    recompute();
-    const unsubs = instances.flatMap((inst) => {
-      const stores = getStreamStores(inst.instanceId);
-      return [stores.position.subscribe(recompute), stores.actionLog.subscribe(recompute)];
+    let alive = true;
+    const fetchAll = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
+        .then((body) => body.positions);
+    const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, 2000, (value, err) => {
+      if (!alive || err || !value) return;
+      setClaims(
+        value.flatMap((p) => {
+          const strategy = getLiveStrategyByBridgeId(p.strategyId);
+          return strategy ? [{ strategyKey: strategy.key, position: positionFromBridge(p) }] : [];
+        }),
+      );
     });
-    return () => { for (const u of unsubs) u(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceKey, recompute]);
+    return () => { alive = false; unsubscribe(); };
+  }, []);
 
   // ---- the join --------------------------------------------------------------------------------
   const view = useMemo(() => {
@@ -334,10 +339,20 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       }
     }
 
+    // Everything the account reports, added up once: every strategy's own bucket, the shared
+    // ticker(s), and the unclaimed ones — nobody's money is left out of this number.
+    let grandOpenPnl = unclaimedOpenPnl + sharedOpenPnl;
+    let grandClosedPnl = unclaimedClosedPnl + sharedClosedPnl;
+    for (const agg of perStrategy.values()) {
+      grandOpenPnl += agg.openPnl;
+      grandClosedPnl += agg.closedPnl;
+    }
+
     return {
       rows, missing, perStrategy,
       unclaimedCount, unclaimedOpenPnl, unclaimedClosedPnl,
       sharedCount, sharedOpenPnl, sharedClosedPnl,
+      grandOpenPnl, grandClosedPnl,
       openCount, rowCount: countedTickers.size,
     };
   }, [claims, snapshot, instances]);
@@ -345,6 +360,24 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const age = snapshot?.ageSeconds;
   const stale = age != null && age >= 0 && age > 30;
   const pnlTone = (value: number) => value > 0 ? "text-emerald-400" : value < 0 ? "text-rose-400" : "text-zinc-500";
+
+  const grandTotal = view.grandOpenPnl + view.grandClosedPnl;
+
+  // UNCLAIMED always sorts to the bottom regardless of direction — it is not "before" or "after"
+  // a real strategy name alphabetically, it is a separate category the operator checks last.
+  const sortedRows = useMemo(() => {
+    if (strategySort === 0) return view.rows;
+    const withOrder = view.rows.map((r, i) => ({ r, i }));
+    withOrder.sort((a, b) => {
+      const ak = a.r.claim?.strategyKey ?? "";
+      const bk = b.r.claim?.strategyKey ?? "";
+      if (!ak && bk) return 1;
+      if (ak && !bk) return -1;
+      if (!ak && !bk) return a.i - b.i;
+      return strategySort * ak.localeCompare(bk) || a.i - b.i;
+    });
+    return withOrder.map((x) => x.r);
+  }, [view.rows, strategySort]);
 
   const strategyTotals = (
     <section className="mt-3 rounded-xl border border-white/[0.06] bg-black/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
@@ -369,6 +402,26 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
             </div>
           );
         })}
+
+        {/*
+          GRAND TOTAL — every strategy's own bucket, plus the shared and unclaimed tickers no
+          single strategy's card counts. Visually set apart (its own accent) so it never reads as
+          just one more strategy in the grid.
+        */}
+        <div className="scanner-glass-card rounded-2xl border border-[#a78bfa]/25 bg-[#a78bfa]/[0.06] px-3 py-2 shadow-xl transition-all duration-300 hover:border-[#a78bfa]/45">
+          <div className="flex items-baseline justify-between font-mono">
+            <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-violet-200">Grand total</span>
+            <span className="text-[10px] text-violet-200/50">all strategies</span>
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-violet-200/60">
+            {view.openCount} open across the account
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2 border-t border-[#a78bfa]/20 pt-2 font-mono tabular-nums">
+            <Metric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
+            <Metric label="Open" value={view.grandOpenPnl} tone={pnlTone(view.grandOpenPnl)} />
+            <Metric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -550,7 +603,13 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-zinc-300 backdrop-blur-xl">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
               <th className="text-left text-zinc-200">Ticker</th>
-              <th className="text-left text-sky-300/70">Strategy</th>
+              <th
+                className="cursor-pointer select-none text-left text-sky-300/70 hover:text-sky-200"
+                onClick={() => setStrategySort((s) => (s === 0 ? 1 : s === 1 ? -1 : 0))}
+                title="Sort by strategy"
+              >
+                Strategy {strategySort === 1 ? "▲" : strategySort === -1 ? "▼" : ""}
+              </th>
               <th className="text-left text-violet-300/80">Side</th>
               <th className="text-right text-violet-300">Size</th>
               <th className="text-right text-amber-400/80">Avg</th>
@@ -570,7 +629,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
               </tr>
             ) : null}
 
-            {view.rows.map((r, index) => {
+            {sortedRows.map((r, index) => {
               const openPnl = r.open ? r.bridge.openPnL ?? 0 : null;
               // null (field absent) contributes nothing rather than a fabricated zero.
       const closedPnl = r.bridge.closedPnL ?? 0;

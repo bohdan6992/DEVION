@@ -393,11 +393,13 @@ export default function CaesarSchedule() {
     });
   }, [plan, nowSegment]);
 
-  // Positions can close long after their segment has ended. Keep their browser action logs in the
-  // terminal's ownership lookup, while the charts remain scoped to the current segment.
+  // Positions can close long after their segment has ended, so this stays every strategy the
+  // registry knows about — not scoped to the current segment like chartInstances above. Used to
+  // also filter to streamEngine === "browser", on the same now-false theory chartInstances'
+  // own doc comment describes: every strategy is bridge-hosted today, so that left this list
+  // permanently empty and CaesarPositions' STRATEGY column read UNCLAIMED for everything, always.
   const positionInstances = useMemo(() => (
     Object.values(LIVE_STRATEGIES)
-      .filter((strategy) => strategy.streamEngine === "browser")
       .map((strategy) => ({
         key: strategy.key,
         instanceId: strategy.bridgeStrategyId,

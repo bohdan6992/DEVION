@@ -101,6 +101,17 @@ function statusTone(status: string): string {
   return status === "EntryReady" ? "text-emerald-300" : "text-zinc-500";
 }
 
+/**
+ * Fixed Tailwind hex classes, not a CSS-variable-driven token — Caesar forces a dark surface in
+ * every theme already (see CaesarSchedule.tsx's own note on why), but the point of using these
+ * specific classes rather than a themed one is that a sign always reads the same regardless of
+ * where this ever renders.
+ */
+function signTone(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "text-zinc-500";
+  return n > 0 ? "text-emerald-400" : n < 0 ? "text-rose-400" : "text-zinc-500";
+}
+
 /** One strategy's live snapshot, polled independently so one strategy's fetch failure never blanks the other. */
 function useStreamEngineSnapshot(strategy: "arbitrage" | "pairflux") {
   const [snapshot, setSnapshot] = useState<StreamEngineSnapshot | null>(null);
@@ -284,7 +295,7 @@ function CandidatesTable({ rows }: { rows: StreamCandidateRow[] }) {
               <div className="px-2 py-2.5 font-semibold text-zinc-100">{r.ticker}</div>
               <div className="px-2 py-2.5 text-zinc-400">{r.pairKey ?? "—"}</div>
               <div className={`px-2 py-2.5 ${sideTone(r.side)}`}>{r.side}</div>
-              <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.signal)}</div>
+              <div className={`px-2 py-2.5 text-right tabular-nums ${signTone(r.signal)}`}>{fmt(r.signal)}</div>
               <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.spread)}</div>
               <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.netEdge)}</div>
               <div className={`px-2 py-2.5 ${statusTone(r.status)}`}>{r.status}</div>
@@ -375,11 +386,27 @@ function StrategyCardHeader({
   );
 }
 
+/** Same identity PositionsTable/CandidatesTable key their rows by: ticker, or ticker+pair. */
+function legIdentity(ticker: string, pairKey: string | null): string {
+  return `${ticker.trim().toUpperCase()}|${(pairKey ?? "").trim().toUpperCase()}`;
+}
+
 function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflux"; label: string }) {
   const { snapshot, error } = useStreamEngineSnapshot(strategy);
   // Only this exact reason means "the operator's own plan toggle is off" — any other noDataReason
   // is a real "ticked, found nothing" answer and must not read as disabled.
   const outOfPlan = snapshot?.noDataReason === OUT_OF_PLAN_REASON;
+
+  // A candidate that already opened is now a POSITION, not a signal — the row belongs in the
+  // table below, once, not in both at the same time. The engine itself keeps computing a signal
+  // reading for it (an open position still needs its own live number for adds/exits), so this is
+  // purely a display decision, not a change to what the bridge tracks.
+  const openIdentities = new Set(
+    (snapshot?.positions ?? []).map((p) => legIdentity(p.ticker, p.pairKey)),
+  );
+  const candidateRows = (snapshot?.candidates ?? []).filter(
+    (c) => !openIdentities.has(legIdentity(c.ticker, c.pairKey)),
+  );
 
   return (
     <div className={`min-w-0 space-y-2 p-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
@@ -393,7 +420,7 @@ function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflu
 
       {!error && (
         <div className="space-y-2">
-          <CandidatesTable rows={snapshot?.candidates ?? []} />
+          <CandidatesTable rows={candidateRows} />
           <PositionsTable rows={snapshot?.positions ?? []} />
         </div>
       )}
