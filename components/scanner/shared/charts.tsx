@@ -688,7 +688,18 @@ export function OptimizerParameterRangeCardImpl({
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Win</th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dW</th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">PnL</th>
-              <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dP</th>
+              <th
+                className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]"
+                title="If you kept ONLY this range and threw away every other trade — this bucket's own PnL minus the current total. Almost always a huge number; it is not the effect of cutting this range."
+              >
+                dP
+              </th>
+              <th
+                className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]"
+                title="If you EXCLUDED this range and kept every other trade — the number to check before cutting a weak bucket."
+              >
+                xP
+              </th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">Avg</th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">dA</th>
               <th className="text-right px-2 py-1.5 uppercase tracking-[0.16em] text-[8px]">W/L</th>

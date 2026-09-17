@@ -655,6 +655,18 @@ export default function ArbitrageScanner({
 
   const routeLocksPrimaryPanel = initialPrimaryPanel === "stream" || initialPrimaryPanel === "scanner";
   const isStreamOnlyShell = shellMode === "streamOnly";
+
+  // BIN/BINS read a per-sigma-bucket win-rate table this scanner has, but the LIVE server engine
+  // never got taught — ArbitrageServerStrategy's own rating gate is a flat SESSION-style floor
+  // (minRate/minTotal) regardless of what this toggle says, and nothing in the pushed live-params
+  // payload even carries the mode. Left free, the Stream tab could show a BIN/BINS-narrowed count
+  // that looks like a preview of live dispatch but isn't — Caesar (reading the bridge's own
+  // candidates) would then read looser and diverge, with no amount of waiting fixing it (operator-
+  // reported, 2026-09-17). Forcing SESSION here, on the live surface only, keeps what this tab shows
+  // truthful; the plain backtest Scanner keeps BIN/BINS for exploration.
+  useEffect(() => {
+    if (isStreamOnlyShell && ratingMode !== "SESSION") setRatingMode("SESSION");
+  }, [isStreamOnlyShell, ratingMode, setRatingMode]);
   const tab = controlledTab ?? internalTab;
 
   const session = controlledSession ?? internalSession;
@@ -5519,21 +5531,28 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => (
-              <button
-                key={modeKey}
-                type="button"
-                onClick={() => setRatingMode(modeKey)}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  ratingMode === modeKey
-                    ? "accent-soft"
-                    : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                {modeKey}
-              </button>
-            ))}
+            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => {
+              const lockedOut = isStreamOnlyShell && modeKey !== "SESSION";
+              return (
+                <button
+                  key={modeKey}
+                  type="button"
+                  disabled={lockedOut}
+                  onClick={() => setRatingMode(modeKey)}
+                  title={lockedOut ? "BIN/BINS isn't applied by the live engine — locked to SESSION on the Stream tab" : undefined}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    lockedOut
+                      ? "cursor-not-allowed border-transparent text-zinc-700"
+                      : ratingMode === modeKey
+                      ? "accent-soft"
+                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  {modeKey}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">

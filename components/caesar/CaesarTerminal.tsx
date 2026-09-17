@@ -46,6 +46,16 @@ type IntentRecord = {
   priority: number;
   dispatched: boolean;
   outcome: string;
+  /**
+   * The identical (strategyId, ticker, action, outcome, reason) repeating tick after tick collapses
+   * into this one record instead of one line per tick — a persistent block (a priority conflict
+   * that outlives the other side's whole position, say) otherwise floods the 200-line window with
+   * one identical line per minute for hours (operator-reported, 2026-09-17: AAOI blocked once a
+   * minute for 2+ hours). 1 means this hasn't repeated; atUtc is when the run STARTED, lastAtUtc is
+   * its most recent tick.
+   */
+  repeatCount: number;
+  lastAtUtc: string;
 };
 
 type EngineStatusResponse = { ok: boolean; engine: { recentIntents: IntentRecord[] } };
@@ -203,12 +213,18 @@ export default function CaesarTerminal({ segment }: CaesarTerminalProps) {
             const detail = i.dispatched || i.outcome === "shadow"
               ? i.reason ?? ""
               : [i.outcome, i.reason].filter(Boolean).join(" — ");
+            const repeated = i.repeatCount > 1;
             return (
               <div
                 key={`${i.atUtc}-${i.strategyId}-${i.ticker}-${idx}`}
                 className="flex items-baseline gap-2 whitespace-nowrap py-[1px] font-mono text-[11px] leading-[1.35]"
               >
-                <span className="text-zinc-600">{timeStr(i.atUtc)}</span>
+                <span
+                  className="text-zinc-600"
+                  title={repeated ? `since ${timeStr(i.atUtc)}, still true as of ${timeStr(i.lastAtUtc)}` : undefined}
+                >
+                  {timeStr(repeated ? i.lastAtUtc : i.atUtc)}
+                </span>
                 <span className="w-[74px] shrink-0 truncate text-zinc-500">{shortId(i.strategyId)}</span>
                 <span className={"w-[46px] shrink-0 " + (ACTION_TONE[i.action] ?? "text-zinc-300")}>
                   {i.action}
@@ -222,6 +238,14 @@ export default function CaesarTerminal({ segment }: CaesarTerminalProps) {
                   {i.side ?? ""}
                 </span>
                 <span className={"w-[80px] shrink-0 " + badge.tone}>{badge.text}</span>
+                {repeated && (
+                  <span
+                    className="w-[76px] shrink-0 text-amber-300/70"
+                    title={`Unchanged since ${timeStr(i.atUtc)} — collapsed from ${i.repeatCount} identical ticks.`}
+                  >
+                    ×{i.repeatCount} since {timeStr(i.atUtc)}
+                  </span>
+                )}
                 <span className="truncate text-zinc-600" title={detail}>{detail}</span>
               </div>
             );

@@ -77,6 +77,8 @@ export type ArbitrageServerSonarFilters = {
   pinned: string[];
   activity: "Off" | "OnlyActive" | "OnlyInactive";
   topMode: boolean;
+  /** Only the sigma leg of TOP is enforced live (SonarFilterConfig.TopSigmaOn) — bench/time are not wired server-side yet. */
+  topSigmaOn: boolean;
   corr: Bound | null;
   beta: Bound | null;
   sigma: Bound | null;
@@ -202,6 +204,7 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
     pinned: upper(Object.keys(f.pinMap ?? {})),
     activity: activity(f.activeMode),
     topMode: !!f.topMode,
+    topSigmaOn: !!f.topSigmaOn,
     corr: bound(f.corrMin, f.corrMax),
     beta: bound(f.betaMin, f.betaMax),
     sigma: bound(f.sigmaMin, f.sigmaMax),
