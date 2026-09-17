@@ -3195,7 +3195,9 @@ export default function ArbitrageScanner({
         req.startAbs = c.s;
         req.startAbsMax = null;
         req.endAbs = c.e;
-        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, req);
+        // includeBestParams:false — this sweep only reduces totalPnlUsd across combos, it never
+        // reads best_params, so there's no reason to pay for it dozens of times over.
+        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...req, includeBestParams: false });
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
         const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
         const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
@@ -3888,6 +3890,14 @@ export default function ArbitrageScanner({
   // The ticker box drives a full re-filter of every row. Deferring it keeps the input responsive:
   // React renders the typed character immediately and re-runs the filters at lower priority.
   const deferredQTicker = React.useDeferredValue(qTicker);
+  // Same reasoning for the ρ/β/σ boxes below — they drove the same full re-filter on every
+  // keystroke and were the only ones of the six not deferred.
+  const deferredMinCorr = React.useDeferredValue(minCorr);
+  const deferredMaxCorr = React.useDeferredValue(maxCorr);
+  const deferredMinBeta = React.useDeferredValue(minBeta);
+  const deferredMaxBeta = React.useDeferredValue(maxBeta);
+  const deferredMinSigma = React.useDeferredValue(minSigma);
+  const deferredMaxSigma = React.useDeferredValue(maxSigma);
 
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
@@ -3916,12 +3926,12 @@ export default function ArbitrageScanner({
     return true;
   };
 
-  const _minCorrV = optNumOrNull(minCorr);
-  const _maxCorrV = optNumOrNull(maxCorr);
-  const _minBetaV = optNumOrNull(minBeta);
-  const _maxBetaV = optNumOrNull(maxBeta);
-  const _minSigmaV = optNumOrNull(minSigma);
-  const _maxSigmaV = optNumOrNull(maxSigma);
+  const _minCorrV = optNumOrNull(deferredMinCorr);
+  const _maxCorrV = optNumOrNull(deferredMaxCorr);
+  const _minBetaV = optNumOrNull(deferredMinBeta);
+  const _maxBetaV = optNumOrNull(deferredMaxBeta);
+  const _minSigmaV = optNumOrNull(deferredMinSigma);
+  const _maxSigmaV = optNumOrNull(deferredMaxSigma);
 
   const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
 
@@ -4054,7 +4064,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4131,7 +4141,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;

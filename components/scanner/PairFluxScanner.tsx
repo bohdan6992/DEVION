@@ -3683,7 +3683,9 @@ export default function PairFluxScanner({
         req.startAbs = c.s;
         req.startAbsMax = null;
         req.endAbs = c.e;
-        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, req);
+        // includeBestParams:false — this sweep only reduces totalPnlUsd across combos, it never
+        // reads best_params, so there's no reason to pay for it dozens of times over.
+        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...req, includeBestParams: false });
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
         const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
         const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
@@ -4379,6 +4381,16 @@ export default function PairFluxScanner({
   // The ticker box drives a full re-filter of every row. Deferring it keeps the input responsive:
   // React renders the typed character immediately and re-runs the filters at lower priority.
   const deferredQTicker = React.useDeferredValue(qTicker);
+  // Same reasoning for the ρ/β/σ/α boxes below — they drove the same full re-filter on every
+  // keystroke and were the only ones of the eight not deferred.
+  const deferredMinCorr = React.useDeferredValue(minCorr);
+  const deferredMaxCorr = React.useDeferredValue(maxCorr);
+  const deferredMinBeta = React.useDeferredValue(minBeta);
+  const deferredMaxBeta = React.useDeferredValue(maxBeta);
+  const deferredMinSigma = React.useDeferredValue(minSigma);
+  const deferredMaxSigma = React.useDeferredValue(maxSigma);
+  const deferredMinAlpha = React.useDeferredValue(minAlpha);
+  const deferredMaxAlpha = React.useDeferredValue(maxAlpha);
 
   const ignoreSet = useMemo(() => new Set(splitListUpper(ignoreTickersText)), [ignoreTickersText]);
   const applySet = useMemo(() => new Set(splitListUpper(tickersText)), [tickersText]);
@@ -4414,14 +4426,14 @@ export default function PairFluxScanner({
     return partner ? one(partner) : true;
   };
 
-  const _minCorrV = optNumOrNull(minCorr);
-  const _maxCorrV = optNumOrNull(maxCorr);
-  const _minBetaV = optNumOrNull(minBeta);
-  const _maxBetaV = optNumOrNull(maxBeta);
-  const _minSigmaV = optNumOrNull(minSigma);
-  const _maxSigmaV = optNumOrNull(maxSigma);
-  const _minAlphaV = optNumOrNull(minAlpha);
-  const _maxAlphaV = optNumOrNull(maxAlpha);
+  const _minCorrV = optNumOrNull(deferredMinCorr);
+  const _maxCorrV = optNumOrNull(deferredMaxCorr);
+  const _minBetaV = optNumOrNull(deferredMinBeta);
+  const _maxBetaV = optNumOrNull(deferredMaxBeta);
+  const _minSigmaV = optNumOrNull(deferredMinSigma);
+  const _maxSigmaV = optNumOrNull(deferredMaxSigma);
+  const _minAlphaV = optNumOrNull(deferredMinAlpha);
+  const _maxAlphaV = optNumOrNull(deferredMaxAlpha);
 
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
@@ -4575,7 +4587,7 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4645,7 +4657,7 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -4700,7 +4712,7 @@ export default function PairFluxScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;

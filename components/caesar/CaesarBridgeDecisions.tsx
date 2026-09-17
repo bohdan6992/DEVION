@@ -35,6 +35,17 @@ type StreamCandidateRow = {
   latched: boolean;
   qualifiedSinceMinuteIdx: number | null;
   readyToEnter: boolean;
+  /**
+   * Status/Reason above come from signal-vs-filter logic alone and have no idea what time it is,
+   * so a row can sit at EntryReady/"signal passes filters" long after the session's entry cutoff
+   * has passed and dispatch has already stopped picking anything. readyToEnter already folds this
+   * in (false once blocked); this field is for saying WHY — and specifically that it's the LATE
+   * gate, not the EARLY one below (an operator caught these two collapsed into one misleading
+   * "past cutoff" label on 2026-09-17, for a row that was actually blocked for the opposite reason).
+   */
+  entryCutoffBlocked: boolean;
+  /** Same idea, opposite gate: the session hasn't started yet. Not a problem, just a wait. */
+  entryBeforeSessionStart: boolean;
 };
 
 type StreamOpenPosition = {
@@ -66,6 +77,17 @@ type StreamEngineSnapshot = {
    * disabled state, so only this one string drives the grayed-out treatment.
    */
   noDataReason: string | null;
+  /**
+   * How many more positions dispatch will actually open right now — MaxOpenPositions minus open
+   * positions, null meaning uncapped. Nothing else on this screen says so: a full book silently
+   * refuses every new candidate (adds to what's already open are unaffected, since they don't need
+   * a new slot), and a row that is Status=EntryReady / readyToEnter=true can still just sit there
+   * forever with no per-row marker — dispatch hands slots out alphabetically by ticker until they
+   * run out, in ServerStrategyRunner's own selection, not per candidate. This count is the whole
+   * story: 0 explains a screen full of ready-looking rows that never moved (operator-reported
+   * incident, 2026-09-17 — Arbitrage candidates piling up at 7am while only adds kept firing).
+   */
+  entrySlotsFree: number | null;
 };
 
 const OUT_OF_PLAN_REASON = "not currently assigned/enabled by the Caesar plan";
@@ -299,8 +321,27 @@ function CandidatesTable({ rows }: { rows: StreamCandidateRow[] }) {
               <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.spread)}</div>
               <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{fmt(r.netEdge)}</div>
               <div className={`px-2 py-2.5 ${statusTone(r.status)}`}>{r.status}</div>
-              <div className={`px-2 py-2.5 ${r.readyToEnter ? "text-emerald-300" : r.latched ? "text-amber-300" : "text-zinc-600"}`}>
-                {r.readyToEnter ? "ready" : r.latched ? "holding" : "—"}
+              <div
+                className={`px-2 py-2.5 ${
+                  r.entryCutoffBlocked
+                    ? "text-rose-300/80"
+                    : r.entryBeforeSessionStart
+                    ? "text-sky-300/70"
+                    : r.readyToEnter
+                    ? "text-emerald-300"
+                    : r.latched
+                    ? "text-amber-300"
+                    : "text-zinc-600"
+                }`}
+                title={
+                  r.entryCutoffBlocked
+                    ? "Session's entry cutoff has passed — this will never be picked, no matter the status above."
+                    : r.entryBeforeSessionStart
+                    ? "Session hasn't started yet — not a problem, just a wait."
+                    : undefined
+                }
+              >
+                {r.entryCutoffBlocked ? "past cutoff" : r.entryBeforeSessionStart ? "not started" : r.readyToEnter ? "ready" : r.latched ? "holding" : "—"}
               </div>
               <div className="px-2 py-2.5 text-zinc-600">{r.reason}</div>
             </div>
@@ -366,10 +407,13 @@ function StrategyCardHeader({
   label,
   outOfPlan,
   asOfUtc,
+  entrySlotsFree,
 }: {
   label: string;
   outOfPlan: boolean;
   asOfUtc: string | null;
+  /** Undefined where the concept doesn't apply (the OpenDoor family has no candidate screen). */
+  entrySlotsFree?: number | null;
 }) {
   return (
     <div className="flex items-center justify-between gap-3 px-1">
@@ -378,6 +422,19 @@ function StrategyCardHeader({
         {outOfPlan && (
           <span className="rounded border border-zinc-600/40 bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
             disabled — nothing sent
+          </span>
+        )}
+        {entrySlotsFree != null && (
+          <span
+            className={
+              "rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest " +
+              (entrySlotsFree === 0
+                ? "border-rose-500/30 bg-rose-500/[0.08] text-rose-300"
+                : "border-white/[0.06] bg-black/25 text-zinc-500")
+            }
+            title="Free entry slots (MaxOpenPositions minus open positions) — 0 silently refuses every new candidate; adds to already-open positions are unaffected."
+          >
+            {entrySlotsFree === 0 ? "0 slots free" : `${entrySlotsFree} slots free`}
           </span>
         )}
         <AgeBadge asOfUtc={asOfUtc} />
@@ -410,7 +467,12 @@ function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflu
 
   return (
     <div className={`min-w-0 space-y-2 p-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
-      <StrategyCardHeader label={label} outOfPlan={outOfPlan} asOfUtc={snapshot?.asOfUtc ?? null} />
+      <StrategyCardHeader
+        label={label}
+        outOfPlan={outOfPlan}
+        asOfUtc={snapshot?.asOfUtc ?? null}
+        entrySlotsFree={snapshot?.entrySlotsFree}
+      />
 
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
