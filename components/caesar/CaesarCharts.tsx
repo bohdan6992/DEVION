@@ -404,10 +404,10 @@ function LinesChart({
   const width = 1100;
   const height = 320;
   const PAD_L = 20;
-  // Wide enough for an end-of-line label like "ARBITRAGE +1234.56" growing rightward from the
-  // last point, not just the value-tick text that used to be the only thing living in this
-  // margin (right-aligned, growing leftward, and needed far less room).
-  const PAD_R = 150;
+  // Just the value-tick text (right-aligned, growing leftward) — names/values moved to the hover
+  // tooltip only (2026-09-18, operator asked for a less cluttered chart), so this no longer has
+  // to leave room for an end-of-line label growing rightward from the last point.
+  const PAD_R = 60;
   const PAD_T = 40;
   const footerH = 40;
   const PAD_B = 56;
@@ -477,39 +477,6 @@ function LinesChart({
     ? `${roundedPolyline(totalPts.map((p): [number, number] => [x(p.min), y(p.value)]), 4)} L ${x(totalPts[totalPts.length - 1].min)} ${y(0)} L ${x(totalPts[0].min)} ${y(0)} Z`
     : "";
 
-  /**
-   * Right at each line's own end, in its own colour, in place of a legend box — the operator
-   * asked for this directly (2026-09-18): no separate swatch list to cross-reference, the name
-   * sits where the line actually is. Dodged the same way the arrivals chart's own endMarks are:
-   * pushed apart from the top down, then off the bottom up, so two lines ending at nearly the
-   * same value do not print one label on top of the other.
-   */
-  const endLabels = useMemo(() => {
-    const marks = series.flatMap((s) => {
-      const pts = inRange(s);
-      if (pts.length === 0) return [];
-      const lastPt = pts[pts.length - 1];
-      const isTotal = !s.dashed;
-      const color = isTotal ? GOLD_LINE : s.color;
-      const endX = x(lastPt.min);
-      const endY = y(lastPt.value);
-      return [{ key: s.key, color, endX, endY, labelY: endY, text: `${s.key.toUpperCase()} ${valueFmt(lastPt.value)}` }];
-    });
-    const MIN_GAP = 12;
-    const TOP = PAD_T;
-    const BOTTOM = height - PAD_B;
-    const order = marks.slice().sort((a, b) => a.labelY - b.labelY);
-    for (let i = 0; i < order.length; i += 1) {
-      const floor = i === 0 ? TOP : order[i - 1].labelY + MIN_GAP;
-      if (order[i].labelY < floor) order[i].labelY = floor;
-    }
-    for (let i = order.length - 1; i >= 0; i -= 1) {
-      const ceiling = i === order.length - 1 ? BOTTOM : order[i + 1].labelY - MIN_GAP;
-      if (order[i].labelY > ceiling) order[i].labelY = ceiling;
-    }
-    return marks;
-  }, [series, inRange, x, y, valueFmt]);
-
   return (
     <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {(title || meta) && (
@@ -544,7 +511,7 @@ function LinesChart({
         {yTicks.map((t) => (
           <g key={`y-${t.y.toFixed(2)}`}>
             <line x1={PAD_L} x2={width - PAD_R} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-            <text x={width - 8} y={t.y - 4} fontSize="14" textAnchor="end" className="fill-zinc-300 font-mono">
+            <text x={width - 8} y={t.y - 5} fontSize="17" textAnchor="end" className="fill-zinc-300 font-mono">
               {valueFmt(t.val)}
             </text>
           </g>
@@ -575,30 +542,17 @@ function LinesChart({
                 d={d}
                 fill="none"
                 stroke={color}
-                strokeWidth={isTotal ? 2.8 : 1.8}
-                strokeDasharray={isTotal ? undefined : "4 3"}
+                strokeWidth={isTotal ? 4 : 3.2}
+                strokeDasharray={isTotal ? undefined : "8 4"}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                opacity={isTotal ? 1 : 0.85}
+                opacity={isTotal ? 1 : 0.95}
                 filter={isTotal ? `url(#${uid}-glow)` : undefined}
               />
-              <circle cx={x(lastPt.min)} cy={y(lastPt.value)} r={isTotal ? 4 : 2.6} fill={color} />
+              <circle cx={x(lastPt.min)} cy={y(lastPt.value)} r={isTotal ? 5 : 4} fill={color} />
             </g>
           );
         })}
-
-        {endLabels.map((m) => (
-          <text
-            key={m.key}
-            x={m.endX + 8}
-            y={m.labelY + 3}
-            fontSize="10"
-            className="font-mono"
-            fill={m.color}
-          >
-            {m.text}
-          </text>
-        ))}
 
         <line x1={PAD_L} x2={width - PAD_R} y1={height - PAD_B} y2={height - PAD_B} stroke="rgba(255,255,255,0.12)" />
         {ticks.map((m) => {
@@ -607,7 +561,7 @@ function LinesChart({
           return (
             <g key={m}>
               <line x1={px} x2={px} y1={PAD_T} y2={height - PAD_B} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
-              <text x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="14" className="fill-zinc-400 font-mono">
+              <text x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="17" className="fill-zinc-400 font-mono">
                 {clockLabel(m)}
               </text>
             </g>
@@ -615,17 +569,19 @@ function LinesChart({
         })}
       </svg>
 
+      {/* Names and values live here ONLY (2026-09-18) — no more always-on end-of-line text
+          crowding the chart; hover the plot to read any series' value at that moment. */}
       {hoverValues && (
         <div
-          className="pointer-events-none absolute top-0 z-10 min-w-[104px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-2 py-1.5 shadow-lg backdrop-blur-xl"
+          className="pointer-events-none absolute top-0 z-10 min-w-[150px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-3 py-2 shadow-lg backdrop-blur-xl"
           style={{ left: `${hoverPct}%`, transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)" }}
         >
-          <div className="font-mono text-[10px] tabular-nums text-zinc-500">{clockLabel(hoverMin ?? 0)}</div>
+          <div className="font-mono text-[12px] tabular-nums text-zinc-500">{clockLabel(hoverMin ?? 0)}</div>
           {hoverValues.map((v) => v.value != null && (
-            <div key={v.key} className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]">
-              <span className="h-1.5 w-1.5 shrink-0 rounded-sm" style={{ backgroundColor: v.color }} />
-              <span className="text-zinc-500">{v.key.toUpperCase()}</span>
-              <span className="ml-auto tabular-nums text-zinc-200">{valueFmt(v.value)}</span>
+            <div key={v.key} className="mt-1 flex items-center gap-2 font-mono text-[13px]">
+              <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: v.color }} />
+              <span className="text-zinc-400">{v.key.toUpperCase()}</span>
+              <span className="ml-auto font-bold tabular-nums text-zinc-100">{valueFmt(v.value)}</span>
             </div>
           ))}
         </div>
@@ -633,8 +589,8 @@ function LinesChart({
 
       {lastTotal && (
         <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-          <div className="flex items-center gap-3 text-[10px] font-mono">
-            <span style={{ color: GOLD_LINE }}>
+          <div className="flex items-center gap-3 text-[12px] font-mono">
+            <span className="font-bold" style={{ color: GOLD_LINE }}>
               total {valueFmt(lastTotal.value)}
             </span>
             {series.filter((s) => s.dashed).map((s) => {

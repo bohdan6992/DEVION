@@ -12,6 +12,50 @@ import { GlassCard, ScopeResearchInsufficientState, renderScopeChartTooltip } fr
 // =========================
 // Simple SVG line chart (equity curve)
 // =========================
+
+function dist(x0: number, y0: number, x1: number, y1: number): number {
+  return Math.hypot(x1 - x0, y1 - y0);
+}
+
+/** The point `d` units from (x0,y0) along the segment toward (x1,y1). */
+function towards(x0: number, y0: number, x1: number, y1: number, d: number): [number, number] {
+  const len = dist(x0, y0, x1, y1);
+  if (len <= 1e-6) return [x0, y0];
+  const t = Math.min(1, d / len);
+  return [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+}
+
+/**
+ * A polyline with every sharp corner eased into a small curve — pulls back `radius` along each
+ * side of a corner, then draws a quadratic curve through the original corner point between those
+ * two pulled-back points. Two adjacent points at nearly the same time (a cluster of trades on one
+ * day) sit far apart vertically but only a couple of pixels apart on the x-axis, so the segment
+ * between them reads as a near-vertical wall — this is what the operator meant by "90-degree
+ * corners", not a literal step interpolation. Rounding every corner (each one bounded to half its
+ * own shortest adjacent segment, so a tight cluster never rounds far enough to self-intersect)
+ * turns that wall into a curve without changing where the line actually is at each real point.
+ */
+function roundedPolyline(points: readonly [number, number][], radius: number): string {
+  if (points.length === 0) return "";
+  if (points.length < 3 || radius <= 0) {
+    return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ");
+  }
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x0, y0] = points[i - 1];
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[i + 1];
+    const r1 = Math.min(radius, dist(x0, y0, x1, y1) / 2);
+    const r2 = Math.min(radius, dist(x1, y1, x2, y2) / 2);
+    const [ax, ay] = towards(x1, y1, x0, y0, r1);
+    const [bx, by] = towards(x1, y1, x2, y2, r2);
+    d += ` L ${ax} ${ay} Q ${x1} ${y1} ${bx} ${by}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last[0]} ${last[1]}`;
+  return d;
+}
+
 export function EquityChartImpl({
   points,
   title,
@@ -121,9 +165,7 @@ export function EquityChartImpl({
   };
   const toY = (v: number) => padTop + (1 - (v - minY) / span) * (h - padTop - padBottom);
 
-  const lineD = chartPoints
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toY(p.equity).toFixed(2)}`)
-    .join(" ");
+  const lineD = roundedPolyline(chartPoints.map((p, i): [number, number] => [toX(i), toY(p.equity)]), 8);
 
   const areaD = `${lineD} L ${toX(chartPoints.length - 1).toFixed(2)} ${(h - padBottom).toFixed(2)} L ${toX(0).toFixed(2)} ${(h - padBottom).toFixed(2)} Z`;
 

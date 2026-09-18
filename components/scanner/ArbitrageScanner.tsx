@@ -3199,35 +3199,24 @@ export default function ArbitrageScanner({
     setScanErr(null);
     setScanProgress({ done: 0, total: combos.length });
 
-    const out: EpisodeScanResult[] = [];
     try {
-      for (let i = 0; i < combos.length; i++) {
-        const c = combos[i];
-        const req = buildPostRequest(from, to);
-        req.startAbs = c.s;
-        req.startAbsMax = null;
-        req.endAbs = c.e;
-        // includeBestParams:false — this sweep only reduces totalPnlUsd across combos, it never
-        // reads best_params, so there's no reason to pay for it dozens of times over.
-        const j = await apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...req, includeBestParams: false });
-        const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
-        const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
-        const wins = rows.filter((r) => (r.totalPnlUsd ?? 0) > 0).length;
-        const losses = rows.filter((r) => (r.totalPnlUsd ?? 0) < 0).length;
-        const trades = rows.length;
-        const winRate = trades > 0 ? wins / trades : 0;
-        out.push({
-          startAbs: c.s,
-          endAbs: c.e,
-          trades,
-          wins,
-          losses,
-          winRate,
-          totalPnlUsd: total,
-          avgPnlUsd: trades > 0 ? total / trades : 0,
-        });
-        setScanProgress({ done: i + 1, total: combos.length });
-      }
+      // One request for the whole grid, not one per combo. The bridge still builds each combo's
+      // own closed-trade set separately server-side (EndAbs changes where a position actually
+      // exits, so it needs its own build — see episodes/scan-sweep's own doc comment for why this
+      // is not the same as ScopeEvaluate's build-once-filter-many), but this removes the ~55
+      // sequential round trips AND the ~55 full row arrays the browser used to fetch only to
+      // reduce each one to these same eight numbers itself. includeBestParams was already false
+      // here; the sweep never read it.
+      const resp = await apiPostWithTimeout<{ rows: EpisodeScanResult[] }>(
+        `${STRATEGY.api.base}/episodes/scan-sweep`,
+        {
+          baseRequest: buildPostRequest(from, to),
+          combos: combos.map((c) => ({ startAbs: c.s, endAbs: c.e })),
+        },
+        180_000
+      );
+      const out = resp?.rows ?? [];
+      setScanProgress({ done: combos.length, total: combos.length });
 
       const sorted = [...out].sort((a, b) => {
         if (scanObjective === "winrate") {
