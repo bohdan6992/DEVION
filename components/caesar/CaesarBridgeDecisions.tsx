@@ -17,10 +17,11 @@
  * over to the bridge for real stays a separate, deliberate step for later.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
 
 type StreamCandidateRow = {
   ticker: string;
@@ -567,6 +568,206 @@ function OpenDoorFamilySection() {
   );
 }
 
+/** One position as the account itself reports it — same shape CaesarPositions.tsx reads. */
+type AccountPosition = {
+  ticker?: string | null;
+  openPnL?: number | null;
+  closedPnL?: number | null;
+  isFlat?: boolean | null;
+};
+
+/**
+ * Ticker -> the account's own realised+unrealised total, straight from TradingApp — the money
+ * ServerPositionTracker itself never carries (it tracks a signal, not a fill price). Shares
+ * CaesarPositions'/CaesarCharts' identical poll under the same key rather than running a fourth
+ * independent one against the same endpoint.
+ */
+function useAccountPnlByTicker() {
+  const [byTicker, setByTicker] = useState<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    let alive = true;
+    const fetchPositions = () =>
+      fetchWithTimeout(bridgeUrl("/api/execution/tradingapp/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ positions?: AccountPosition[] }>);
+    const unsubscribe = subscribeSharedPoll("account-positions", fetchPositions, POLL_MS, (json, err) => {
+      if (!alive || err || !json) return;
+      const map = new Map<string, number>();
+      for (const p of json.positions ?? []) {
+        const ticker = (p.ticker ?? "").trim().toUpperCase();
+        if (!ticker) continue;
+        const openPnl = p.isFlat ? 0 : p.openPnL ?? 0;
+        const closedPnl = p.closedPnL ?? 0;
+        map.set(ticker, openPnl + closedPnl);
+      }
+      setByTicker(map);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  return byTicker;
+}
+
+type SituationRow = {
+  key: string;
+  label: string;
+  strategyId: string;
+  side: string;
+  entryCount: number;
+  pnl: number;
+  /** A ticker still legging more than one open pair at once — the account's one number for it
+      cannot be split between them, so this row shows that ticker's own (blended) figure instead
+      of a combined pair total it cannot actually back up. */
+  shared: boolean;
+};
+
+/**
+ * Every open situation across every strategy, PairFlux's own pairs collapsed into one row with
+ * a combined P&L — the operator's own request (2026-09-18): watching two legs as two unrelated
+ * rows hides that they are one bet.
+ *
+ * PairFlux lets one ticker leg more than one pair at once (ServerPositionTracker.FindAll's own
+ * doc comment), and the account reports ONE number per ticker — so the instant a ticker is doing
+ * that, no combined figure for either pair would be anything but a guess. Those legs fall back to
+ * their own ticker-level figure, flagged, rather than a confident-looking split that is not real.
+ * The moment one of the two pairs closes (its own leg drops out of the tracker entirely), the
+ * ticker is no longer shared and the next poll folds it back into a real combined total for
+ * whichever pair is still open — this recomputes from scratch every poll, nothing is cached
+ * across the transition.
+ */
+function AllSituationsSection() {
+  const { positions } = useAllPositions();
+  const accountPnlByTicker = useAccountPnlByTicker();
+
+  const rows = useMemo<SituationRow[]>(() => {
+    const list = positions ?? [];
+    const byPairKey = new Map<string, StreamOpenPosition[]>();
+    const singles: StreamOpenPosition[] = [];
+    for (const p of list) {
+      if (p.pairKey) {
+        const arr = byPairKey.get(p.pairKey) ?? [];
+        arr.push(p);
+        byPairKey.set(p.pairKey, arr);
+      } else {
+        singles.push(p);
+      }
+    }
+
+    const tickerToPairKeys = new Map<string, Set<string>>();
+    for (const [pairKey, legs] of byPairKey) {
+      for (const leg of legs) {
+        const t = leg.ticker.trim().toUpperCase();
+        const set = tickerToPairKeys.get(t) ?? new Set<string>();
+        set.add(pairKey);
+        tickerToPairKeys.set(t, set);
+      }
+    }
+
+    const tickerPnl = (ticker: string) => accountPnlByTicker.get(ticker.trim().toUpperCase()) ?? 0;
+
+    const out: SituationRow[] = [];
+    for (const [pairKey, legs] of byPairKey) {
+      const isShared = legs.some((l) => (tickerToPairKeys.get(l.ticker.trim().toUpperCase())?.size ?? 0) > 1);
+      if (!isShared) {
+        out.push({
+          key: `pair:${pairKey}`,
+          label: legs.map((l) => l.ticker).join(" / "),
+          strategyId: legs[0]?.strategyId ?? "",
+          side: legs.map((l) => l.side).join(" / "),
+          entryCount: Math.max(1, ...legs.map((l) => l.entryCount)),
+          pnl: legs.reduce((sum, l) => sum + tickerPnl(l.ticker), 0),
+          shared: false,
+        });
+      } else {
+        for (const leg of legs) {
+          out.push({
+            key: `leg:${pairKey}:${leg.ticker}`,
+            label: `${leg.ticker} (${pairKey})`,
+            strategyId: leg.strategyId,
+            side: leg.side,
+            entryCount: leg.entryCount,
+            pnl: tickerPnl(leg.ticker),
+            shared: true,
+          });
+        }
+      }
+    }
+    for (const p of singles) {
+      out.push({
+        key: `single:${p.strategyId}:${p.ticker}`,
+        label: p.ticker,
+        strategyId: p.strategyId,
+        side: p.side,
+        entryCount: p.entryCount,
+        pnl: tickerPnl(p.ticker),
+        shared: false,
+      });
+    }
+
+    return out.sort((a, b) => b.pnl - a.pnl);
+  }, [positions, accountPnlByTicker]);
+
+  const total = rows.reduce((sum, r) => sum + r.pnl, 0);
+  const pnlTone = (v: number) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-zinc-500");
+
+  return (
+    <div className="scanner-glass-card mt-3 min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-400">All situations</span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">{rows.length} open</span>
+          <span className={`font-mono text-[12px] font-bold tabular-nums ${pnlTone(total)}`}>
+            {total >= 0 ? "+" : ""}{fmt(total)}
+          </span>
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-white/[0.05]">
+        <table className="w-full min-w-[760px] text-xs">
+          <thead>
+            <tr className="border-b border-white/[0.06] bg-black/20 text-left font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+              <th className="px-2 py-1.5">Ticker / Pair</th>
+              <th className="px-2 py-1.5">Strategy</th>
+              <th className="px-2 py-1.5">Side</th>
+              <th className="px-2 py-1.5 text-right">Adds</th>
+              <th className="px-2 py-1.5 text-right">P&amp;L</th>
+              <th className="px-2 py-1.5">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-2 py-6 text-center font-mono text-[11px] text-zinc-600">
+                  no open situations
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => {
+                const strategy = getLiveStrategyByBridgeId(r.strategyId);
+                return (
+                  <tr key={r.key} className="border-b border-white/[0.03] font-mono text-[11px]">
+                    <td className="px-2 py-1.5 font-bold text-zinc-200">{r.label}</td>
+                    <td className="px-2 py-1.5 text-zinc-400">{(strategy?.key ?? r.strategyId).toUpperCase()}</td>
+                    <td className={r.side.includes("Short") && !r.side.includes("Long") ? "px-2 py-1.5 text-rose-300" : "px-2 py-1.5 text-emerald-300"}>
+                      {r.side}
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-zinc-400">{Math.max(0, r.entryCount - 1)}</td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${pnlTone(r.pnl)}`}>
+                      {r.pnl >= 0 ? "+" : ""}{fmt(r.pnl)}
+                    </td>
+                    <td className="px-2 py-1.5 text-amber-300/80">
+                      {r.shared ? "shared ticker — own figure, not combined" : ""}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function CaesarBridgeDecisions() {
   return (
     <div className="mt-3">
@@ -594,6 +795,7 @@ export default function CaesarBridgeDecisions() {
         <StrategySection strategy="pairflux" label="PairFlux" />
       </div>
       <OpenDoorFamilySection />
+      <AllSituationsSection />
     </div>
   );
 }
