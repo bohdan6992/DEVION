@@ -375,7 +375,13 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         seen.add(t);
         const owners = claimsByTicker.get(t) ?? [];
         const open = isOpen(p);
-        const shared = owners.length > 1;
+        // SHARED means two DIFFERENT strategies hold this ticker, not "more than one claim" —
+        // PairFlux alone can produce two claims for the same ticker (it legs one ticker into
+        // more than one pair at once, see ServerPositionTracker.FindAll's own doc comment), and
+        // treating that as "shared" pulled the ticker's whole P&L out of PairFlux's own total and
+        // into the neutral shared bucket while the grand total still counted it — the strategy
+        // card and the grand total disagreeing by exactly that ticker's P&L (reported 2026-09-18).
+        const shared = new Set(owners.map((o) => o.strategyKey)).size > 1;
         if (owners.length === 0) {
           return [{ bridge: p, claim: null, ticker: t, open, shared: false }];
         }
