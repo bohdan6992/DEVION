@@ -29,10 +29,11 @@
  * rather than inventing a hue.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { SOFT_LOSS_MUTED, SOFT_LOSS_SOLID, SOFT_LOSS_STROKE } from "@/components/scanner/shared/styles";
 
 export type CaesarChartsProps = {
   instances: readonly { key: string; instanceId: string; priority: number }[];
@@ -43,10 +44,25 @@ export type CaesarChartsProps = {
   nowMin: number | null;
 };
 
-/** Scanner's fixed mint, coral, lavender, turquoise, gold and orange analytics palette. */
-const SERIES = ["#63e6be", "#f3a6b2", "#a78bfa", "#2dd4bf", "#facc15", "#fb923c"] as const;
-const OTHER = "#fb923c";
+/**
+ * Strategy IDENTITY colours — deliberately excludes mint/emerald and coral/rose. Those two are
+ * reserved app-wide for POSITIVE/NEGATIVE (or long/short) — see the SOFT_LOSS_* constants in
+ * components/scanner/shared/styles.ts and pnlTone() below. A strategy assigned one of those by
+ * coincidence of palette order would read as "this strategy is good/bad" in any chart that also
+ * shows a signed total nearby (exactly what LinesChart's legend does), which is not what the
+ * colour is there to say. Lavender / orange / cyan / yellow / blue, in that order; OTHER is the
+ * fold-over past five strategies.
+ */
+const SERIES = ["#a78bfa", "#fb923c", "#22d3ee", "#facc15", "#60a5fa"] as const;
+const OTHER = "#818cf8";
 const SURFACE = "#0a0a0a";
+
+/**
+ * LinesChart-only: the solid Total line is the hero, gold, regardless of sign — sign still reads
+ * from valueFmt's own leading "+"/"-". Per-strategy dashed lines keep their own SERIES identity
+ * colour (reverted 2026-09-18 — a uniform silver secondary tone made every strategy look alike).
+ */
+const GOLD_LINE = "#d4af37";
 const MAX_SERIES = SERIES.length;
 
 const AXIS = "rgba(255,255,255,0.10)";
@@ -72,8 +88,20 @@ type BridgePosition = {
 
 type BridgePositionsResponse = { ok: boolean; positions: BridgePosition[] };
 
-/** GET api/stream/caesar/entries: bridge strategy id -> that strategy's own entry timestamps today. */
-type EntryLogResponse = { ok: boolean; tradingDateNy: string; entries: Record<string, string[]> };
+/** One entry moment — see ServerStrategyRunner's EntryLogRecord. */
+type EntryLogEntry = { atUtc: string; side: string };
+
+/** GET api/stream/caesar/entries: bridge strategy id -> that strategy's own entries today. */
+type EntryLogResponse = { ok: boolean; tradingDateNy: string; entries: Record<string, EntryLogEntry[]> };
+
+/** GET api/stream/caesar/pnl-series: see StrategyPnlSeriesService on the bridge. */
+type PnlSample = { total: number; situations: number };
+type PnlSamplePoint = { atUtc: string; minuteOfDay: number; perStrategy: Record<string, PnlSample> };
+type PnlSeriesResponse = { ok: boolean; tradingDateNy: string; points: PnlSamplePoint[] };
+
+/** A generic multi-series line — shared shape for the PnL and average-trade charts. */
+type ValuePoint = { min: number; value: number };
+type ValueSeries = { key: string; color: string; dashed: boolean; points: ValuePoint[] };
 
 function isAccountActive(position: AccountPosition): boolean {
   if (position.isFlat === true) return false;
@@ -347,12 +375,439 @@ function Donut({
 }
 
 // =========================================================================================
+// MULTI-SERIES LINE CHART — shared by the PnL-over-time and average-trade charts. Total is always
+// solid and glowed, coloured by its own sign (the app-wide emerald/soft-rose money convention);
+// every per-strategy line is dashed. Same card shell, gradient/glow language, tick sizing and
+// footer-stats-bar convention as the scanner's own EquityChart/StartsByTimeChart — see
+// components/scanner/shared/charts.tsx, which this deliberately matches rather than invents a
+// second visual language for.
+// =========================================================================================
+
+function LinesChart({
+  series,
+  fromMin,
+  toMin,
+  nowMin,
+  valueFmt,
+  title,
+  meta,
+}: {
+  series: ValueSeries[];
+  fromMin: number | null;
+  toMin: number | null;
+  nowMin: number | null;
+  valueFmt: (v: number) => string;
+  title?: string;
+  meta?: string;
+}) {
+  const uid = useId().replace(/:/g, "");
+  const width = 1100;
+  const height = 320;
+  const PAD_L = 20;
+  // Wide enough for an end-of-line label like "ARBITRAGE +1234.56" growing rightward from the
+  // last point, not just the value-tick text that used to be the only thing living in this
+  // margin (right-aligned, growing leftward, and needed far less room).
+  const PAD_R = 150;
+  const PAD_T = 40;
+  const footerH = 40;
+  const PAD_B = 56;
+  const plotW = width - PAD_L - PAD_R;
+  const plotH = height - PAD_T - PAD_B;
+  const from = fromMin ?? 0;
+  const to = toMin ?? 1440;
+  const span = Math.max(1, to - from);
+
+  const inRange = useCallback((s: ValueSeries) =>
+    s.points.filter((p) => p.min >= from && p.min <= to).sort((a, b) => a.min - b.min), [from, to]);
+
+  const allValues = series.flatMap((s) => inRange(s).map((p) => p.value));
+  const maxVal = Math.max(0, ...allValues, 1e-6);
+  const minVal = Math.min(0, ...allValues);
+  const valSpan = Math.max(1e-6, maxVal - minVal);
+
+  const x = useCallback((min: number) => PAD_L + ((min - from) / span) * plotW, [from, span, plotW]);
+  const y = useCallback((value: number) => PAD_T + plotH - ((value - minVal) / valSpan) * plotH, [minVal, valSpan, plotH]);
+
+  const yTicks = Array.from({ length: 5 }, (_, i) => {
+    const t = i / 4;
+    const val = maxVal - t * valSpan;
+    return { y: y(val), val };
+  });
+
+  const ticks = useMemo(() => {
+    const out: number[] = [];
+    const first = Math.ceil(from / 60) * 60;
+    const step = span > 600 ? 180 : span > 240 ? 60 : 30;
+    for (let m = first; m <= to; m += step) out.push(m);
+    return out;
+  }, [from, to, span]);
+
+  const [hoverMin, setHoverMin] = useState<number | null>(null);
+  const plotRef = useRef<SVGSVGElement | null>(null);
+  const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = plotRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * width;
+    if (px < PAD_L || px > width - PAD_R) { setHoverMin(null); return; }
+    setHoverMin(from + ((px - PAD_L) / plotW) * span);
+  }, [from, span, plotW]);
+
+  const hoverValues = useMemo(() => {
+    if (hoverMin == null) return null;
+    return series.map((s) => {
+      let nearest: number | null = null;
+      let bestDiff = Infinity;
+      for (const p of inRange(s)) {
+        const diff = Math.abs(p.min - hoverMin);
+        if (diff < bestDiff) { bestDiff = diff; nearest = p.value; }
+      }
+      return { key: s.key, color: s.dashed ? s.color : GOLD_LINE, value: nearest };
+    });
+  }, [hoverMin, series, inRange]);
+  const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / width) * 100;
+
+  const zeroY = y(0);
+  const zeroInRange = minVal <= 0 && maxVal >= 0;
+
+  const total = series.find((s) => !s.dashed) ?? null;
+  const totalPts = total ? inRange(total) : [];
+  const lastTotal = totalPts.length > 0 ? totalPts[totalPts.length - 1] : null;
+  const totalAreaD = totalPts.length > 0
+    ? `${roundedPolyline(totalPts.map((p): [number, number] => [x(p.min), y(p.value)]), 4)} L ${x(totalPts[totalPts.length - 1].min)} ${y(0)} L ${x(totalPts[0].min)} ${y(0)} Z`
+    : "";
+
+  /**
+   * Right at each line's own end, in its own colour, in place of a legend box — the operator
+   * asked for this directly (2026-09-18): no separate swatch list to cross-reference, the name
+   * sits where the line actually is. Dodged the same way the arrivals chart's own endMarks are:
+   * pushed apart from the top down, then off the bottom up, so two lines ending at nearly the
+   * same value do not print one label on top of the other.
+   */
+  const endLabels = useMemo(() => {
+    const marks = series.flatMap((s) => {
+      const pts = inRange(s);
+      if (pts.length === 0) return [];
+      const lastPt = pts[pts.length - 1];
+      const isTotal = !s.dashed;
+      const color = isTotal ? GOLD_LINE : s.color;
+      const endX = x(lastPt.min);
+      const endY = y(lastPt.value);
+      return [{ key: s.key, color, endX, endY, labelY: endY, text: `${s.key.toUpperCase()} ${valueFmt(lastPt.value)}` }];
+    });
+    const MIN_GAP = 12;
+    const TOP = PAD_T;
+    const BOTTOM = height - PAD_B;
+    const order = marks.slice().sort((a, b) => a.labelY - b.labelY);
+    for (let i = 0; i < order.length; i += 1) {
+      const floor = i === 0 ? TOP : order[i - 1].labelY + MIN_GAP;
+      if (order[i].labelY < floor) order[i].labelY = floor;
+    }
+    for (let i = order.length - 1; i >= 0; i -= 1) {
+      const ceiling = i === order.length - 1 ? BOTTOM : order[i + 1].labelY - MIN_GAP;
+      if (order[i].labelY > ceiling) order[i].labelY = ceiling;
+    }
+    return marks;
+  }, [series, inRange, x, y, valueFmt]);
+
+  return (
+    <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <svg
+        ref={plotRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="block h-full w-full"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHoverMin(null)}
+        role="img"
+        aria-label="Value over time, one line per strategy plus a solid total"
+      >
+        <defs>
+          <linearGradient id={`${uid}-fill`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(212,175,55,0.30)" />
+            <stop offset="100%" stopColor="rgba(212,175,55,0.02)" />
+          </linearGradient>
+          <filter id={`${uid}-glow`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {yTicks.map((t) => (
+          <g key={`y-${t.y.toFixed(2)}`}>
+            <line x1={PAD_L} x2={width - PAD_R} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+            <text x={width - 8} y={t.y - 4} fontSize="14" textAnchor="end" className="fill-zinc-300 font-mono">
+              {valueFmt(t.val)}
+            </text>
+          </g>
+        ))}
+
+        {zeroInRange && (
+          <line x1={PAD_L} x2={width - PAD_R} y1={zeroY} y2={zeroY} stroke="rgba(244,63,94,0.25)" strokeDasharray="4 3" />
+        )}
+        {nowMin != null && nowMin >= from && nowMin <= to && (
+          <line x1={x(nowMin)} y1={PAD_T} x2={x(nowMin)} y2={height - PAD_B} stroke="rgba(255,255,255,0.22)" strokeWidth={1} />
+        )}
+        {hoverMin != null && (
+          <line x1={x(hoverMin)} y1={PAD_T} x2={x(hoverMin)} y2={height - PAD_B} stroke="rgba(255,255,255,0.30)" strokeWidth={1} />
+        )}
+
+        {totalAreaD && <path d={totalAreaD} fill={`url(#${uid}-fill)`} />}
+
+        {series.map((s) => {
+          const pts = inRange(s);
+          if (pts.length === 0) return null;
+          const d = roundedPolyline(pts.map((p): [number, number] => [x(p.min), y(p.value)]), 4);
+          const lastPt = pts[pts.length - 1];
+          const isTotal = !s.dashed;
+          const color = isTotal ? GOLD_LINE : s.color;
+          return (
+            <g key={s.key}>
+              <path
+                d={d}
+                fill="none"
+                stroke={color}
+                strokeWidth={isTotal ? 2.8 : 1.8}
+                strokeDasharray={isTotal ? undefined : "4 3"}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                opacity={isTotal ? 1 : 0.85}
+                filter={isTotal ? `url(#${uid}-glow)` : undefined}
+              />
+              <circle cx={x(lastPt.min)} cy={y(lastPt.value)} r={isTotal ? 4 : 2.6} fill={color} />
+            </g>
+          );
+        })}
+
+        {endLabels.map((m) => (
+          <text
+            key={m.key}
+            x={m.endX + 8}
+            y={m.labelY + 3}
+            fontSize="10"
+            className="font-mono"
+            fill={m.color}
+          >
+            {m.text}
+          </text>
+        ))}
+
+        <line x1={PAD_L} x2={width - PAD_R} y1={height - PAD_B} y2={height - PAD_B} stroke="rgba(255,255,255,0.12)" />
+        {ticks.map((m) => {
+          const px = x(m);
+          if (px < PAD_L + 8) return null;
+          return (
+            <g key={m}>
+              <line x1={px} x2={px} y1={PAD_T} y2={height - PAD_B} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
+              <text x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="14" className="fill-zinc-400 font-mono">
+                {clockLabel(m)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {hoverValues && (
+        <div
+          className="pointer-events-none absolute top-0 z-10 min-w-[104px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-2 py-1.5 shadow-lg backdrop-blur-xl"
+          style={{ left: `${hoverPct}%`, transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)" }}
+        >
+          <div className="font-mono text-[10px] tabular-nums text-zinc-500">{clockLabel(hoverMin ?? 0)}</div>
+          {hoverValues.map((v) => v.value != null && (
+            <div key={v.key} className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-sm" style={{ backgroundColor: v.color }} />
+              <span className="text-zinc-500">{v.key.toUpperCase()}</span>
+              <span className="ml-auto tabular-nums text-zinc-200">{valueFmt(v.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lastTotal && (
+        <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
+          <div className="flex items-center gap-3 text-[10px] font-mono">
+            <span style={{ color: GOLD_LINE }}>
+              total {valueFmt(lastTotal.value)}
+            </span>
+            {series.filter((s) => s.dashed).map((s) => {
+              const pts = inRange(s);
+              const last = pts.length > 0 ? pts[pts.length - 1] : null;
+              return (
+                <span key={s.key} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+                  {s.key.toUpperCase()}: <span style={{ color: s.color }}>{last ? valueFmt(last.value) : "—"}</span>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Y coordinate for an x-axis tick label, matching the scanner charts' own footer-clearance math. */
+function h_text(height: number, footerH: number): number {
+  return height - footerH + 12;
+}
+
+// =========================================================================================
+// LONGS/SHORTS SENT — a bar per 10-minute bucket, in the scanner's own START OK/START BAD
+// gradient-bar language (emerald for long, the app-wide soft-rose for short).
+// =========================================================================================
+
+function LongShortHistogram({
+  buckets,
+  fromMin,
+  toMin,
+  nowMin,
+  title,
+  meta,
+}: {
+  buckets: { min: number; long: number; short: number }[];
+  fromMin: number | null;
+  toMin: number | null;
+  nowMin: number | null;
+  title?: string;
+  meta?: string;
+}) {
+  const uid = useId().replace(/:/g, "");
+  const width = 1100;
+  const height = 320;
+  const PAD_L = 22;
+  const PAD_R = 40;
+  const PAD_T = 40;
+  const footerH = 40;
+  const PAD_B = 56;
+  const plotW = width - PAD_L - PAD_R;
+  const plotH = height - PAD_T - PAD_B;
+  const from = fromMin ?? 0;
+  const to = toMin ?? 1440;
+  const span = Math.max(1, to - from);
+  const maxCount = Math.max(1, ...buckets.map((b) => Math.max(b.long, b.short)));
+
+  const barGap = 2;
+  const groupW = Math.max(4, Math.floor(plotW / Math.max(1, buckets.length)) - barGap);
+  const barW = Math.max(2, Math.floor((groupW - 1) / 2));
+  const x = useCallback((min: number) => PAD_L + ((min - from) / span) * plotW, [from, span, plotW]);
+  const y = useCallback((count: number) => PAD_T + plotH - (count / maxCount) * plotH, [maxCount, plotH]);
+  const yTicks = [0, Math.ceil(maxCount * 0.33), Math.ceil(maxCount * 0.66), maxCount];
+
+  const ticks = useMemo(() => {
+    const out: number[] = [];
+    const first = Math.ceil(from / 60) * 60;
+    const step = span > 600 ? 180 : span > 240 ? 60 : 30;
+    for (let m = first; m <= to; m += step) out.push(m);
+    return out;
+  }, [from, to, span]);
+
+  const totalLong = buckets.reduce((s, b) => s + b.long, 0);
+  const totalShort = buckets.reduce((s, b) => s + b.short, 0);
+  const total = totalLong + totalShort;
+  const longShare = total > 0 ? totalLong / total : 0;
+  const bestBucket = buckets.reduce((best, cur) => (cur.long + cur.short > best.long + best.short ? cur : best), buckets[0] ?? { min: from, long: 0, short: 0 });
+
+  return (
+    <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <svg viewBox={`0 0 ${width} ${height}`} className="block h-full w-full" role="img" aria-label="Longs and shorts sent per 10 minutes">
+        <defs>
+          <linearGradient id={`${uid}-long`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
+            <stop offset="100%" stopColor="rgba(110,231,183,0.25)" />
+          </linearGradient>
+          <linearGradient id={`${uid}-short`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
+            <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
+          </linearGradient>
+        </defs>
+
+        {yTicks.map((t) => {
+          const ty = y(t);
+          return (
+            <g key={`y-${t}`}>
+              <line x1={PAD_L} x2={width - PAD_R} y1={ty} y2={ty} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+              {t > 0 && (
+                <text x={width - 8} y={ty - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
+                  {t}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {nowMin != null && nowMin >= from && nowMin <= to && (
+          <line x1={x(nowMin)} y1={PAD_T} x2={x(nowMin)} y2={height - PAD_B} stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+        )}
+
+        {buckets.map((b) => {
+          const xBase = x(b.min);
+          const hLong = plotH * (b.long / maxCount);
+          const hShort = plotH * (b.short / maxCount);
+          const yLong = PAD_T + plotH - hLong;
+          const yShort = PAD_T + plotH - hShort;
+          return (
+            <g key={b.min}>
+              <rect x={xBase} y={yLong} width={barW} height={hLong} rx="3" fill={`url(#${uid}-long)`} stroke="rgba(110,231,183,0.55)" strokeWidth="0.6">
+                <title>{`${clockLabel(b.min)} LONG: ${b.long}`}</title>
+              </rect>
+              <rect x={xBase + barW + 1} y={yShort} width={barW} height={hShort} rx="3" fill={`url(#${uid}-short)`} stroke={SOFT_LOSS_STROKE} strokeWidth="0.6">
+                <title>{`${clockLabel(b.min)} SHORT: ${b.short}`}</title>
+              </rect>
+            </g>
+          );
+        })}
+
+        <line x1={PAD_L} x2={width - PAD_R} y1={height - PAD_B} y2={height - PAD_B} stroke="rgba(255,255,255,0.15)" />
+        {ticks.map((m) => {
+          const px = x(m);
+          if (px < PAD_L + 8) return null;
+          return (
+            <text key={m} x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="14" className="fill-zinc-200 font-mono">
+              {clockLabel(m)}
+            </text>
+          );
+        })}
+      </svg>
+
+      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <span className="text-emerald-300/90">long {intnLike(totalLong)}</span>
+          <span style={{ color: SOFT_LOSS_SOLID }}>short {intnLike(totalShort)}</span>
+          <span className="text-zinc-500">long share {(longShare * 100).toFixed(1)}%</span>
+          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
+            busiest: <span className="text-zinc-200">{clockLabel(bestBucket.min)}</span> ({intnLike(bestBucket.long + bestBucket.short)})
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function intnLike(n: number): string {
+  return Math.round(n).toLocaleString("en-US");
+}
+
+// =========================================================================================
 
 export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: CaesarChartsProps) {
   const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
   const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
   const [bridgePositions, setBridgePositions] = useState<BridgePosition[]>([]);
-  const [bridgeEntries, setBridgeEntries] = useState<Record<string, string[]>>({});
+  const [bridgeEntries, setBridgeEntries] = useState<Record<string, EntryLogEntry[]>>({});
+  const [pnlPoints, setPnlPoints] = useState<PnlSamplePoint[]>([]);
   const [hoverMin, setHoverMin] = useState<number | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const plotRef = useRef<SVGSVGElement | null>(null);
@@ -406,10 +861,26 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     return () => { alive = false; unsubscribe(); };
   }, []);
 
+  // Every strategy's own total P&L, sampled every 10 minutes — see StrategyPnlSeriesService. A new
+  // point lands on the bridge only once per 10 minutes, so this polls far slower than the live
+  // panels above; it exists purely to backfill/refresh, not to catch every tick.
+  useEffect(() => {
+    let alive = true;
+    const fetchSeries = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-series"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<PnlSeriesResponse>)
+        .then((body) => body.points);
+    const unsubscribe = subscribeSharedPoll("bridge-pnl-series", fetchSeries, 30_000, (value, err) => {
+      if (!alive) return;
+      if (!err && value) setPnlPoints(value);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
   const series = useMemo<Series[]>(() => instances.map((inst, index) => {
     // One step per ENTRY, in time order, carried forward as a running total.
     const orderedAt = (bridgeEntries[inst.instanceId] ?? [])
-      .map((iso) => new Date(iso).getTime())
+      .map((e) => new Date(e.atUtc).getTime())
       .filter((ts) => Number.isFinite(ts))
       .sort((a, b) => a - b);
 
@@ -467,14 +938,96 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       .filter((s) => s.active > 0);
     const shared = counts.get("shared") ?? 0;
     const unclaimed = counts.get("unclaimed") ?? 0;
-    if (shared > 0) result.push({ key: "shared", color: "#2dd4bf", active: shared, entered: 0, points: [] });
-    if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fb923c", active: unclaimed, entered: 0, points: [] });
+    // Neither a strategy identity nor a sign — reuses CaesarPositions.tsx's own sky/"shared" and
+    // amber/"unclaimed" badge colours rather than a SERIES entry, which by design is now reserved
+    // for actual strategies (see SERIES's own doc comment).
+    if (shared > 0) result.push({ key: "shared", color: "#38bdf8", active: shared, entered: 0, points: [] });
+    if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fbbf24", active: unclaimed, entered: 0, points: [] });
     return result;
   }, [accountActiveCount, accountPositions, bridgePositions, instances, series]);
   const totalActive = activeSeries.reduce((sum, s) => sum + s.active, 0);
   const unclaimedActive = activeSeries.find((s) => s.key === "unclaimed")?.active ?? 0;
   const totalEntered = series.reduce((sum, s) => sum + s.entered, 0);
   const maxCount = Math.max(1, ...series.map((s) => s.entered));
+
+  // ---- longs/shorts sent, bucketed into 10-minute bars ----------------------------------------
+  //
+  // Counts NEW entries dispatched inside each bucket — not a running total like the arrivals
+  // chart above, since "how many were sent in THIS 10 minutes" is a different question from "how
+  // many have arrived so far today". Pooled across every currently-scheduled strategy (`instances`
+  // is already segment-scoped, same as the arrivals chart), since the operator asked for one
+  // count, not a per-strategy breakdown.
+  const BUCKET_MINUTES = 10;
+  const longShortBuckets = useMemo(() => {
+    const from = fromMin ?? 0;
+    const to = toMin ?? 1440;
+    const buckets = new Map<number, { long: number; short: number }>();
+    for (let m = Math.floor(from / BUCKET_MINUTES) * BUCKET_MINUTES; m < to; m += BUCKET_MINUTES) {
+      buckets.set(m, { long: 0, short: 0 });
+    }
+    for (const inst of instances) {
+      for (const e of bridgeEntries[inst.instanceId] ?? []) {
+        const ts = new Date(e.atUtc).getTime();
+        if (!Number.isFinite(ts)) continue;
+        const min = axisMinuteOf(ts);
+        if (min < from || min >= to) continue;
+        const bucketStart = Math.floor(min / BUCKET_MINUTES) * BUCKET_MINUTES;
+        const bucket = buckets.get(bucketStart);
+        if (!bucket) continue;
+        if (e.side?.toUpperCase() === "SHORT") bucket.short += 1;
+        else bucket.long += 1;
+      }
+    }
+    return Array.from(buckets.entries())
+      .map(([min, counts]) => ({ min, ...counts }))
+      .sort((a, b) => a.min - b.min);
+  }, [instances, bridgeEntries, fromMin, toMin]);
+
+  // ---- PnL-over-time and average-trade lines, from the bridge's own 10-minute samples ----------
+  //
+  // Total is POOLED (sum of every active strategy's own value at that sample), not an average of
+  // averages — same convention the donut's own "total" already uses for situations.
+  const pnlLineSeries = useMemo<ValueSeries[]>(() => {
+    const perStrategy: ValueSeries[] = instances.map((inst, index) => ({
+      key: inst.key,
+      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      dashed: true,
+      points: pnlPoints
+        .filter((p) => p.perStrategy[inst.instanceId] !== undefined)
+        .map((p) => ({ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: p.perStrategy[inst.instanceId].total })),
+    }));
+    const totalPoints: ValuePoint[] = pnlPoints.map((p) => ({
+      min: axisMinuteOf(new Date(p.atUtc).getTime()),
+      value: instances.reduce((sum, inst) => sum + (p.perStrategy[inst.instanceId]?.total ?? 0), 0),
+    }));
+    return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
+  }, [instances, pnlPoints]);
+
+  const avgTradeLineSeries = useMemo<ValueSeries[]>(() => {
+    const perStrategy: ValueSeries[] = instances.map((inst, index) => ({
+      key: inst.key,
+      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      dashed: true,
+      points: pnlPoints.flatMap((p) => {
+        const s = p.perStrategy[inst.instanceId];
+        if (!s || s.situations <= 0) return [];
+        return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: s.total / s.situations }];
+      }),
+    }));
+    const totalPoints: ValuePoint[] = pnlPoints.flatMap((p) => {
+      let total = 0;
+      let situations = 0;
+      for (const inst of instances) {
+        const s = p.perStrategy[inst.instanceId];
+        if (!s) continue;
+        total += s.total;
+        situations += s.situations;
+      }
+      if (situations <= 0) return [];
+      return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: total / situations }];
+    });
+    return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
+  }, [instances, pnlPoints]);
 
   // ---- the time scale ------------------------------------------------------------------------
   const W = 920;
@@ -659,63 +1212,41 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
           </tbody>
         </table>
       ) : (
-      <div className="mt-3 grid items-center gap-4 lg:grid-cols-[minmax(280px,1fr)_minmax(0,2fr)]">
-          {/* ---------- SHARE ---------- */}
-          <figure className="scanner-glass-card relative m-0 flex h-[400px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-            <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-              <span>Active account book</span>
-              <span className="text-zinc-600">{totalActive} total</span>
-            </figcaption>
+      <>
+      {/* ---------- SITUATIONS / LONGS-SHORTS / AVG TRADE — three across, on top ---------- */}
+      <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_2fr_2fr]">
+        <figure className="scanner-glass-card relative m-0 flex h-[320px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            <span>ACTIVE ACCOUNT BOOK</span>
+            <span className="text-zinc-600">{totalActive} total</span>
+          </figcaption>
+          <Donut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
+        </figure>
 
-            {/* Flex, not a grid: the ring is a fixed 196px and the legend takes what is left, which
-                a fractional grid cannot express once the max-w classes are stripped. */}
-            <div className="mt-7 flex flex-col items-center gap-3 xl:flex-row xl:justify-center">
-              <Donut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
+        <LongShortHistogram
+          buckets={longShortBuckets}
+          fromMin={fromMin}
+          toMin={toMin}
+          nowMin={nowMin}
+          title="LONGS / SHORTS SENT"
+          meta="per 10m"
+        />
 
-              {/* Legend — always present for two or more series, so identity is never colour alone,
-                  and it is the hover surface too: pointing at a row lights its wedge. */}
-              {/* Width is inline for the same reason the ring's is: a `max-w-` class would be
-                  stripped, and without a cap the value column drifts half a panel away from the
-                  name it belongs to. */}
-              <ul className="hidden" style={{ flex: "1 1 168px", maxWidth: 236 }}>
-                {activeSeries.map((s) => {
-                  const on = hoverKey === s.key;
-                  return (
-                    <li
-                      key={s.key}
-                      onMouseEnter={() => setHoverKey(s.key)}
-                      onMouseLeave={() => setHoverKey(null)}
-                      className={
-                        "flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 font-mono text-[11px] transition-colors " +
-                        (on ? "bg-white/[0.06]" : "hover:bg-white/[0.03]")
-                      }
-                    >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-sm"
-                        style={{
-                          backgroundColor: s.color,
-                          boxShadow: on ? `0 0 8px ${s.color}` : undefined,
-                        }}
-                      />
-                      <span className={on ? "text-zinc-200" : "text-zinc-400"}>{s.key.toUpperCase()}</span>
-                      <span className="ml-auto tabular-nums text-zinc-200">{s.active}</span>
-                      <span className="w-9 text-right tabular-nums text-zinc-600">
-                        {totalActive > 0 ? `${Math.round((s.active / totalActive) * 100)}%` : "—"}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-            <div className="hidden">
-              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Active</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{totalActive}</div></div>
-              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Entries</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{totalEntered}</div></div>
-              <div><div className="text-[9px] uppercase tracking-widest text-zinc-600">Streams</div><div className="mt-0.5 text-lg font-bold tabular-nums text-zinc-100">{series.length}</div></div>
-            </div>
-          </figure>
+        <LinesChart
+          series={avgTradeLineSeries}
+          fromMin={fromMin}
+          toMin={toMin}
+          nowMin={nowMin}
+          valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
+          title="AVERAGE TRADE"
+          meta="total ÷ situations"
+        />
+      </div>
 
+      {/* ---------- ARRIVALS + PNL OVER TIME — two across, underneath ---------- */}
+      <div className="mt-3 grid gap-4 lg:grid-cols-2">
           {/* ---------- ARRIVALS ---------- */}
-          <figure className="scanner-glass-card relative m-0 h-[400px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <figure className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
             <div className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between">
               <figcaption className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 Entered during the segment
@@ -801,8 +1332,11 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                     </text>
                     {unclaimedActive > 0 && (
                       <g transform={`translate(${x(nowMin) + 8} ${PAD_T + 8})`}>
-                        <rect width="78" height="16" rx="4" fill="rgba(243,166,178,0.14)" stroke="rgba(243,166,178,0.38)" />
-                        <text x="6" y="11" fill="#f3a6b2" fontSize="7.5" letterSpacing="0.8" fontFamily="ui-monospace, monospace">
+                        {/* Amber, not coral — unclaimed is an ownership gap, not a negative result,
+                            and coral is reserved for that. Matches CaesarPositions.tsx's own
+                            UNCLAIMED badge. */}
+                        <rect width="78" height="16" rx="4" fill="rgba(251,191,36,0.14)" stroke="rgba(251,191,36,0.38)" />
+                        <text x="6" y="11" fill="#fbbf24" fontSize="7.5" letterSpacing="0.8" fontFamily="ui-monospace, monospace">
                           UNCLAIMED {unclaimedActive}
                         </text>
                       </g>
@@ -870,7 +1404,19 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
               )}
             </div>
           </figure>
-        </div>
+
+          {/* ---------- PNL OVER TIME ---------- */}
+          <LinesChart
+            series={pnlLineSeries}
+            fromMin={fromMin}
+            toMin={toMin}
+            nowMin={nowMin}
+            valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
+            title="PNL OVER TIME"
+            meta="open + closed, every 10m"
+          />
+      </div>
+      </>
       )}
       <style jsx global>{`
         @keyframes caesar-donut-enter {

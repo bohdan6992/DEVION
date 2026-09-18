@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUi } from "@/components/UiProvider";
 import type { ThemeKey, LangKey } from "@/components/UiProvider";
+import { IconCaesar } from "@/components/nav/AppIcons";
 
 /* ─── vertical scroll helpers (body is scroll container) ─── */
 const getScrollY  = () => document.body.scrollTop  || document.documentElement.scrollTop  || window.scrollY  || 0;
@@ -134,6 +135,12 @@ const NAV = [
         <rect x="9"   y="9"   width="5.5" height="5.5" rx="1"/>
       </svg>
     ),
+  },
+  {
+    // Same helmet mark used everywhere else Caesar is linked (AppDock, main.tsx's QuickNavButtons)
+    // — reused rather than redrawn, so the operator learns one glyph for it, not three.
+    href: "/caesar", label: "Caesar",
+    Icon: () => <IconCaesar width={15} height={15} />,
   },
 ];
 

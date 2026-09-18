@@ -2652,7 +2652,15 @@ export default function PairFluxScanner({
   useEffect(() => {
     if (primaryPanel !== "stream") return;
     let alive = true;
-    void (async () => {
+
+    // Fetched once, with no repeat — this used to only ever re-run when the class/rating floor
+    // changed, so a page left open all session kept trading whatever pair assignments happened to
+    // be published at load time. The bridge refreshes its OWN copy of this same table every 5min
+    // (PairFluxRatingsService.CacheTtl); left this way, an all-day tab falls further and further
+    // behind it, and eventually shows the operator a stream candidate list that no longer matches
+    // what Caesar is actually trading — measured live, 2026-09-17 (Caesar correctly dropped/added
+    // pairs as the table updated; this tab kept showing a stale set from hours earlier).
+    const load = async () => {
       try {
         const res = await fetchPairFluxRatings({
           cls: (session.toLowerCase() as PairFluxClass),
@@ -2665,8 +2673,12 @@ export default function PairFluxScanner({
       } catch {
         if (alive) setPfPairs([]);
       }
-    })();
-    return () => { alive = false; };
+    };
+
+    void load();
+    // Tighter than the bridge's own 5min cache so this tab is never the stale side of a comparison.
+    const interval = window.setInterval(() => { void load(); }, 60_000);
+    return () => { alive = false; window.clearInterval(interval); };
   }, [primaryPanel, session, streamRatingRule.minRate, streamRatingRule.minTotal]);
 
   /**

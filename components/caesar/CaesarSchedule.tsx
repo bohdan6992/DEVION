@@ -14,7 +14,6 @@ import {
   pushBridgePlan,
   setBridgeEngineEnabled,
   setBridgeScheduleEnabled,
-  setBridgeStrategyShadow,
   startStrategyNow,
   stopStrategyNow,
 } from "@/lib/caesar/planClient";
@@ -25,6 +24,7 @@ import {
   MAX_PRIORITY,
   MIN_PRIORITY,
   PRIORITY_STEP,
+  SEGMENT_BY_KEY,
   axisPct,
   clampPriority,
   clockLabel,
@@ -121,16 +121,6 @@ export default function CaesarSchedule() {
    * banner (every request still succeeds; it just always answers empty). See setBridgeEngineEnabled.
    */
   const [engineEnabled, setEngineEnabled] = useState<boolean | null>(null);
-  /**
-   * Per-strategy shadow override, read alongside the engine's own status — `null` (not `false`)
-   * until the bridge answers, same reasoning as scheduleEnabled/engineEnabled above: a toggle must
-   * never claim a state it has not confirmed. Only Arbitrage/PairFlux get a control for this (the
-   * two strategies an operator actually promotes out of shadow one at a time); the OpenDoor family
-   * stays wherever the plan already has it.
-   */
-  const [shadowByStrategy, setShadowByStrategy] = useState<Record<string, boolean> | null>(null);
-  const [shadowBusyId, setShadowBusyId] = useState<string | null>(null);
-
   useEffect(() => {
     setPlan(loadCaesarPlan());
   }, []);
@@ -192,24 +182,7 @@ export default function CaesarSchedule() {
     }
     setEngineError(false);
     setEngineEnabled(status.enabled);
-    setShadowByStrategy(status.strategyShadowMode ?? {});
   }, []);
-
-  const toggleShadow = useCallback(async (strategyId: string) => {
-    if (shadowBusyId != null || shadowByStrategy == null) return;
-    const current = shadowByStrategy[strategyId] ?? true;
-    setShadowBusyId(strategyId);
-    try {
-      const result = await setBridgeStrategyShadow(strategyId, !current);
-      if (result == null) {
-        await pullEngine();
-        return;
-      }
-      setShadowByStrategy(result.strategyShadowMode ?? {});
-    } finally {
-      setShadowBusyId(null);
-    }
-  }, [shadowBusyId, shadowByStrategy, pullEngine]);
 
   useEffect(() => {
     void pullEngine();
@@ -377,9 +350,15 @@ export default function CaesarSchedule() {
   }, [plan, scheduleEnabled, scheduleBusy, scheduleError, pullSchedule]);
 
   const nowSegment = nowMin == null ? null : segmentAtAxisMinute(nowMin);
+  // The charts follow whichever segment card is SELECTED in the timeline above, not whatever is
+  // live by the clock — switching to OPEN or POST must re-scope the whole row (x-axis window AND
+  // which strategies' lines are drawn) to that segment's own assignments, not silently keep
+  // showing PRE's. SEGMENT_BY_KEY always has an entry (unlike nowSegment, which is null before
+  // the clock loads), so this needs no null branch of its own.
+  const selectedSegment = SEGMENT_BY_KEY[selected];
   const chartInstances = useMemo(() => {
-    if (!plan || !nowSegment) return [];
-    return (plan[nowSegment.key] ?? []).flatMap((row) => {
+    if (!plan) return [];
+    return (plan[selected] ?? []).flatMap((row) => {
       if (!row.enabled) return [];
       const strategy = LIVE_STRATEGIES[row.strategyKey];
       if (!strategy) return [];
@@ -391,7 +370,7 @@ export default function CaesarSchedule() {
       // server-side, which by now is all six: "0 total" forever, not because nothing happened.
       return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority }];
     });
-  }, [plan, nowSegment]);
+  }, [plan, selected]);
 
   // Positions can close long after their segment has ended, so this stays every strategy the
   // registry knows about — not scoped to the current segment like chartInstances above. Used to
@@ -414,10 +393,7 @@ export default function CaesarSchedule() {
   return (
     <div className="w-full text-zinc-100">
       <div className="mx-auto w-full max-w-[1720px] px-6 pb-2 pt-6 lg:px-10">
-        <Header
-          nowLabel={nowMin == null ? null : clockLabel(nowMin)}
-          nowSegment={nowSegment}
-        />
+        <Header />
 
         {plan == null ? (
           <div className={`mt-3 p-10 text-center text-sm text-white/45 ${PANEL}`}>
@@ -490,9 +466,6 @@ export default function CaesarSchedule() {
               engineBusy={engineBusy}
               engineError={engineError}
               onToggleEngine={toggleEngine}
-              shadowByStrategy={shadowByStrategy}
-              shadowBusyId={shadowBusyId}
-              onToggleShadow={toggleShadow}
               scheduleEnabled={scheduleEnabled}
               scheduleBusy={scheduleBusy}
               scheduleError={scheduleError}
@@ -500,10 +473,12 @@ export default function CaesarSchedule() {
               onReset={() => mutate(defaultCaesarPlan())}
             />
 
-            {/* A separate operational readout, directly after the clock it describes. */}
+            {/* A separate operational readout, directly after the clock it describes. Scoped to
+                the SELECTED segment card (selectedSegment), not nowSegment — see chartInstances'
+                own doc comment. */}
             <CaesarCharts
-              fromMin={nowSegment?.fromMin ?? null}
-              toMin={nowSegment?.toMin ?? null}
+              fromMin={selectedSegment.fromMin}
+              toMin={selectedSegment.toMin}
               nowMin={nowMin}
               instances={chartInstances}
             />
@@ -524,56 +499,106 @@ export default function CaesarSchedule() {
  * Same shell as the Sonar/Scanner headers: the shared GlitchTitle renders white text with an accent
  * glow, so it needs the dark surface underneath in every theme, not just the dark ones.
  */
-function Header({
-  nowLabel,
-  nowSegment,
-}: {
-  nowLabel: string | null;
-  nowSegment: CaesarSegment | null;
-}) {
+function Header() {
+  // Copied straight from ScannerHeader.tsx's own dark-theme branch, class for class — including
+  // the border and rounded-2xl, both missing from the first pass. Caesar has no "current page"
+  // among STREAM/SCANNER/SONAR and no ignore/apply/pin list of its own, so every control below is
+  // inert (no href, no onClick, disabled where that does not fight the visual). The operator
+  // asked for the literal look of that header, buttons included, not a reinvented equivalent —
+  // and no extra Caesar-only chrome (the segment-colour accent line, the clock) bolted onto it.
+  const headerNavGroupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
+  const headerNavInactiveClass = "border-transparent text-zinc-400";
+
   return (
-    <header className={`relative flex flex-wrap items-center justify-between gap-4 p-4 ${GRAPH_SURFACE}`}>
-      {/* The cap is the CURRENT segment's colour, so the head of the page and the band the clock
-          is standing in are the same fact stated twice. Off the data — it labels nothing on its
-          own, and the badge beside the clock spells the segment out. */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-[2px]"
-        style={{
-          background: `linear-gradient(90deg, ${withAlpha(nowSegment?.color ?? "#ffffff", 0.85)}, transparent 55%)`,
-        }}
-      />
+    <header className="scanner-header-surface flex flex-wrap items-center justify-between gap-4 border border-white/[0.06] rounded-2xl bg-[#0a0a0a]/50 p-4 shadow-xl backdrop-blur-md">
       <div className="flex items-center gap-3">
         <GlitchTitle text="CAESAR" />
       </div>
 
-      {/*
-        IDENTITY AND TIME ONLY. The schedule switch and the reset button used to live here; they
-        are controls you press once, against the plan, so they sit with the plan — see
-        CaesarControlBar under the timeline.
-      */}
-      {nowLabel && (
-        <div className="flex items-stretch gap-2 px-1">
-          <span
-            className="font-mono text-3xl font-bold leading-none tabular-nums text-zinc-100"
-            style={
-              nowSegment
-                ? { textShadow: `0 0 22px ${withAlpha(nowSegment.color, 0.45)}` }
-                : undefined
-            }
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className={headerNavGroupClass}>
+          <button
+            type="button"
+            disabled
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5 ${headerNavInactiveClass}`}
           >
-            {nowLabel}
-          </span>
-          {nowSegment && (
-            <span
-              className="flex items-center rounded px-2 text-[10px] font-bold leading-none tracking-[0.15em]"
-              style={{ backgroundColor: withAlpha(nowSegment.color, 0.16), color: nowSegment.color }}
-            >
-              {nowSegment.label}
-            </span>
-          )}
+            <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+            STREAM
+          </button>
+          <button
+            type="button"
+            disabled
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5 ${headerNavInactiveClass}`}
+          >
+            <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+            </svg>
+            SCANNER
+          </button>
+          <button
+            type="button"
+            disabled
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5 ${headerNavInactiveClass}`}
+          >
+            <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="2" />
+              <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            </svg>
+            SONAR
+          </button>
         </div>
-      )}
+
+        <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+          <div className="flex items-stretch overflow-hidden rounded-lg border border-white/10 bg-white/5">
+            <button type="button" disabled className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2 text-zinc-300">
+              <span className="tracking-wide">IGN</span>
+            </button>
+            <div className="w-px bg-white/10" />
+            <button type="button" disabled className="px-2.5 py-1.5 flex items-center justify-center text-zinc-400">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-80">
+                <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+                <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex items-stretch overflow-hidden rounded-lg border border-white/10 bg-white/5">
+            <button type="button" disabled className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2 text-zinc-300">
+              <span className="tracking-wide">APP</span>
+            </button>
+            <div className="w-px bg-white/10" />
+            <button type="button" disabled className="px-2.5 py-1.5 flex items-center justify-center text-zinc-400">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-80">
+                <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+                <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex items-stretch overflow-hidden rounded-lg border border-white/10 bg-white/5">
+            <button type="button" disabled className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-2 text-zinc-300">
+              <span className="tracking-wide">PIN</span>
+            </button>
+            <div className="w-px bg-white/10" />
+            <button type="button" disabled className="px-2.5 py-1.5 flex items-center justify-center text-zinc-400">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-80">
+                <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+                <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="button" disabled className="h-7 w-7 flex items-center justify-center rounded-full text-zinc-600">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <polyline points="21 3 21 9 15 9" />
+          </svg>
+        </button>
+      </div>
     </header>
   );
 }

@@ -41,28 +41,12 @@ export type CaesarControlBarProps = {
   engineBusy: boolean;
   engineError: boolean;
   onToggleEngine: () => void;
-  /** Bridge strategy id -> shadow (true) or live (false). Null until the bridge answers. */
-  shadowByStrategy: Record<string, boolean> | null;
-  /** The one strategy id currently mid-toggle, or null. */
-  shadowBusyId: string | null;
-  onToggleShadow: (strategyId: string) => void;
   scheduleEnabled: boolean | null;
   scheduleBusy: boolean;
   scheduleError: boolean;
   onToggleSchedule: () => void;
   onReset: () => void;
 };
-
-/**
- * The only two strategies an operator promotes out of shadow one at a time — the OpenDoor family
- * has no control here and stays wherever the plan already has it. Before this existed, flipping
- * shadow had NO UI at all: a raw POST, awkward from a terminal and impossible from a machine
- * reached only through the deployed (Vercel) frontend with no shell open on it (2026-09-16).
- */
-const SHADOW_STRATEGIES: readonly { id: string; label: string }[] = [
-  { id: "stream.arbitrage", label: "ARB" },
-  { id: "stream.pairflux", label: "PF" },
-];
 
 /**
  * RUNNING IS RED, ALWAYS — not the current segment's band colour.
@@ -121,9 +105,6 @@ export default function CaesarControlBar({
   engineBusy,
   engineError,
   onToggleEngine,
-  shadowByStrategy,
-  shadowBusyId,
-  onToggleShadow,
   scheduleEnabled,
   scheduleBusy,
   scheduleError,
@@ -148,7 +129,7 @@ export default function CaesarControlBar({
     /* No padding and no frame: standing on the page between two panels, the row aligns to their
        OUTER edge, which is what makes it read as a separate thing acting on the plan rather than a
        footer belonging to it. */
-    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+    <div className="mt-3 flex items-center">
       {/* ---- the keys ---- */}
       <div className="flex items-center gap-2">
         {/*
@@ -186,51 +167,9 @@ export default function CaesarControlBar({
                 : "Engine off"}
         </button>
 
-        {/*
-          SHADOW -> LIVE, per strategy. Same RUNNING_RED as Schedule below — going live on a
-          strategy is exactly "real money moving", not a calmer state like Engine's.
-        */}
-        {SHADOW_STRATEGIES.map(({ id, label }) => {
-          const shadow = shadowByStrategy?.[id];
-          const isLive = shadow === false;
-          const busy = shadowBusyId === id;
-          const reading = shadowByStrategy == null;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onToggleShadow(id)}
-              disabled={busy || reading}
-              title={
-                reading
-                  ? "Reading shadow mode…"
-                  : isLive
-                    ? `${label}: LIVE — real orders dispatch. Click to put it back in shadow (record only, nothing real sent).`
-                    : `${label}: SHADOW — records only, nothing real is sent. Click to go live.`
-              }
-              className={KEY + " gap-1.5 px-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em]"}
-              style={
-                isLive
-                  ? { color: RUNNING_RED, backgroundColor: `${RUNNING_RED}1c`, borderColor: `${RUNNING_RED}44` }
-                  : undefined
-              }
-            >
-              <span className="relative flex h-1.5 w-1.5 shrink-0">
-                {isLive && (
-                  <span
-                    className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
-                    style={{ backgroundColor: RUNNING_RED }}
-                  />
-                )}
-                <span
-                  className="relative inline-flex h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: isLive ? RUNNING_RED : "rgba(255,255,255,0.28)" }}
-                />
-              </span>
-              {label} {busy || reading ? "…" : isLive ? "live" : "shadow"}
-            </button>
-          );
-        })}
+        {/* Arbitrage and PairFlux no longer have a shadow toggle here — the bridge now forces
+            both permanently live (ServerEngineControlService.IsShadow, 2026-09-18), so there is
+            nothing left for a button to switch. */}
 
         {/*
           MARKET MAKER. One button, two meanings, because the bind has exactly two states and a
@@ -338,54 +277,6 @@ export default function CaesarControlBar({
                 ? "Stop auto"
                 : "Start auto"}
         </button>
-      </div>
-
-      {/* ---- what the keys are reporting ----
-          Beside them, not under them: three buttons whose state you have to hover to read is how
-          a day starts with an unbound window. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px]">
-        <span className="flex items-center gap-1.5">
-          <span className="uppercase tracking-[0.16em] text-zinc-600">Engine</span>
-          <span
-            className={engineError ? "text-rose-300/80" : engineOn ? "text-sky-300/80" : "text-amber-300/80"}
-            title={engineError ? `resolved base: ${resolvedBridgeBase}` : undefined}
-          >
-            {engineEnabled == null ? "reading…" : engineError ? `unreachable (${resolvedBridgeBase})` : engineOn ? "ticking" : "off — nothing ticks, not even preview"}
-          </span>
-        </span>
-        <span className="text-white/10">·</span>
-        <span className="flex items-center gap-1.5">
-          <span className="uppercase tracking-[0.16em] text-zinc-600">Live</span>
-          <span className={shadowByStrategy == null ? "text-zinc-600" : "text-zinc-400"}>
-            {shadowByStrategy == null
-              ? "reading…"
-              : SHADOW_STRATEGIES.map(({ id, label }) => `${label} ${shadowByStrategy[id] === false ? "live" : "shadow"}`).join(" · ")}
-          </span>
-        </span>
-        <span className="text-white/10">·</span>
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="uppercase tracking-[0.16em] text-zinc-600">MM</span>
-          <span
-            className={"truncate " + (mm.error ? "text-rose-300/80" : mm.isBound ? "text-emerald-300/80" : "text-amber-300/80")}
-            title={mm.error ? `resolved base: ${resolvedBridgeBase}` : undefined}
-          >
-            {mm.error
-              ? `bridge unreachable (${resolvedBridgeBase})`
-              : mm.isBound
-                ? mm.boundTitle || "bound (no title)"
-                : "not bound — hotkeys follow focus"}
-          </span>
-        </span>
-        <span className="text-white/10">·</span>
-        <span className="flex items-center gap-1.5">
-          <span className="uppercase tracking-[0.16em] text-zinc-600">Schedule</span>
-          <span
-            className={scheduleError ? "text-rose-300/80" : running ? "text-emerald-300/80" : "text-zinc-500"}
-            title={scheduleError ? `resolved base: ${resolvedBridgeBase}` : undefined}
-          >
-            {scheduleEnabled == null ? "reading…" : scheduleError ? `unreachable (${resolvedBridgeBase})` : running ? "driving the day" : "off — nothing starts"}
-          </span>
-        </span>
       </div>
     </div>
   );

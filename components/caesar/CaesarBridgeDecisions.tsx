@@ -21,7 +21,6 @@ import React, { useEffect, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import CaesarPanel from "./CaesarPanel";
 
 type StreamCandidateRow = {
   ticker: string;
@@ -466,7 +465,12 @@ function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflu
   );
 
   return (
-    <div className={`min-w-0 space-y-2 p-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
+    <div
+      className={
+        "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80" +
+        (outOfPlan ? " opacity-40 grayscale" : "")
+      }
+    >
       <StrategyCardHeader
         label={label}
         outOfPlan={outOfPlan}
@@ -521,9 +525,9 @@ function OpenDoorFamilySection() {
     .filter((g) => g.rows.length > 0 || running?.[g.strategyId] === true);
 
   return (
-    <div className="border-t border-white/[0.05]">
+    <div className="mt-3">
       {error && (
-        <div className="mx-3 my-2 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
         </div>
       )}
@@ -538,13 +542,19 @@ function OpenDoorFamilySection() {
             nothing assigned to the current segment
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 p-2 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {grouped.map(({ strategyId, label, rows }) => {
               // Grayed the same way Arbitrage/PairFlux are above: shown (because it still holds a
               // position) but the plan is not currently sending it anything new.
               const outOfPlan = running?.[strategyId] !== true;
               return (
-                <div key={strategyId} className={`min-w-0 space-y-2 transition-opacity ${outOfPlan ? "opacity-40 grayscale" : ""}`}>
+                <div
+                  key={strategyId}
+                  className={
+                    "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80" +
+                    (outOfPlan ? " opacity-40 grayscale" : "")
+                  }
+                >
                   <StrategyCardHeader label={label} outOfPlan={outOfPlan} asOfUtc={asOfUtc} />
                   <PositionsTable rows={rows} />
                 </div>
@@ -559,17 +569,31 @@ function OpenDoorFamilySection() {
 
 export default function CaesarBridgeDecisions() {
   return (
-    <CaesarPanel title="Bridge Decisions" subtitle="what the server engine sees" accent="#a78bfa" terminal className="mt-3">
-      {/* Side by side above the OpenDoor-family strip below — the two strategies an operator
-          watches together, so neither has to scroll past the other to see both at once. Each
-          table keeps its own overflow-x-auto, so a narrow column scrolls its rows sideways
-          rather than squeezing them; the divider collapses to a horizontal one when the two
-          strategies stack on a narrow screen instead of sitting side by side. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-white/[0.05] border-t border-white/[0.05]">
+    <div className="mt-3">
+      {/* Bare label, no card of its own — the blocks below carry their own frames now, the same
+          way the strategy cards on /main do under their own plain "Active Strategies" heading. */}
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: "#a78bfa", boxShadow: "0 0 8px #a78bfa80" }}
+        />
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-300">
+          Bridge Decisions
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
+          what the server engine sees
+        </span>
+      </div>
+
+      {/* Side by side — the two strategies an operator watches together, so neither has to scroll
+          past the other to see both at once. Each is now its own card rather than two halves of
+          one shared strip, so a narrow screen can stack them without a lingering divider that no
+          longer separates anything. */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <StrategySection strategy="arbitrage" label="Arbitrage" />
         <StrategySection strategy="pairflux" label="PairFlux" />
       </div>
       <OpenDoorFamilySection />
-    </CaesarPanel>
+    </div>
   );
 }

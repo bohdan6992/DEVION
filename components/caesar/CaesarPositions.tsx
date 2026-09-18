@@ -94,6 +94,9 @@ type ClosedOwners = Record<string, string[]>;
 
 type BridgeTrackedPositionsResponse = { ok: boolean; positions: BridgeTrackedPosition[]; closedOwners?: ClosedOwners };
 
+/** One Caesar segment (pre/open/intra/post) — see CaesarPlanController's own segment-pnl routes. */
+type SegmentInfo = { segmentKey: string; fromMinuteIdx: number; toMinuteIdx: number; hasData: boolean };
+
 /**
  * A synthetic claim for a ticker the bridge no longer tracks (it closed) but remembers who
  * traded it. Only `strategyKey` and `status`/`reason` are ever actually read for a closed row —
@@ -216,6 +219,45 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const [strategySort, setStrategySort] = useState<0 | 1 | -1>(0);
   /** Clicking a strategy card narrows the list below to just its own rows; clicking the header (or the same card again) clears it. */
   const [cardFilter, setCardFilter] = useState<string | null>(null);
+
+  // ---- segment switcher: which Caesar segment's own closed-position data is shown ------------
+  //
+  // null = LIVE, the panel exactly as it always was. A segment key narrows the CLOSED column (and
+  // only that column — TradingApp's ClosedPnL is a running per-ticker total for the whole day, not
+  // per-trade events, so a segment's own share of it is a boundary-to-boundary delta computed on
+  // the bridge — see SegmentPnlLedgerService) to just what that segment itself contributed, reset
+  // to zero the instant the segment starts and frozen forever once the next one begins.
+  const [segments, setSegments] = useState<SegmentInfo[]>([]);
+  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const [segmentPnl, setSegmentPnl] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let alive2 = true;
+    const load = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/segment-pnl/segments"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; segments: SegmentInfo[] }>)
+        .then((body) => { if (alive2) setSegments(body.segments ?? []); })
+        .catch(() => {});
+    void load();
+    // Segments only change when the operator edits the Caesar schedule — this just needs to
+    // notice that eventually, not track it live.
+    const interval = window.setInterval(load, 30_000);
+    return () => { alive2 = false; window.clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSegment) { setSegmentPnl({}); return; }
+    let alive3 = true;
+    const load = () =>
+      fetchWithTimeout(bridgeUrl(`/api/stream/caesar/segment-pnl?segment=${encodeURIComponent(selectedSegment)}`), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; pnlByTicker: Record<string, number> }>)
+        .then((body) => { if (alive3) setSegmentPnl(body.pnlByTicker ?? {}); })
+        .catch(() => {});
+    void load();
+    // Same cadence as the account poll below — a segment still running should visibly grow.
+    const interval = window.setInterval(load, POLL_MS);
+    return () => { alive3 = false; window.clearInterval(interval); };
+  }, [selectedSegment]);
 
   // ---- the account, polled -------------------------------------------------------------------
   const alive = useRef(true);
@@ -446,6 +488,46 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
 
   const grandTotal = view.grandOpenPnl + view.grandClosedPnl;
 
+  // ---- segment view: this segment's own closed-position rows, from segmentPnl's boundary-delta
+  // map rather than the account's raw ClosedPnL. Deliberately does not reuse `view.rows` — that is
+  // built from the LIVE account snapshot, which is not what a past segment's own frozen numbers
+  // should track. Ownership still comes from closedOwners: the segment ledger only knows deltas
+  // per ticker, not who traded them, and closedOwners is the exact same "who closed this today"
+  // record the LIVE panel already falls back to for a ticker no longer open.
+  const segmentView = useMemo(() => {
+    if (!selectedSegment) return null;
+
+    type SegRow = { ticker: string; pnl: number; strategyKey: string | null; shared: boolean };
+    const rows: SegRow[] = Object.entries(segmentPnl)
+      .filter(([, pnl]) => pnl !== 0)
+      .map(([ticker, pnl]) => {
+        const ownerIds = closedOwners[ticker] ?? [];
+        const owners = ownerIds.flatMap((id) => {
+          const s = getLiveStrategyByBridgeId(id);
+          return s ? [s.key] : [];
+        });
+        return {
+          ticker,
+          pnl,
+          strategyKey: owners.length === 1 ? owners[0] : null,
+          shared: owners.length > 1,
+        };
+      })
+      .sort((a, b) => b.pnl - a.pnl || a.ticker.localeCompare(b.ticker));
+
+    const perStrategy = new Map<string, number>();
+    let unclaimed = 0;
+    let shared = 0;
+    for (const r of rows) {
+      if (r.shared) shared += r.pnl;
+      else if (r.strategyKey) perStrategy.set(r.strategyKey, (perStrategy.get(r.strategyKey) ?? 0) + r.pnl);
+      else unclaimed += r.pnl;
+    }
+    const total = rows.reduce((sum, r) => sum + r.pnl, 0);
+
+    return { rows, perStrategy, unclaimed, shared, total };
+  }, [selectedSegment, segmentPnl, closedOwners]);
+
   // UNCLAIMED always sorts to the bottom regardless of direction — it is not "before" or "after"
   // a real strategy name alphabetically, it is a separate category the operator checks last.
   const sortedRows = useMemo(() => {
@@ -465,6 +547,47 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
 
   return (
     <div className={CAESAR_PANEL_SURFACE + " mt-3"}>
+      {/*
+        Segment switcher. LIVE (selectedSegment === null) leaves everything below completely
+        untouched — this row only exists once the plan actually defines segments to switch between.
+      */}
+      {segments.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-white/[0.06] bg-[#0a0a0a]/30 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setSelectedSegment(null)}
+            className={
+              "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
+              (selectedSegment === null ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300")
+            }
+          >
+            Live
+          </button>
+          {segments.map((s) => (
+            <button
+              key={s.segmentKey}
+              type="button"
+              onClick={() => setSelectedSegment(s.segmentKey)}
+              title={s.hasData ? undefined : "This segment has not started yet today"}
+              className={
+                "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
+                (selectedSegment === s.segmentKey
+                  ? "bg-white/10 text-zinc-100"
+                  : s.hasData
+                    ? "text-zinc-500 hover:text-zinc-300"
+                    : "text-zinc-700")
+              }
+            >
+              {s.segmentKey}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedSegment && segmentView ? (
+        <SegmentClosedPanel segmentKey={selectedSegment} view={segmentView} pnlTone={pnlTone} instances={instances} />
+      ) : (
+      <>
       {/*
         ONE BLOCK. Used to be two — a "Strategy P&L" section and a separately-framed "Active"
         panel right under it, each with its own idea of a header (one had per-strategy totals in
@@ -727,6 +850,107 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         <span className="text-sky-300/70">shared</span> ticker is held by two strategies at once —
         legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
         so they are counted once into SHARED rather than added to either strategy.
+      </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One segment's own closed-position data — the operator's own requested view: reset to zero the
+ * instant the segment starts, frozen forever once the next one begins. See segmentView's own doc
+ * comment in CaesarPositions for how `view` is built from the bridge's boundary-delta ledger.
+ */
+function SegmentClosedPanel({
+  segmentKey,
+  view,
+  pnlTone,
+  instances,
+}: {
+  segmentKey: string;
+  view: {
+    rows: { ticker: string; pnl: number; strategyKey: string | null; shared: boolean }[];
+    perStrategy: Map<string, number>;
+    unclaimed: number;
+    shared: number;
+    total: number;
+  };
+  pnlTone: (value: number) => string;
+  instances: CaesarPositionsProps["instances"];
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl">
+        <div className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
+          Closed — {segmentKey}
+          <span className="ml-2 font-normal tracking-normal text-zinc-600">
+            {view.rows.length} ticker{view.rows.length === 1 ? "" : "s"} closed this segment
+          </span>
+        </div>
+        <HeaderMetric label="Closed" value={view.total} tone={pnlTone(view.total)} />
+      </div>
+
+      <div className="grid gap-2 border-t border-white/[0.06] p-3 sm:grid-cols-2 xl:grid-cols-3">
+        {instances
+          .filter((inst) => (view.perStrategy.get(inst.key) ?? 0) !== 0)
+          .map((inst) => {
+            const value = view.perStrategy.get(inst.key) ?? 0;
+            return (
+              <div key={inst.key} className="scanner-glass-card rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 shadow-xl">
+                <div className="flex items-baseline justify-between gap-2 font-mono">
+                  <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{inst.key}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-600">#{inst.priority}</span>
+                </div>
+                <div className="mt-2.5 border-t border-white/[0.06] pt-2.5 font-mono tabular-nums">
+                  <Metric label="Closed" value={value} tone={pnlTone(value)} />
+                </div>
+              </div>
+            );
+          })}
+      </div>
+
+      {(view.unclaimed !== 0 || view.shared !== 0) && (
+        <div className="mx-3 mb-3 flex gap-4 font-mono text-[10px] text-zinc-500">
+          {view.unclaimed !== 0 && <span>unclaimed: <span className={pnlTone(view.unclaimed)}>{view.unclaimed >= 0 ? "+" : ""}{fmt(view.unclaimed)}</span></span>}
+          {view.shared !== 0 && <span>shared: <span className={pnlTone(view.shared)}>{view.shared >= 0 ? "+" : ""}{fmt(view.shared)}</span></span>}
+        </div>
+      )}
+
+      <div className="max-h-[320px] overflow-auto border-t border-white/[0.06]">
+        <table className="w-full min-w-[420px] text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-zinc-300 backdrop-blur-xl">
+            <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-normal [&>th]:uppercase [&>th]:tracking-[0.14em]">
+              <th className="text-left text-zinc-200">Ticker</th>
+              <th className="text-left text-sky-300/70">Strategy</th>
+              <th className="text-right text-pink-400/80">Closed P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.rows.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="px-3 py-8 text-center text-zinc-600">
+                  Nothing closed in this segment yet.
+                </td>
+              </tr>
+            ) : view.rows.map((r) => (
+              <tr key={r.ticker} className="border-t border-white/5 [&>td]:px-3 [&>td]:py-2.5">
+                <td className="font-bold text-zinc-200">
+                  {r.ticker}
+                  {r.shared && (
+                    <span className="ml-1.5 rounded bg-sky-500/15 px-1 text-[9px] font-bold uppercase tracking-[0.1em] text-sky-300">shared</span>
+                  )}
+                </td>
+                <td className={r.strategyKey ? "text-zinc-300" : "text-amber-300"}>
+                  {r.shared ? "SHARED" : r.strategyKey?.toUpperCase() ?? "UNCLAIMED"}
+                </td>
+                <td className={"text-right tabular-nums " + pnlTone(r.pnl)}>
+                  {r.pnl >= 0 ? "+" : ""}{fmt(r.pnl)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
