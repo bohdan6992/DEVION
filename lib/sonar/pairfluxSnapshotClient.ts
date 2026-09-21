@@ -112,6 +112,8 @@ export type PairFluxSonarSnapshot = {
   pairs: LivePair[];
   /** Per-stage rejection counts from the leg filter — see ArbitrageSonarSnapshot's twin. Null on timeout. */
   funnel: import("./arbitrageSnapshotClient").SonarFilterFunnel | null;
+  /** Published pairs that can / cannot be priced under the leg filters — the panel's header count. */
+  coverage: { both: number; half: number; total: number } | null;
 };
 
 export function fetchPairFluxSonarSnapshot(): Promise<PairFluxSonarSnapshot> {

@@ -42,6 +42,10 @@ export type OpenDoorSonarSnapshot = {
   /** True when the bridge's own fetch timed out (no live feed) — rows is empty, not "no matches". */
   timedOut: boolean;
   rows: OpenDoorSonarRow[];
+  /** Full signal rows for the listed tickers plus the few the panel's widgets read — chosen on the bridge. */
+  items: unknown[];
+  /** How many tickers the bridge looked at before choosing. */
+  rawCount: number;
 };
 
 export function toOpenDoorSonarLiveParams(args: {

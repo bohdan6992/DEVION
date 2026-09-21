@@ -90,7 +90,6 @@ import {
   toBool,
   toNum,
 } from "@/lib/signals/signal";
-import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import {
@@ -118,7 +117,10 @@ type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
 type BenchBlock = { benchmark: string; buckets: BucketGroup[] };
 
-type ArbClass = "blue" | "ark" | "pre" | "print" | "open" | "intra" | "post" | "global";
+// v13 (2026-09-20): BLUE/ARK folded into PRE, PRINT into INTRA, GLOBAL retired as a gate — see
+// ArbitrageFilesService.NormalizeRatingClass on the bridge, which every one of these class names
+// now resolves through regardless of what a stale saved value here still says.
+type ArbClass = "pre" | "open" | "intra" | "post";
 type ArbType = "any" | "hard" | "soft";
 
 /* =========================
@@ -149,7 +151,7 @@ const BENCH_COLORS: Record<string, string> = {
   DEFAULT: "#94a3b8",
 };
 
-const clsOrder: ArbClass[] = ["global", "blue", "pre", "ark", "print", "open", "intra", "post"];
+const clsOrder: ArbClass[] = ["pre", "open", "intra", "post"];
 const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
@@ -544,7 +546,6 @@ function safeRecord(value: any): Record<string, any> | null {
 }
 
 function sonarClassToBinClassKey(cls: ArbClass): string {
-  if (cls === "global") return "global";
   return cls;
 }
 
@@ -1675,6 +1676,8 @@ export type SonarExactFilterSnapshot = {
   sigmaMax: string;
   zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off";
   zapShowAbs: number;
+  /** Separate threshold for NEGATIVE deviations (a Long entry); null/absent = the same as zapShowAbs. */
+  zapShowAbsNeg?: number | null;
   zapSilverAbs: number;
   zapGoldAbs: number;
 };
@@ -1822,196 +1825,6 @@ export function SignalDetailPanel({ signal, ratingType = "any", liveSnap = null,
       </div>
     </div>
   );
-}
-
-export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
-  const out: ArbitrageSignal[] = [];
-  const mr = toNum(f.minRate);
-  const mt = toNum(f.minTotal);
-  const useBinRatingFilter = f.ratingMode === "BIN" && f.zapMode === "sigma";
-  const useSigBinFilter = f.ratingMode === "BINS" && f.zapMode === "sigma";
-
-  const base = Number(f.zapShowAbs ?? 0);
-  const zapThr = Math.max(0.3, base);
-  const sigThr = Math.max(0.05, base);
-  const eqNeedle = f.equityType.trim().toLowerCase();
-
-  const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
-    if ((min != null || max != null) && val == null) return false;
-    if (min != null && val != null && val < min) return false;
-    if (max != null && val != null && val > max) return false;
-    return true;
-  };
-
-  const boundKeys = Object.keys(RANGE_VALUE_GETTERS) as Array<keyof typeof RANGE_VALUE_GETTERS>;
-  const passesRangeBound = (key: keyof typeof RANGE_VALUE_GETTERS, signal: ArbitrageSignal) => {
-    const bounds = f.bounds[key];
-    return passMinMaxLocal(RANGE_VALUE_GETTERS[key](signal), bounds.min, bounds.max);
-  };
-
-  for (const s of arr ?? []) {
-    const tk = normalizeTicker(s?.ticker || "");
-    if (!tk) continue;
-    const posActive = isActiveByPositionBp(s);
-
-    if (f.activeMode === "onlyActive" && !posActive) continue;
-
-    if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
-    if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
-    if (f.listMode === "pin" && !f.pinMap[tk]) continue;
-
-    if (f.activeMode === "onlyInactive") {
-      if (posActive) continue;
-    }
-
-    if (!passMinMaxLocal(getCorrValue(s), toNum(f.corrMin), toNum(f.corrMax))) continue;
-    if (!passMinMaxLocal(getBetaValue(s), toNum(f.betaMin), toNum(f.betaMax))) continue;
-    if (!passMinMaxLocal(getSigmaValue(s), toNum(f.sigmaMin), toNum(f.sigmaMax))) continue;
-    let failedRangeBound = false;
-    for (const key of boundKeys) {
-      if (!passesRangeBound(key, s)) {
-        failedRangeBound = true;
-        break;
-      }
-    }
-    if (failedRangeBound) continue;
-
-    if (f.skipArbitrageRating) {
-      // Rated by the strategy's own file instead — see skipArbitrageRating.
-    } else if (useBinRatingFilter) {
-      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
-    } else if (useSigBinFilter) {
-      if (!passesSonarBinRating({ signal: s, cls: f.cls as any, minRate: mr ?? 0, minTotal: mt ?? 0 })) continue;
-      const binStats = getSessionBinRating(s, f.cls as ArbClass);
-      if (binStats === null) continue;
-      if (mr != null && binStats.rate < mr) continue;
-      if (mt != null && binStats.total < mt) continue;
-    } else {
-      const effMr = Math.max(0, Number(mr) || 0);
-      const effMt = Math.max(0, Math.trunc(Number(mt) || 0));
-      if (effMr > 0 || effMt > 0) {
-        if (mr != null) {
-          const r = getBestRating(s) ?? (s as any)._bestRating ?? toNum((s as any).rating) ?? null;
-          if (r == null || r < mr) continue;
-        }
-        if (mt != null) {
-          const t = getBestTotalByType(s, f.type as any);
-          if (t == null || t < mt) continue;
-        }
-      }
-    }
-
-    if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
-
-    if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
-    if (f.excludeNews) {
-      const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-      if (nn > 0) continue;
-    }
-    if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
-    if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
-    if (f.excludeReport && hasTodayReport(s)) continue;
-    // CORR: not "this ticker reports" but "this ticker moves with one that does".
-    if (f.excludeCorr && rowExcludedByCorr(s, f.corrExcluded)) continue;
-    if (f.excludeETF) {
-      if (boolIsETF(s) === true) continue;
-      const eqt = strEquityType(s).toLowerCase();
-      if (eqt && eqt.includes("etf")) continue;
-    }
-    if (f.excludeCrap) {
-      // YESTERDAY's close first, the definition the scanner's tape flag uses
-      // (TapeWriter: IsCrap = YCls < 5). numLastClose reads LstCls first, which moves during the
-      // session, so a name trading through $5 was CRAP on one surface and not on the other.
-      const px = getNumAny(s, ["YCls", "yCls"]) ?? numLastClose(s);
-      if (px != null && px < 5) continue;
-    }
-    // Borrow availability (B5ETB) — one reader shared with the Scanner, which receives the same
-    // field under a different spelling. See lib/filters/borrow.
-    if (rowExcludedByBorrow(s, f.excludeItb, f.excludeHard)) continue;
-
-    if (f.includeUSA || f.includeChina) {
-      const matchUSA = isUSA(s);
-      const c = getCountryStr(s);
-      const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
-      if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
-    }
-
-    if (f.selCountries.size > 0) {
-      if (f.countryEnabled === "include" && !f.selCountries.has(getCountry(s))) continue;
-      if (f.countryEnabled === "exclude" && f.selCountries.has(getCountry(s))) continue;
-    }
-    if (f.selExchanges.size > 0) {
-      if (f.exchangeEnabled === "include" && !f.selExchanges.has(getExchange(s))) continue;
-      if (f.exchangeEnabled === "exclude" && f.selExchanges.has(getExchange(s))) continue;
-    }
-    if (f.selSectors.size > 0) {
-      if (f.sectorEnabled === "include" && !f.selSectors.has(getSector(s))) continue;
-      if (f.sectorEnabled === "exclude" && f.selSectors.has(getSector(s))) continue;
-    }
-
-    if (f.filterReport !== "ALL") {
-      const rep = hasTodayReport(s);
-      if (f.filterReport === "YES" && rep !== true) continue;
-      if (f.filterReport === "NO" && rep !== false) continue;
-    }
-
-    if (eqNeedle) {
-      const et = strEquityType(s).toLowerCase();
-      if (!et.includes(eqNeedle)) continue;
-    }
-
-    if (f.zapMode !== "off" && !s.isStaticFallback) {
-      const dir = s.direction;
-      const isShort = dir === "down";
-      const isLong = dir === "up";
-      if (!isShort && !isLong) continue;
-
-      if (!posActive && !f.skipArbitrageZapThreshold) {
-        if (f.zapMode === "zap") {
-          if (isShort) {
-            const v = toNum(s.zapS);
-            if (v == null || v < zapThr) continue;
-          } else {
-            const v = toNum(s.zapL);
-            if (v == null || v > -zapThr) continue;
-          }
-        } else if (f.zapMode === "alpha") {
-          // Same rule as gamma: no alpha means no divisor, so the ticker leaves the list.
-          const v = isShort ? toNum(s.zapSalpha) : toNum(s.zapLalpha);
-          if (v == null) continue;
-          if (isShort ? v < zapThr : v > -zapThr) continue;
-        } else if (f.zapMode === "gamma") {
-          // No gamma means no divisor, so the reading does not exist. Your call: such tickers
-          // are hidden in this mode rather than shown unfiltered.
-          const v = isShort ? toNum(s.zapSgamma) : toNum(s.zapLgamma);
-          if (v == null) continue;
-          if (isShort ? v < zapThr : v > -zapThr) continue;
-        } else if (f.zapMode === "delta") {
-          const baseDelta = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
-          const deltaThr = baseDelta + Math.max(0.05, Number(f.zapShowAbs ?? 0));
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < deltaThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -deltaThr) continue;
-          }
-        } else {
-          if (isShort) {
-            const v = toNum(s.zapSsigma);
-            if (v == null || v < sigThr) continue;
-          } else {
-            const v = toNum(s.zapLsigma);
-            if (v == null || v > -sigThr) continue;
-          }
-        }
-      }
-    }
-
-    out.push(s);
-  }
-
-  return out;
 }
 
 
@@ -2442,7 +2255,7 @@ export default function ArbitrageSonar() {
     "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-zinc-400 transition-all hover:text-white hover:bg-white/5";
 
   /* ===== defaults requested: global / all / any ===== */
-  const [cls, setCls] = useState<ArbClass>("global");
+  const [cls, setCls] = useState<ArbClass>("pre");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
   const [corrMin, setCorrMin] = useState("");
@@ -2558,7 +2371,7 @@ export default function ArbitrageSonar() {
   const [adv20NFMin, setAdv20NFMin] = useState("");
   const [adv20NFMax, setAdv20NFMax] = useState("");
 
-  const [bpCls, setBpCls] = useState<ArbClass>("global");
+  const [bpCls, setBpCls] = useState<ArbClass>("pre");
 
   const [zapMode, setZapMode] = useState<"zap" | "sigma" | "delta" | "gamma" | "alpha" | "off">("zap");
 
@@ -2726,8 +2539,9 @@ export default function ArbitrageSonar() {
 
   /* ===== Data ===== */
   const [allItems, setAllItems] = useState<ArbitrageSignal[]>([]);
+  const [sonarRawCount, setSonarRawCount] = useState(0);
   const [items, setItems] = useState<ArbitrageSignal[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
@@ -3010,11 +2824,13 @@ export default function ArbitrageSonar() {
         const s = JSON.parse(raw);
 
         // core
-        if (typeof s?.cls === "string") setCls(s.cls);
+        // A stale blue/ark/print/global value has no button anymore; the "pre" default (above) takes
+        // over instead of restoring a class that would highlight nothing.
+        if (s?.cls === "pre" || s?.cls === "open" || s?.cls === "intra" || s?.cls === "post") setCls(s.cls);
         if (typeof s?.type === "string") setType(s.type);
         if (typeof s?.mode === "string") setMode(s.mode);
         if (typeof s?.listMode === "string") setListMode(s.listMode);
-        if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
+        if (s?.bpCls === "pre" || s?.bpCls === "open" || s?.bpCls === "intra" || s?.bpCls === "post") setBpCls(s.bpCls);
 
         // zap/sort
         if (s?.zapMode === "zap" || s?.zapMode === "sigma" || s?.zapMode === "delta" || s?.zapMode === "gamma" || s?.zapMode === "alpha" || s?.zapMode === "off") setZapMode(s.zapMode);
@@ -3820,6 +3636,8 @@ export default function ArbitrageSonar() {
    * from the existing live feed below) for SignalDetailPanel's ~30 extra fields; only the FILTER
    * DECISION moves to the backend, which is the actual "activity moved to the backend" change here.
    */
+  // Retry bumps this to re-subscribe the snapshot poll below.
+  const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
   const [sonarApprovedKeys, setSonarApprovedKeys] = useState<Set<string> | null>(null);
   // Per-stage rejection counts from the bridge's own filter chain — populated even when it zeroes
   // everything out, precisely so "0 visible" has an answer besides re-reading every toolbar toggle.
@@ -3838,10 +3656,20 @@ export default function ArbitrageSonar() {
       }
       const rows: SonarSignalRow[] = value?.rows ?? [];
       setSonarApprovedKeys(new Set(rows.map((r) => `${r.ticker.toUpperCase()}|${r.side}`)));
+      // The bridge also sends the full rows those tickers (and the few its hedge / gold / sector-
+      // correlation widgets read) are drawn from, so the page opens no live feed of its own.
+      const detail = (((value as any)?.items ?? []) as any[]).map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+      startTransition(() => {
+        setAllItems(detail);
+        setSonarRawCount((value as any)?.rawCount ?? detail.length);
+        setUpdatedAt(Date.now());
+      });
+      setLoading(false);
+      setError(null);
       setSonarFunnel(value?.funnel ?? null);
     });
     return () => { alive = false; unsubscribe(); };
-  }, []);
+  }, [streamReconnectVersion]);
 
   /* =========================
      Filters (fast single-pass)
@@ -3854,81 +3682,9 @@ export default function ArbitrageSonar() {
   };
 
   // Filtering itself now happens server-side (ArbitrageSonarSnapshotService) — see
-  // sonarApprovedKeys below, which the live feed's rows are intersected against instead of being
-  // run through applyExactSonarClientFilters (still exported above; kept, not removed, since it
-  // is this module's public export and nothing here can rule out an external caller).
-  const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
-
-
-
-  const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: snapshot.cls,
-    type: snapshot.type,
-    mode: snapshot.mode,
-    ratingMode: snapshot.ratingMode,
-    // GAMMA is a PairFlux-only scale and the server has no such rating mode, so it travels as
-    // "zap". That loses nothing: the server's zapMode only picks which per-ticker rating bins
-    // to read, and gamma divides a PAIR spread — a quantity the signals endpoint never sees.
-    zapMode: (snapshot.zapMode === "gamma" || snapshot.zapMode === "alpha") ? "zap" : snapshot.zapMode,
-    minRate: snapshot.minRate,
-    minTotal: snapshot.minTotal,
-    tickers: snapshot.tickersFilterNorm || undefined,
-    minCorr: toNum(snapshot.corrMin),
-    maxCorr: toNum(snapshot.corrMax),
-    minBeta: toNum(snapshot.betaMin),
-    maxBeta: toNum(snapshot.betaMax),
-    minSigma: toNum(snapshot.sigmaMin),
-    maxSigma: toNum(snapshot.sigmaMax),
-  }), [
-    snapshot.betaMax,
-    snapshot.betaMin,
-    snapshot.cls,
-    snapshot.corrMax,
-    snapshot.corrMin,
-    snapshot.minRate,
-    snapshot.minTotal,
-    snapshot.mode,
-    snapshot.ratingMode,
-    snapshot.sigmaMax,
-    snapshot.sigmaMin,
-    snapshot.tickersFilterNorm,
-    snapshot.type,
-    snapshot.zapMode,
-  ]);
-
-  // Subscribes through the SHARED SSE hub instead of owning an EventSource.
-  //
-  // Three things this buys, beyond one connection per URL instead of one per surface:
-  //   * the snapshot/diff merge (byTicker map, add/update/remove, fresh array identity) now has a
-  //     single implementation — this component had its own byte-equivalent copy;
-  //   * a Sonar open next to a Stream on the same URL costs one connection and one JSON parse,
-  //     not two;
-  //   * DISCONNECTS BECOME VISIBLE. The old `source.onerror` only cleared the spinner, so a
-  //     dropped feed left the last snapshot frozen on screen with nothing to say so. EventSource
-  //     reconnects on its own; what matters is that the gap is not silent.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    setLoading(true);
-    setError(null);
-
-    let wasConnected = false;
-
-    return subscribeToStreamSse(streamSignalsUrl, (state) => {
-      if (wasConnected && !state.connected) {
-        setError("Live feed disconnected — values below are the last received snapshot.");
-      } else if (state.connected) {
-        setError(null);
-      }
-      wasConnected = state.connected;
-
-      startTransition(() => {
-        setAllItems(state.signals);
-        setUpdatedAt(state.generatedAt || state.lastMessageAt || Date.now());
-      });
-      setLoading(false);
-    });
-  }, [streamReconnectVersion, streamSignalsUrl]);
+  // sonarApprovedKeys below, which the live feed's rows are intersected against. The browser copy
+  // of the filter chain (applyExactSonarClientFilters) is deleted: it had no caller, and a second
+  // copy of a rule is how the two drift apart (the absolute reject-unknown rule lives on the bridge).
 
   // The filter decision now comes from the bridge (sonarApprovedKeys, polled above) — this only
   // intersects it with the live feed's full-fidelity rows. `null` (no poll landed yet) keeps the
@@ -4260,7 +4016,7 @@ export default function ArbitrageSonar() {
   const hedgeByBench = hedgeComputed.byBench;
   const pairMutualExclusion = hedgeComputed.exclusions;
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0));
-  const rawSignalCount = allItems.length;
+  const rawSignalCount = sonarRawCount;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
   const filteredOutByClientFilters = !loading && !error && !hasAny && rawSignalCount > 0;
   const bridgeReturnedNoSignals = !loading && !error && !hasAny && rawSignalCount === 0;
@@ -4362,7 +4118,7 @@ export default function ArbitrageSonar() {
   const ignoreList = useMemo(() => sortedTickers(ignoreSet), [ignoreSet]);
   const applyList = useMemo(() => sortedTickers(applySet), [applySet]);
 
-  const classLabel = cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase();
+  const classLabel = cls.toUpperCase();
   const typeLabel = type.toUpperCase();
   const modeLabel = mode.toUpperCase();
 
@@ -4580,6 +4336,7 @@ export default function ArbitrageSonar() {
           navStreamHref={SONAR_NAV.stream}
           navScannerHref={SONAR_NAV.scanner}
           navSonarHref={SONAR_NAV.sonar}
+          navScoutHref={SONAR_NAV.scout}
           primaryPanel="sonar"
           listMode={listMode}
           ignCount={ignoreSet.size}
@@ -4709,11 +4466,11 @@ export default function ArbitrageSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {(["global", "blue", "pre", "ark", "print", "open", "intra", "post"] as ArbClass[]).map((c) => (
+            {(["pre", "open", "intra", "post"] as ArbClass[]).map((c) => (
               <FilterButton
                 key={c}
                 active={cls === c}
-                label={c === "global" ? "GLOB" : c.toUpperCase()}
+                label={c.toUpperCase()}
                 onClick={() => setCls(c)}
               />
             ))}
@@ -5021,8 +4778,9 @@ export default function ArbitrageSonar() {
                     ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
                 ].join(" ")}
+                title="Thresholds in PERCENT - the raw deviation off the tape"
               >
-                % ZAP
+                %
               </button>
 
               <button
@@ -5034,8 +4792,9 @@ export default function ArbitrageSonar() {
                     ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
                     : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200",
                 ].join(" ")}
+                title="Thresholds in SIGMAS - the ticker's own dispersion"
               >
-                <span className="leading-none" style={{ textTransform: "none" }}>σ ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>σ</span>
               </button>
 
               <button
@@ -5049,7 +4808,7 @@ export default function ArbitrageSonar() {
                 ].join(" ")}
                 title="Use sigma threshold above direction-specific median print plus the first input delta"
               >
-                <span className="leading-none" style={{ textTransform: "none" }}>Δ ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>Δ</span>
               </button>
 
               <button
@@ -5063,7 +4822,7 @@ export default function ArbitrageSonar() {
                 ].join(" ")}
                 title="Deviation in GAMMAS - the ticker's PRE reversal level. Measured on the pre-market but applied all session; tickers without a gamma are hidden in this mode."
               >
-                <span className="leading-none" style={{ textTransform: "none" }}>γ ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>γ</span>
               </button>
 
               <button
@@ -5077,7 +4836,7 @@ export default function ArbitrageSonar() {
                 ].join(" ")}
                 title="Deviation in ALPHAS - the level this ticker reaches both often and far. Not the same as Δ ZAP, which divides by the five-day median print. Tickers without an alpha are hidden in this mode."
               >
-                <span className="leading-none" style={{ textTransform: "none" }}>α ZAP</span>
+                <span className="leading-none" style={{ textTransform: "none" }}>α</span>
               </button>
 
               {/* 1) show/filter threshold (single) */}

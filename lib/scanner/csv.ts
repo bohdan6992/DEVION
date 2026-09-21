@@ -67,7 +67,9 @@ export function downloadEpisodesCsv(
       : "";
     const gateContext = context
       ? [
-          `start>=${context.startAbs.toFixed(2)}`,
+          context.startAbsNeg != null
+            ? `start+>=${context.startAbs.toFixed(2)} | start->=${context.startAbsNeg.toFixed(2)}`
+            : `start>=${context.startAbs.toFixed(2)}`,
           `start<=${context.startAbsMax || "-"}`,
           `end<=${context.endAbs.toFixed(2)}`,
           `hold>=${context.minHoldCandles}m`,

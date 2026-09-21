@@ -38,6 +38,12 @@ export type ArbitrageLiveParams = {
   signalsMinTotal: number;
   filters: ArbitrageServerFilters | null;
   sonar: ArbitrageServerSonarFilters | null;
+  /**
+   * The direction auto-balance switch. The bridge acts on it: every few minutes it counts its book by
+   * side and lowers the entry threshold of the under-represented one. Null/disabled = it never
+   * touches a threshold.
+   */
+  autoBalance: { enabled: boolean; ratio: number } | null;
   source: string;
 };
 
@@ -106,6 +112,8 @@ export type ArbitrageServerSonarFilters = {
   equityType: string | null;
   zapMode: "Off" | "Zap" | "Sigma" | "Delta";
   zapShowAbs: number;
+  /** Separate threshold for NEGATIVE deviations (a Long entry); null = the same as zapShowAbs. */
+  zapShowAbsNeg: number | null;
 };
 
 const upper = (values?: Iterable<string> | null): string[] =>
@@ -235,6 +243,7 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
       f.zapMode === "delta" ? "Delta" :
       f.zapMode === "off" ? "Off" : "Sigma",
     zapShowAbs: num(f.zapShowAbs) ?? 0,
+    zapShowAbsNeg: num(f.zapShowAbsNeg),
   };
 }
 
@@ -248,6 +257,7 @@ export function toArbitrageLiveParams(args: {
   signalsType: string;
   signalsMinRate: number;
   signalsMinTotal: number;
+  autoBalance?: { enabled: boolean; ratio: number } | null;
   source: string;
 }): ArbitrageLiveParams {
   const a = args.automation;
@@ -277,6 +287,7 @@ export function toArbitrageLiveParams(args: {
     // The page runs EITHER Sonar or the toolbar set, never both — the bridge expects the same.
     filters: args.sonar ? null : toArbitrageServerFilters(args.filters),
     sonar: args.sonar ? toArbitrageServerSonarFilters(args.sonar) : null,
+    autoBalance: args.autoBalance ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2 } : null,
     source: args.source,
   };
 }

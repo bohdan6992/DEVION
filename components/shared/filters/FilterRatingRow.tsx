@@ -81,6 +81,56 @@ function normalizeDecimal(raw: string): string {
   return raw.replace(",", ".");
 }
 
+/**
+ * The ρ/β/σ-style min/max boxes. Exported on its own so a page without the ACTIVE/INACTIVE strip
+ * (the Scout pages) draws the SAME boxes instead of a second copy of this markup.
+ */
+export function FilterRangeBoxes({ ranges }: { ranges: FilterRangeField[] }) {
+  return (
+    <>
+      {ranges.map((field) => (
+        <div
+          key={field.title}
+          className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45"
+          title={field.title}
+        >
+          <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+            {field.label}
+          </span>
+          <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={field.minValue}
+              onChange={(e) => field.setMin(normalizeDecimal(e.target.value))}
+              className={NUM_INPUT}
+              placeholder="min"
+            />
+            <Spinner
+              onUp={() => field.setMin(shift(field.minValue, field.step))}
+              onDown={() => field.setMin(shift(field.minValue, -field.step))}
+            />
+          </div>
+          <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={field.maxValue}
+              onChange={(e) => field.setMax(normalizeDecimal(e.target.value))}
+              className={NUM_INPUT}
+              placeholder="max"
+            />
+            <Spinner
+              onUp={() => field.setMax(shift(field.maxValue, field.step))}
+              onDown={() => field.setMax(shift(field.maxValue, -field.step))}
+            />
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export type FilterRatingRowProps = {
   activeMode: FilterActiveMode;
   setActiveMode: (next: FilterActiveMode) => void;
@@ -164,45 +214,7 @@ export default function FilterRatingRow({
           </div>
         ))}
 
-        {ranges.map((field) => (
-          <div
-            key={field.title}
-            className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45"
-            title={field.title}
-          >
-            <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
-              {field.label}
-            </span>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={field.minValue}
-                onChange={(e) => field.setMin(normalizeDecimal(e.target.value))}
-                className={NUM_INPUT}
-                placeholder="min"
-              />
-              <Spinner
-                onUp={() => field.setMin(shift(field.minValue, field.step))}
-                onDown={() => field.setMin(shift(field.minValue, -field.step))}
-              />
-            </div>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={field.maxValue}
-                onChange={(e) => field.setMax(normalizeDecimal(e.target.value))}
-                className={NUM_INPUT}
-                placeholder="max"
-              />
-              <Spinner
-                onUp={() => field.setMax(shift(field.maxValue, field.step))}
-                onDown={() => field.setMax(shift(field.maxValue, -field.step))}
-              />
-            </div>
-          </div>
-        ))}
+        <FilterRangeBoxes ranges={ranges} />
       </div>
     </div>
   );

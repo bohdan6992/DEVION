@@ -11,7 +11,7 @@ import { toArbitrageServerSonarFilters, type ArbitrageServerSonarFilters } from 
  *
  * PairFlux has no toolbar-vs-Sonar fork the way Arbitrage does — the stream tab always screens
  * each leg through the SAME Sonar-shaped exclude-flag chain the divergence panel uses
- * (applyExactSonarClientFilters), so `legFilters` is never null here the way Arbitrage's `sonar`
+ * (SonarSignalFilter on the bridge), so `legFilters` is never null here the way Arbitrage's `sonar`
  * is. It reuses ArbitrageServerSonarFilters' shape because the bridge reuses SonarFilterConfig for
  * it — same type, same reason both surfaces read the same live pairs.
  */

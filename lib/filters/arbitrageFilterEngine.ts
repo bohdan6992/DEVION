@@ -1,5 +1,5 @@
 import type { ArbitrageFilterConfigV1, MinMax, ReportMode, ZapMode } from "@/lib/filters/arbitrageFilterConfigV1";
-import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "@/lib/filters/reportTiming";
+import { parseReportDateAffectsTodaySession, rowReportClassification } from "@/lib/filters/reportTiming";
 
 type AnyRow = Record<string, any>;
 
@@ -75,8 +75,9 @@ function parseReportTextAsToday(value: any): boolean | null {
   return null;
 }
 
-function readTodayReportBool(row: AnyRow): boolean {
-  return rowReportAffectsTodaySession(row);
+/** true / false, or null when the row carries no report field at all (unknown => rejected). */
+function readTodayReportBool(row: AnyRow): boolean | null {
+  return rowReportClassification(row, null);
 }
 
 function passMinMax(x: any, mm?: MinMax): boolean {
@@ -158,37 +159,38 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
     if (listMode === "pin" && pinnedSet.size > 0 && !pinnedSet.has(t)) return false;
 
     // activeMode (PositionBp != 0)
-    const posBp = Number(getField(r, "PositionBp") ?? getField(r, "positionBp") ?? 0);
-    const isActive = posBp !== 0;
+    // THE RULE, on every filter here: a row that lacks the field the filter reads is REJECTED.
+    // News and dividend are the only exceptions - the feed carries them only when there is one.
+    const posRaw = getField(r, "PositionBp") ?? getField(r, "positionBp");
+    const posBp = posRaw == null || posRaw === "" ? NaN : Number(posRaw);
+    if (activeMode !== "off" && !isFinite(posBp)) return false;
+    const isActive = isFinite(posBp) && posBp !== 0;
     if (activeMode === "onlyActive" && !isActive) return false;
     if (activeMode === "onlyInactive" && isActive) return false;
 
     // include flags
     if (include.usaOnly) {
       const c = getField(r, "Country") ?? getField(r, "country");
-      if (c != null) {
-        const cu = String(c).trim().toUpperCase();
-        const isUsa = cu === "USA" || cu === "US" || cu.startsWith("UNITED STATES");
-        if (!isUsa) return false;
-      }
+      if (c == null || String(c).trim() === "") return false;
+      const cu = String(c).trim().toUpperCase();
+      const isUsa = cu === "USA" || cu === "US" || cu.startsWith("UNITED STATES");
+      if (!isUsa) return false;
     }
     if (include.chinaOnly) {
       const c = getField(r, "Country") ?? getField(r, "country");
-      if (c != null) {
-        const cu = String(c).trim().toUpperCase();
-        if (!(cu.includes("CHINA") || cu.includes("HONG"))) return false;
-      }
+      if (c == null || String(c).trim() === "") return false;
+      const cu = String(c).trim().toUpperCase();
+      if (!(cu.includes("CHINA") || cu.includes("HONG"))) return false;
     }
 
     // multi selects
     if (countryEnabled && selCountries.size > 0) {
       const cv = getField(r, "Country") ?? getField(r, "country");
-      if (cv != null) {
-        const c = String(cv).trim().toUpperCase();
-        // Normalize "UNITED STATES" → "USA" for matching
-        const cn = (c === "UNITED STATES" || c.startsWith("UNITED STATES ")) ? "USA" : c;
-        if (!selCountries.has(cn) && !selCountries.has(c)) return false;
-      }
+      if (cv == null || String(cv).trim() === "") return false;
+      const c = String(cv).trim().toUpperCase();
+      // Normalize "UNITED STATES" → "USA" for matching
+      const cn = (c === "UNITED STATES" || c.startsWith("UNITED STATES ")) ? "USA" : c;
+      if (!selCountries.has(cn) && !selCountries.has(c)) return false;
     }
     if (exchangeEnabled && selExchanges.size > 0) {
       const e = String(r.exchange ?? r.Exchange ?? "").trim().toUpperCase();
@@ -229,8 +231,8 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       if (readRowBool(r.isSsr ?? r.IsSSR ?? r.isSSR) !== false) return false;
     }
     if (exclude.report) {
-      const hasRep = readTodayReportBool(r);
-      if (hasRep) return false;
+      // Only a row KNOWN not to report survives; no report field is unknown, so it goes too.
+      if (readTodayReportBool(r) !== false) return false;
     }
     if (exclude.etf) {
       // EquityType has no counterpart in the tape; it can only exclude MORE, never let an ETF
@@ -251,7 +253,7 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
     // report tri-state
     if (reportMode !== null) {
       const hasRep = readTodayReportBool(r);
-      if (hasRep !== reportMode) return false;
+      if (hasRep == null || hasRep !== reportMode) return false;
     }
 
     // equity type substring
@@ -273,26 +275,15 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       const isDown = dirRaw === "down" || dirRaw === "short" || dirRaw === "-1";
       const isUp = dirRaw === "up" || dirRaw === "long" || dirRaw === "1";
 
-      const zapVal = Number(r.Zap ?? r.zap ?? 0);
-      const sigVal = Number(r.SigmaZap ?? r.sigmaZap ?? r.SigZap ?? 0);
-
-      if (zapMode === "zap") {
-        if (isDown) {
-          if (!(zapVal <= -zapThr)) return false;
-        } else if (isUp) {
-          if (!(zapVal >= zapThr)) return false;
-        } else {
-          // if direction unknown, keep row (or drop). Terminal uses direction; we keep to avoid over-dropping.
-        }
-      }
-
-      if (zapMode === "sigma") {
-        if (isDown) {
-          if (!(sigVal <= -sigThr)) return false;
-        } else if (isUp) {
-          if (!(sigVal >= sigThr)) return false;
-        }
-      }
+      // No direction, or no reading to compare, is unknown - rejected (used to be kept "to avoid
+      // over-dropping", and a missing reading defaulted to 0).
+      if (!isDown && !isUp) return false;
+      const rawZap = zapMode === "zap" ? (r.Zap ?? r.zap) : (r.SigmaZap ?? r.sigmaZap ?? r.SigZap);
+      const val = rawZap == null || rawZap === "" ? NaN : Number(rawZap);
+      if (!isFinite(val)) return false;
+      const thr = zapMode === "zap" ? zapThr : sigThr;
+      if (isDown && !(val <= -thr)) return false;
+      if (isUp && !(val >= thr)) return false;
     }
 
     return true;

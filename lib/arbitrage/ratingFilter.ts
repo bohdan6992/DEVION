@@ -33,19 +33,26 @@ export function getBestParamsRaw(row: any): Record<string, any> | null {
 }
 
 /**
- * Maps session string (e.g. "ARK", "ark", "GLOB") to the bin class key
- * used inside best_params sigma_bin_stats / sigma_peak_bins.
+ * Maps session string (e.g. "ARK", "ark", "GLOB") to the bin class key used inside best_params
+ * sigma_bin_stats / sigma_peak_bins.
+ *
+ * The v13 notebook (2026-09-20) only publishes pre/open/intra/post — BLUE and ARK are now part of
+ * PRE's own window, PRINT of INTRA's, and there is no "global" bin table at all (a lookup that used
+ * to land on "global" would silently find nothing there and read as "no bin data" downstream, which
+ * for a class that no longer exists is the wrong absence to report). Mirrors the bridge's own fold
+ * in ArbitrageFilesService.NormalizeRatingClass, so client and server never disagree about which
+ * class a legacy session name belongs to.
  */
 export function sessionToClassKey(session: string): string {
   switch ((session ?? "").toUpperCase()) {
-    case "BLUE": return "blue";
-    case "ARK":  return "ark";
-    case "PRE":  return "pre";
-    case "OPEN": return "open";
+    case "BLUE":
+    case "ARK":
+    case "PRE":   return "pre";
+    case "OPEN":  return "open";
+    case "PRINT":
     case "INTRA": return "intra";
-    case "PRINT": return "print";
-    case "POST": return "post";
-    default:     return "global";
+    case "POST":  return "post";
+    default:      return "pre";
   }
 }
 

@@ -40,7 +40,7 @@ import type { SonarExactFilterSnapshot } from "../sonar/OpenDoorSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
-import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
+import { parseSessionDay, rowReportClassification } from "../../lib/filters/reportTiming";
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
 import {
   SECTOR_CORR_DEFAULT,
@@ -2609,219 +2609,6 @@ export default function OpenFadeScanner({
   );
   const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr, corrThreshold, reportSessionForRow);
 
-  const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
-    const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
-      min: rangeValueOrNull(key, minRaw),
-      max: rangeValueOrNull(key, maxRaw),
-    });
-    const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
-
-      const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
-
-      return {
-        // No Arbitrage rating anywhere: zero floors so neither the server nor the client filter
-        // can reject on it, plus the explicit skip so the BIN/BINS lookups (which reject a ticker
-        // merely for having no Arbitrage bin data) never run either.
-        cls: OPEN_DOOR_CLS,
-        type: ratingType ?? "any",
-        mode: scopeModeForSnapshot,
-        ratingMode,
-        skipArbitrageRating: true,
-        minRate: OPEN_DOOR_NO_ARB_RATE,
-        minTotal: OPEN_DOOR_NO_ARB_TOTAL,
-        tickersFilterNorm: splitListUpper(tickersText).join(","),
-        listMode,
-        ignoreSet: new Set(splitListUpper(ignoreTickersText)),
-        applySet: new Set(splitListUpper(tickersText)),
-        pinMap,
-        bounds: {
-        Corr: mm("corr", minCorr, maxCorr),
-        Beta: mm("beta", minBeta, maxBeta),
-        Sigma: mm("sigma", minSigma, maxSigma),
-        ADV20: mm("adv20", minAdv20, maxAdv20),
-        ADV20NF: mm("adv20nf", minAdv20NF, maxAdv20NF),
-        ADV90: mm("adv90", minAdv90, maxAdv90),
-        ADV90NF: mm("adv90nf", minAdv90NF, maxAdv90NF),
-        AvPreMhv: mm("avpremhv", minAvPreMhv, maxAvPreMhv),
-        RoundLot: mm("roundlot", minRoundLot, maxRoundLot),
-        VWAP: mm("vwap", minVWAP, maxVWAP),
-        SpreadBidPct: mm("spread", minSpread, maxSpread),
-        LstPrcL: mm("lstprcl", minLstPrcL, maxLstPrcL),
-        LstCls: mm("lstcls", minLstCls, maxLstCls),
-        YCls: mm("ycls", minYCls, maxYCls),
-        TCls: mm("tcls", minTCls, maxTCls),
-        ClsToClsPct: mm("clstocls", minClsToClsPct, maxClsToClsPct),
-        Lo: mm("lo", minLo, maxLo),
-        LstClsNewsCnt: mm("lstclsnewscnt", minLstClsNewsCnt, maxLstClsNewsCnt),
-        MarketCapM: mm("marketcapm", minMarketCapM, maxMarketCapM),
-        PreMhVolNF: mm("premhvolnf", minPreMktVolNF, maxPreMktVolNF),
-        VolNFfromLstCls: mm("volnffromlstcls", minVolNFfromLstCls, maxVolNFfromLstCls),
-        AvPostMhVol90NF: mm("avpostmhvol90nf", minAvPostMhVol90NF, maxAvPostMhVol90NF),
-        AvPreMhVol90NF: mm("avpremhvol90nf", minAvPreMhVol90NF, maxAvPreMhVol90NF),
-        AvPreMhValue20NF: mm("avpremhvalue20nf", minAvPreMhValue20NF, maxAvPreMhValue20NF),
-        AvPreMhValue90NF: mm("avpremhvalue90nf", minAvPreMhValue90NF, maxAvPreMhValue90NF),
-        AvgDailyValue20: mm("avgdailyvalue20", minAvgDailyValue20, maxAvgDailyValue20),
-        AvgDailyValue90: mm("avgdailyvalue90", minAvgDailyValue90, maxAvgDailyValue90),
-        Volatility20: mm("volatility20", minVolatility20, maxVolatility20),
-        Volatility90: mm("volatility90", minVolatility90, maxVolatility90),
-        PreMhMDV20NF: mm("premhmdv20nf", minPreMhMDV20NF, maxPreMhMDV20NF),
-        PreMhMDV90NF: mm("premhmdv90nf", minPreMhMDV90NF, maxPreMhMDV90NF),
-        VolRel: mm("volrel", minVolRel, maxVolRel),
-        PreMhBidLstPrcPct: mm("premhbidlstprc", minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct),
-        PreMhLoLstPrcPct: mm("premhlolstprc", minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct),
-        PreMhHiLstClsPct: mm("premhhilstcls", minPreMhHiLstClsPct, maxPreMhHiLstClsPct),
-        PreMhLoLstClsPct: mm("premhlolstcls", minPreMhLoLstClsPct, maxPreMhLoLstClsPct),
-        LstPrcLstClsPct: mm("lstprclstcls", minLstPrcLstClsPct, maxLstPrcLstClsPct),
-        ImbExch925: mm("imbexch925", minImbExch925, maxImbExch925),
-        ImbExch1555: mm("imbexch1555", minImbExch1555, maxImbExch1555),
-      },
-      excludeDividend: excludeDividend,
-      excludeNews: excludeHasNews,
-      excludePTP: excludePTP,
-      excludeSSR: excludeSSR,
-      excludeReport: excludeHasReport,
-      excludeETF: excludeETF,
-      excludeCrap: excludeCrap,
-      excludeItb: excludeItb,
-      excludeHard: excludeHard,
-      excludeCorr: excludeCorr,
-      corrExcluded: sectorCorr.excluded,
-      activeMode: "off",
-      includeUSA: includeUSA,
-      includeChina: includeChina,
-      selCountries: selCountries,
-      countryEnabled,
-      selExchanges: selExchanges,
-      exchangeEnabled,
-      selSectors: selSectors,
-      sectorEnabled,
-      filterReport: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
-      equityType: "",
-      corrMin: minCorr,
-      corrMax: maxCorr,
-      betaMin: minBeta,
-      betaMax: maxBeta,
-      sigmaMin: minSigma,
-      sigmaMax: maxSigma,
-      zapMode: zapMode,
-      zapShowAbs: startAbs,
-      zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
-      zapGoldAbs: Math.max(0, Number(endAbs) || 0),
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
-    };
-  }, [
-      benchTickersText,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
-      selCountries, countryEnabled,
-      selExchanges, exchangeEnabled,
-      selSectors, sectorEnabled,
-      endAbs,
-      excludeDividend,
-      excludeCrap,
-      excludeItb,
-      excludeHard,
-      excludeCorr,
-      sectorCorr.excluded,
-      excludeETF,
-      excludeHasNews,
-      excludeHasReport,
-      excludePTP,
-      excludeSSR,
-      includeChina,
-      includeUSA,
-      ignoreTickersText,
-      listMode,
-      maxAdv20,
-      maxAdv20NF,
-      maxAdv90,
-      maxAdv90NF,
-      maxAvgDailyValue20,
-      maxAvgDailyValue90,
-      maxAvPostMhVol90NF,
-      maxAvPreMhValue20NF,
-      maxAvPreMhValue90NF,
-      maxAvPreMhVol90NF,
-      maxAvPreMhv,
-      maxBeta,
-      maxCorr,
-      maxImbExch1555,
-      maxImbExch925,
-      maxLo,
-      maxLstCls,
-      maxLstClsNewsCnt,
-      maxLstPrcL,
-      maxLstPrcLstClsPct,
-    maxMarketCapM,
-    maxPreMhBidLstPrcPct,
-    maxPreMhHiLstClsPct,
-    maxPreMhLoLstClsPct,
-    maxPreMhLoLstPrcPct,
-    maxPreMhMDV20NF,
-    maxPreMhMDV90NF,
-    maxPreMktVolNF,
-    maxRoundLot,
-    maxSigma,
-    maxSpread,
-    maxTCls,
-    maxVolNFfromLstCls,
-    maxVolRel,
-    maxVolatility20,
-    maxVolatility90,
-    maxVWAP,
-    maxYCls,
-    metric,
-    ratingMode,
-    minAdv20,
-    minAdv20NF,
-    minAdv90,
-    minAdv90NF,
-    minAvgDailyValue20,
-    minAvgDailyValue90,
-    minAvPostMhVol90NF,
-    minAvPreMhValue20NF,
-    minAvPreMhValue90NF,
-    minAvPreMhVol90NF,
-    minAvPreMhv,
-    minBeta,
-    minCorr,
-    minImbExch1555,
-    minImbExch925,
-    minLo,
-    minLstCls,
-    minLstClsNewsCnt,
-    minLstPrcL,
-    minLstPrcLstClsPct,
-    minMarketCapM,
-    minPreMhBidLstPrcPct,
-    minPreMhHiLstClsPct,
-    minPreMhLoLstClsPct,
-    minPreMhLoLstPrcPct,
-    minPreMhMDV20NF,
-    minPreMhMDV90NF,
-    minPreMktVolNF,
-    minRoundLot,
-    minSigma,
-    minSpread,
-    minTCls,
-    minVolNFfromLstCls,
-    minVolRel,
-    minVolatility20,
-    minVolatility90,
-    minVWAP,
-    minYCls,
-      streamRatingRule.minRate,
-      streamRatingRule.minTotal,
-      streamSignalClass,
-      ratingType,
-      startAbs,
-      tickersText,
-      zapMode,
-      sharedRangeFilterModes,
-    ]);
-
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
     strategyModeEnabled: streamAutomationConfigOverride?.strategyModeEnabled ?? false,
     minNetEdge: streamAutomationConfigOverride?.minNetEdge ?? 0,
@@ -2864,68 +2651,6 @@ export default function OpenFadeScanner({
     preStartTime,
   ]);
 
-  const streamTrackedSignalsEnabled =
-    !isStreamOnlyShell ||
-    tab !== "active" ||
-    streamViewModeOverride === "auto" ||
-    Boolean(streamAutoEnabledOverride) ||
-    Boolean(streamAutoStartEnabledOverride) ||
-    Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
-
-  // The OpenDoor stream must receive the SAME universe OpenDoor Sonar does, or the shared gate
-  // still judges different sets of tickers. Sonar asks the server with cls="global", minRate=0.3,
-  // minTotal=1 and — critically — NO startAbs: its entry rule is the per-bin gate, not a sigma
-  // floor, so a server-side sigma threshold would silently narrow the universe before the gate
-  // ever sees it. These mirror OpenDoorSonar's own defaults and must be changed together with it.
-  const openDoorSignalsRequest = useMemo(() => ({
-    cls: OPEN_DOOR_CLS,
-    minRate: OPEN_DOOR_NO_ARB_RATE,
-    minTotal: OPEN_DOOR_NO_ARB_TOTAL,
-    omitStartAbs: true,
-    includeAll: fadeUniverseAll,
-  }), [fadeUniverseAll]);
-
-  // Same rule, same function, same rows as OpenDoor Sonar — see lib/opendoor/gate.ts for why it
-  // is not duplicated here. The scanner has no ADVANCED toggle (that is a Sonar-only view), so
-  // the standard 09:20 bin columns are always the ones read.
-  // OpenFade's rule, mirroring TapeOpenDoorEngine.FadePass: the reading must sit inside the band
-  // and its SIGN picks the side. Judging by rating bins here would have the stream send what
-  // OpenDoor would trade, not what this strategy backtests.
-  const openDoorStreamGate = useCallback(
-    (signal: any) => {
-      const referencePct = getNumAny(signal, ["RefPrcExchLstClsΔ%", "RefPrcExchLstClsPct", "RefPrcExchLstClsDeltaPct"]);
-      const benchmarkReferencePct = getNumAny(signal, ["BenchRefPrcExchLstClsΔ%", "bench.RefPrcExchLstClsΔ%", "BenchRefPrcExchLstClsPct"]);
-      const best = signal?.best ?? signal?.Best ?? signal?.best_params?.best ?? signal?.bestParams?.best ?? null;
-      const staticBest = signal?.best_params?.static ?? signal?.bestParams?.static ?? null;
-      const beta = toNum(signal?.beta ?? signal?.Beta ?? best?.beta ?? best?.Beta ?? staticBest?.beta ?? staticBest?.Beta);
-      const sigma = toNum(signal?.sigma ?? signal?.Sigma ?? best?.sigma ?? best?.Sigma ?? staticBest?.sigma ?? staticBest?.Sigma);
-      const rawReferenceDeviation =
-        referencePct != null && benchmarkReferencePct != null && beta != null
-          ? referencePct - benchmarkReferencePct * beta
-          : null;
-      const referenceSigma =
-        rawReferenceDeviation != null && sigma != null && sigma !== 0
-          // Match ArbitrageMath.DerivedPrecision (two decimals) on the bridge so a boundary
-          // value cannot pass the browser gate and fail the server strategy, or vice versa.
-          ? Math.round((rawReferenceDeviation / sigma) * 100) / 100
-          : null;
-      // RefPrcExchLstClsΔ% has one reference price per symbol, so one signed reading selects
-      // the side: negative fades into Long, positive fades into Short.
-      const rawUp = fadeMetric === "pct" ? rawReferenceDeviation : referenceSigma;
-      const rawDown = rawUp;
-      const inBand = (v: number | null, wantNegative: boolean) => {
-        if (v == null || !Number.isFinite(v)) return false;
-        if (wantNegative ? v >= 0 : v <= 0) return false;
-        const abs = Math.abs(v);
-        if (abs < fadeMinAbs) return false;
-        if (fadeMaxAbs != null && abs > fadeMaxAbs) return false;
-        return true;
-      };
-      return { up: inBand(rawUp, true), down: inBand(rawDown, false) };
-    },
-    [fadeMetric, fadeMinAbs, fadeMaxAbs]
-  );
-
   const {
     streamEntryReadyCount,
     streamAutoEnabled,
@@ -2951,60 +2676,14 @@ export default function OpenFadeScanner({
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
   } = useStreamEngine({
-    // OpenDoor's real gate is per-bin, per-direction, at the selected exit horizon — a rule the
-    // Arbitrage-shaped session rating cannot express, which is why the stream tab used to show
-    // hundreds of candidates where Sonar showed single digits. This runs the SAME function Sonar
-    // filters with (lib/opendoor/gate.ts) over the SAME SSE rows, so the two agree exactly.
-    signalGate: openDoorStreamGate,
-    // OpenDoor ends its session with a single Ctrl+E at CUTOFF, not Arbitrage's Ctrl+Q -> Ctrl+O.
-    cutoffAction: "exit-all" as const,
-    // OpenFade's own order types. They resolve to the same Ctrl+F1 / Ctrl+F2 as OpenDoor today,
-    // but through its own setting — so retuning one desk's keys cannot move the other's.
+    // This page only DRAWS: the bridge screens the candidates and makes every decision, so
+    // nothing about filters, gates or signal metrics is passed to the engine any more.
     entryIntentTypes: { long: "OpenFadeEnterLong", short: "OpenFadeEnterShort" },
-    signalsRequest: openDoorSignalsRequest,
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
-    trackedSignalsEnabled: streamTrackedSignalsEnabled,
     initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
     signalClass: streamSignalClass,
-    ruleBand,
-    ratingType,
-    metric,
-    ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
-    startAbs,
-    startAbsMax: optNumOrNull(startAbsMax),
-    endAbs,
-    closeMode,
-    minHoldCandles,
-    ratingMode,
-    session,
-    ratingMinRate: streamRatingRule.minRate,
-    ratingMinTotal: streamRatingRule.minTotal,
-    tickersCsv: splitListUpper(tickersText).join(",") || undefined,
-    minCorr: optNumOrNull(minCorr),
-    maxCorr: optNumOrNull(maxCorr),
-    minBeta: optNumOrNull(minBeta),
-    maxBeta: optNumOrNull(maxBeta),
-    minSigma: optNumOrNull(minSigma),
-    maxSigma: optNumOrNull(maxSigma),
-    sideFilter: sideFilter || undefined,
-    filterConfig: streamFilterConfig,
-    exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
-    maxSpreadValue: maxSpread,
     automationConfig: effectiveStreamAutomationConfig,
-    activeScannerTickers: activeRows.map((r) => ({
-      ticker: r.ticker,
-      side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-    })),
-    onFetchActiveTickers: async () => {
-      const qs = buildPaperQuery(buildOpenDoorGetParams(dateNy));
-      const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
-      const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
-      return rows.map((r) => ({
-        ticker: r.ticker,
-        side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-      }));
-    },
     onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
@@ -3297,8 +2976,8 @@ export default function OpenFadeScanner({
       maxRoundLot: rangeValueOrNull("roundlot", maxRoundLot),
       minVWAP: rangeValueOrNull("vwap", minVWAP),
       maxVWAP: rangeValueOrNull("vwap", maxVWAP),
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minLstPrcL: rangeValueOrNull("lstprcl", minLstPrcL),
       maxLstPrcL: rangeValueOrNull("lstprcl", maxLstPrcL),
       minLstCls: rangeValueOrNull("lstcls", minLstCls),
@@ -3482,8 +3161,8 @@ export default function OpenFadeScanner({
       minPreMktVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
       maxPreMktVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
 
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minSpreadBps: optNumOrNull(minSpreadBps),
       maxSpreadBps: optNumOrNull(maxSpreadBps),
 
@@ -4427,8 +4106,6 @@ export default function OpenFadeScanner({
   const _minSigmaV = optNumOrNull(minSigma);
   const _maxSigmaV = optNumOrNull(maxSigma);
 
-  const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
-
   // Shared min/max filters used to be enforced only by the Arbitrage endpoint, which received them
   // in the request body. OpenDoor talks to its own endpoint, whose request carries none of them, so
   // without this they silently did nothing and the P&L never moved when a bound was set.
@@ -4499,7 +4176,9 @@ export default function OpenFadeScanner({
     // Deliberately NOT the server's HasReport boolean: the tape collapses the marker to "any
     // marker means yes", discarding the date and release time the rule is built on.
     if (requireHasReport || excludeHasReport) {
-      const affectsSession = rowReportAffectsSession(row, reportSessionForRow(row));
+      const affectsSession = rowReportClassification(row, reportSessionForRow(row));
+      // No report marker at all is unknown, and unknown is rejected whichever way the toggle is set.
+      if (affectsSession == null) return false;
       if (excludeHasReport && affectsSession) return false;
       if (requireHasReport && !affectsSession) return false;
     }
@@ -4513,7 +4192,9 @@ export default function OpenFadeScanner({
     if (_minCorrV != null || _maxCorrV != null) {
       const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
       if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        // No value is unknown, so the row is rejected - also while the meta is still loading
+        // (the memo re-runs when it arrives).
+        return false;
       } else {
         if (_minCorrV != null && value < _minCorrV) return false;
         if (_maxCorrV != null && value > _maxCorrV) return false;
@@ -4522,7 +4203,9 @@ export default function OpenFadeScanner({
     if (_minBetaV != null || _maxBetaV != null) {
       const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
       if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        // No value is unknown, so the row is rejected - also while the meta is still loading
+        // (the memo re-runs when it arrives).
+        return false;
       } else {
         if (_minBetaV != null && value < _minBetaV) return false;
         if (_maxBetaV != null && value > _maxBetaV) return false;
@@ -4531,7 +4214,9 @@ export default function OpenFadeScanner({
     if (_minSigmaV != null || _maxSigmaV != null) {
       const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
       if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        // No value is unknown, so the row is rejected - also while the meta is still loading
+        // (the memo re-runs when it arrives).
+        return false;
       } else {
         if (_minSigmaV != null && value < _minSigmaV) return false;
         if (_maxSigmaV != null && value > _maxSigmaV) return false;

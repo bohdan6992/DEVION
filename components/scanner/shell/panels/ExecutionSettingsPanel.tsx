@@ -5,6 +5,7 @@ import { clampInt, formatDilutionStepValue, formatScannerSizeValue, normalizeSca
 import type { ScannerFilterBag } from "../../../../lib/scanner/filterState";
 import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArbPriceMode, PaperArbSizingMode, TabKey } from "../../../../lib/scanner/types";
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
+import type { DirectionBalanceState } from "../../../../lib/arbitrage/directionBalanceClient";
 
 /**
  * THESE FOUR GROUPS DESCRIBE THE BACKTEST'S ARITHMETIC, NOT THE LIVE ORDER.
@@ -29,7 +30,22 @@ const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
  * P&L and price mode, min hold, the stream start/cutoff steppers and the two log
  * downloads. Identical for every strategy.
  */
+/**
+ * The direction auto-balance switch (Arbitrage only). The bridge decides; this is the switch, the
+ * trigger ratio, and the bridge's report of what it has done.
+ */
+export type DirectionBalanceControl = {
+  enabled: boolean;
+  /** Majority : minority that counts as skewed - 2 means two longs for every short. */
+  ratio: number;
+  onToggle: () => void;
+  onRatio: (value: number) => void;
+  status: DirectionBalanceState | null;
+};
+
 export type ExecutionSettingsPanelProps = {
+  /** When present the panel shows the BALANCE switch beside UNDILUTED / DILUTED. */
+  directionBalance?: DirectionBalanceControl;
   filters: ScannerFilterBag;
   tab: TabKey;
   isStreamOnlyShell: boolean;
@@ -45,7 +61,76 @@ export type ExecutionSettingsPanelProps = {
   downloadStreamFilterPassLog: () => void;
 };
 
+function BalanceRatioInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
+  const [text, setText] = React.useState(String(value));
+
+  React.useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const n = Number(raw.replace(",", "."));
+    if (Number.isFinite(n) && n >= 1.1) onChange(n);
+  };
+  const bump = (dir: 1 | -1) => {
+    const next = Math.max(1.1, +((Number.isFinite(value) ? value : 2) + dir * 0.5).toFixed(2));
+    setText(String(next));
+    onChange(next);
+  };
+
+  return (
+    <div className="group relative h-8 w-11 overflow-hidden rounded-md">
+      <input
+        type="number"
+        inputMode="decimal"
+        min={1.1}
+        step={0.5}
+        value={text}
+        disabled={disabled}
+        onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
+        onBlur={() => setText(String(value))}
+        aria-label="Balance trigger ratio"
+        className="center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99] disabled:opacity-40 accent-text"
+      />
+      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => bump(1)}
+          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+          aria-label="Increase balance trigger ratio"
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => bump(-1)}
+          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+          aria-label="Decrease balance trigger ratio"
+        >
+          ▼
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const fmtAdj = (v: number) => (v > 0 ? `−${(+v.toFixed(2)).toString()}` : "0");
+
+function balanceTitle(status: DirectionBalanceState | null): string {
+  const base =
+    "AUTO BALANCE. The bridge counts its open positions by side every few minutes. If one side outnumbers the other by the trigger ratio (e.g. 10 longs : 5 shorts at 2), the entry threshold of the SIDE THAT IS SHORT OF POSITIONS is lowered by a step, so the stream takes setups it was leaving alone; it repeats each check while the skew lasts, and lowers the other side if the book flips. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
+  if (!status) return base;
+  const next = status.nextCheckUtc ? new Date(status.nextCheckUtc).toLocaleTimeString() : "-";
+  return `${base}\n\nNow: short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}. Last check saw ${status.lastLongs} long / ${status.lastShorts} short: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
+}
+
 export default function ExecutionSettingsPanel({
+  directionBalance,
   filters,
   tab,
   isStreamOnlyShell,
@@ -241,6 +326,43 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
+    {directionBalance && (
+      <>
+        <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={balanceTitle(directionBalance.status)}>
+          <button
+            type="button"
+            aria-pressed={directionBalance.enabled}
+            onClick={directionBalance.onToggle}
+            className={clsx(
+              "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+              directionBalance.enabled
+                ? "accent-soft"
+                : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+            )}
+          >
+            BALANCE
+          </button>
+        </div>
+
+        <div
+          className={clsx("flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20", !directionBalance.enabled && "opacity-60")}
+          title="Trigger ratio: how many times more positions one side must hold than the other before the balance acts. 2 = two longs for every short."
+        >
+          <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
+          <BalanceRatioInput value={directionBalance.ratio} onChange={directionBalance.onRatio} disabled={!directionBalance.enabled} />
+          {directionBalance.enabled && (
+            <span
+              className="flex h-8 items-center gap-1.5 pr-2 text-[10px] font-mono tabular-nums select-none"
+              title={balanceTitle(directionBalance.status)}
+            >
+              <span className="text-emerald-400/80">S {directionBalance.status ? fmtAdj(directionBalance.status.shortAdjust) : "·"}</span>
+              <span className="text-rose-400/80">L {directionBalance.status ? fmtAdj(directionBalance.status.longAdjust) : "·"}</span>
+            </span>
+          )}
+        </div>
+      </>
+    )}
+
     <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
       <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">STEP</span>
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -367,11 +489,11 @@ export default function ExecutionSettingsPanel({
     </div>
 
     <div
-      className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20"
+      className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20"
       title="MINHOLD — скільки хвилин поспіль умова має триматись, щоб їй повірили. Одне й те саме число гейтить ВХІД (підтвердження розходження) і ВИХІД (підтвердження збіжності). 0 і 1 означають одне: підтверджено на самому барі, без очікування."
     >
       <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
-      <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-11 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -380,7 +502,7 @@ export default function ExecutionSettingsPanel({
           step={1}
           value={minHoldCandles}
           onChange={(e) => setMinHoldCandles(Math.max(0, Math.min(180, clampInt(e.target.value, 0))))}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -405,9 +527,9 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20">
+    <div className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20">
       <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
-      <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-11 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -423,7 +545,7 @@ export default function ExecutionSettingsPanel({
               queueDelayMaxSeconds: nextMax,
             });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -460,7 +582,7 @@ export default function ExecutionSettingsPanel({
         </div>
       </div>
       <span className="flex h-7 items-center justify-center text-[10px] font-mono text-zinc-600">-</span>
-      <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-11 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -476,7 +598,7 @@ export default function ExecutionSettingsPanel({
               queueDelayMaxSeconds: nextMax,
             });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -511,13 +633,13 @@ export default function ExecutionSettingsPanel({
           </button>
         </div>
       </div>
-      <span className="flex h-8 items-center pr-3 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
+      <span className="flex h-8 items-center pr-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
     </div>
 
-    <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="Position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning.">
+    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="Position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning.">
       <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">START</span>
       {/* Hour stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -532,7 +654,7 @@ export default function ExecutionSettingsPanel({
             setPreStartTime(nextPreStartTime);
             onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -563,9 +685,9 @@ export default function ExecutionSettingsPanel({
           >▼</button>
         </div>
       </div>
-      <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
+      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
       {/* Minute stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -580,7 +702,7 @@ export default function ExecutionSettingsPanel({
             setPreStartTime(nextPreStartTime);
             onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -613,10 +735,10 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
+    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
       <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>
       {/* Hour stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -631,7 +753,7 @@ export default function ExecutionSettingsPanel({
             setStartCutoffTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -662,9 +784,9 @@ export default function ExecutionSettingsPanel({
           >▼</button>
         </div>
       </div>
-      <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
+      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
       {/* Minute stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -679,7 +801,7 @@ export default function ExecutionSettingsPanel({
             setStartCutoffTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -712,10 +834,10 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-1 pl-3 pr-0 rounded-lg bg-black/20" title="ENTRY STOP: after this time no NEW positions are taken. Leave equal to CUTOFF to stop entries at the close; set it earlier (e.g. 09:25 vs a 10:00 close) to give the dispatch queue time to flush.">
+    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="ENTRY STOP: after this time no NEW positions are taken. Leave equal to CUTOFF to stop entries at the close; set it earlier (e.g. 09:25 vs a 10:00 close) to give the dispatch queue time to flush.">
       <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">ENTRY</span>
       {/* Hour stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -730,7 +852,7 @@ export default function ExecutionSettingsPanel({
             setEntryStopTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button
@@ -761,9 +883,9 @@ export default function ExecutionSettingsPanel({
           >▼</button>
         </div>
       </div>
-      <span className="text-[11px] font-mono text-zinc-500 select-none">:</span>
+      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
       {/* Minute stepper */}
-      <div className="group relative h-8 w-9 overflow-hidden rounded-md">
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number"
           inputMode="numeric"
@@ -778,7 +900,7 @@ export default function ExecutionSettingsPanel({
             setEntryStopTime(nextCutoffTime);
             onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
           }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
+          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
           <button

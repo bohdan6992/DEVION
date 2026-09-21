@@ -17,7 +17,7 @@
 
 import { rowExcludedByBorrow } from "@/lib/filters/borrow";
 import { rowExcludedByCorr } from "@/lib/filters/sectorCorr";
-import { rowReportAffectsSession, type ReportSessionDay } from "@/lib/filters/reportTiming";
+import { rowReportClassification, type ReportSessionDay } from "@/lib/filters/reportTiming";
 
 /** The partner's ticker as the row spells it, uppercased; "" when the row carries no hedge leg. */
 export function benchTickerOf(row: any): string {
@@ -46,16 +46,18 @@ export type PairLegFilterOpts = {
 /**
  * True when the HEDGE leg fails one of the three browser-side toggles.
  *
- * A partner with no marker at all is not rejected by an exclude toggle (nothing to exclude) but is
- * rejected by REQUIRE — the same asymmetry the ticker leg has, since "no marker" reads as "does not
- * report" rather than as "unknown".
+ * THE RULE: a partner that lacks what a toggle reads is rejected, whichever way the toggle is set.
+ * No partner ticker at all, no report marker, no borrow status — each is unknown, and unknown is
+ * not "clear". (The pair is one trade on two names; a leg we know nothing about cannot vouch for it.)
  */
 export function benchLegExcluded(row: any, o: PairLegFilterOpts): boolean {
+  const anyToggle = o.requireHasReport || o.excludeHasReport || o.excludeItb || o.excludeHard || o.excludeCorr;
   const bench = benchTickerOf(row);
-  if (!bench) return false;
+  if (!bench) return anyToggle;
 
   if (o.requireHasReport || o.excludeHasReport) {
-    const affects = rowReportAffectsSession(benchReportShim(row), o.session);
+    const affects = rowReportClassification(benchReportShim(row), o.session);
+    if (affects == null) return true;
     if (o.excludeHasReport && affects) return true;
     if (o.requireHasReport && !affects) return true;
   }

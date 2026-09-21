@@ -88,6 +88,9 @@ export function useScannerFilters(
   const [closeMode, setCloseMode] = useState<PaperArbCloseMode>("Active");
   const [startAbs, setStartAbs] = useState<number>(options.startAbsDefault ?? 0.1);
   const [startAbsMax, setStartAbsMax] = useState<string>("");
+  // Start threshold for NEGATIVE deviations (a Long entry). "" = the same one as startAbs, i.e. the
+  // single threshold every strategy has always had; startAbs is then the POSITIVE one (a Short).
+  const [startAbsNeg, setStartAbsNeg] = useState<string>("");
   const [endAbs, setEndAbs] = useState<number>(0.05);
   const [minHoldCandles, setMinHoldCandles] = useState<number>(0);
   const [startCutoffTime, setStartCutoffTime] = useState<string>(() => options.streamAutomationConfigOverride?.startCutoffTime ?? "09:20");
@@ -372,6 +375,7 @@ export function useScannerFilters(
     closeMode, setCloseMode,
     startAbs, setStartAbs,
     startAbsMax, setStartAbsMax,
+    startAbsNeg, setStartAbsNeg,
     endAbs, setEndAbs,
     minHoldCandles, setMinHoldCandles,
     startCutoffTime, setStartCutoffTime,

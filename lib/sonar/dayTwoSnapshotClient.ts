@@ -41,6 +41,10 @@ export type DayTwoSonarRow = {
 export type DayTwoSonarSnapshot = {
   timedOut: boolean;
   rows: DayTwoSonarRow[];
+  /** Full signal rows for the listed tickers plus the few the panel's widgets read — chosen on the bridge. */
+  items: unknown[];
+  /** How many tickers the bridge looked at before choosing. */
+  rawCount: number;
 };
 
 export function toDayTwoSonarLiveParams(args: {

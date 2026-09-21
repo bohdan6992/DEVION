@@ -77,10 +77,9 @@
  * any level, so there is no distance it is known to return from. Those rows show "—".
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { buildQuoteIndex, computeLivePairs, type LivePair } from "@/lib/pairflux/livePairs";
-import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "../../lib/pairflux/client";
-import type { ArbitrageSignal } from "../../lib/signals/signal";
+import React, { useMemo, useState } from "react";
+import type { LivePair } from "@/lib/pairflux/livePairs";
+import type { PairFluxClass } from "../../lib/pairflux/client";
 
 /** Both sides of a ticker's move against its own previous close, in percentage points. */
 // Benchmark order and beta buckets are LIFTED VERBATIM from the Arbitrage sonar
@@ -116,7 +115,6 @@ function betaKeyOf(beta: number | null): BetaKey {
 }
 
 export default function PairFluxDivergence({
-  signals,
   // Owned by the Sonar so the switcher can sit in the shared filter toolbar next to every other
   // control, rather than this panel carrying a second one of its own.
   cls,
@@ -124,83 +122,23 @@ export default function PairFluxDivergence({
   unit: zapMode,
   minStr: zapMin,
   maxStr: zapMax,
-  exitStr: zapExit,
-  // The rho / beta / sigma / alpha boxes in the toolbar, each a [min, max] pair of raw strings.
-  corrRange,
-  betaRange,
-  sigmaRange,
-  alphaRange,
-  // When set, this REPLACES the internal computeLivePairs call — the bridge's own
-  // PairFluxSonarSnapshotService already computed the same thing server-side (identical math,
-  // ported and tested). `pairs`/`quoteByTicker` are still built locally either way: they back the
-  // header's "how many pairs were lost to exactly one leg" coverage count, not the divergence math.
+  // The pairs that are apart right now — computed on the bridge (PairFluxSonarSnapshotService).
+  // The page draws them; it loads no pair table and runs no divergence math of its own.
+  // Null until the first snapshot lands (or while the bridge fetch is timing out).
   rowsOverride,
+  // How the published pairs survive the leg filters, counted on the bridge for the header.
+  coverage: coverageInfo,
 }: {
-  signals: ArbitrageSignal[];
   cls: PairFluxClass;
   unit: "pct" | "sigma" | "alpha" | "gamma";
   minStr: string;
   maxStr: string;
-  exitStr: string;
-  corrRange: readonly [string, string];
-  betaRange: readonly [string, string];
-  sigmaRange: readonly [string, string];
-  alphaRange: readonly [string, string];
   rowsOverride?: LivePair[] | null;
+  coverage?: { both: number; half: number; total: number } | null;
 }) {
   const [open, setOpen] = useState(true);
-  const [pairs, setPairs] = useState<PairFluxRow[]>([]);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  // The pair universe. includeInverted=false because each published pair is wanted ONCE here —
-  // the mirrored row is the same spread read backwards and would double every card.
-  const loadPairs = useCallback(async () => {
-    setLoading(true);
-    setLoadErr(null);
-    try {
-      const res = await fetchPairFluxRatings({ cls, includeInverted: false, limit: 20000 });
-      setPairs(res.rows ?? []);
-      if (!res.ok && res.error) setLoadErr(res.error);
-    } catch (e: any) {
-      setLoadErr(String(e?.message ?? e));
-      setPairs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [cls]);
-
-  useEffect(() => { void loadPairs(); }, [loadPairs]);
-
-  // The stream reads the same index off the same signals, so a ticker quoted here is quoted
-  // there. See lib/pairflux/livePairs.
-  const quoteByTicker = useMemo(() => buildQuoteIndex(signals), [signals]);
-
-  const [corrLo, corrHi] = corrRange;
-  const [betaLo, betaHi] = betaRange;
-  const [sigmaLo, sigmaHi] = sigmaRange;
-  const [alphaLo, alphaHi] = alphaRange;
-
-  // computeLivePairs is the actual divergence math PairFluxSonarSnapshotService already ran
-  // server-side — skipped entirely (not just discarded after running) whenever a backend snapshot
-  // is available, so the client is never doing that work twice. It still runs as the fallback for
-  // the two cases rowsOverride can legitimately be null: before the first poll lands, and while the
-  // bridge fetch is timing out.
-  const rows = useMemo<LivePair[]>(() => {
-    if (rowsOverride) return rowsOverride;
-    return computeLivePairs({
-      pairs,
-      quoteByTicker,
-      unit: zapMode,
-      minStr: zapMin,
-      maxStr: zapMax,
-      exitStr: zapExit,
-      corrRange,
-      betaRange,
-      sigmaRange,
-      alphaRange,
-    });
-  }, [rowsOverride, pairs, quoteByTicker, zapMode, zapMin, zapMax, zapExit, corrRange, betaRange, sigmaRange, alphaRange]);
+  const loading = rowsOverride == null;
+  const rows = useMemo<LivePair[]>(() => rowsOverride ?? [], [rowsOverride]);
 
   /**
    * Benchmark columns, each split into the Sonar's beta buckets. Nothing is capped — the toolbar
@@ -239,17 +177,7 @@ export default function PairFluxDivergence({
    */
   const unitLabel = zapMode === "sigma" ? "σ" : zapMode === "alpha" ? "α" : "DEV";
 
-  const coverage = useMemo(() => {
-    let both = 0;
-    let half = 0;
-    for (const p of pairs) {
-      const a = quoteByTicker.has(p.ticker);
-      const b = quoteByTicker.has(p.partner);
-      if (a && b) both++;
-      else if (a || b) half++;
-    }
-    return { both, half };
-  }, [pairs, quoteByTicker]);
+  const coverage = coverageInfo ?? { both: 0, half: 0, total: 0 };
 
   return (
     <div className="rounded-2xl border border-white/[0.06] bg-black/25 backdrop-blur-sm">
@@ -265,18 +193,16 @@ export default function PairFluxDivergence({
         <span className="font-mono text-[9px] tracking-[0.14em] text-zinc-500">
           {loading
             ? "…"
-            : `${rows.length} розійшлись · ${coverage.both} з ${pairs.length} пар обідві ноги` +
+            : `${rows.length} розійшлись · ${coverage.both} з ${coverage.total} пар обідві ноги` +
               (coverage.half > 0 ? ` · ${coverage.half} відсіяло по одній нозі` : "")}
         </span>
       </div>
-
-      {loadErr && <div className="px-4 pb-2 font-mono text-[10px] text-rose-300/80">{loadErr}</div>}
 
       {open && (
         <div className="border-t border-white/[0.05] px-4 py-4">
           {benchBlocks.length === 0 ? (
             <div className="py-8 text-center font-mono text-[10px] text-zinc-600">
-              {pairs.length === 0
+              {coverage.total === 0
                 ? "Список пар порожній — рейтинги PairFlux ще не опубліковані."
                 : coverage.both === 0
                   ? coverage.half > 0

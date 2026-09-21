@@ -100,7 +100,11 @@ export class StreamSignalStore {
   }
 
   applySnapshot(signals: ArbitrageSignal[]): void {
-    const nextMeta = buildMeta(signals);
+    this.applyMeta(buildMeta(signals));
+  }
+
+  /** The bridge counts and lists the candidates now; the page only stores what it was told. */
+  applyMeta(nextMeta: StreamSignalMeta): void {
     if (sameMeta(this.meta, nextMeta)) return;
     this.meta = nextMeta;
     this.listeners.forEach((listener) => listener());

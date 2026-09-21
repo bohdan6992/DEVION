@@ -215,6 +215,22 @@ export function rowReportAffectsSession(row: any, session?: ReportSessionDay | n
 }
 
 /**
+ * The FILTER's verdict: `rowReportAffectsSession`, except that a row with no report marker and no
+ * precomputed flag at all is `null` (unknown) instead of `false` (does not report).
+ *
+ * Every filter that reads the report must reject `null` whichever way it is set — "unknown" is not
+ * "definitely not reporting", and treating it so is how an exclude-REP toggle let rows through that
+ * the bridge (`ReportTiming.Classify`) had dropped. The tape writes "NO" when there is nothing, so
+ * a truly empty field is missing data, not an answer.
+ */
+export function rowReportClassification(row: any, session?: ReportSessionDay | null): boolean | null {
+  const raw = pickReportValue(row);
+  const hasFlag = readLooseBool(row?._reportBool) != null || readLooseBool(row?.hasReport ?? row?.HasReport) != null;
+  if ((raw == null || String(raw).trim() === "") && !hasFlag) return null;
+  return rowReportAffectsSession(row, session);
+}
+
+/**
  * Returns true/false when `value` carries a parsable date, null when it does not (caller should
  * then fall back to its own boolean parsing).
  */

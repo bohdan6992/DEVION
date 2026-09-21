@@ -245,6 +245,7 @@ export type ScannerFilterState = {
   sizingMode: PaperArbSizingMode;
   startAbs: number;
   startAbsMax: string;
+  startAbsNeg: string;
   startCutoffTime: string;
   streamAutoStartLocked: boolean;
   streamAutomationTogglePending: null | "start" | "stop";
@@ -481,6 +482,7 @@ export type ScannerFilterSetters = {
   setSizingMode: React.Dispatch<React.SetStateAction<PaperArbSizingMode>>;
   setStartAbs: React.Dispatch<React.SetStateAction<number>>;
   setStartAbsMax: React.Dispatch<React.SetStateAction<string>>;
+  setStartAbsNeg: React.Dispatch<React.SetStateAction<string>>;
   setStartCutoffTime: React.Dispatch<React.SetStateAction<string>>;
   setStreamAutoStartLocked: React.Dispatch<React.SetStateAction<boolean>>;
   setStreamAutomationTogglePending: React.Dispatch<React.SetStateAction<null | "start" | "stop">>;

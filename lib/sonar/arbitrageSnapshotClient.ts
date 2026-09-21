@@ -62,6 +62,13 @@ export type ArbitrageSonarSnapshot = {
   rows: SonarSignalRow[];
   /** Null on a timeout (nothing ran). */
   funnel: SonarFilterFunnel | null;
+  /**
+   * The full signal rows the panel draws detail from — every listed ticker, plus the few rows its
+   * hedge / gold / sector-correlation widgets read. Chosen on the bridge; the page filters nothing.
+   */
+  items: unknown[];
+  /** How many tickers the bridge looked at before choosing — the panel's "raw" count. */
+  rawCount: number;
 };
 
 const num = (value: unknown): number => {
@@ -78,7 +85,9 @@ export function toArbitrageSonarLiveParams(args: {
   const s = args.snapshot;
   const ratingMode = s.ratingMode === "BIN" || s.ratingMode === "BINS" ? s.ratingMode : "SESSION";
   return {
-    signalsClass: String(s.cls ?? "global"),
+    // "global" is a display-only aggregate on the bridge now, never something to gate live
+    // signals on (ArbitrageFilesService.NormalizeRatingClass) - "pre" is the Sonar's own default.
+    signalsClass: String(s.cls ?? "pre"),
     signalsType: String(s.type ?? "any"),
     signalsMinRate: num(s.minRate),
     signalsMinTotal: num(s.minTotal),

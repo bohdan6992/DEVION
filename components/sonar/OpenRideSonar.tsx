@@ -100,7 +100,6 @@ import {
   toBool,
   toNum,
 } from "@/lib/signals/signal";
-import { subscribeToStreamSse } from "@/components/stream/streamSseHub";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
@@ -1571,129 +1570,6 @@ const PIN_DOT_CLASS: Record<PinColor, string> = {
   cyan: "bg-sky-300", // was bg-cyan-300 -> now light-blue
 };
 
-export function applyExactSonarClientFilters(arr: ArbitrageSignal[], f: SonarExactFilterSnapshot): ArbitrageSignal[] {
-  const out: ArbitrageSignal[] = [];
-  // minRate/minTotal/ratingMode and the zap/sigma thresholds off the snapshot are intentionally
-  // not read here: OpenDoor neither rates by Arbitrage bins nor gates on start deviation. The
-  // snapshot still carries them because it is the shared Scanner/Stream/Sonar filter shape.
-  const eqNeedle = f.equityType.trim().toLowerCase();
-
-  const passMinMaxLocal = (val: number | null, min: number | null, max: number | null) => {
-    if ((min != null || max != null) && val == null) return false;
-    if (min != null && val != null && val < min) return false;
-    if (max != null && val != null && val > max) return false;
-    return true;
-  };
-
-  const boundKeys = Object.keys(RANGE_VALUE_GETTERS) as Array<keyof typeof RANGE_VALUE_GETTERS>;
-  const passesRangeBound = (key: keyof typeof RANGE_VALUE_GETTERS, signal: ArbitrageSignal) => {
-    const bounds = f.bounds[key];
-    return passMinMaxLocal(RANGE_VALUE_GETTERS[key](signal), bounds.min, bounds.max);
-  };
-
-  for (const s of arr ?? []) {
-    const tk = normalizeTicker(s?.ticker || "");
-    if (!tk) continue;
-    const posActive = isActiveByPositionBp(s);
-
-    if (f.activeMode === "onlyActive" && !posActive) continue;
-
-    if (f.listMode === "ignore" && f.ignoreSet.has(tk)) continue;
-    if (f.listMode === "apply" && !f.applySet.has(tk)) continue;
-    if (f.listMode === "pin" && !f.pinMap[tk]) continue;
-
-    if (f.activeMode === "onlyInactive") {
-      if (posActive) continue;
-    }
-
-    if (!passMinMaxLocal(getCorrValue(s), toNum(f.corrMin), toNum(f.corrMax))) continue;
-    if (!passMinMaxLocal(getBetaValue(s), toNum(f.betaMin), toNum(f.betaMax))) continue;
-    if (!passMinMaxLocal(getSigmaValue(s), toNum(f.sigmaMin), toNum(f.sigmaMax))) continue;
-    let failedRangeBound = false;
-    for (const key of boundKeys) {
-      if (!passesRangeBound(key, s)) {
-        failedRangeBound = true;
-        break;
-      }
-    }
-    if (failedRangeBound) continue;
-
-    // No Arbitrage rating gate here. OpenDoor rates a signal against its OWN summary.csv bins
-    // (matchOpenDoor: STACK/BENCH/DEV x exit class x direction, with its own MINRATE/MINTOTAL/
-    // MINMOVE levels). Running Arbitrage's session/bin rating first would pre-thin the feed by a
-    // completely different statistic before OpenDoor ever looks at it.
-
-    if (f.topMode && !passesTopWindowFilter(s, f.cls as ArbClass, f.topSigmaOn, f.topBenchOn, f.topTimeOn)) continue;
-
-    if (f.excludeDividend && hasValue(pickAny(s, ["dividend", "Dividend", "hasDividend", "HasDividend"]))) continue;
-    if (f.excludeNews) {
-      const nn = toNum((s as any)._newsCount ?? numNews(s)) ?? 0;
-      if (nn > 0) continue;
-    }
-    if (f.excludePTP && (((s as any)._isPTP ?? boolIsPTP(s)) === true)) continue;
-    if (f.excludeSSR && (((s as any)._isSSR ?? boolIsSSR(s)) === true)) continue;
-    if (f.excludeReport && hasTodayReport(s)) continue;
-    // CORR: not "this ticker reports" but "this ticker moves with one that does".
-    if (f.excludeCorr && rowExcludedByCorr(s, f.corrExcluded)) continue;
-    if (f.excludeETF) {
-      if (boolIsETF(s) === true) continue;
-      const eqt = strEquityType(s).toLowerCase();
-      if (eqt && eqt.includes("etf")) continue;
-    }
-    if (f.excludeCrap) {
-      const px = numLastClose(s);
-      if (px != null && px < 5) continue;
-    }
-    // Borrow availability (B5ETB) — one reader shared with the Scanner, which receives the same
-    // field under a different spelling. See lib/filters/borrow.
-    if (rowExcludedByBorrow(s, f.excludeItb, f.excludeHard)) continue;
-
-    if (f.includeUSA || f.includeChina) {
-      const matchUSA = isUSA(s);
-      const c = getCountryStr(s);
-      const matchChina = c.includes("CHINA") || c.includes("HONG KONG");
-      if (!((f.includeUSA && matchUSA) || (f.includeChina && matchChina))) continue;
-    }
-
-    if (f.selCountries.size > 0) {
-      if (f.countryEnabled === "include" && !f.selCountries.has(getCountry(s))) continue;
-      if (f.countryEnabled === "exclude" && f.selCountries.has(getCountry(s))) continue;
-    }
-    if (f.selExchanges.size > 0) {
-      if (f.exchangeEnabled === "include" && !f.selExchanges.has(getExchange(s))) continue;
-      if (f.exchangeEnabled === "exclude" && f.selExchanges.has(getExchange(s))) continue;
-    }
-    if (f.selSectors.size > 0) {
-      if (f.sectorEnabled === "include" && !f.selSectors.has(getSector(s))) continue;
-      if (f.sectorEnabled === "exclude" && f.selSectors.has(getSector(s))) continue;
-    }
-
-    if (f.filterReport !== "ALL") {
-      const rep = hasTodayReport(s);
-      if (f.filterReport === "YES" && rep !== true) continue;
-      if (f.filterReport === "NO" && rep !== false) continue;
-    }
-
-    if (eqNeedle) {
-      const et = strEquityType(s).toLowerCase();
-      if (!et.includes(eqNeedle)) continue;
-    }
-
-    // No start-deviation gate here either. Arbitrage requires the signal to have already moved a
-    // threshold distance (zap / sigma / print-median delta) before it is worth looking at; OpenDoor
-    // does not — it enters at 09:20 regardless of how far the name has travelled, and decides
-    // purely on whether the entry snapshot lands inside a historically profitable bin. Keeping the
-    // gate meant matchOpenDoor only ever saw the residue of an unrelated filter.
-    //
-    // The TOP-window filter above is deliberately left in place: it stays under the user's own
-    // topMode toggle, so it only narrows the feed when explicitly asked for.
-
-    out.push(s);
-  }
-
-  return out;
-}
-
 
 
 type HedgeInfo = {
@@ -2526,8 +2402,9 @@ export default function OpenRideSonar() {
 
   /* ===== Data ===== */
   const [allItems, setAllItems] = useState<ArbitrageSignal[]>([]);
+  const [sonarRawCount, setSonarRawCount] = useState(0);
   const [items, setItems] = useState<ArbitrageSignal[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
@@ -3589,95 +3466,19 @@ export default function OpenRideSonar() {
     return true;
   };
 
-  const applyAllClientFilters = useCallback((arr: ArbitrageSignal[], f: typeof snapshot) => {
-    return applyExactSonarClientFilters(arr, f as SonarExactFilterSnapshot);
-  }, []);
+  // Retry bumps this to re-subscribe the snapshot poll below.
   const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
-
-
-  const streamSignalsUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: snapshot.cls,
-    type: snapshot.type,
-    mode: snapshot.mode,
-    ratingMode: snapshot.ratingMode,
-    zapMode: snapshot.zapMode,
-    // OpenDoor evaluates CLEAN data. Sending snapshot.minRate/minTotal (Arbitrage's rating floor,
-    // defaulting to 0.3/1) made the SERVER pre-thin the feed by a rule OpenDoor does not use —
-    // the same leftover this file's own applyExactSonarClientFilters already refuses to apply on
-    // the client. The only rating allowed to reject a ticker is OpenDoor's per-bin table.
-    minRate: 0,
-    minTotal: 0,
-    // Whole universe when GATE ON: OpenRide judges a live reading, so the rows the server would
-    // have filtered away are exactly the ones whose deviation it wants to see.
-    includeAll: fadeUniverseAll,
-    tickers: snapshot.tickersFilterNorm || undefined,
-    minCorr: toNum(snapshot.corrMin),
-    maxCorr: toNum(snapshot.corrMax),
-    minBeta: toNum(snapshot.betaMin),
-    maxBeta: toNum(snapshot.betaMax),
-    minSigma: toNum(snapshot.sigmaMin),
-    maxSigma: toNum(snapshot.sigmaMax),
-  }), [
-    fadeUniverseAll,
-    snapshot.betaMax,
-    snapshot.betaMin,
-    snapshot.cls,
-    snapshot.corrMax,
-    snapshot.corrMin,
-    snapshot.minRate,
-    snapshot.minTotal,
-    snapshot.mode,
-    snapshot.ratingMode,
-    snapshot.sigmaMax,
-    snapshot.sigmaMin,
-    snapshot.tickersFilterNorm,
-    snapshot.type,
-    snapshot.zapMode,
-  ]);
-
-  // Subscribes through the SHARED SSE hub instead of owning an EventSource.
-  //
-  // Three things this buys, beyond one connection per URL instead of one per surface:
-  //   * the snapshot/diff merge (byTicker map, add/update/remove, fresh array identity) now has a
-  //     single implementation — this component had its own byte-equivalent copy;
-  //   * a Sonar open next to a Stream on the same URL costs one connection and one JSON parse,
-  //     not two;
-  //   * DISCONNECTS BECOME VISIBLE. The old `source.onerror` only cleared the spinner, so a
-  //     dropped feed left the last snapshot frozen on screen with nothing to say so. EventSource
-  //     reconnects on its own; what matters is that the gap is not silent.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    setLoading(true);
-    setError(null);
-
-    let wasConnected = false;
-
-    return subscribeToStreamSse(streamSignalsUrl, (state) => {
-      if (wasConnected && !state.connected) {
-        setError("Live feed disconnected — values below are the last received snapshot.");
-      } else if (state.connected) {
-        setError(null);
-      }
-      wasConnected = state.connected;
-
-      startTransition(() => {
-        setAllItems(state.signals);
-        setUpdatedAt(state.generatedAt || state.lastMessageAt || Date.now());
-      });
-      setLoading(false);
-    });
-  }, [streamReconnectVersion, streamSignalsUrl]);
-
-  // Re-apply client filters immediately on any local filter change.
+  // The bridge already decided which tickers are listed (openRideSonarRows) and sent their full rows; this
+  // only narrows the detail pool to them. No filter runs in the browser.
   useEffect(() => {
     if (isEditingRef.current) return;
-    const filtered = applyAllClientFilters(allItems, snapshot);
+    const listed = new Set(openRideSonarRows.map((r) => String(r.ticker ?? "").toUpperCase().trim()));
+    const narrowed = allItems.filter((s) => listed.has(String(s.ticker ?? "").toUpperCase().trim()));
     startTransition(() => {
-      setItems(filtered);
+      setItems(narrowed);
     });
-  }, [allItems, snapshot, applyAllClientFilters, isEditing]);
+  }, [allItems, openRideSonarRows, isEditing]);
 
   /* =========================
     Flash Logic (stable, cleanup-safe)
@@ -4051,9 +3852,19 @@ export default function OpenRideSonar() {
         return;
       }
       setOpenRideSonarRows(value?.rows ?? []);
+      // The bridge also sends the full rows those tickers (and the few its widgets read) are drawn
+      // from, so the page opens no live feed of its own.
+      const detail = (((value as any)?.items ?? []) as any[]).map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
+      startTransition(() => {
+        setAllItems(detail);
+        setSonarRawCount((value as any)?.rawCount ?? detail.length);
+        setUpdatedAt(Date.now());
+      });
+      setLoading(false);
+      setError(null);
     });
     return () => { alive = false; unsubscribe(); };
-  }, []);
+  }, [streamReconnectVersion]);
 
   // OpenRide: which tickers pass, now decided server-side (OpenRideSonarSnapshotService, the SAME
   // OpenRideLiveEngine the Stream tab trades on — band only, see the operator decision above)
@@ -4088,7 +3899,7 @@ export default function OpenRideSonar() {
   // "filtered out" empty-state banner ABOVE a real, populated matched list from the bridge.
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0))
     || openDoorMatchedUp.length > 0 || openDoorMatchedDown.length > 0;
-  const rawSignalCount = allItems.length;
+  const rawSignalCount = sonarRawCount;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
   const filteredOutByClientFilters = !loading && !error && !hasAny && rawSignalCount > 0;
   const bridgeReturnedNoSignals = !loading && !error && !hasAny && rawSignalCount === 0;

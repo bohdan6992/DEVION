@@ -96,7 +96,9 @@ class TapeMetaStore {
     this.disconnect();
 
     const url = buildSignalsStreamUrl({
-      cls: "ark",
+      // "ark" folded into "pre" in v13 (ArbitrageFilesService.NormalizeRatingClass); this stream is
+      // only used for its country/exchange/sector universe, so any surviving class works equally.
+      cls: "pre",
       type: "any",
       mode: "all",
       ratingMode: "SESSION",

@@ -43,6 +43,10 @@ export type OpenFadeSonarRow = {
 export type OpenFadeSonarSnapshot = {
   timedOut: boolean;
   rows: OpenFadeSonarRow[];
+  /** Full signal rows for the listed tickers plus the few the panel's widgets read — chosen on the bridge. */
+  items: unknown[];
+  /** How many tickers the bridge looked at before choosing. */
+  rawCount: number;
 };
 
 export function toOpenFadeSonarLiveParams(args: {

@@ -31,11 +31,16 @@ export function readBorrowStatus(row: any): string {
   return "";
 }
 
-/** True when the row must be dropped by the ITB/HARD toggles. */
+/**
+ * True when the row must be dropped by the ITB/HARD toggles.
+ *
+ * A row with NO borrow status is dropped too: "unknown" is not "freely borrowable", and the bridge
+ * (`SonarSignalFilter`) already rejects it — the rule is absolute across every surface.
+ */
 export function rowExcludedByBorrow(row: any, excludeItb: boolean, excludeHard: boolean): boolean {
   if (!excludeItb && !excludeHard) return false;
   const status = readBorrowStatus(row);
-  if (!status) return false;
+  if (!status) return true;
   if (excludeItb && status === "ITB") return true;
   if (excludeHard && status === "NO") return true;
   return false;

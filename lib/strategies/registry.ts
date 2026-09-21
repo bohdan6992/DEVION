@@ -41,6 +41,8 @@ export type StrategyNav = {
   stream: string;
   scanner: string;
   sonar: string;
+  /** Only strategies that have a Scout page (rolling 5/20/40-session performance) set this. */
+  scout?: string;
 };
 
 export type StrategyRatingClasses = {
@@ -117,6 +119,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       // `/signals/arbitrage`, NOT `/sonar`. The latter renders BridgeSonarSignals — a separate
       // diagnostic component — so the old value sent the SONAR button somewhere else entirely.
       sonar: "/signals/arbitrage",
+      scout: "/arbitrage/scout",
     },
     // Full session: PRE starts at -180 (21:00 the evening before) and POST ends at 19:59, i.e.
     // 1200 exclusive.
@@ -128,13 +131,15 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // no longer needs to mount the full browser engine just to have something to host.
     streamEngine: "bridge",
     storage: { scannerPrefix: "paper.arb", sonarPrefix: "bridge.arb", streamPrefix: "stream.arbitrage" },
+    // v13 notebook (2026-09-20): BLUE/ARK folded into PRE, PRINT folded into INTRA, GLOBAL removed
+    // as a gate (the bridge still answers a "global" lookup as a display-only best-of-classes
+    // aggregate, never something to filter on). The bridge's own class reader folds a legacy
+    // blue/ark/print value onto its new home, so an old saved selection degrades gracefully rather
+    // than returning nothing - this list is what the UI now offers going forward.
     ratingClasses: {
       dimension: "SESSION",
-      keys: ["blue", "pre", "ark", "open", "intra", "print", "post", "global"],
-      labels: {
-        blue: "BLUE", pre: "PRE", ark: "ARK", open: "OPEN",
-        intra: "INTRA", print: "PRINT", post: "POST", global: "GLOBAL",
-      },
+      keys: ["pre", "open", "intra", "post"],
+      labels: { pre: "PRE", open: "OPEN", intra: "INTRA", post: "POST" },
     },
   },
 
@@ -248,6 +253,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/pairflux/stream",
       scanner: "/pairflux/scanner",
       sonar: "/pairflux/sonar",
+      scout: "/pairflux/scout",
     },
     // The union of the three PairFlux classes: PRE opens at 21:00 the evening before (-180) and
     // INTRA ends at 16:00. OPEN (09:00-10:00) sits inside that span, so the window is one range

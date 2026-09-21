@@ -9,36 +9,29 @@ import { usePersistedFilters } from "../../lib/scanner/usePersistedFilters";
 import { useFilterRestore } from "../../lib/scanner/useFilterRestore";
 import { useEpisodesSearchCache } from "../../lib/scanner/useEpisodesSearchCache";
 import { getToken } from "../../lib/authClient";
-import { bridgeUrl, getBridgeBaseUrl } from "../../lib/bridgeBase";
 import { getArbitrageList } from "../../lib/trapClient";
 import { useUi } from "../UiProvider";
 import PresetPicker from "../presets/PresetPicker";
 import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFilterPreset } from "../../lib/presets/sharedFilterPreset";
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
-import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import ArbitrageStreamView from "../stream/ArbitrageStreamView";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
-import { subscribeToStreamSse } from "../stream/streamSseHub";
-import { buildSignalsStreamUrl } from "@/lib/signals/url";
-import { fetchPairFluxRatings, type PairFluxClass, type PairFluxRow } from "@/lib/pairflux/client";
-import { buildQuoteIndex, computeLivePairs, pairExitDeviation, type LivePairUnit } from "@/lib/pairflux/livePairs";
 import { pushPairFluxLiveParams, toPairFluxLiveParams } from "@/lib/pairflux/liveParamsClient";
-import { buildPairFluxGateMap, expandPairFluxSignal, matchPairFluxGate, pairFluxLegsFor, pairKeyOf } from "@/lib/pairflux/gate";
-import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, type StreamPosition, useStreamEngine } from "../stream/streamEngine";
+import { toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
 // The SAME implementation the engine imports, deliberately — a second copy of this filter is
 // exactly how the gate and the decisions came to disagree about which tickers exist.
-import { applyExactSonarClientFilters, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
+import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
-import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
+import { parseSessionDay, rowReportClassification } from "../../lib/filters/reportTiming";
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
 import { benchLegExcluded } from "../../lib/pairflux/legFilters";
 import {
@@ -75,7 +68,6 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
-import DispatchOwnerBanner from "../stream/DispatchOwnerBanner";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -123,6 +115,7 @@ type PairFluxScannerProps = {
   navStreamHref?: string;
   navScannerHref?: string;
   navSonarHref?: string;
+  navScoutHref?: string;
 };
 
 const ACTIVE_TICKER_STRATEGY = "pairflux" as const;
@@ -161,6 +154,7 @@ export default function PairFluxScanner({
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,
   navSonarHref = STRATEGY.nav.sonar,
+  navScoutHref = STRATEGY.nav.scout,
 }: PairFluxScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
@@ -2097,109 +2091,6 @@ export default function PairFluxScanner({
   }, [ratingRules, ruleBand]);
   const streamRatingRule = streamExecutionDescriptorOverride?.ratingRule ?? derivedStreamRatingRule;
 
-  const streamFilterConfig = useMemo<ArbitrageFilterConfigV1>(() => {
-    const mm = (minRaw: string, maxRaw: string) => {
-      const min = optNumOrNull(minRaw);
-      const max = optNumOrNull(maxRaw);
-      if (min == null && max == null) return undefined;
-      return {
-        ...(min != null ? { min } : {}),
-        ...(max != null ? { max } : {}),
-      };
-    };
-
-    const applyTickers = splitListUpper(tickersText);
-    const ignoreTickers = splitListUpper(ignoreTickersText);
-    const pinnedTickers = splitListUpper(benchTickersText);
-    const countries = Array.from(selCountries);
-    const exchanges = Array.from(selExchanges);
-    const sectors = Array.from(selSectors);
-
-    return buildStreamFilterConfig({
-      signalClass: streamSignalClass,
-      ratingType,
-      minRate: streamRatingRule.minRate,
-      minTotal: streamRatingRule.minTotal,
-      listMode,
-      ignoreTickers,
-      applyTickers,
-      pinnedTickers,
-      bounds: {
-        ADV20: mm(minAdv20, maxAdv20),
-        ADV20NF: mm(minAdv20NF, maxAdv20NF),
-        ADV90: mm(minAdv90, maxAdv90),
-        ADV90NF: mm(minAdv90NF, maxAdv90NF),
-        AvPreMhv: mm(minAvPreMhv, maxAvPreMhv),
-        RoundLot: mm(minRoundLot, maxRoundLot),
-        VWAP: mm(minVWAP, maxVWAP),
-        SpreadBidPct: mm(minSpread, maxSpread),
-        LstPrcL: mm(minLstPrcL, maxLstPrcL),
-        LstCls: mm(minLstCls, maxLstCls),
-        YCls: mm(minYCls, maxYCls),
-        TCls: mm(minTCls, maxTCls),
-        ClsToClsPct: mm(minClsToClsPct, maxClsToClsPct),
-        Lo: mm(minLo, maxLo),
-        LstClsNewsCnt: mm(minLstClsNewsCnt, maxLstClsNewsCnt),
-        MarketCapM: mm(minMarketCapM, maxMarketCapM),
-        PreMhVolNF: mm(minPreMktVolNF, maxPreMktVolNF),
-        VolNFfromLstCls: mm(minVolNFfromLstCls, maxVolNFfromLstCls),
-        AvPostMhVol90NF: mm(minAvPostMhVol90NF, maxAvPostMhVol90NF),
-        AvPreMhVol90NF: mm(minAvPreMhVol90NF, maxAvPreMhVol90NF),
-        AvPreMhValue20NF: mm(minAvPreMhValue20NF, maxAvPreMhValue20NF),
-        AvPreMhValue90NF: mm(minAvPreMhValue90NF, maxAvPreMhValue90NF),
-        AvgDailyValue20: mm(minAvgDailyValue20, maxAvgDailyValue20),
-        AvgDailyValue90: mm(minAvgDailyValue90, maxAvgDailyValue90),
-        Volatility20: mm(minVolatility20, maxVolatility20),
-        Volatility90: mm(minVolatility90, maxVolatility90),
-        PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
-        PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
-        VolRel: mm(minVolRel, maxVolRel),
-      },
-      exclude: {
-        dividend: excludeDividend,
-        news: excludeHasNews,
-        ptp: excludePTP,
-        ssr: excludeSSR,
-        report: excludeHasReport,
-        etf: excludeETF,
-        crap: excludeCrap,
-      },
-      include: {
-        usaOnly: includeUSA,
-        chinaOnly: includeChina,
-      },
-      multi: {
-        countries,
-        exchanges,
-        sectors,
-      },
-      reportMode: requireHasReport ? "YES" : excludeHasReport ? "NO" : "ALL",
-      zapMode: metric === "SigmaZap" ? "sigma" : "zap",
-      zapThresholdAbs: startAbs,
-    });
-  }, [
-    streamSignalClass,
-    ratingType,
-    streamRatingRule,
-    listMode,
-    scopeMode,
-    ignoreTickersText,
-    tickersText,
-    benchTickersText,
-    minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
-    minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
-    minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
-    minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt,
-    minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls,
-    minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF,
-    minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF,
-    minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
-    minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
-    minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
-    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
-    includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
-  ]);
-
   // Which session a row's report marker is judged against. The marker carries only day/month, so
   // it only means anything relative to a date: for the Scanner that is the tape day the row came
   // from, never "today". Rows carry their own `dateNy`; the selected day is the fallback for any
@@ -2620,325 +2511,6 @@ export default function PairFluxScanner({
     streamExactSonarFilterSnapshot,
   ]);
 
-  const streamTrackedSignalsEnabled =
-    !isStreamOnlyShell ||
-    tab !== "active" ||
-    streamViewModeOverride === "auto" ||
-    Boolean(streamAutoEnabledOverride) ||
-    Boolean(streamAutoStartEnabledOverride) ||
-    Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
-
-  // ===================== THE STREAM'S SIGNALS ARE THE SONAR'S =====================
-  //
-  // This scanner used to pass NO signalGate, so the engine fell through to its default — the
-  // Arbitrage per-ticker ZAP band. That is a rule about a ticker against its benchmark ETF, not
-  // about a pair coming apart, which is why the stream tab and the PairFlux Sonar listed
-  // different things. Everything below feeds ONE function, lib/pairflux/livePairs, which is the
-  // same function the Sonar's divergence panel renders from.
-
-  /**
-   * The published pair universe for the class being watched, pre-filtered server-side by the
-   * toolbar's own MINRATE/MINTOTAL floor — the same floor computeLivePairs applies again below on
-   * whatever survives here. Used to fetch the whole class unfiltered (up to ~17k INTRA pairs) and
-   * re-scan all of it on every quote tick; the rating floor cuts that to whatever actually clears
-   * the bar (usually a few hundred), which is the set that can ever become a live pair anyway.
-   *
-   * TRADEOFF: an already-OPEN position's pair can fall out of this array if the floor is raised
-   * mid-session, blanking its exit-deviation display (pairFluxExitOverride/pfPairsByKey below) until
-   * the next class/floor reload. That is display-only — real exits run on the bridge's own
-   * PairFluxServerStrategy/ServerPositionTracker, which reads live TradingApp state, not this array.
-   */
-  const [pfPairs, setPfPairs] = useState<PairFluxRow[]>([]);
-  useEffect(() => {
-    if (primaryPanel !== "stream") return;
-    let alive = true;
-
-    // Fetched once, with no repeat — this used to only ever re-run when the class/rating floor
-    // changed, so a page left open all session kept trading whatever pair assignments happened to
-    // be published at load time. The bridge refreshes its OWN copy of this same table every 5min
-    // (PairFluxRatingsService.CacheTtl); left this way, an all-day tab falls further and further
-    // behind it, and eventually shows the operator a stream candidate list that no longer matches
-    // what Caesar is actually trading — measured live, 2026-09-17 (Caesar correctly dropped/added
-    // pairs as the table updated; this tab kept showing a stale set from hours earlier).
-    const load = async () => {
-      try {
-        const res = await fetchPairFluxRatings({
-          cls: (session.toLowerCase() as PairFluxClass),
-          includeInverted: false,
-          minRate: streamRatingRule.minRate,
-          minTotal: streamRatingRule.minTotal,
-          limit: 20000,
-        });
-        if (alive) setPfPairs(res.rows ?? []);
-      } catch {
-        if (alive) setPfPairs([]);
-      }
-    };
-
-    void load();
-    // Tighter than the bridge's own 5min cache so this tab is never the stale side of a comparison.
-    const interval = window.setInterval(() => { void load(); }, 60_000);
-    return () => { alive = false; window.clearInterval(interval); };
-  }, [primaryPanel, session, streamRatingRule.minRate, streamRatingRule.minTotal]);
-
-  /**
-   * Every leg that can still matter, once pfPairs is already narrowed by the rating floor above.
-   *
-   * WHY THIS EXISTS. Arbitrage's own signal fetch is pre-narrowed server-side (its own toolbar
-   * ranges apply directly to a per-ticker candidate set). PairFlux never could do that the same way
-   * — corr/beta/sigma/rate/total here are PAIR statistics, and a leg failing some per-ticker bound
-   * says nothing about whether ITS PAIR still qualifies — so both signal fetches below (pfSignals
-   * and the engine's own signalsRequest) were asking for the WHOLE published universe every time,
-   * unfiltered, "just in case" a leg was needed. That is what made PairFlux's per-tick payload and
-   * per-tick recompute so much larger than Arbitrage's for the same feed.
-   *
-   * Once pfPairs is cut down by MINRATE/MINTOTAL, the set of tickers that could ever appear in a
-   * live pair is exactly {ticker, partner} of what survived — nothing outside that set can ever
-   * price a pair this floor allows. So this is a SAFE narrowing, not an approximation: the
-   * computed live pairs are identical to fetching everything and filtering after, just far cheaper
-   * to fetch and to scan. Same open-position display tradeoff as pfPairs itself — see its comment.
-   */
-  const pfPairTickers = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of pfPairs) {
-      if (p.ticker) set.add(p.ticker.trim().toUpperCase());
-      if (p.partner) set.add(p.partner.trim().toUpperCase());
-    }
-    return Array.from(set).sort();
-  }, [pfPairs]);
-  // Falls back to `undefined` (fetch everything, today's behaviour) in two cases: pfPairs hasn't
-  // loaded yet — so the feed isn't wrongly starved for the few seconds before the first ratings
-  // response lands — and a floor loose enough (e.g. MINRATE/MINTOTAL near 0) that the "narrowed"
-  // list is no longer meaningfully smaller than the universe, where a many-thousand-ticker CSV in
-  // a URL is its own liability rather than the optimization this exists to be.
-  const pfPairTickersCsv =
-    pfPairTickers.length > 0 && pfPairTickers.length <= 1500 ? pfPairTickers.join(",") : undefined;
-
-  /**
-   * The live rows. Same hub the engine itself subscribes to, so this opens no second connection
-   * when the URL matches and costs one shared EventSource when it does not — and either way the
-   * gate is derived independently of the engine's own output rather than fed back into it.
-   */
-  const [pfSignals, setPfSignals] = useState<any[]>([]);
-  const pfSignalsUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: (session.toLowerCase() as any),
-    type: (ratingType ?? "any") as any,
-    // Taken from the SAME snapshot the engine builds its own URL from. These three were hardcoded
-    // here, so whenever the toolbar sat on sigmas or alphas the two subscriptions asked the server
-    // for different things — and a leg present in one and absent from the other is precisely the
-    // "partner leg missing" case, arriving before any client filter had a chance to run.
-    mode: (streamExactSonarFilterSnapshot?.mode ?? "all") as any,
-    ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-    zapMode: (streamExactSonarFilterSnapshot?.zapMode ?? (metric === "SigmaZap" ? "sigma" : "zap")) as any,
-    // No server-side rating floor either, and for the same reason as the sigma one below: it is a
-    // per-TICKER figure, while the gate that decides a PairFlux trade is the pair's own rating for
-    // the class. Kept at 0 here so this subscription stays identical to the engine's, which sets
-    // omitTickerRating — a leg present in one and missing from the other is the "partner leg
-    // missing" case all over again.
-    minRate: 0,
-    minTotal: 0,
-    // No server-side sigma floor: the entry rule here is a PAIR spread, and a per-ticker floor
-    // would narrow the universe before the pair can even be formed. Both legs must arrive.
-    startAbs: undefined,
-    // APPLY mode's explicit list wins when set (a human narrowed it on purpose); otherwise fall
-    // back to pfPairTickersCsv — every leg that can still be part of a pair clearing the rating
-    // floor, not the whole published universe. See pfPairTickers' doc comment above.
-    tickers: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : pfPairTickersCsv,
-    limit: 5000,
-    includeAll: true,
-  }), [session, ratingType, streamRatingRule.minRate, streamRatingRule.minTotal, tickersText, listMode,
-       streamExactSonarFilterSnapshot, ratingMode, metric, pfPairTickersCsv]);
-
-  // Mirrors streamDispatchState into a ref so the SSE callback below reads the CURRENT value
-  // without needing it in the effect's deps — putting it there would tear down and resubscribe the
-  // EventSource every time dispatch ownership changes, for no reason. Assigned below, once
-  // streamDispatchState itself exists (useStreamEngine is called further down this component).
-  const pfDispatchStateRef = useRef<string>("pending");
-  const pfSignalsFlushTimerRef = useRef<number | null>(null);
-  const pfSignalsLatestRef = useRef<any[]>([]);
-  useEffect(() => {
-    if (primaryPanel !== "stream") { setPfSignals([]); return; }
-    const unsubscribe = subscribeToStreamSse(pfSignalsUrl, (state) => {
-      pfSignalsLatestRef.current = state.signals ?? [];
-      // This tab is not the one dispatching whenever another client (normally the bridge, once it
-      // holds real authority) owns the strategy — see streamDispatchState. Every message here still
-      // re-derives computeLivePairs / the pair-expanded decision set, so an un-throttled setState on
-      // every SSE tick was recomputing that on every market tick purely to redraw a page nobody is
-      // trading from. A dispatching tab keeps a near-immediate 200ms flush; a view-only one gets 1s,
-      // same reasoning as scheduleLocalRefresh's throttle in streamEngine.ts.
-      if (pfSignalsFlushTimerRef.current != null) return;
-      const delayMs = pfDispatchStateRef.current === "other" ? 1000 : 200;
-      pfSignalsFlushTimerRef.current = window.setTimeout(() => {
-        pfSignalsFlushTimerRef.current = null;
-        setPfSignals(pfSignalsLatestRef.current);
-      }, delayMs);
-    });
-    return () => {
-      unsubscribe();
-      if (pfSignalsFlushTimerRef.current != null) {
-        window.clearTimeout(pfSignalsFlushTimerRef.current);
-        pfSignalsFlushTimerRef.current = null;
-      }
-    };
-  }, [primaryPanel, pfSignalsUrl]);
-
-  /**
-   * The universe a pair may be BUILT from — the same one the engine will act on.
-   *
-   * `pfSignals` is deliberately unfiltered (includeAll, no sigma floor) so that both legs of a
-   * pair can arrive. But the ENGINE only ever decides on signals that survived the client filter
-   * chain, so a pair built here from a leg that chain rejects can never be traded: one leg reaches
-   * the table and the other never becomes a decision, and the pair is refused as one-sided. That
-   * is what "partner leg missing" was reporting — GFI/FSM among them.
-   *
-   * The Sonar never had the problem because its divergence panel already reads the filtered set.
-   * Running the same function here is what makes the two surfaces agree on the same filters, which
-   * is the whole point: a pair the stream shows is a pair the stream can send.
-   */
-  const pfQuotableSignals = useMemo(
-    () => (streamExactSonarFilterSnapshot
-      ? applyExactSonarClientFilters(pfSignals as any[], streamExactSonarFilterSnapshot)
-      : pfSignals),
-    [pfSignals, streamExactSonarFilterSnapshot],
-  );
-
-  /**
-   * The unit the toolbar reads deviation in, translated to computeLivePairs' vocabulary.
-   *
-   * Pulled out so the ENTRY reading (pfLivePairs, below) and the EXIT reading
-   * (pairFluxExitOverride, further down) are guaranteed to agree on what "the deviation" means —
-   * two places deriving the same ternary independently is exactly how the entry side and the exit
-   * side end up reading two different units without anyone changing either one on purpose.
-   */
-  const pairFluxUnit: LivePairUnit = devUnit === "sigma" ? "sigma"
-    : devUnit === "alpha" ? "alpha"
-    : devUnit === "gamma" ? "gamma"
-    : "pct";
-
-  /** The pairs that are APART right now, read exactly as the Sonar reads them. */
-  const pfLivePairs = useMemo(() => computeLivePairs({
-    pairs: pfPairs,
-    quoteByTicker: buildQuoteIndex(pfQuotableSignals),
-    unit: pairFluxUnit,
-    minStr: String(startAbs),
-    maxStr: startAbsMax ?? "",
-    exitStr: String(endAbs),
-    corrRange: [minCorr, maxCorr],
-    betaRange: [minBeta, maxBeta],
-    sigmaRange: [minSigma, maxSigma],
-    alphaRange: [minAlpha, maxAlpha],
-    // MINRATE / MINTOTAL, read on the PAIR for this class — the same floor the replay applies.
-    minRate: streamRatingRule.minRate,
-    minTotal: streamRatingRule.minTotal,
-  }), [pfPairs, pfQuotableSignals, pairFluxUnit, startAbs, startAbsMax, endAbs,
-       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
-       streamRatingRule.minRate, streamRatingRule.minTotal]);
-
-  /**
-   * The published universe, keyed by pair identity rather than by either leg — so an OPEN
-   * position can find its own pair's beta/sigma/alpha/gamma even after that pair has converged
-   * out of pfLivePairs (see pairExitDeviation). pfPairs already carries the full class, not the
-   * live-only subset, so nothing here depends on the pair still being enterable.
-   */
-  const pfPairsByKey = useMemo(() => {
-    const m = new Map<string, PairFluxRow>();
-    for (const row of pfPairs) m.set(pairKeyOf(row.ticker, row.partner), row);
-    return m;
-  }, [pfPairs]);
-
-  /**
-   * Quotes for EVERY published leg, unfiltered by the toolbar's own ranges.
-   *
-   * pfQuotableSignals (above) is deliberately narrowed by the client filter chain — that is
-   * correct for deciding what may be ENTERED. An open position must keep reporting its exit level
-   * regardless of a filter change made after it opened; reading the toolbar-filtered set here
-   * would silently stop pricing the exit the moment a leg fell outside a range the user only meant
-   * to apply to new entries.
-   */
-  const pfQuoteIndexAll = useMemo(() => buildQuoteIndex(pfSignals), [pfSignals]);
-
-  /**
-   * The strategy's own EXIT reading for an already-open position — see syncStreamPositions'
-   * exitOverride and pairExitDeviation's own doc for why this cannot reuse the entry-side
-   * decisionMap. Returns null (falls back to the engine's own defaults) for a position with no
-   * pairKey, a pair the published universe no longer carries, or a leg with no live quote.
-   */
-  const pairFluxExitOverride = useCallback(
-    (position: StreamPosition): number | null => {
-      if (!position.pairKey) return null;
-      const pair = pfPairsByKey.get(position.pairKey);
-      if (!pair) return null;
-      const reading = pairExitDeviation(pair, pfQuoteIndexAll, pairFluxUnit, position.ticker, position.side);
-      return reading?.signed ?? null;
-    },
-    [pfPairsByKey, pfQuoteIndexAll, pairFluxUnit],
-  );
-
-  /**
-   * BOTH LEGS, ONE EVENT. The ahead leg is approved to be SOLD and the lagging leg to be BOUGHT,
-   * so one diverged pair yields two approvals — and because the engine is per-ticker, two
-   * decisions and two order intents. That is the two orders the desk actually has to send.
-   */
-  const pfGateMap = useMemo(() => buildPairFluxGateMap(pfLivePairs), [pfLivePairs]);
-  const pairFluxStreamGate = useCallback(
-    (signal: any) => matchPairFluxGate(pfGateMap, signal?.ticker),
-    [pfGateMap],
-  );
-
-  /**
-   * One row per PAIR, not per ticker.
-   *
-   * A ticker diverged from three partners is three trades, and the engine used to be able to hold
-   * only one of them: a row was a ticker. Expanding here gives each pair its own row, and the
-   * engine keys decisions, latches, positions and dispatch by (ticker, pairKey) from there on, so
-   * the three situations open, add and close independently.
-   */
-  const pairFluxSignalExpand = useCallback(
-    (signal: any) => expandPairFluxSignal(pfGateMap, signal),
-    [pfGateMap],
-  );
-
-  /**
-   * What the SIGNALS table shows for a pair leg.
-   *
-   * Without this the row kept Arbitrage's numbers: the BENCH column showed the leg's benchmark
-   * ETF rather than the ticker it is actually paired against, and SIGNAL showed a per-ticker
-   * sigma this strategy never gates on. Worse, a leg with no such sigma was dropped outright —
-   * so a pair could reach the table with only one of its two orders.
-   *
-   * The reading is signed the way the trade is: the leg being SOLD carries a positive deviation,
-   * the leg being BOUGHT a negative one, so the sign and the side agree at a glance.
-   *
-   * ONE SITUATION, CHECKED ONCE. Both legs return the same `pairKey`, so the engine gives the pair
-   * a single verdict instead of judging each leg on its own book — GFI and HMY carried the same
-   * 0.83 deviation and different net edges (0.690 vs 0.780) purely because their spreads differ,
-   * which is enough to arm one leg and block the other.
-   *
-   * And the edge is handed over rather than derived. The generic rule is |signal| - spread, but
-   * `measure` is in whatever unit the toolbar selected and `spread` is in dollars; in sigma or
-   * alpha mode that subtraction has no meaning. `toExit` is what the trade banks reaching the exit
-   * level, in pp, already net of crossing both books — the same quantity for both legs, because it
-   * belongs to the pair.
-   */
-  const pairFluxDecisionOverride = useCallback(
-    (signal: any, side: "Long" | "Short") => {
-      // The ROW says which pair it is, not the ticker — a ticker is a leg of as many pairs as it
-      // has diverged from, and the expansion gave each of them its own row. Falling back to the
-      // widest leg only covers a row that reached here without being expanded.
-      const legs = pairFluxLegsFor(pfGateMap, signal?.ticker);
-      if (legs.length === 0) return null;
-      const wanted = String(signal?.pairKey ?? "");
-      const hit = (wanted ? legs.find((l) => l.pairKey === wanted) : null) ?? legs[0];
-      return {
-        signal: side === "Short" ? hit.measure : -hit.measure,
-        benchmark: hit.partner,
-        pairKey: hit.pairKey,
-        netEdge: hit.toExit,
-      };
-    },
-    [pfGateMap],
-  );
-
   const {
     streamEntryReadyCount,
     streamAutoEnabled,
@@ -2963,85 +2535,17 @@ export default function PairFluxScanner({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
-    streamDispatchOwner,
-    streamDispatchState,
-    streamDispatchOwnerClientId,
-    takeDispatchOwnership,
   } = useStreamEngine({
-    signalGate: pairFluxStreamGate,
-    decisionOverride: pairFluxDecisionOverride,
-    signalExpand: pairFluxSignalExpand,
-    exitOverride: pairFluxExitOverride,
-    // The universe must arrive whole: a pair needs BOTH legs, and the server's own candidate set
-    // is built from a per-ticker sigma rule this strategy does not use.
-    // corr/beta/sigma are PAIR statistics here, and computeLivePairs already applies the
-    // toolbar's ranges to the pair's own values — see omitTickerRanges.
-    signalsRequest: { cls: session.toLowerCase(), omitStartAbs: true, includeAll: true, omitTickerRanges: true, omitTickerRating: true },
+    // This page only DRAWS: the bridge screens the candidates and makes every decision, so
+    // nothing about filters, gates or signal metrics is passed to the engine any more.
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
-    trackedSignalsEnabled: streamTrackedSignalsEnabled,
     initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
     signalClass: streamSignalClass,
-    ruleBand,
-    ratingType,
-    metric,
-    ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
-    startAbs,
-    startAbsMax: optNumOrNull(startAbsMax),
-    endAbs,
-    closeMode,
-    minHoldCandles,
-    ratingMode,
-    session,
-    // Also not passed: these are the ticker's own Arbitrage session rating, and MINRATE / MINTOTAL
-    // on this toolbar mean the PAIR's rate and total — computeLivePairs applies them there.
-    // `omitTickerRating` below already zeroes them in the URL; withholding them here means there is
-    // no per-ticker rating anywhere in the stream's inputs to be picked up by accident.
-    /**
-     * The APPLY box restricts the feed only while APPLY is the list mode — the scanner's rule
-     * (requestScopedTickers). It was sent whenever the box held any text, so names left in it after
-     * switching to IGN or off still narrowed the stream to that handful while the scanner read the
-     * whole universe. And a pair needs both legs in the feed, so this cut pairs, not just tickers.
-     *
-     * Outside APPLY, this used to fall through to `undefined` — the engine's OWN internal signal
-     * feed asking for the entire published universe on every tick, same as pfSignalsUrl above did
-     * before pfPairTickersCsv. Same fix, same reasoning: narrow to legs that can still be part of a
-     * pair clearing the rating floor, not the whole universe.
-     */
-    tickersCsv: listMode === "apply" ? (splitListUpper(tickersText).join(",") || undefined) : pfPairTickersCsv,
-    // NOT PASSED, DELIBERATELY. These six are the engine's PER-TICKER corr / beta / sigma bounds,
-    // meaning a stock against its benchmark ETF. On this strategy the same four boxes hold the
-    // PAIR's own statistics, and computeLivePairs already applies them there — see corrRange /
-    // betaRange / sigmaRange / alphaRange on the live pair build.
-    //
-    // `omitTickerRanges` on signalsRequest below already stopped them reaching the server, so this
-    // is not a second fix: it removes the values from the stream's world entirely, so there is
-    // nothing left that could be read per ticker by a later edit.
-    sideFilter: sideFilter || undefined,
-    filterConfig: streamFilterConfig,
-    exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
-    maxSpreadValue: maxSpread,
     automationConfig: effectiveStreamAutomationConfig,
-    activeScannerTickers: activeRows.map((r) => ({
-      ticker: r.ticker,
-      side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-    })),
-    onFetchActiveTickers: async () => {
-      const params = buildGetParams(dateNy);
-      const qs = buildPaperQuery(params);
-      const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
-      const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
-      return rows.map((r) => ({
-        ticker: r.ticker,
-        side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-      }));
-    },
     onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
-  // See pfDispatchStateRef's declaration above, near the pfSignals SSE subscription: assigned here
-  // rather than there because streamDispatchState only exists after this call.
-  pfDispatchStateRef.current = streamDispatchState;
   const streamInstance = useStreamInstance();
   const filterPassLogStore = useStreamStores().filterPassLog;
   const streamSignalMeta = useStreamSignalMeta();
@@ -3303,8 +2807,8 @@ export default function PairFluxScanner({
       maxRoundLot: rangeValueOrNull("roundlot", maxRoundLot),
       minVWAP: rangeValueOrNull("vwap", minVWAP),
       maxVWAP: rangeValueOrNull("vwap", maxVWAP),
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minLstPrcL: rangeValueOrNull("lstprcl", minLstPrcL),
       maxLstPrcL: rangeValueOrNull("lstprcl", maxLstPrcL),
       minLstCls: rangeValueOrNull("lstcls", minLstCls),
@@ -3491,8 +2995,8 @@ export default function PairFluxScanner({
       minPreMktVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
       maxPreMktVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
 
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minSpreadBps: optNumOrNull(minSpreadBps),
       maxSpreadBps: optNumOrNull(maxSpreadBps),
 
@@ -4455,7 +3959,9 @@ export default function PairFluxScanner({
     // Deliberately NOT the server's HasReport boolean: the tape collapses the marker to "any
     // marker means yes", discarding the date and release time the rule is built on.
     if (requireHasReport || excludeHasReport) {
-      const affectsSession = rowReportAffectsSession(row, reportSessionForRow(row));
+      const affectsSession = rowReportClassification(row, reportSessionForRow(row));
+      // No report marker at all is unknown, and unknown is rejected whichever way the toggle is set.
+      if (affectsSession == null) return false;
       if (excludeHasReport && affectsSession) return false;
       if (requireHasReport && !affectsSession) return false;
     }
@@ -5929,6 +5435,7 @@ export default function PairFluxScanner({
           navStreamHref={navStreamHref}
           navScannerHref={navScannerHref}
           navSonarHref={navSonarHref}
+          navScoutHref={navScoutHref}
           primaryPanel={primaryPanel}
           listMode={listMode}
           ignCount={ignCount}
@@ -7118,13 +6625,6 @@ export default function PairFluxScanner({
         </div>
 
         {/* CONTENT */}
-        {primaryPanel === "stream" && !streamDispatchOwner && (
-          <DispatchOwnerBanner
-            state={streamDispatchState}
-            ownerClientId={streamDispatchOwnerClientId}
-            onTakeOwnership={takeDispatchOwnership}
-          />
-        )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView
             tab={tab}

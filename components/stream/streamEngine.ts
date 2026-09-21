@@ -1,31 +1,34 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+/**
+ * The browser side of a Stream: it DRAWS what the bridge says, and holds the operator's manual
+ * controls. It screens nothing, decides nothing and sends nothing.
+ *
+ * Everything a Stream page lists is computed on the bridge, once, for every viewer:
+ *   - the candidate list (filters, each strategy's gate, spread/edge screen) — GET /api/stream/screen/{strategy};
+ *   - open positions and the recent orders — GET /api/stream/caesar/positions and /engine.
+ * Every entry, add and exit is decided and dispatched there too, once a minute, on the same
+ * start-of-minute readings the tape records.
+ *
+ * This file used to run its own copy of all of it in every open tab: a live SSE feed of thousands of
+ * rows re-parsed and re-filtered every second, per-strategy gates, decision rules, latches, position
+ * sync, an order queue and an arbiter registration. The copy was not harmless — the bridge stands
+ * down while any tab holds dispatch ownership — and it was the single biggest cost of leaving a
+ * Stream page open.
+ *
+ * What is left is timers that fetch three small JSON documents while the page is visible, plus the
+ * operator's controls: bind windows, book reading, panic, start/stop, the queue, manual orders.
+ */
+
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
-import { applyArbitrageFilters } from "../../lib/filters/arbitrageFilterEngine";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { applyExactSonarClientFilters, type SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
-import { normalizeSignal, type ArbitrageSignal } from "@/lib/signals/signal";
-import { buildSignalsStreamUrl } from "@/lib/signals/url";
-import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { streamExecutionStore } from "./streamExecutionStore";
 import { useStreamInstance, type StreamInstance } from "./streamInstance";
 import { connectStreamOcrFeed } from "./streamOcrFeed";
-import { streamBookStore, resetStreamOcrStores } from "./streamOcrStores";
-import { type StreamLogEvent } from "./streamLogStore";
+import { resetStreamOcrStores } from "./streamOcrStores";
 import { getStreamStores } from "./streamStoreRegistry";
 import { acquireSharedStreamStores, releaseSharedStreamStores, hasOtherSharedStreamUsers } from "./streamSharedStores";
-import { subscribeToStreamSse } from "./streamSseHub";
-import { startStreamTicker } from "./streamTicker";
-import {
-  acquireStreamTicker,
-  fetchServerEngineShadowMode,
-  heartbeatStreamStrategy,
-  registerStreamStrategy,
-  releaseAllStreamTickers,
-  releaseStreamTicker,
-} from "./streamStrategyClient";
-import { tapeClient } from "../../lib/tapeClient";
 
 export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -168,16 +171,6 @@ function legIdentityOf(row: { ticker: string; pairKey?: string | null }): string
   return row.pairKey ? `${row.ticker}|${row.pairKey}` : row.ticker;
 }
 
-function isEntryOrderIntent(intent: StreamOrderIntentType | null | undefined): boolean {
-  return intent === "ENTER_LONG_AGGRESSIVE" || intent === "ENTER_SHORT_AGGRESSIVE";
-}
-
-function isExitOrderIntent(intent: StreamOrderIntentType | null | undefined): boolean {
-  return intent === "EXIT_LONG_AGGRESSIVE" ||
-    intent === "EXIT_SHORT_AGGRESSIVE" ||
-    intent === "EXIT_LONG_PRINT" ||
-    intent === "EXIT_SHORT_PRINT";
-}
 
 export type TradingAppExecutionStep = {
   step: string;
@@ -330,18 +323,6 @@ export type StreamAutomationConfig = {
   preStartTime: string;
 };
 
-type StreamSignalLatch = {
-  ticker: string;
-  /** The situation this latch belongs to; null for single-ticker strategies. See legIdentityOf. */
-  pairKey?: string | null;
-  benchmark: string;
-  side: "Long" | "Short";
-  qualifiedSince: number;
-  lastSeenAt: number;
-  bounceCount: number;    // how many signal drop/recovery cycles happened (ремонт count)
-  latchOrigin: string;   // "new" | "hist" | "primed" | "cont"
-};
-
 type StreamMinMax = {
   min?: number;
   max?: number;
@@ -423,23 +404,6 @@ function toNum(value: unknown): number | null {
   return null;
 }
 
-function toBool(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1 ? true : value === 0 ? false : null;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return null;
-    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
-    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
-  }
-  return null;
-}
-
-function sameNullableNumber(a: number | null | undefined, b: number | null | undefined): boolean {
-  if (a == null && b == null) return true;
-  return a === b;
-}
-
 export function parseTimeToMinutes(value: string | undefined, fallbackMinutes: number): number {
   if (!value) return fallbackMinutes;
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
@@ -474,155 +438,8 @@ export function currentMinutesLocal(): number {
   return nyMinutesAt(Date.now());
 }
 
-// NY calendar date (yyyy-MM-dd), independent of the browser's own timezone/locale — unlike
-// localDayKey() (browser-local calendar day), this matches the "dateNy" convention Scanner's
-// TapeArbitrageEngine uses to key its sigma-range sidecar file. dayOffset=-1 gets yesterday's
-// NY date (shift by a full 24h of wall time before formatting so DST transitions on the
-// shifted day are still handled correctly by the timeZone formatter).
-function nyDateKeyAt(timestamp: number, dayOffset = 0): string {
-  try {
-    const base = new Date(timestamp + dayOffset * 86_400_000);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(base);
-    const yyyy = parts.find((part) => part.type === "year")?.value;
-    const mm = parts.find((part) => part.type === "month")?.value;
-    const dd = parts.find((part) => part.type === "day")?.value;
-    if (yyyy && mm && dd) return `${yyyy}-${mm}-${dd}`;
-  } catch {
-    // Fallback below.
-  }
-  return localDayKey(timestamp + dayOffset * 86_400_000);
-}
-
-function currentNyDateKey(dayOffset = 0): string {
-  return nyDateKeyAt(Date.now(), dayOffset);
-}
-
-// The action-log "day" a moment belongs to, anchored to the session's own START time (e.g.
-// 21:00) instead of calendar midnight — so an overnight session (21:00 -> 09:00 next day) is
-// one continuous "trading day" that only resets at the next START, not at midnight partway
-// through. Before START is configured (sessionStartMinutes == null), falls back to the plain
-// NY calendar date. nowMinutes before sessionStartMinutes means we're still in the tail of the
-// session that started YESTERDAY (NY date), so it gets yesterday's date; at/after START, today's.
-export function tradingDayKeyAt(sessionStartMinutes: number | null, timestamp: number): string {
-  if (sessionStartMinutes == null) return nyDateKeyAt(timestamp);
-  return nyMinutesAt(timestamp) < sessionStartMinutes
-    ? nyDateKeyAt(timestamp, -1)
-    : nyDateKeyAt(timestamp);
-}
-
-function currentTradingDayKey(sessionStartMinutes: number | null): string {
-  return tradingDayKeyAt(sessionStartMinutes, Date.now());
-}
-
-// Temporary diagnostic for the "START=21:00 doesn't dispatch" investigation — logs at most
-// once per (minute, tag, ticker) so it doesn't flood the console on every poll tick. Safe to
-// delete once the entry-gating root cause is confirmed.
-const __streamGateLogSeen = new Set<string>();
-function logStreamGateBlock(tag: string, details: Record<string, unknown>): void {
-  const key = `${Math.floor(Date.now() / 60_000)}|${tag}|${details.ticker ?? ""}`;
-  if (__streamGateLogSeen.has(key)) return;
-  __streamGateLogSeen.add(key);
-  if (__streamGateLogSeen.size > 2000) __streamGateLogSeen.clear();
-  // eslint-disable-next-line no-console
-  console.debug(`[stream-gate-debug] ${tag}`, details);
-}
-
-function intentId(parts: Array<string | number>): string {
-  return parts.join("|");
-}
-
-
-function signalAbs(row: ArbitrageSignal | null | undefined): number | null {
-  if (!row) return null;
-  const raw = toNum(row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS ?? row.sig);
-  return raw == null ? null : Math.abs(raw);
-}
-
-function signalSigned(row: ArbitrageSignal | null | undefined): number | null {
-  if (!row) return null;
-  return toNum(row.zapLsigma ?? row.zapSsigma ?? row.zapL ?? row.zapS ?? row.sig);
-}
-
-function numPositionBp(row: ArbitrageSignal | null | undefined): number | null {
-  if (!row) return null;
-  const anyRow = row as any;
-  return toNum(
-    anyRow?.PositionBp ??
-      anyRow?.positionBp ??
-      anyRow?.position_bp ??
-      anyRow?.posBp ??
-      anyRow?.PosBp ??
-      anyRow?.meta?.PositionBp ??
-      anyRow?.meta?.positionBp ??
-      anyRow?.meta?.position_bp ??
-      anyRow?.meta?.posBp ??
-      anyRow?.meta?.PosBp ??
-      anyRow?.positionBpAbs ??
-      anyRow?.PositionBpAbs ??
-      anyRow?.meta?.positionBpAbs ??
-      anyRow?.meta?.PositionBpAbs
-  );
-}
-
-function isActiveByPositionBp(row: ArbitrageSignal | null | undefined): boolean {
-  if (!row) return false;
-  const bp = numPositionBp(row);
-  // Stream engine uses strict position activity: only PositionBp != 0 means active.
-  return bp != null && bp !== 0;
-}
-
-// Report is a display passthrough — the value shape varies ("NO", "10/08 BMO", "10080700"), so
-// it is deliberately NOT parsed here; the column shows exactly what the feed sent.
-function signalReport(row: ArbitrageSignal | null | undefined): string | null {
-  if (!row) return null;
-  const raw = (row as any).Report ?? (row as any).report ?? (row as any).meta?.Report ?? (row as any).meta?.report;
-  const text = String(raw ?? "").trim();
-  return text ? text : null;
-}
-
-function signalSpread(row: ArbitrageSignal | null | undefined): number | null {
-  if (!row) return null;
-  return toNum(row.Spread ?? row.spread);
-}
-
-function signalSpreadBidPct(row: ArbitrageSignal | null | undefined): number | null {
-  if (!row) return null;
-  return toNum(
-    (row as any)["SpreadBid%"] ??
-    (row as any).spreadBidPct ??
-    (row as any).SpreadBidPct ??
-    (row as any).Spread ??
-    (row as any).spread
-  );
-}
-
-// Every session class (GLOB/BLUE/PRE/ARK/PRINT/OPEN/INTRA/POST) is now gated purely by the
-// user's own START/CUTOFF fields — no more built-in per-class time restriction. signalClass
-// is kept as a parameter for call-site compatibility only.
-function hasStrategyEntryCutoff(_signalClass: string | undefined): boolean {
-  return true;
-}
-
-// Floor for new entries, mirrors Scanner's TapeArbClasses explicit-start override — same
-// user-configured "START" field for every class, PRE included.
-//
-// PRE used to be excluded here (returning null) and gated instead by its own hard 21:00-09:30
-// window. That contradicted the design the backend already states outright in TapeArbClasses:
-// class names "carry no built-in time restriction ... they only drive rating bands ... actual
-// start/stop control is entirely via the caller's own explicit start/cutoff". PRE's own
-// From/To on the backend is the cross-midnight range of tape DATA it loads, not a trading gate.
-// Keeping it as a gate here made PRE silently ignore any START outside 21:00-09:30 (the value
-// isn't even representable on PRE's relative axis, so it fell back to 21:00 without a word).
-// signalClass is now purely a ratings selector, exactly like every other class.
-function getStrategySessionStartMinutes(signalClass: string | undefined, startTime: string | undefined): number | null {
-  if (startTime == null) return null;
-  return parseTimeToMinutes(startTime, 0);
-}
+const PRE_SESSION_START_MINUTES = 21 * 60; // 1260 (21:00)
+const PRE_SESSION_END_MINUTES = 9 * 60 + 30; // 570 (09:30, next-day continuation)
 
 // Maps a wall-clock minute-of-day onto PRE's own axis (mirrors Scanner's
 // TapeArbClasses.ResolvePrePhysical convention): negative for the 21:00-23:59 evening portion,
@@ -656,674 +473,6 @@ export function isPastSessionCutoff(
     return nowMinutes < wrapStartMinutes && nowMinutes >= cutoffMinutes;
   }
   return nowMinutes >= cutoffMinutes;
-}
-
-// Wrap-aware counterpart to the plain "nowMinutes < startMinutes" floor check: for a WRAPPING
-// window (startMinutes > cutoffMinutes, e.g. START=23:00/CUTOFF=09:00 next day), the session is
-// still considered started during the early-morning tail (nowMinutes < cutoffMinutes) even
-// though nowMinutes has wrapped back to a small number — only the dead zone strictly between
-// today's cutoff and tonight's start (cutoffMinutes <= nowMinutes < startMinutes) counts as
-// "before start". For a same-day window (startMinutes <= cutoffMinutes), this is the original
-// plain comparison.
-function isBeforeSessionStart(nowMinutes: number, startMinutes: number, cutoffMinutes: number | null): boolean {
-  if (cutoffMinutes == null || startMinutes <= cutoffMinutes) {
-    return nowMinutes < startMinutes;
-  }
-  return nowMinutes >= cutoffMinutes && nowMinutes < startMinutes;
-}
-
-const PRE_SESSION_START_MINUTES = 21 * 60; // 1260 (21:00)
-const PRE_SESSION_END_MINUTES = 9 * 60 + 30; // 570 (09:30, next-day continuation)
-
-function normalizeLiveSnapshotItems(rawItems: any[]): ArbitrageSignal[] {
-  return rawItems
-    .map((item) => {
-      if (!item) return null;
-      const ticker = String(item?.ticker ?? item?.Ticker ?? "").trim().toUpperCase();
-      if (!ticker) return null;
-      const fields = item?.fields ?? item?.Fields ?? {};
-      const positionBp = toNum(
-        fields?.PositionBp ??
-        fields?.positionBp ??
-        fields?.position_bp ??
-        fields?.posBp ??
-        fields?.PosBp
-      );
-      const fallbackDirection =
-        positionBp == null || positionBp === 0
-          ? undefined
-          : positionBp > 0
-            ? "up"
-            : "down";
-      return normalizeSignal({
-        ...fields,
-        ticker,
-        Ticker: ticker,
-        benchmark: fields?.Benchmark ?? fields?.benchmark ?? fields?.bench ?? "UNKNOWN",
-        direction: fields?.direction ?? fallbackDirection,
-        meta: fields,
-      });
-    })
-    .filter(Boolean) as ArbitrageSignal[];
-}
-
-// Keyed by INSTANCE first, then signal class. Keying by class alone (the old behaviour) meant two
-// strategy instances configured for the same class — the normal case when scaling out, e.g. two
-// "global" strategies with different thresholds — shared one action log, so each one restored the
-// other's positions on load and treated them as its own to add to and close.
-function streamActionLogStorageKey(instanceId: string, signalClass: string | undefined): string {
-  const suffix = (signalClass ?? "global").trim().toLowerCase() || "global";
-  const scope = (instanceId ?? "").trim() || "stream.arbitrage";
-  return `${scope}.action-log.${suffix}`;
-}
-
-function localDayKey(timestamp = Date.now()): string {
-  const date = new Date(timestamp);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function dayKeyAgeInDays(dayKey: string, now = Date.now()): number {
-  const target = new Date(`${dayKey}T00:00:00`);
-  const current = new Date(`${localDayKey(now)}T00:00:00`);
-  return Math.floor((current.getTime() - target.getTime()) / 86_400_000);
-}
-
-function pruneStreamActionLog(entries: StreamActionLogEntry[], now = Date.now()): StreamActionLogEntry[] {
-  return entries
-    .filter((entry) => {
-      const age = dayKeyAgeInDays(entry.dayKey, now);
-      return age >= 0 && age < 3;
-    })
-    .sort((a, b) => a.at - b.at);
-}
-
-function readStreamActionLog(storageKey: string): StreamActionLogEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return pruneStreamActionLog(parsed
-      .map((item) => {
-        if (!item || typeof item !== "object") return null;
-        const row = item as Partial<StreamActionLogEntry>;
-        const ticker = String(row.ticker ?? "").trim().toUpperCase();
-        if (!ticker) return null;
-        return {
-          id: String(row.id ?? "").trim() || `${ticker}|${String(row.kind ?? "ENTRY").trim()}|${Math.max(0, Math.trunc(toNum(row.at) ?? Date.now()))}`,
-          dayKey: String(row.dayKey ?? localDayKey(toNum(row.at) ?? Date.now())).trim() || localDayKey(),
-          ticker,
-          benchmark: String(row.benchmark ?? "UNKNOWN").trim().toUpperCase() || "UNKNOWN",
-          side: row.side === "Short" ? "Short" : "Long",
-          kind: row.kind === "ADD" || row.kind === "CLOSE" ? row.kind : "ENTRY",
-          deviation: toNum(row.deviation),
-          at: Math.max(0, Math.trunc(toNum(row.at) ?? Date.now())),
-          ...(typeof row.reason === "string" && row.reason ? { reason: row.reason } : {}),
-          intent:
-            row.intent === "ENTER_LONG_AGGRESSIVE" ||
-            row.intent === "ENTER_SHORT_AGGRESSIVE" ||
-            row.intent === "EXIT_LONG_AGGRESSIVE" ||
-            row.intent === "EXIT_SHORT_AGGRESSIVE" ||
-            row.intent === "EXIT_LONG_PRINT" ||
-            row.intent === "EXIT_SHORT_PRINT" ||
-            row.intent === "CLOSE_ALL_PRINT" ||
-            row.intent === "MANUAL"
-              ? row.intent
-              : "MANUAL",
-          ...(row.sequence != null ? { sequence: Math.trunc(Number(row.sequence)) } : {}),
-          ...(toNum(row.addThreshold) != null ? { addThreshold: toNum(row.addThreshold) } : {}),
-          ...(toNum(row.sinceLastMs) != null ? { sinceLastMs: toNum(row.sinceLastMs) } : {}),
-          ...(toNum(row.delayRequiredMs) != null ? { delayRequiredMs: toNum(row.delayRequiredMs) } : {}),
-          ...(toNum(row.holdMs) != null ? { holdMs: toNum(row.holdMs) } : {}),
-          ...(toNum(row.entryCount) != null ? { entryCount: toNum(row.entryCount) } : {}),
-          ...(typeof row.filtersOk === "string" && row.filtersOk ? { filtersOk: row.filtersOk } : {}),
-        } satisfies StreamActionLogEntry;
-      })
-      .filter((row): row is StreamActionLogEntry => row !== null), Date.now());
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Reads every persisted action-log class for one stream instance. Caesar uses this after a segment
- * has unmounted its browser engine, when the registry store no longer has that strategy's rows.
- */
-export function readPersistedStreamActionLog(instanceId: string): StreamActionLogEntry[] {
-  if (typeof window === "undefined") return [];
-  const scope = (instanceId ?? "").trim() || "stream.arbitrage";
-  const prefix = `${scope}.action-log.`;
-  const entries: StreamActionLogEntry[] = [];
-  try {
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-      if (key?.startsWith(prefix)) entries.push(...readStreamActionLog(key));
-    }
-  } catch {
-    // Storage can be unavailable in privacy-restricted browser contexts.
-  }
-  return entries;
-}
-
-function buildStreamPositionsFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): StreamPosition[] {
-  // NOT filtered to entry.dayKey === dayKey: a position opened before midnight in a
-  // forward-wrapping session (e.g. START=21:00) is still legitimately open once the calendar
-  // date rolls over, but its action-log entry keeps YESTERDAY's dayKey. Filtering to today's
-  // dayKey exactly used to silently drop it from "open positions" the instant the date changed
-  // — entryDispatchedAt/loggedOpenTickers then never matched it again, so it got stuck showing
-  // "awaiting execution confirmation" forever and never became ADD-eligible. `entries` is
-  // already pruned to <3 calendar days by pruneStreamActionLog, so replaying all of it
-  // chronologically (oldest first) is safe: a ticker's last event (ENTRY/ADD vs CLOSE) still
-  // correctly determines whether it's open, regardless of which day that event happened on.
-  const chronological = entries.slice().sort((a, b) => a.at - b.at);
-  const openByTicker = new Map<string, StreamPosition>();
-
-  for (const entry of chronological) {
-    if (entry.kind === "CLOSE") {
-      openByTicker.delete(logLegId(entry));
-      continue;
-    }
-
-    const existing = openByTicker.get(logLegId(entry));
-    if (!existing) {
-      openByTicker.set(logLegId(entry), {
-        ticker: entry.ticker,
-        pairKey: entry.pairKey ?? null,
-        benchmark: entry.benchmark,
-        side: entry.side,
-        entrySignal: entry.deviation,
-        lastSignal: entry.deviation,
-        lastScaleSignal: entry.deviation,
-        belowThresholdTicks: 0,
-        spread: null,
-        spreadBidPct: null,
-        status: "OPEN",
-        reason: entry.kind === "ADD" ? "restored add from action log" : "restored entry from action log",
-        entryCount: entry.kind === "ADD" ? 2 : 1,
-        lockedForPrint: false,
-        pendingIntent: null,
-        entryDispatchedAt: entry.at,
-        lastDispatchedAt: entry.at,
-        lastConfirmedActiveAt: entry.at,
-        lastAboveAddCapAt: null,
-        openedAt: entry.at,
-        updatedAt: entry.at,
-      });
-      continue;
-    }
-
-    const nextEntryCount = entry.kind === "ADD" ? existing.entryCount + 1 : existing.entryCount;
-    openByTicker.set(logLegId(entry), {
-      ...existing,
-      benchmark: entry.benchmark || existing.benchmark,
-      side: entry.side,
-      lastSignal: entry.deviation ?? existing.lastSignal,
-      lastScaleSignal: entry.kind === "ADD" ? (entry.deviation ?? existing.lastScaleSignal) : existing.lastScaleSignal,
-      reason: entry.kind === "ADD" ? "restored add from action log" : existing.reason,
-      entryCount: nextEntryCount,
-      entryDispatchedAt: existing.entryDispatchedAt ?? entry.at,
-      lastDispatchedAt: entry.at,
-      lastConfirmedActiveAt: entry.at,
-      updatedAt: entry.at,
-    });
-  }
-
-  return Array.from(openByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-function buildOpenTickersFromActionLog(entries: StreamActionLogEntry[], dayKey = localDayKey()): Set<string> {
-  return new Set(buildStreamPositionsFromActionLog(entries, dayKey).map((row) => row.ticker));
-}
-
-function hasExecutionDispatchConfirmation(
-  snapshot: TradingAppExecutionSnapshot | null | undefined,
-  intentId: string,
-  entries: StreamActionLogEntry[] = [],
-): boolean {
-  if (!snapshot || !intentId) return false;
-  const matchesIntent = (item: TradingAppQueueItem | null | undefined) =>
-    item != null &&
-    item.intentId === intentId &&
-    (item.status === "Sent" || item.status === "Completed");
-
-  if (matchesIntent(snapshot.current ?? null)) {
-    return true;
-  }
-
-  if (snapshot.queue.some(matchesIntent) || snapshot.history.some(matchesIntent)) {
-    return true;
-  }
-
-  if (!entries.length) return false;
-
-  const fallbackMatch = (item: TradingAppQueueItem | null | undefined) =>
-    item != null &&
-    queueItemMatchesPendingActionLogEntry(item, entries[0]);
-
-  return fallbackMatch(snapshot.current ?? null) ||
-    snapshot.queue.some(fallbackMatch) ||
-    snapshot.history.some(fallbackMatch);
-}
-
-function mapActionLogIntentToExecutionType(intent: StreamActionLogEntry["intent"]): TradingAppQueueItem["type"] | null {
-  switch (intent) {
-    case "ENTER_LONG_AGGRESSIVE":
-      return "EnterLongAggressive";
-    case "ENTER_SHORT_AGGRESSIVE":
-      return "EnterShortAggressive";
-    case "EXIT_LONG_AGGRESSIVE":
-    case "EXIT_SHORT_AGGRESSIVE":
-      return "ExitActive";
-    case "EXIT_LONG_PRINT":
-    case "EXIT_SHORT_PRINT":
-    case "CLOSE_ALL_PRINT":
-      return "ExitPrint";
-    default:
-      return null;
-  }
-}
-
-function queueItemMatchesPendingActionLogEntry(
-  item: TradingAppQueueItem,
-  entry: StreamActionLogEntry | undefined,
-): boolean {
-  if (!entry) return false;
-  if (item.status !== "Sent" && item.status !== "Completed") return false;
-  if (item.ticker !== entry.ticker) return false;
-
-  const expectedType = mapActionLogIntentToExecutionType(entry.intent);
-  if (expectedType && item.type !== expectedType) return false;
-
-  const itemTimestamp = Date.parse(item.finishedAtUtc ?? item.startedAtUtc ?? item.createdAtUtc);
-  if (!Number.isFinite(itemTimestamp)) return false;
-
-  // Allow a small backward window because the local log entry is created
-  // immediately after enqueue, while backend timestamps are captured inside
-  // the queue worker lifecycle.
-  return itemTimestamp >= entry.at - 60_000;
-}
-
-function normalizeConfirmedActionLogReason(entry: StreamActionLogEntry): string | undefined {
-  const reason = entry.reason?.trim();
-  if (
-    reason &&
-    reason !== "awaiting entry dispatch" &&
-    reason !== "order queued | waiting for execution confirmation" &&
-    reason !== "order dispatched | awaiting execution confirmation"
-  ) {
-    return reason;
-  }
-
-  if (entry.kind === "CLOSE") {
-    return "execution confirmed";
-  }
-  if (entry.kind === "ADD") {
-    return "add confirmed";
-  }
-  return "entry confirmed";
-}
-
-function normalizeConfirmedActionLogEntries(entries: StreamActionLogEntry[]): StreamActionLogEntry[] {
-  return entries.map((entry) => ({
-    ...entry,
-    reason: normalizeConfirmedActionLogReason(entry),
-  }));
-}
-
-/** The action log's own copy of legIdentityOf — an entry is a ticker plus, maybe, a situation. */
-function logLegId(entry: { ticker: string; pairKey?: string | null }): string {
-  return entry.pairKey ? `${entry.ticker}|${entry.pairKey}` : entry.ticker;
-}
-
-// An action log records that we asked TradingApp to open a position; it is not proof that the
-// position still exists. Give a new order time to reach the account, then let the fresh account
-// book win so an old browser session cannot consume every entry slot forever.
-const ACCOUNT_FLAT_RECONCILIATION_GRACE_MS = 90_000;
-
-function mergeStreamPositionsWithActionLog(
-  prev: StreamPosition[],
-  entries: StreamActionLogEntry[],
-  dayKey = localDayKey(),
-  accountPositionBpByTicker: ReadonlyMap<string, number> = new Map(),
-  accountBookIsAuthoritative = false,
-): StreamPosition[] {
-  const restored = buildStreamPositionsFromActionLog(entries, dayKey);
-  const restoredByTicker = new Map(restored.map((row) => [legIdentityOf(row), row]));
-  const prevByTicker = new Map(prev.map((row) => [legIdentityOf(row), row]));
-  const transient = prev.filter((row) =>
-    row.status !== "CLOSED" &&
-    row.entryDispatchedAt == null &&
-    isEntryOrderIntent(row.pendingIntent)
-  );
-  const transientByTicker = new Map(transient.map((row) => [legIdentityOf(row), row]));
-  const merged = new Map<string, StreamPosition>();
-
-  for (const [ticker, row] of restoredByTicker) {
-    if (
-      accountBookIsAuthoritative &&
-      (accountPositionBpByTicker.get(row.ticker) ?? 0) === 0 &&
-      Date.now() - row.openedAt >= ACCOUNT_FLAT_RECONCILIATION_GRACE_MS
-    ) {
-      continue;
-    }
-    const existing = prevByTicker.get(ticker) ?? null;
-    merged.set(ticker, existing ? {
-      ...row,
-      // Never regress entryCount below what the engine already pre-incremented.
-      // The log lags behind: engine pre-increments on trigger, log only confirms on execution.
-      // If we let the log overwrite with a lower count, the maxAdds guard can be bypassed.
-      entryCount: Math.max(existing.entryCount, row.entryCount),
-      spread: existing.spread ?? row.spread,
-      spreadBidPct: existing.spreadBidPct ?? row.spreadBidPct,
-      status: existing.status === "EXIT_BLOCKED" || existing.status === "PRINT_PENDING" ? existing.status : row.status,
-      reason: existing.reason || row.reason,
-      // Same lag as entryCount above: a pending ADD (ENTER_*_AGGRESSIVE on an already-open
-      // position) is only confirmed in the action log after dispatch completes. Clearing it
-      // here on every intervening tick — before dispatch even finishes — would drop the
-      // isEntryOrderIntent(pendingIntent) guard in the add-trigger check one tick later,
-      // letting addDelayPassed fall back to stale entryDispatchedAt (the ORIGINAL entry time,
-      // not the just-decided add) and pass immediately. Preserve entry intents same as exits.
-      pendingIntent: isExitOrderIntent(existing.pendingIntent) || isEntryOrderIntent(existing.pendingIntent)
-        ? existing.pendingIntent
-        : null,
-      lockedForPrint: existing.lockedForPrint,
-      lastSignal: existing.lastSignal ?? row.lastSignal,
-      // Same lag as entryCount/pendingIntent above: the action log only has the signal
-      // value from the LAST CONFIRMED add, not the one the engine just pre-incremented to
-      // in memory. Without preferring existing here, every merge (i.e. every poll tick
-      // before the just-fired add is confirmed) resets the grid's rebase point back to the
-      // prior add's — or the original entry's — signal, so the next trigger recomputes as
-      // if no add had happened, letting the SAME live deviation satisfy add after add
-      // instead of requiring genuine further movement past each new step.
-      lastScaleSignal: existing.lastScaleSignal ?? row.lastScaleSignal,
-      lastDispatchedAt: existing.lastDispatchedAt ?? row.lastDispatchedAt,
-      lastAboveAddCapAt: existing.lastAboveAddCapAt ?? row.lastAboveAddCapAt ?? null,
-      // Action log restores only confirmed ENTRY/ADD/CLOSE events and knows nothing about the
-      // in-flight minute being tracked for future ADD eligibility. Preserve the live engine's
-      // minute-close state across every merge; otherwise confirmedAdd*/addPeak* get reset to
-      // null on each poll and ACTIVE stays stuck on WAIT CONF forever.
-      addPeakMinuteIdx: existing.addPeakMinuteIdx ?? row.addPeakMinuteIdx ?? null,
-      addPeakAbs: existing.addPeakAbs ?? row.addPeakAbs ?? null,
-      addPeakSigned: existing.addPeakSigned ?? row.addPeakSigned ?? null,
-      confirmedAddAbs: existing.confirmedAddAbs ?? row.confirmedAddAbs ?? null,
-      confirmedAddSigned: existing.confirmedAddSigned ?? row.confirmedAddSigned ?? null,
-      pendingAddTrigger: existing.pendingAddTrigger ?? row.pendingAddTrigger ?? null,
-      // buildStreamPositionsFromActionLog always sets these to 0/null (the action log has no
-      // concept of "ticks below end threshold" — only confirmed ENTRY/ADD/CLOSE events). Without
-      // preferring existing here, this counter would reset to 0 on every merge (i.e. every poll
-      // tick), capping it at 0-1 forever and permanently disabling active-mode normalize-exit's
-      // MINHOLD-based exit confirmation window.
-      belowThresholdTicks: existing.belowThresholdTicks ?? row.belowThresholdTicks,
-      belowThresholdSinceMinuteIdx: existing.belowThresholdSinceMinuteIdx ?? row.belowThresholdSinceMinuteIdx ?? null,
-      updatedAt: Math.max(existing.updatedAt, row.updatedAt),
-    } : row);
-  }
-
-  for (const [ticker, row] of transientByTicker) {
-    if (!merged.has(ticker)) {
-      merged.set(ticker, row);
-    }
-  }
-
-  // Keep positions that have been dispatched but not yet confirmed in the action log.
-  // Without this they'd be dropped from positionsBaseline, fall out of `seen` in
-  // syncStreamPositions, and the latch would recreate them with a new openedAt →
-  // different intentId → duplicate dispatch.
-  for (const [ticker, row] of prevByTicker) {
-    const isConfirmedFlatOldPosition =
-      accountBookIsAuthoritative &&
-      (accountPositionBpByTicker.get(row.ticker) ?? 0) === 0 &&
-      Date.now() - row.openedAt >= ACCOUNT_FLAT_RECONCILIATION_GRACE_MS;
-    if (!merged.has(ticker) && !isConfirmedFlatOldPosition && row.status !== "CLOSED" && row.entryDispatchedAt != null) {
-      merged.set(ticker, row);
-    }
-  }
-
-  return Array.from(merged.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-function sameSignalList(a: ArbitrageSignal[], b: ArbitrageSignal[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-function sameDecisionRows(a: StreamDecisionRow[], b: StreamDecisionRow[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    const left = a[i];
-    const right = b[i];
-    if (
-      left.ticker !== right.ticker ||
-      left.benchmark !== right.benchmark ||
-      left.side !== right.side ||
-      left.signal !== right.signal ||
-      left.spread !== right.spread ||
-      left.netEdge !== right.netEdge ||
-      left.positionBp !== right.positionBp ||
-      left.status !== right.status ||
-      left.reason !== right.reason
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * A restarted browser has no action-log claim for positions that were already in the account.
- * PositionBp is the live account authority: restore such a ticker as OPEN before latches are
- * evaluated, so it cannot re-enter while its normal add/exit management remains available.
- */
-function hydrateLiveActivePositions(
-  prev: StreamPosition[],
-  decisions: readonly StreamDecisionRow[]
-): StreamPosition[] {
-  const knownTickers = new Set(
-    prev.filter((row) => row.status !== "CLOSED").map((row) => row.ticker.trim().toUpperCase())
-  );
-  const now = Date.now();
-  const restored: StreamPosition[] = [];
-
-  for (const decision of decisions) {
-    const ticker = decision.ticker.trim().toUpperCase();
-    if (!ticker || decision.positionBp == null || decision.positionBp === 0 || knownTickers.has(ticker)) continue;
-
-    restored.push({
-      ticker,
-      pairKey: decision.pairKey ?? null,
-      benchmark: decision.benchmark,
-      side: decision.positionBp > 0 ? "Long" : "Short",
-      entrySignal: decision.signal,
-      lastSignal: decision.signal,
-      lastScaleSignal: decision.signal,
-      spread: decision.spread,
-      spreadBidPct: decision.spreadBidPct,
-      status: "OPEN",
-      reason: "restored active account position (PositionBp != 0)",
-      entryCount: 1,
-      belowThresholdTicks: 0,
-      belowThresholdSinceMinuteIdx: null,
-      lockedForPrint: false,
-      pendingIntent: null,
-      entryDispatchedAt: now,
-      lastDispatchedAt: now,
-      lastConfirmedActiveAt: now,
-      lastAboveAddCapAt: null,
-      openedAt: now,
-      updatedAt: now,
-      addPeakMinuteIdx: null,
-      addPeakAbs: null,
-      addPeakSigned: null,
-      confirmedAddAbs: null,
-      confirmedAddSigned: null,
-      pendingAddTrigger: null,
-    });
-    knownTickers.add(ticker);
-  }
-
-  return restored.length === 0 ? prev : [...prev, ...restored].sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-function syncStreamSignalLatches(
-  prev: StreamSignalLatch[],
-  decisions: StreamDecisionRow[],
-  autoEnabled: boolean,
-  automationConfig?: StreamAutomationConfig,
-  entryCutoffEnabled = true,
-  sessionStartMinutes: number | null = null,
-  primeImmediately = false,
-  latchHistory?: ReadonlyMap<string, { qualifiedSince: number; lastSeenAt: number }>,
-  primedTickers?: ReadonlySet<string>,
-  minuteQualifiedTickers?: ReadonlySet<string>,
-  windowExitedMinutes?: ReadonlyMap<string, number>
-): StreamSignalLatch[] {
-  if (!autoEnabled || !automationConfig?.strategyModeEnabled) {
-    logStreamGateBlock("latches:disabled", { autoEnabled, strategyModeEnabled: automationConfig?.strategyModeEnabled });
-    return [];
-  }
-
-  const now = Date.now();
-  const minHoldMinutes = Math.max(0, automationConfig.minHoldMinutes ?? 0);
-  const minHoldMs = minHoldMinutes * 60_000;
-  const nowMinuteIdx = Math.floor(now / 60_000);
-  const nowMinutes = currentMinutesLocal();
-  // Entries end at entryStopTime when it is set, otherwise at CUTOFF. The CLOSE hotkey always
-  // uses startCutoffTime — see StreamAutomationConfig.entryStopTime.
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig.entryStopTime ?? automationConfig.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
-    logStreamGateBlock("latches:pastEntryStop", { nowMinutes, entryStopMinutes: startCutoffMinutes, sessionStartMinutes });
-    return [];
-  }
-  // Session hasn't started yet (e.g. START=04:00, now 03:00) — automation can be toggled on
-  // early, it just waits here instead of creating any latches. Wrap-aware: if START (e.g. 23:00)
-  // is later than CUTOFF (e.g. 09:00 next day), a small nowMinutes after midnight still counts
-  // as "started" (continuing last evening's session), not "before start".
-  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
-    logStreamGateBlock("latches:beforeStart", { nowMinutes, sessionStartMinutes, startCutoffMinutes });
-    return [];
-  }
-
-  const prevMap = new Map(prev.map((row) => [legIdentityOf(row), row]));
-  const next: StreamSignalLatch[] = [];
-
-  for (const row of decisions) {
-    // Track all signal candidates (above startAbs threshold): ENTRY_READY,
-    // BLOCKED_SPREAD, and BLOCKED_EDGE. HOLD means below threshold — skip.
-    if (row.status === "HOLD") continue;
-    const legId = legIdentityOf(row);
-    const existing = prevMap.get(legId);
-    // Recover qualifiedSince from history if the latch briefly dropped (signal bounced
-    // below threshold for < 1 min). Without this, sub-minute noise resets the hold
-    // timer and the ticker never dispatches.
-    const historic = !existing ? latchHistory?.get(legId) : null;
-    // If this ticker was already active in SCANNER when STREAM started, pre-seed its
-    // qualifiedSince so it qualifies immediately (matching SCANNER candidate list).
-    const isPrimed = !existing && !historic && !!primedTickers?.has(`${row.ticker}|${row.side}`);
-    // Priming and minute-qualification are seeded from SCANNER rows, which have no pair — so they
-    // stay keyed by ticker and side. A primed ticker primes every situation it is a leg of, which
-    // is the intended reading: the ticker was already active when the stream started.
-    // For latches without a live predecessor (new or recovering from history): require the
-    // signal to have been above threshold at the last minute boundary. This mirrors tape
-    // behavior where a candle below threshold resets the consecutive streak — even a brief
-    // sub-minute bounce must not survive a minute boundary that showed the signal below.
-    if (!existing && !isPrimed) {
-      // Leg-keyed, because the minute accumulator that FILLS this set is leg-keyed. Reading it by
-      // ticker made the lookup miss every time on a paired strategy, so no latch was ever created
-      // and nothing could enter: ENTRY READY counted 10 while ENTRIES stayed 0.
-      const isMinuteQualified = minuteQualifiedTickers == null || minuteQualifiedTickers.has(`${legId}|${row.side}`);
-      if (!isMinuteQualified) {
-        logStreamGateBlock("latches:notMinuteQualified", {
-          ticker: row.ticker,
-          side: row.side,
-          status: row.status,
-          historic: Boolean(historic),
-          minuteQualifiedTickersSize: minuteQualifiedTickers?.size ?? null,
-        });
-        continue;
-      }
-    }
-    // qualifiedSince is aligned to minute boundaries so hold check (minute index
-    // arithmetic) gives integer-exact results matching tape candle counting.
-    //
-    // Scanner semantics:
-    // - minHold=0 => the first signal minute is the episode start minute.
-    // Stream semantics we want here:
-    // - if a signal first appears during minute T, it may dispatch only at the END of T
-    //   (i.e. once "now" reaches minute T+1) for minHold=0, and one additional full
-    //   minute later per +1 of minHold.
-    //
-    // This branch of the ternary below (completedSignalMinuteBoundary) is ONLY reached
-    // for a brand-new, non-primed latch that just passed the isMinuteQualified gate above
-    // — i.e. minuteQualifiedTickers (the FROZEN, fully-completed PREVIOUS minute's
-    // above-threshold set) already confirms the ticker was a candidate during minute T-1.
-    // That gate itself only starts passing once "now" has rolled into minute T (the minute
-    // after T-1), so by the time this code runs, nowMinuteIdx == T and the signal's true
-    // first-confirmed minute is T-1, not "now". Anchoring qualifiedSince to "now" here
-    // (instead of T-1) double-counts that gate's own 1-minute wait, pushing effective
-    // dispatch out to T+1 for minHold=0 instead of the intended T (== "now", the very
-    // minute the gate just confirmed) — a full extra minute of unintended delay stacked
-    // on top of hasCompletedStreamHoldWindow's own T -> T+1 wait.
-    const minuteAlignedNow = nowMinuteIdx * 60_000;
-    const completedSignalMinuteBoundary = minuteAlignedNow - 60_000;
-    const primedQualifiedSince = minuteAlignedNow - ((minHoldMinutes + 1) * 60_000);
-    // NOTE: this used to push qualifiedSince forward by a full extra minute whenever
-    // windowExitedMinutes recorded a bounce (dip + recovery) in this or the prior minute — a
-    // crude penalty from when isMinuteQualified above only checked a single instant. Now that
-    // isMinuteQualified requires ENTRY_HOLD_BEFORE_BOUNDARY_MS (10s) of genuinely continuous
-    // holding before the boundary (see aboveSinceRef), passing that gate already proves the
-    // bounce resolved in time — an EXTRA minute of delay on top would contradict the explicit
-    // requirement that "appeared, dropped, reappeared, held the last ~10s" dispatches at THIS
-    // boundary, not the next one. So a brand-new latch always anchors to the immediately
-    // preceding minute boundary, bounce or not.
-    const exitMinute = windowExitedMinutes?.get(legId);
-    const freshQualifiedSince = completedSignalMinuteBoundary;
-    // Track how many signal drop/recovery cycles this latch has seen.
-    // A bounce = latch was absent (signal below threshold) and just recovered,
-    // AND windowExitedMinutes recorded the exit → qualifiedSince pushed forward.
-    const hadBounce = !existing && exitMinute != null;
-    const prevBounceCount = existing?.bounceCount ?? 0;
-    const latchOrigin: string = existing ? "cont" : isPrimed ? "primed" : historic ? "hist" : "new";
-    const resolvedQualifiedSince = existing?.qualifiedSince
-      ?? historic?.qualifiedSince
-      ?? (isPrimed ? primedQualifiedSince : freshQualifiedSince);
-    next.push({
-      ticker: row.ticker,
-      pairKey: row.pairKey ?? null,
-      benchmark: row.benchmark,
-      side: row.side,
-      qualifiedSince: resolvedQualifiedSince,
-      lastSeenAt: now,
-      bounceCount: hadBounce ? prevBounceCount + 1 : prevBounceCount,
-      latchOrigin,
-    });
-  }
-
-  return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-export function parseStreamSpreadLimit(value: unknown): number | null {
-  return toNum(value);
-}
-
-function hasCompletedStreamHoldWindow(
-  qualifiedSinceMs: number,
-  nowMinuteIdx: number,
-  minHoldMinutes: number
-): boolean {
-  const qualifiedMinuteIdx = Math.floor(qualifiedSinceMs / 60_000);
-  // STREAM should only dispatch after the qualifying minute fully closes:
-  // minHold=0 => wait until the next minute boundary,
-  // minHold=1 => wait one additional full minute after that boundary, etc.
-  return nowMinuteIdx - qualifiedMinuteIdx > minHoldMinutes;
 }
 
 export function deriveStreamSignalClass(ruleBand: "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "PRINT" | "POST" | "GLOBAL"): string {
@@ -1380,1584 +529,124 @@ export function buildStreamFilterConfig(args: StreamFilterBuilderArgs): Arbitrag
   };
 }
 
-/** Gamma and alpha are the same percentage reading as ZapPct, divided by a per-ticker constant
- *  the bridge publishes with the signal. A ticker without that constant has no reading here. */
-/** The sonar filter snapshot names the reading, not the metric; they differ only in spelling. */
-function _zapModeForMetric(m: StreamDecisionMetric): "sigma" | "zap" | "gamma" | "alpha" {
-  if (m === "SigmaZap") return "sigma";
-  if (m === "GammaZap") return "gamma";
-  if (m === "AlphaZap") return "alpha";
-  return "zap";
-}
-
-export type StreamDecisionMetric = "SigmaZap" | "ZapPct" | "GammaZap" | "AlphaZap";
-
-export function computeStreamDecisionRows(
-  signals: ArbitrageSignal[],
-  maxSpreadValue: unknown,
-  automationConfig?: StreamAutomationConfig,
-  bookSnapshot?: MarketMakerBookSnapshot | null,
-  metric: StreamDecisionMetric = "SigmaZap",
-  decisionOverride?: StreamDecisionOverride
-): StreamDecisionRow[] {
-  const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
-  const canApplyBook = signals.length === 1 && (bookSnapshot?.bestBid != null || bookSnapshot?.bestAsk != null);
-
-  const rows = signals.flatMap((row) => {
-    const side: "Long" | "Short" = row.direction === "down" ? "Short" : "Long";
-    // The strategy's own reading, when it has one. See StreamDecisionOverride.
-    const override = decisionOverride?.(row, side) ?? null;
-    // Direction-specific and metric-specific signal. null = no data → exclude candidate.
-    const signal = override
-      ? override.signal
-      : metric === "SigmaZap"
-        ? (side === "Long" ? toNum(row.zapLsigma) : toNum(row.zapSsigma))
-        : metric === "GammaZap"
-          ? (side === "Long" ? toNum(row.zapLgamma) : toNum(row.zapSgamma))
-          : metric === "AlphaZap"
-            ? (side === "Long" ? toNum(row.zapLalpha) : toNum(row.zapSalpha))
-            : (side === "Long" ? toNum(row.zapL) : toNum(row.zapS));
-    if (signal == null) return []; // no data for this mode/direction → not a candidate
-    const bid = toNum(row.Bid ?? row.bidStock ?? row.bid);
-    const ask = toNum(row.Ask ?? row.askStock ?? row.ask);
-    const bookBid = canApplyBook ? toNum(bookSnapshot?.bestBid) : null;
-    const bookAsk = canApplyBook ? toNum(bookSnapshot?.bestAsk) : null;
-    const effectiveBid = bookBid ?? bid;
-    const effectiveAsk = bookAsk ?? ask;
-    const rawSpread = toNum(row.Spread ?? row.spread);
-    const spread = effectiveBid != null && effectiveAsk != null
-      ? Math.max(0, effectiveAsk - effectiveBid)
-      : rawSpread ?? (bid != null && ask != null ? Math.max(0, ask - bid) : null);
-    const safePrice = side === "Long" ? effectiveBid : effectiveAsk;
-    const edge = signal == null ? null : Math.abs(signal);
-    // A strategy that knows its own edge says so; otherwise the signal pays the leg's spread.
-    const netEdge =
-      override && override.netEdge != null && Number.isFinite(override.netEdge)
-        ? Math.max(0, override.netEdge)
-        : edge == null
-          ? null
-          : Math.max(0, edge - Math.max(0, spread ?? 0));
-    const positionBp = numPositionBp(row);
-    const blockedBySpread = spreadLimit != null && spread != null && spread > spreadLimit;
-    const minNetEdge = automationConfig?.minNetEdge ?? 0;
-    const blockedByEdge = netEdge != null && netEdge < minNetEdge;
-    // Annotated: the rows now pass through a local before being returned, and without this the
-    // ternary widens to plain string.
-    const status: StreamDecisionStatus = blockedBySpread
-      ? "BLOCKED_SPREAD"
-      : blockedByEdge
-        ? "BLOCKED_EDGE"
-        : "ENTRY_READY";
-    const reason = blockedBySpread
-      ? "spread too wide"
-      : blockedByEdge
-        ? `net edge below ${minNetEdge.toFixed(2)}`
-        : "signal passes filters";
-
-    return {
-      ticker: row.ticker,
-      benchmark: override ? override.benchmark : String(row.benchmark ?? "UNKNOWN"),
-      // From the override when the strategy supplies one, else straight off the row the expansion
-      // produced — either way the decision knows which situation it is.
-      pairKey: override?.pairKey ?? (row as { pairKey?: string | null }).pairKey ?? null,
-      side,
-      signal,
-      spread,
-      spreadBidPct: signalSpreadBidPct(row),
-      safePrice,
-      netEdge,
-      positionBp,
-      report: signalReport(row),
-      status,
-      reason,
-      updatedAt: Date.now(),
-    };
-  });
-
-  return reconcilePairedDecisions(rows);
-}
-
-/**
- * Rows that named the same pair get ONE verdict.
- *
- * A pair trade is one situation with two orders, but the checks above are per ticker: each leg is
- * measured against its OWN spread, so two legs of the same divergence routinely land on different
- * answers. Observed live on GFI/HMY: one deviation, 0.83, shown on both legs — and two net edges,
- * 0.690 and 0.780, because GFI's spread was 0.140 and HMY's 0.050. With a minimum edge anywhere
- * between those, one leg is ENTRY READY and the other is BLOCKED, and the strategy sends a single
- * naked order on a book it only ever measured hedged.
- *
- * Two rules, both conservative:
- *
- *   1. If any leg is blocked, every leg is blocked, and they all carry the blocked leg's reason.
- *      A pair is tradable only where BOTH sides can be crossed.
- *   2. A leg whose partner is not in this decision set at all is blocked outright. This is the
- *      quieter half: the partner can be absent because a per-ticker filter removed it from the
- *      universe upstream, and the surviving leg then looks like a perfectly good single-ticker
- *      signal. It is not one — its edge was measured against a hedge that is not there.
- *
- * Untouched when no row declares a pairKey, which is every single-leg strategy.
- */
-function reconcilePairedDecisions(rows: StreamDecisionRow[]): StreamDecisionRow[] {
-  const groups = new Map<string, StreamDecisionRow[]>();
-  for (const r of rows) {
-    if (!r.pairKey) continue;
-    const g = groups.get(r.pairKey);
-    if (g) g.push(r);
-    else groups.set(r.pairKey, [r]);
-  }
-  if (groups.size === 0) return rows;
-
-  const verdict = new Map<string, { status: StreamDecisionStatus; reason: string }>();
-  for (const [key, legs] of groups) {
-    if (legs.length < 2) {
-      // Name the absent side. "partner leg missing" alone says a pair is broken but not which
-      // half, and the half is the whole question: the partner is normally absent because some
-      // per-ticker filter removed it from the universe, and knowing the symbol is what makes that
-      // checkable instead of guessable.
-      const absent = legs[0]?.benchmark?.trim();
-      verdict.set(key, {
-        status: "BLOCKED_EDGE",
-        reason: absent
-          ? `${absent} is not in the signal universe — a pair trade cannot go out one-sided`
-          : "partner leg missing — a pair trade cannot go out one-sided",
-      });
-      continue;
-    }
-    // Spread first: an uncrossable book is a harder no than a thin edge, and it is the reason
-    // worth showing.
-    const blocked =
-      legs.find((l) => l.status === "BLOCKED_SPREAD") ??
-      legs.find((l) => l.status !== "ENTRY_READY");
-    if (!blocked) continue;
-    const self = blocked.ticker;
-    verdict.set(key, {
-      status: blocked.status,
-      reason: `${blocked.reason} (on ${self})`,
-    });
-  }
-  if (verdict.size === 0) return rows;
-
-  return rows.map((r) => {
-    const v = r.pairKey ? verdict.get(r.pairKey) : undefined;
-    if (!v || (r.status === v.status && r.reason === v.reason)) return r;
-    return { ...r, status: v.status, reason: v.reason };
-  });
-}
-
-export function syncStreamPositions(
-  prev: StreamPosition[],
-  decisions: StreamDecisionRow[],
-  allSignals: ArbitrageSignal[],
-  filteredSignals: ArbitrageSignal[],
-  latches: StreamSignalLatch[],
-  autoEnabled: boolean,
-  maxSpreadValue: unknown,
-  automationConfig?: StreamAutomationConfig,
-  entryCutoffEnabled = true,
-  sessionStartMinutes: number | null = null,
-  loggedOpenTickers: ReadonlySet<string> = new Set(),
-  dispatchingEntryTickers: ReadonlySet<string> = new Set(),
-  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map(),
-  /** The toolbar's own maximum entry deviation, in the unit the strategy reads. See ADD_MAX_SIGMA. */
-  entryWindowMax: number | null = null,
-  /**
-   * A strategy-specific EXIT reading for an already-open position, independent of decisionMap.
-   *
-   * decisionMap only holds a row while the strategy's own entry gate still approves the ticker —
-   * for PairFlux that gate is "this pair is still enterable", which stops being true exactly when
-   * a position starts converging. Supplied, this is tried BEFORE every other exit fallback; see
-   * PairFluxScanner's pairFluxExitOverride and lib/pairflux/livePairs.pairExitDeviation.
-   */
-  exitOverride?: (position: StreamPosition) => number | null,
-  /**
-   * Cross-poll, cross-minute memory for the pair-simultaneity gate below (see "A PAIR ENTERS AS A
-   * PAIR"). Mutated in place — the caller owns a single long-lived Map (a ref) and passes the same
-   * one in every poll, so a leg's "was fully ready" moment survives past the one poll it happened
-   * on. Keyed by legIdentityOf (ticker+pairKey), valued by the minuteIdx it was last seen ready.
-   */
-  pairLegReadyMinutes: Map<string, number> = new Map()
-): StreamPosition[] {
-  const signalMap = new Map(allSignals.map((row) => [row.ticker, row]));
-  const filteredSignalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
-  // Leg-keyed: one ticker can own several decisions at once. See legIdentityOf.
-  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
-  const spreadLimit = parseStreamSpreadLimit(maxSpreadValue);
-  const now = Date.now();
-  const nowMinutes = currentMinutesLocal();
-  const nowMinuteIdx = Math.floor(now / 60_000);
-  const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
-  // After this time, no new ENTRY orders are auto-dispatched (existing positions are unaffected).
-  // entryStopTime when set, else CUTOFF — see StreamAutomationConfig.entryStopTime.
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
-  const endThreshold = Math.max(0, automationConfig?.endSignalThreshold ?? 0);
-  const minHoldMinutes = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
-  const minHoldMs = minHoldMinutes * 60_000;
-
-  if (!autoEnabled) {
-    return prev
-      .filter((row) =>
-        row.status !== "CLOSED" &&
-        row.entryDispatchedAt != null &&
-        loggedOpenTickers.has(row.ticker)
-      )
-      .map((existing) => {
-        const raw = filteredSignalMap.get(existing.ticker) ?? signalMap.get(existing.ticker);
-        const zapSigma = existing.side === "Long"
-          ? toNum(raw?.zapLsigma)
-          : toNum(raw?.zapSsigma);
-        // Same rule for a position restored from the action log: it is tracked on its pair.
-        const restoredPairSignal = existing.pairKey
-          ? decisionMap.get(legIdentityOf(existing))?.signal ?? null
-          : null;
-        const currentSignal = restoredPairSignal ?? zapSigma ?? signalSigned(raw) ?? signalAbs(raw) ?? existing.lastSignal;
-        // Ctrl+O only ever fires as part of the Ctrl+Q -> 1s -> Ctrl+O cutoff pair (dispatch
-        // loop, driven by startCutoffTime) — this printStartTime-driven auto print-exit is
-        // disabled so no other path can arm/dispatch it.
-        const inPrintWindow = false;
-        return {
-          ...existing,
-          lastSignal: currentSignal,
-          lastScaleSignal: existing.lastScaleSignal ?? existing.entrySignal ?? currentSignal,
-          spread: signalSpread(raw) ?? existing.spread,
-          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
-          status: inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN"),
-          reason: inPrintWindow ? "09:20 print exit armed" : "restored active STREAM position from action log",
-          lockedForPrint: inPrintWindow,
-          pendingIntent: inPrintWindow && !existing.lockedForPrint
-            ? (existing.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT")
-            : null,
-          entryDispatchedAt: existing.entryDispatchedAt ?? existing.openedAt ?? now,
-          lastConfirmedActiveAt: existing.lastConfirmedActiveAt ?? existing.updatedAt ?? now,
-          openedAt: existing.openedAt ?? (now - minHoldMs),
-          updatedAt: now,
-        } satisfies StreamPosition;
-      })
-      .sort((a, b) => a.ticker.localeCompare(b.ticker));
-  }
-
-  if (automationConfig?.strategyModeEnabled) {
-    const next: StreamPosition[] = [];
-
-    // Legs that armed an ADD / an ACTIVE exit on this pass, holding the row as it stood BEFORE
-    // the decision so the pair reconciliation below can put it back. See that block.
-    const addArmedThisPass = new Map<string, StreamPosition>();
-    const exitArmedThisPass = new Map<string, StreamPosition>();
-    const seen = new Set<string>();
-    const maxOpenAllowed = entryCutoffEnabled
-      ? (automationConfig.maxOpenPositions ?? Number.MAX_SAFE_INTEGER)
-      : Number.MAX_SAFE_INTEGER;
-
-    for (const existing of prev) {
-      const existsInActionLog = loggedOpenTickers.has(existing.ticker);
-      const raw = signalMap.get(existing.ticker);
-      const rawSeen = Boolean(raw);
-      const livePositionBp = numPositionBp(raw);
-      // A position restored solely from the account must follow the account back to flat. It has
-      // no action-log CLOSE event because this engine did not open it, so retaining it here would
-      // keep add logic alive after a manual close.
-      if (
-        existing.reason === "restored active account position (PositionBp != 0)" &&
-        rawSeen &&
-        (livePositionBp == null || livePositionBp === 0)
-      ) {
-        continue;
-      }
-      const filteredRaw = filteredSignalMap.get(existing.ticker);
-      // Use direction-specific ZAP sigma field: zapLsigma for Long, zapSsigma for Short.
-      // This matches the entry filter (applyExactSonarClientFilters σ ZAP mode) and
-      // ensures exit threshold comparison uses the same metric as what the user sees.
-      const anyRaw = filteredRaw ?? raw;
-      const zapSigma = existing.side === "Long"
-        ? (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma))
-        : (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma));
-      /**
-       * A multi-leg strategy is tracked on ITS OWN reading, not on the ticker's ZAP.
-       *
-       * zapLsigma/zapSsigma is each ticker's sigma-ZAP against its benchmark ETF — Arbitrage's
-       * metric, and the right one there. PairFlux does not trade it: its situation is the PAIR's
-       * divergence, measured in whatever unit the toolbar selects and divided by that pair's own
-       * per-class alpha or residual sigma. Reading zap here meant entry and exit were judged on the
-       * pair while ADDS were judged on a different series in a different unit — a position could
-       * scale in on the ticker drifting from GDX while the pair itself was converging.
-       *
-       * The decision row already carries the strategy's own number, so prefer it whenever the row
-       * declares a pairKey. Single-leg strategies have no pairKey and keep the ZAP path exactly.
-       */
-      const ownDecision = decisionMap.get(legIdentityOf(existing));
-      const pairSigned = ownDecision?.pairKey ? ownDecision.signal : null;
-      const currentSigned =
-        pairSigned ?? zapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
-      const currentAbs = currentSigned == null ? signalAbs(raw) : Math.abs(currentSigned);
-      const currentSpread = signalSpread(raw) ?? existing.spread;
-      // Lazy-init: positions restored from action log may have null entrySignal (missing deviation).
-      // Fill from current signal on first available tick so add triggers are anchored correctly.
-      const resolvedEntrySignal = existing.entrySignal ?? currentSigned ?? null;
-      const spreadBlocked = spreadLimit != null && currentSpread != null && currentSpread > spreadLimit;
-      const holdBlocked = minHoldMs > 0 && now - existing.openedAt < minHoldMs;
-      // Ctrl+O only ever fires as part of the Ctrl+Q -> 1s -> Ctrl+O cutoff pair (dispatch
-      // loop, driven by startCutoffTime) — this printStartTime-driven auto print-exit is
-      // disabled so no other path can arm/dispatch it.
-      const inPrintWindow = false;
-      const activeExitMode = (automationConfig.exitExecutionMode ?? "active") === "active";
-      // Exit/normalization checks the OPPOSITE-side ZAP field from entry: a Long position was
-      // entered on zapLsigma (the deviation you'd pay to BUY in), but closing a Long is a SELL —
-      // priced off zapSsigma, the same field a Short entry uses, since both are sell-side
-      // transactions. Symmetric for Short: entered on zapSsigma (sell-in), exits (buy to cover)
-      // on zapLsigma. ADD (scaling further into the SAME side) is unaffected — it's still a
-      // buy for Long / sell for Short, so it keeps reading the same-side field as entry (see
-      // filteredSignedZap inside the ADD block below, independent of this).
-      const exitZapSigma = existing.side === "Long"
-        ? (toNum(anyRaw?.zapSsigma) ?? toNum(raw?.zapSsigma))
-        : (toNum(anyRaw?.zapLsigma) ?? toNum(raw?.zapLsigma));
-      /**
-       * A PAIR EXITS ON THE PAIR. The whole opposite-side-ZAP argument above is about one ticker
-       * against its benchmark ETF, and it does not describe a pair spread at all: PairFlux closes
-       * when the two names come back together, which is its own deviation falling to the exit
-       * level, not when either leg happens to sit near its own benchmark. Reading the ticker's ZAP
-       * here would hold a converged pair open and close a diverged one.
-       *
-       * pairSigned IS NOT THE RIGHT NUMBER EITHER, once the pair has actually started converging.
-       * It comes from decisionMap, which only holds a row while the pair is still ENTERABLE —
-       * exactly the computeLivePairs question, "is either devUp or devDn outside zero right now".
-       * A converging pair crosses INTO its own two-sided spread precisely while it is closing, so
-       * decisionMap loses the row at the moment the exit rule most needs to read it, and this fell
-       * back to the ticker's own ZAP (a different pair entirely) or nothing.
-       *
-       * exitOverride is what the strategy supplies instead: a reading computed straight from
-       * quotes and beta, with no "still enterable" gate, valid for as long as both legs are
-       * quoted at all. See pairExitDeviation and PairFluxScanner's pairFluxExitOverride.
-       */
-      const exitOverrideSigned = exitOverride ? exitOverride(existing) : null;
-      const exitSigned =
-        exitOverrideSigned ?? pairSigned ?? exitZapSigma ?? signalSigned(filteredRaw ?? raw) ?? signalSigned(raw);
-      const exitAbs = exitSigned == null ? signalAbs(raw) : Math.abs(exitSigned);
-      const belowEndThreshold = exitAbs != null && exitAbs < endThreshold;
-      const atOrAboveEndThreshold = currentAbs != null && currentAbs >= endThreshold;
-      // How long the signal must stay normalized below the threshold is MINHOLD — the very same
-      // number, and the very same rule, that gates entry. There is no separate CONF any more:
-      // one knob describes "how long a condition must hold to be believed", in both directions.
-      //
-      // Count in whole minute boundaries crossed, not poll ticks — mirrors Scanner's
-      // ExitConfirmCandles (pendingEndHoldCount only bumps once per new tape minute, reset
-      // immediately on any candle back above EndAbs). Without minute-boundary counting, Stream
-      // would confirm in ~N poll intervals (a few seconds) while Scanner requires N full minutes.
-      let belowThresholdSinceMinuteIdx = existing.belowThresholdSinceMinuteIdx ?? null;
-      let belowThresholdTicks: number;
-      if (belowEndThreshold) {
-        if (belowThresholdSinceMinuteIdx == null) {
-          belowThresholdSinceMinuteIdx = nowMinuteIdx;
-          belowThresholdTicks = 0;
-        } else {
-          belowThresholdTicks = Math.max(0, nowMinuteIdx - belowThresholdSinceMinuteIdx);
-        }
-      } else {
-        belowThresholdSinceMinuteIdx = null;
-        belowThresholdTicks = 0;
-      }
-      // Reuses hasCompletedStreamHoldWindow — literally the same helper the entry path uses — so
-      // "held long enough" cannot drift apart between entry and exit. MINHOLD=0 therefore means
-      // "must survive to the close of the minute it first dropped in", exactly as MINHOLD=0 on
-      // entry means "must survive to the close of the minute it first qualified in".
-      //
-      // belowEndThreshold stays REQUIRED and is not implied by the hold window: while the signal
-      // is healthy the else-branch above resets belowThresholdSinceMinuteIdx to null, and a null
-      // anchor must never be read as "confirmed long ago".
-      const shouldNormalizeExit =
-        activeExitMode &&
-        belowEndThreshold &&
-        belowThresholdSinceMinuteIdx != null &&
-        hasCompletedStreamHoldWindow(belowThresholdSinceMinuteIdx * 60_000, nowMinuteIdx, minHoldMinutes);
-
-      let status: StreamPosition["status"] = existing.status;
-      let reason = existing.reason;
-      let pendingIntent: StreamPosition["pendingIntent"] = existing.pendingIntent;
-      let lockedForPrint = existing.lockedForPrint;
-      let entryCount = existing.entryCount;
-      let lastScaleSignal = existing.lastScaleSignal ?? existing.entrySignal;
-      let pendingAddTrigger = existing.pendingAddTrigger ?? null;
-      let entryDispatchedAt = existing.entryDispatchedAt ?? null;
-      let lastConfirmedActiveAt = existing.lastConfirmedActiveAt ?? null;
-      let lastAboveAddCapAt = existing.lastAboveAddCapAt ?? null;
-      // ADD trigger bar value — see StreamPosition.confirmedAddAbs doc: addPeakAbs tracks the
-      // latest live poll, confirmedAddAbs only advances to that value once its minute has
-      // fully closed (boundary crossed), so the fire check always uses a boundary-confirmed
-      // reading, not a mid-minute touch.
-      let addPeakMinuteIdx = existing.addPeakMinuteIdx ?? null;
-      let addPeakAbs = existing.addPeakAbs ?? null;
-      let addPeakSigned = existing.addPeakSigned ?? null;
-      let confirmedAddAbs = existing.confirmedAddAbs ?? null;
-      let confirmedAddSigned = existing.confirmedAddSigned ?? null;
-      const decision = decisionMap.get(legIdentityOf(existing));
-      const entryStillReady = decision?.status === "ENTRY_READY";
-      const hasUndispatchedEntry =
-        entryDispatchedAt == null &&
-        (isEntryOrderIntent(existing.pendingIntent) || existing.entryCount <= 1);
-
-      if (!hasUndispatchedEntry && entryDispatchedAt != null && !existsInActionLog) {
-        logStreamGateBlock("position:awaitingActionLogConfirmation", {
-          ticker: existing.ticker,
-          entryDispatchedAt,
-          entryCount: existing.entryCount,
-          openedAt: existing.openedAt,
-          ageMs: now - entryDispatchedAt,
-        });
-        // Keep in next so the position stays in state across refresh cycles.
-        // Without this, setStreamPositions removes it → mergeStreamPositionsWithActionLog
-        // can't restore it → latch recreates a new position with a different openedAt
-        // → duplicate dispatch before action-log confirmation arrives.
-        next.push({
-          ...existing,
-          lastSignal: currentSigned ?? currentAbs ?? existing.lastSignal,
-          spread: currentSpread ?? existing.spread,
-          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
-          status: "PENDING_ENTRY",
-          reason: "order dispatched | awaiting execution confirmation",
-          pendingIntent: null,
-          updatedAt: now,
-        });
-        seen.add(legIdentityOf(existing)); // block latch from recreating
-        continue;
-      }
-
-      if (entryDispatchedAt != null) {
-        lastConfirmedActiveAt = now;
-      }
-
-      if (hasUndispatchedEntry) {
-        // Keep the PENDING_ENTRY alive for a brief window even if the signal
-        // momentarily drops out of ENTRY_READY (e.g. brief spread spike between
-        // the prime tick and the actual POST). Without this the position is
-        // dropped before sendQueuedIntents can fire, so only the first ticker
-        // in the batch ever dispatches.
-        const pendingEntryAgeMs = now - (existing.openedAt ?? now);
-        // Grace period only applies to temporary blocks (spread/edge) — NOT to HOLD
-        // (signal out of the entry window). If signal is HOLD, cancel immediately so
-        // entries don't fire at deviations far outside the configured startAbsMax cap.
-        const entryIsHold = decision?.status === "HOLD";
-        const withinGrace = !entryIsHold && pendingEntryAgeMs < 30000;
-        const cutoffReached = entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes);
-        if (inPrintWindow || entryIsHold || cutoffReached || (!entryStillReady && !withinGrace)) {
-          // If a real-mode dispatch is in-flight for this ticker (between
-          // dispatchingEntryTickersRef.add and the post-dispatch state update), keep
-          // the position alive so the latch cannot recreate it with a new qualifiedSince.
-          // A new qualifiedSince would produce a different intentId and bypass
-          // dispatchedIntentIdsRef, causing a duplicate ENTRY order to be sent.
-          if (dispatchingEntryTickers.has(legIdentityOf(existing))) {
-            next.push({
-              ...existing,
-              pendingIntent: null,
-              reason: "dispatch in-flight — entry hold cancelled, keeping to block latch",
-              updatedAt: now,
-            });
-            seen.add(legIdentityOf(existing));
-          }
-          continue;
-        }
-
-        status = "PENDING_ENTRY";
-        reason = "awaiting entry dispatch";
-        pendingIntent = isEntryOrderIntent(existing.pendingIntent)
-          ? existing.pendingIntent
-          : (existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE");
-
-        next.push({
-          ...existing,
-          lastSignal: currentSigned ?? currentAbs ?? existing.lastSignal,
-          lastScaleSignal,
-          spread: currentSpread,
-          spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
-          status,
-          reason,
-          entryCount,
-          lockedForPrint: false,
-          pendingIntent,
-          entryDispatchedAt: null,
-          lastConfirmedActiveAt,
-          updatedAt: now,
-        });
-        seen.add(legIdentityOf(existing));
-        continue;
-      }
-
-      if (!rawSeen) {
-        if (entryDispatchedAt == null) {
-          status = "OPEN";
-          reason = "awaiting entry dispatch";
-        } else {
-          logStreamGateBlock("position:noRawSignal", {
-            ticker: existing.ticker,
-            entryDispatchedAt,
-            ageMs: now - entryDispatchedAt,
-          });
-          status = inPrintWindow ? "PRINT_PENDING" : (existing.status === "EXIT_BLOCKED" ? "EXIT_BLOCKED" : "OPEN");
-          reason = inPrintWindow ? "09:20 print exit armed" : "tracked from action log | waiting for live signal";
-          if (inPrintWindow) {
-            if (!existing.lockedForPrint) {
-              pendingIntent = existing.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT";
-              lockedForPrint = true;
-            }
-          } else if (!isExitOrderIntent(pendingIntent)) {
-            pendingIntent = null;
-          }
-        }
-      } else if (inPrintWindow) {
-        status = "PRINT_PENDING";
-        reason = "09:20 print exit armed";
-        if (!existing.lockedForPrint) {
-          pendingIntent = existing.side === "Long" ? "EXIT_LONG_PRINT" : "EXIT_SHORT_PRINT";
-          lockedForPrint = true;
-        }
-      } else if (shouldNormalizeExit) {
-        if (spreadBlocked && automationConfig.noSpreadExit !== false) {
-          status = "EXIT_BLOCKED";
-          reason = "exit blocked by spread";
-          pendingIntent = null;
-        } else if (holdBlocked) {
-          status = "OPEN";
-          reason = `min hold ${automationConfig.minHoldMinutes}min not reached`;
-          pendingIntent = null;
-        } else {
-          status = "CLOSED";
-          reason = `signal below end threshold ${endThreshold.toFixed(2)}`;
-          pendingIntent = existing.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE";
-          // Same bookkeeping as the add above, for the same reason — see the pair reconciliation.
-          if (existing.pairKey) exitArmedThisPass.set(legIdentityOf(existing), existing);
-          logStreamGateBlock("position:normalizeExitClosed", {
-            ticker: existing.ticker,
-            currentAbs,
-            exitAbs,
-            endThreshold,
-            entryCount: existing.entryCount,
-            entryDispatchedAt,
-            ageMs: entryDispatchedAt != null ? now - entryDispatchedAt : null,
-            belowThresholdTicks,
-            minHoldMinutes,
-          });
-        }
-      } else {
-        status = "OPEN";
-        reason = currentAbs == null
-          ? "holding | awaiting live deviation"
-          : belowEndThreshold
-            ? activeExitMode
-              ? `below end threshold | confirming exit (${belowThresholdTicks}/${minHoldMinutes + 1} min)`
-              : "passive mode | holding below end threshold"
-            : atOrAboveEndThreshold
-              ? "holding above end threshold"
-              : "holding";
-
-        // Scaling into a position is "taking position" just as much as a fresh entry, so it obeys
-        // the SAME window: nothing is added after CUTOFF, and nothing is added before the next
-        // START. The beforeStart half matters for a same-day window (e.g. START=04:00,
-        // CUTOFF=09:00): there "past cutoff" is false again in the small hours, so without this a
-        // position carried over from a previous session could keep scaling at 02:00.
-        const addGateOk =
-          entryDispatchedAt != null &&
-          atOrAboveEndThreshold &&
-          !inPrintWindow &&
-          !(entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) &&
-          !(entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) &&
-          automationConfig.scaleMode === "scale_in" &&
-          entryCount - 1 < Math.max(0, automationConfig.maxAdds ?? 0);
-        if (!addGateOk && entryDispatchedAt != null) {
-          logStreamGateBlock("add:outerGate", {
-            ticker: existing.ticker,
-            entryDispatchedAt,
-            atOrAboveEndThreshold,
-            currentAbs,
-            endThreshold,
-            inPrintWindow,
-            cutoffBlocking: entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes),
-            nowMinutes,
-            startCutoffMinutes,
-            sessionStartMinutes,
-            scaleMode: automationConfig.scaleMode,
-            entryCount,
-            maxAdds: automationConfig.maxAdds,
-          });
-        }
-        if (addGateOk) {
-          const filteredSignal = filteredRaw;
-          const filteredSignedZap = existing.side === "Long"
-            ? (toNum(filteredSignal?.zapLsigma) ?? toNum(raw?.zapLsigma))
-            : (toNum(filteredSignal?.zapSsigma) ?? toNum(raw?.zapSsigma));
-          // Same substitution as above, and it has to be the same or the rung and the anchor it is
-          // measured from would come off two different series.
-          const filteredSigned =
-            pairSigned ?? filteredSignedZap ?? signalSigned(filteredSignal) ?? signalSigned(raw);
-          const filteredAbs = filteredSigned == null ? null : Math.abs(filteredSigned);
-
-          // Direction (sign) is always anchored to the FIRST entry signal.
-          const entryBase = resolvedEntrySignal;
-
-          // On a minute-boundary crossing, the OLD addPeakAbs/addPeakSigned (the last poll
-          // seen while still inside the minute that just closed) becomes the new confirmed
-          // value — only now is it eligible to drive a fire decision. Then start tracking the
-          // new minute fresh. Within the same minute, addPeakAbs simply tracks every poll.
-          const addMinuteAdvanced = addPeakMinuteIdx == null || addPeakMinuteIdx !== nowMinuteIdx;
-          if (addMinuteAdvanced) {
-            confirmedAddAbs = addPeakAbs;
-            confirmedAddSigned = addPeakSigned;
-            addPeakMinuteIdx = nowMinuteIdx;
-          }
-          addPeakAbs = filteredAbs;
-          addPeakSigned = filteredSigned;
-
-          // Hard cap: no ADDs above this deviation. If exceeded, cancel any pending ADD
-          // and restart the add delay timer (same hold protection as entry window).
-          /**
-           * The runaway cap, in the unit the position is actually measured in.
-           *
-           * 4.0 was written for Arbitrage, where the reading is a per-ticker sigma. A pair is
-           * measured in whatever the toolbar selects — at a 2-alpha entry the live pairs sit at 4
-           * and 5, so a flat 4.0 silently blocked every add they could ever take. For a pair the
-           * meaningful bound is the user's OWN entry maximum: past it the deviation is outside the
-           * band they said they would trade. Unset, there is no cap, which matches the entry rule
-           * itself having none.
-           */
-          const ADD_MAX_SIGMA = existing.pairKey
-            ? (entryWindowMax != null && entryWindowMax > 0 ? entryWindowMax : Infinity)
-            : 4.0;
-          if (confirmedAddAbs != null && confirmedAddAbs > ADD_MAX_SIGMA) {
-            lastAboveAddCapAt = now;
-            if (isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
-          }
-          if (entryBase == null || entryBase === 0) {
-            if (!isEntryOrderIntent(existing.pendingIntent)) pendingIntent = null;
-          } else {
-          // Trigger threshold is measured from the signal AT THE LAST ADD (grid rebases each
-          // time an add fires), not from a fixed entry-anchored grid. lastScaleSignal is
-          // seeded to entrySignal before any add, so this is entryBase+STEP for add #1 and
-          // (last add's signal)+STEP for every add after — a big jump that already earned one
-          // add still requires a further STEP of real movement (not just the delay timer)
-          // before the next add is granted.
-          const lastAddBase = lastScaleSignal ?? entryBase;
-          const trigger = Math.abs(lastAddBase) + Math.max(0, automationConfig.dilutionStep ?? 0);
-          const sameSign =
-            confirmedAddSigned != null &&
-            Number.isFinite(confirmedAddSigned) &&
-            confirmedAddSigned !== 0 &&
-            Math.sign(confirmedAddSigned) === Math.sign(entryBase);
-          const addDelayMs = Math.max(STREAM_AUTOMATION_TICK_MS, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
-          // Add delay restarts from the last cap breach — same protection as entry minHold.
-          // If signal was above ADD_MAX_SIGMA, lastAboveAddCapAt records that moment so
-          // the delay runs fresh after the signal returns into range.
-          const lastDispatchOrBreach = Math.max(
-            existing.lastDispatchedAt ?? existing.entryDispatchedAt ?? existing.openedAt,
-            lastAboveAddCapAt ?? 0
-          );
-          // Also block while an entry-type intent is already pending, to prevent double-fire
-          // before the async dispatch updates lastDispatchedAt.
-          const addDelayPassed = isEntryOrderIntent(existing.pendingIntent)
-            ? false
-            : now - lastDispatchOrBreach >= addDelayMs;
-          const belowAddCap = confirmedAddAbs == null || confirmedAddAbs <= ADD_MAX_SIGMA;
-          if (addMinuteAdvanced && confirmedAddAbs != null && confirmedAddAbs >= trigger && belowAddCap && sameSign && addDelayPassed) {
-            // Remember the pre-add row: a pair adds on both legs or on neither, and the
-            // reconciliation after this loop needs somewhere to put a lone add back.
-            if (existing.pairKey) addArmedThisPass.set(legIdentityOf(existing), existing);
-            entryCount += 1;
-            pendingAddTrigger = trigger;
-            lastScaleSignal = confirmedAddSigned;
-            pendingIntent = existing.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE";
-            reason = `scale-in add ${entryCount - 1}/${Math.max(0, automationConfig.maxAdds ?? 0)} | trigger=${trigger.toFixed(3)}σ`;
-          } else {
-            logStreamGateBlock("add:triggerNotMet", {
-              ticker: existing.ticker,
-              confirmedAddAbs,
-              confirmedAddSigned,
-              trigger,
-              lastAddBase,
-              belowAddCap,
-              sameSign,
-              addDelayPassed,
-              addMinuteAdvanced,
-              addDelayMs,
-              lastDispatchOrBreach,
-              pendingIntent: existing.pendingIntent,
-              msUntilDelayPassed: addDelayMs - (now - lastDispatchOrBreach),
-            });
-            // Keep a pending ADD intent alive while signal is flat (hasn't crossed the
-            // next threshold yet). But if the bar's value reversed sign, clear the intent —
-            // the position has moved against entry and the pending order is no longer valid.
-            const signalReversed =
-              confirmedAddSigned != null &&
-              Number.isFinite(confirmedAddSigned) &&
-              confirmedAddSigned !== 0 &&
-              Math.sign(confirmedAddSigned) !== Math.sign(entryBase);
-            if (!isEntryOrderIntent(existing.pendingIntent) || signalReversed) {
-              pendingIntent = null;
-            }
-          }
-          }
-        } else if (!isExitOrderIntent(pendingIntent)) {
-          pendingIntent = null;
-        }
-      }
-
-      next.push({
-        ...existing,
-        entrySignal: resolvedEntrySignal,
-        lastSignal: currentSigned ?? currentAbs,
-        lastScaleSignal,
-        belowThresholdTicks,
-        belowThresholdSinceMinuteIdx,
-        spread: currentSpread,
-        spreadBidPct: signalSpreadBidPct(raw) ?? existing.spreadBidPct,
-        status,
-        reason,
-        entryCount,
-        lockedForPrint,
-        pendingIntent,
-        entryDispatchedAt,
-        lastConfirmedActiveAt,
-        lastAboveAddCapAt,
-        addPeakMinuteIdx,
-        addPeakAbs,
-        addPeakSigned,
-        confirmedAddAbs,
-        confirmedAddSigned,
-        pendingAddTrigger,
-        updatedAt: now,
-      });
-      seen.add(legIdentityOf(existing));
-    }
-
-    /**
-     * A PAIR ADDS AS A PAIR, AND EXITS AS A PAIR.
-     *
-     * The entry path already has this rule (pairReadyKeys, below) but the two decisions taken
-     * while a position is OPEN did not, and they are per-leg for different reasons:
-     *
-     *   ADD  — the trigger itself is symmetric (both legs read ONE deviation through
-     *          exitOverride/pairSigned and anchor on the same signed entry value), so the legs
-     *          agree on the arithmetic. What they do not share is `existing.pendingIntent` and
-     *          `lastDispatchedAt`: a leg whose previous order is still in flight, or whose
-     *          dispatch failed, is not add-eligible while its partner is. The add then lands on
-     *          one side only and the position stops being a hedge.
-     *
-     *   EXIT — `spreadBlocked` is priced off THAT leg's own book (line ~1672), so a wide quote on
-     *          one name closes the other alone. That is the same failure the entry rule was
-     *          written for, arriving at the other end of the trade.
-     *
-     * Both revert to HOLD rather than to force the partner: for an add, holding means the pair
-     * simply keeps the size it has and re-arms on the next bar that still clears the trigger
-     * (lastScaleSignal is deliberately NOT advanced, so the same trigger is met again); for an
-     * exit, holding means keeping the hedge on rather than standing naked in one name.
-     *
-     * A lone leg — a pair whose partner never opened, or already closed — is still allowed to
-     * EXIT (getting flat is always safe) but never to ADD.
-     *
-     * The 09:20 print exit is deliberately untouched: it is a session event, not a threshold, and
-     * stranding a position through it to preserve a hedge is the worse outcome.
-     */
-    if (addArmedThisPass.size > 0 || exitArmedThisPass.size > 0) {
-      const liveLegsByPair = new Map<string, number>();
-      for (const row of next) {
-        if (!row.pairKey) continue;
-        const legId = legIdentityOf(row);
-        // Legs that are closing on THIS pass still count — they are what the pair is made of.
-        if (row.status === "CLOSED" && !exitArmedThisPass.has(legId)) continue;
-        liveLegsByPair.set(row.pairKey, (liveLegsByPair.get(row.pairKey) ?? 0) + 1);
-      }
-      const armedByPair = (armed: Map<string, StreamPosition>) => {
-        const m = new Map<string, number>();
-        for (const row of next) {
-          if (!row.pairKey) continue;
-          if (!armed.has(legIdentityOf(row))) continue;
-          m.set(row.pairKey, (m.get(row.pairKey) ?? 0) + 1);
-        }
-        return m;
-      };
-      const addsByPair = armedByPair(addArmedThisPass);
-      const exitsByPair = armedByPair(exitArmedThisPass);
-
-      for (let i = 0; i < next.length; i++) {
-        const row = next[i];
-        if (!row.pairKey) continue;
-        const legId = legIdentityOf(row);
-        const legs = liveLegsByPair.get(row.pairKey) ?? 0;
-
-        const prevAdd = addArmedThisPass.get(legId);
-        if (prevAdd && (legs < 2 || (addsByPair.get(row.pairKey) ?? 0) < legs)) {
-          next[i] = {
-            ...row,
-            entryCount: prevAdd.entryCount,
-            lastScaleSignal: prevAdd.lastScaleSignal,
-            pendingAddTrigger: prevAdd.pendingAddTrigger ?? null,
-            pendingIntent: null,
-            reason: legs < 2
-              ? "add held | partner leg not open"
-              : "add held | partner leg did not arm this bar",
-          };
-          logStreamGateBlock("add:partnerNotArmed", {
-            ticker: row.ticker, pairKey: row.pairKey, legs, armed: addsByPair.get(row.pairKey) ?? 0,
-          });
-          continue;
-        }
-
-        const prevExit = exitArmedThisPass.get(legId);
-        if (prevExit && legs >= 2 && (exitsByPair.get(row.pairKey) ?? 0) < legs) {
-          next[i] = {
-            ...row,
-            status: "OPEN",
-            pendingIntent: null,
-            reason: "exit held | partner leg cannot exit — keeping the hedge",
-          };
-          logStreamGateBlock("exit:partnerBlocked", {
-            ticker: row.ticker, pairKey: row.pairKey, legs, armed: exitsByPair.get(row.pairKey) ?? 0,
-          });
-        }
-      }
-    }
-
-    let openCount = next.filter((row) =>
-      row.status === "OPEN" ||
-      row.status === "PRINT_PENDING" ||
-      (row.status === "PENDING_ENTRY" && row.entryDispatchedAt != null)
-    ).length;
-    /**
-     * A PAIR ENTERS AS A PAIR, OR NOT AT ALL.
-     *
-     * Each leg has its own latch and its own hold window, and they finish at different moments —
-     * so the leg that qualified first was dispatched alone and the other followed minutes later,
-     * or never. Observed live: four SFNC shorts went out at 10:43:01 and the AUB long that
-     * belonged with one of them at 10:45:04, leaving the book directional for two minutes.
-     *
-     * A leg counts as satisfied when it is ready to enter on THIS pass, or when it already holds a
-     * position — the second case only so a pair that somehow half-opened can still be completed.
-     *
-     * WITHIN A MINUTE, NOT WITHIN A POLL. The two legs of a pair share one deviation, but each
-     * leg's own BLOCKED_SPREAD/BLOCKED_EDGE gate is priced off THAT ticker's own book — so one leg
-     * can blink blocked for a poll or two while the other sits ENTRY_READY the whole time.
-     * Requiring both on the literal same pass (the original fix for SFNC/AUB) starved a pair whose
-     * legs never happened to land on one poll together: PairFlux measured live 2026-09-09, two
-     * pairs sitting ENTRY_READY on both legs for 20+ minutes with zero entries, because the two
-     * legs' momentary blocks never lined up empty at once.
-     *
-     * pairLegReadyMinutes remembers the last minute each leg was FULLY ready (latch hold-window
-     * complete, decision ENTRY_READY) — mutated here, read back here, surviving past the poll it
-     * was recorded on. A leg still counts toward its pair if it was fully ready in the current
-     * minute OR the one just before: tight enough that a two-MINUTE gap (the original SFNC/AUB
-     * failure) still cannot recur, loose enough that a one-poll blink no longer starves the pair.
-     */
-    const pairReadyKeys = new Set<string>();
-    // Lifted out of the block below so the dispatch loop's own partnerAlreadyOpen check (further
-    // down) can reuse this SAME map instead of re-scanning `next` with `.some()` once per latch —
-    // that was an O(latches x next) full rescan per candidate, harmless at a handful of open
-    // positions but scaling quadratically exactly during a burst of many simultaneous candidates
-    // (measured live 2026-09-09: 60+ tickers becoming ENTRY_READY within the same minute). One pass
-    // over `next` here, O(1) Set lookups everywhere it's read.
-    const legsByPair = new Map<string, Set<string>>();
-    {
-      const noteLeg = (pairKey: string, ticker: string) => {
-        const set = legsByPair.get(pairKey);
-        if (set) set.add(ticker);
-        else legsByPair.set(pairKey, new Set([ticker]));
-      };
-      for (const row of next) {
-        if (row.pairKey && row.status !== "CLOSED") noteLeg(row.pairKey, row.ticker);
-      }
-      for (const l of latches) {
-        if (!l.pairKey) continue;
-        if (!hasCompletedStreamHoldWindow(l.qualifiedSince, nowMinuteIdx, minHoldMinutes)) continue;
-        const d = decisionMap.get(legIdentityOf(l));
-        if (!d || d.status !== "ENTRY_READY") continue;
-        pairLegReadyMinutes.set(legIdentityOf(l), nowMinuteIdx);
-        noteLeg(l.pairKey, l.ticker);
-      }
-      // The memory: a leg fully ready within the last minute counts too, even if THIS poll caught
-      // it mid-blink. Stale entries (more than a couple minutes old) are dropped so the map does
-      // not grow for the rest of the session.
-      pairLegReadyMinutes.forEach((readyMinute, legId) => {
-        if (readyMinute < nowMinuteIdx - 2) {
-          pairLegReadyMinutes.delete(legId);
-          return;
-        }
-        if (readyMinute < nowMinuteIdx - 1) return; // remembered, but too stale to count now
-        // legId is legIdentityOf's own "ticker|pairKey" — recovered directly rather than looked
-        // up in `latches`, which may no longer hold this leg (its latch can have been recreated
-        // with a fresh qualifiedSince by the time this memory entry is read back).
-        const firstPipe = legId.indexOf("|");
-        if (firstPipe <= 0) return; // no pairKey encoded — a single-leg strategy's own leg id
-        noteLeg(legId.slice(firstPipe + 1), legId.slice(0, firstPipe));
-      });
-      for (const [key, tickers] of legsByPair) {
-        if (tickers.size >= 2) pairReadyKeys.add(key);
-      }
-    }
-
-    // Rows already in `next` before ANY latch is considered this pass — i.e. legs that are
-    // genuinely an open/pending position from a PRIOR cycle, not merely "ready" this instant.
-    // Used below to tell "partner already open, one leg is enough" apart from "partner never
-    // fired at all" — legsByPair (above) blends in a one-minute READINESS memory for pairReadyKeys
-    // and is deliberately loose; reusing it here would just re-derive the bug this pass exists to
-    // catch.
-    const preLatchNextLen = next.length;
-    // Legs that clear every gate and get pushed as a fresh PENDING_ENTRY in THIS pass, by pair.
-    // See the reconciliation right after this loop.
-    const freshEntryFires = new Map<string, Array<{ ticker: string; partnerTicker: string; index: number }>>();
-
-    for (const latch of latches) {
-      if (seen.has(legIdentityOf(latch))) continue;
-      if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) {
-        logStreamGateBlock("positions:pastCutoff", { ticker: latch.ticker, nowMinutes, startCutoffMinutes, sessionStartMinutes });
-        continue;
-      }
-      // Session hasn't started yet (e.g. START=04:00, now 03:00) — same wait-then-work behavior
-      // as the latch gate above.
-      if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) {
-        logStreamGateBlock("positions:beforeStart", { ticker: latch.ticker, nowMinutes, sessionStartMinutes, startCutoffMinutes });
-        continue;
-      }
-      // A pair costs TWO slots, and it must be able to afford both before either goes out.
-      // Checked per leg, a pair arriving with one slot left would open its first half and have the
-      // second refused here — the exact naked position the pair gating exists to prevent. The
-      // partner already being open means the slot is spent, so then one is enough.
-      //
-      // O(1) via legsByPair (built once above from `next`) instead of an O(next.length) `.some()`
-      // scan per latch — see its own comment for why that mattered.
-      const openTickersForPair = latch.pairKey != null ? legsByPair.get(latch.pairKey) : undefined;
-      const partnerAlreadyOpen = !!openTickersForPair &&
-        (openTickersForPair.size > 1 || !openTickersForPair.has(latch.ticker));
-      const slotsNeeded = latch.pairKey && !partnerAlreadyOpen ? 2 : 1;
-      if (openCount + slotsNeeded > maxOpenAllowed) {
-        logStreamGateBlock("positions:maxOpen", { ticker: latch.ticker, openCount, maxOpenAllowed, slotsNeeded });
-        continue;
-      }
-      // Hold check uses minute-index arithmetic to match tape consecutive-candle counting:
-      // qualifiedSince is minute-aligned, so this gives exact integer-minute comparison. The
-      // "must have held for real seconds before dispatch" protection now lives upstream, in
-      // the latch's OWN creation gate (minuteQualifiedTickers / aboveSinceRef, requiring 10s of
-      // continuous qualification before the boundary) — no separate post-creation delay here,
-      // so dispatch fires right at the boundary, matching Scanner's own minute labeling.
-      if (!hasCompletedStreamHoldWindow(latch.qualifiedSince, nowMinuteIdx, minHoldMinutes)) {
-        logStreamGateBlock("positions:holdWindow", {
-          ticker: latch.ticker,
-          qualifiedSince: latch.qualifiedSince,
-          qualifiedMinuteIdx: Math.floor(latch.qualifiedSince / 60_000),
-          nowMinuteIdx,
-          minHoldMinutes,
-        });
-        continue;
-      }
-      // Only enter when signal is fully ready — latches may exist for BLOCKED_SPREAD/
-      // BLOCKED_EDGE tickers (tracked as candidates) but we don't enter until clear.
-      const latchDecision = decisionMap.get(legIdentityOf(latch));
-      if (!latchDecision || latchDecision.status !== "ENTRY_READY") {
-        logStreamGateBlock("positions:notEntryReady", { ticker: latch.ticker, status: latchDecision?.status ?? "missing" });
-        continue;
-      }
-      // Both halves, same pass. See pairReadyKeys.
-      if (latch.pairKey && !pairReadyKeys.has(latch.pairKey)) {
-        logStreamGateBlock("positions:partnerNotReady", { ticker: latch.ticker, pairKey: latch.pairKey });
-        continue;
-      }
-
-      const raw = filteredSignalMap.get(latch.ticker) ?? signalMap.get(latch.ticker);
-      const filteredRawEntry = filteredSignalMap.get(latch.ticker);
-      const zapSigmaEntry = latch.side === "Long"
-        ? (toNum(filteredRawEntry?.zapLsigma) ?? toNum(raw?.zapLsigma))
-        : (toNum(filteredRawEntry?.zapSsigma) ?? toNum(raw?.zapSsigma));
-      // The pair's own reading when this is a pair. Without it every SFNC leg recorded the same
-      // number — its zap against its benchmark ETF — so four different pairs logged an identical
-      // 3.4621 entry and every add was anchored to a series the trade does not use.
-      const pairSignedEntry = latchDecision.pairKey ? latchDecision.signal : null;
-      const currentSigned = pairSignedEntry ?? zapSigmaEntry ?? signalSigned(raw) ?? signalAbs(raw);
-      if (currentSigned == null) continue; // no signal — cannot anchor add triggers, skip
-      // Anchor the DISPATCHED entry value to the last poll of the minute that just closed
-      // (frozenEntrySignalMap), not whatever the live poll shows right now — dispatch can run
-      // a few ticks after the boundary, during which the price may keep moving. Falls back to
-      // the live value when no frozen snapshot exists yet (startup / first minute).
-      const frozenSigned = frozenEntrySignalMap.get(`${legIdentityOf(latch)}|${latch.side}`);
-      const entrySignedValue = frozenSigned ?? currentSigned;
-      const currentSpread = signalSpread(raw);
-      next.push({
-        ticker: latch.ticker,
-        pairKey: latch.pairKey ?? null,
-        benchmark: latch.benchmark,
-        side: latch.side,
-        entrySignal: entrySignedValue,
-        lastSignal: currentSigned,
-        lastScaleSignal: entrySignedValue,
-        belowThresholdTicks: 0,
-        spread: currentSpread,
-        spreadBidPct: signalSpreadBidPct(raw),
-        status: "PENDING_ENTRY",
-        reason: `entered after hold ${automationConfig.minHoldMinutes ?? 0}min`,
-        entryCount: 1,
-        lockedForPrint: false,
-        pendingIntent: latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
-        entryDispatchedAt: null,
-        lastDispatchedAt: null,
-        lastConfirmedActiveAt: null,
-        lastAboveAddCapAt: null,
-        openedAt: latch.qualifiedSince,
-        updatedAt: now,
-      });
-      if (latch.pairKey) {
-        const arr = freshEntryFires.get(latch.pairKey) ?? [];
-        arr.push({ ticker: latch.ticker, partnerTicker: latch.benchmark, index: next.length - 1 });
-        freshEntryFires.set(latch.pairKey, arr);
-      }
-      openCount += 1;
-      seen.add(legIdentityOf(latch));
-    }
-
-    /**
-     * A PAIR ENTERS AS A PAIR — closing the gap `pairReadyKeys` leaves open.
-     *
-     * pairReadyKeys says the PAIR may be considered at all, from a one-minute memory of each leg's
-     * OWN readiness (deliberately loose — see its own comment, 2026-09-09). But each latch above is
-     * STILL gated on `latchDecision.status === "ENTRY_READY"` read from THIS poll's decisionMap, not
-     * from that memory. A leg that was ready a moment ago and has since flickered to
-     * BLOCKED_SPREAD/BLOCKED_EDGE fails its OWN check and is skipped — while its partner, still
-     * ENTRY_READY right now, sails through alone: pairReadyKeys already said yes. Measured live
-     * 2026-09-11: MUU/KORU logged one ENTRY row (MUU) with no KORU counterpart, and TradingApp
-     * shows MUU bought with no KORU order at all — a naked, unhedged leg.
-     *
-     * Same shape as the ADD/EXIT reconciliation above, for a fresh entry instead of an open
-     * position: a lone leg is reverted UNLESS its partner also fired this pass, or was already an
-     * open/pending position from before this loop (preLatchNextLen) — that second case is the
-     * legitimate "completing a half-open pair" path the slotsNeeded=1 branch above expects to feed.
-     */
-    if (freshEntryFires.size > 0) {
-      const openLegsByPair = new Map<string, Set<string>>();
-      for (let i = 0; i < preLatchNextLen; i++) {
-        const row = next[i];
-        if (!row.pairKey || row.status === "CLOSED") continue;
-        const set = openLegsByPair.get(row.pairKey);
-        if (set) set.add(row.ticker);
-        else openLegsByPair.set(row.pairKey, new Set([row.ticker]));
-      }
-      const revertIndices: number[] = [];
-      for (const [pairKey, fires] of freshEntryFires) {
-        const firedTickers = new Set(fires.map((f) => f.ticker));
-        const openLegs = openLegsByPair.get(pairKey);
-        for (const f of fires) {
-          const partnerCovered = firedTickers.has(f.partnerTicker) || (openLegs?.has(f.partnerTicker) ?? false);
-          if (!partnerCovered) revertIndices.push(f.index);
-        }
-      }
-      if (revertIndices.length > 0) {
-        for (const idx of revertIndices) {
-          const row = next[idx];
-          logStreamGateBlock("entry:partnerNotFiring", {
-            ticker: row.ticker, pairKey: row.pairKey, benchmark: row.benchmark,
-          });
-          seen.delete(legIdentityOf(row));
-          openCount -= 1;
-        }
-        // Descending so earlier indices stay valid as later ones are spliced out.
-        for (const idx of [...revertIndices].sort((a, b) => b - a)) next.splice(idx, 1);
-      }
-    }
-
-    return next
-      .filter((row) => row.status !== "CLOSED" || now - row.updatedAt < 15000)
-      .sort((a, b) => a.ticker.localeCompare(b.ticker));
-  }
-
-  // UNREACHABLE under the current UI wiring, kept for reference: see the matching note in
-  // buildStreamOrderIntents. autoEnabled=true here always implies strategyModeEnabled=true
-  // (autoEnabledNow in the main refresh cycle ANDs them together before either function is
-  // called), so the `if (automationConfig?.strategyModeEnabled)` branch above already returned.
-  // This is a pre-Strategy-Mode code path that predates strategyModeEnabled becoming the sole
-  // automation mechanism. Do not assume this code runs.
-  const printCloseMinutes = parseTimeToMinutes(automationConfig?.printCloseTime, 9 * 60 + 30);
-  // Exit Mode "print" is retired — CUTOFF (Ctrl+Q -> 1s -> Ctrl+O) is the only session-end path.
-  const printWindowEnabled = false;
-  const next: StreamPosition[] = [];
-  const seen = new Set<string>();
-
-  for (const existing of prev) {
-    if (existing.entryDispatchedAt != null && !loggedOpenTickers.has(existing.ticker)) {
-      continue;
-    }
-    const current = decisionMap.get(legIdentityOf(existing));
-    if (!current) {
-      if (printWindowEnabled && nowMinutes < printCloseMinutes) {
-        next.push({
-          ...existing,
-          openedAt: existing.openedAt,
-          status: nowMinutes >= printStartMinutes ? "PRINT_PENDING" : "OPEN",
-          reason: nowMinutes >= printStartMinutes ? "print order armed" : "holding for print window",
-          entryDispatchedAt: existing.entryDispatchedAt,
-          updatedAt: now,
-        });
-        seen.add(legIdentityOf(existing));
-        continue;
-      }
-      next.push({
-        ...existing,
-        openedAt: existing.openedAt,
-        status: "OPEN",
-        reason: "holding | awaiting live deviation",
-        entryDispatchedAt: existing.entryDispatchedAt,
-        updatedAt: now,
-      });
-      seen.add(legIdentityOf(existing));
-      continue;
-    }
-
-    if (current.status === "BLOCKED_SPREAD") {
-      next.push({
-        ...existing,
-        openedAt: existing.openedAt,
-        lastSignal: current.signal,
-        spread: current.spread,
-        spreadBidPct: current.spreadBidPct,
-        status: automationConfig?.noSpreadExit === false ? "CLOSED" : "EXIT_BLOCKED",
-        reason: automationConfig?.noSpreadExit === false ? "forced exit despite spread" : "exit blocked by spread",
-        updatedAt: now,
-      });
-      seen.add(legIdentityOf(existing));
-      continue;
-    }
-
-    next.push({
-      ...existing,
-      openedAt: existing.openedAt,
-      lastScaleSignal: existing.lastScaleSignal,
-      lastSignal: current.signal,
-      spread: current.spread,
-      spreadBidPct: current.spreadBidPct,
-      status: printWindowEnabled && nowMinutes >= printStartMinutes ? "PRINT_PENDING" : "OPEN",
-      reason:
-        printWindowEnabled
-          ? nowMinutes >= printStartMinutes
-            ? "print exit armed"
-            : "holding until print window"
-          : automationConfig?.scaleMode === "scale_in"
-            ? "holding filtered signal | scale-in enabled"
-            : "holding filtered signal",
-      entryCount: existing.entryCount,
-      lockedForPrint: existing.lockedForPrint,
-      pendingIntent: null,
-      entryDispatchedAt: existing.entryDispatchedAt,
-      updatedAt: now,
-    });
-    seen.add(legIdentityOf(existing));
-  }
-
-  return next
-    .filter((row) => row.status !== "CLOSED" || now - row.updatedAt < 15000)
-    .sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-export function buildStreamOrderIntents(
-  decisions: StreamDecisionRow[],
-  positions: StreamPosition[],
-  autoEnabled: boolean,
-  automationConfig?: StreamAutomationConfig,
-  entryCutoffEnabled = false,
-  // Namespaces every generated intent id. The bridge's queue de-duplicates by intentId, so
-  // without this two strategies entering the same ticker at the same minute boundary would
-  // produce byte-identical ids and the second strategy's order would be silently swallowed as
-  // a duplicate of the first — looking, from the UI, exactly like a successful send.
-  strategyId = ""
-): StreamOrderIntent[] {
-  if (!autoEnabled) return [];
-
-  const now = Date.now();
-  const nowMinutes = currentMinutesLocal();
-  const printStartMinutes = parseTimeToMinutes(automationConfig?.printStartTime, 9 * 60 + 20);
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-  const intents: StreamOrderIntent[] = [];
-  // Leg-keyed: one ticker can own several decisions at once. See legIdentityOf.
-  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
-
-  if (automationConfig?.strategyModeEnabled) {
-    // Ctrl+O is only ever sent as part of the Ctrl+Q → 1s → Ctrl+O cutoff pair, driven by
-    // startCutoffTime (see the dispatch loop). No other automatic path fires it here — entries
-    // are already stopped at cutoff via syncStreamPositions/syncStreamSignalLatches.
-    for (const position of positions) {
-      if (!position.pendingIntent) continue;
-      intents.push({
-        id: intentId([strategyId, legIdentityOf(position), "strategy", position.openedAt, position.pendingIntent, position.entryCount, "live"]),
-        ticker: position.ticker,
-        pairKey: position.pairKey ?? null,
-        benchmark: position.benchmark,
-        side: position.side,
-        intent: position.pendingIntent,
-        sequence: position.entryCount,
-        priceRef:
-          position.pendingIntent === "EXIT_LONG_PRINT" || position.pendingIntent === "EXIT_SHORT_PRINT"
-            ? "PRINT"
-            : position.pendingIntent === "EXIT_LONG_AGGRESSIVE"
-              ? (automationConfig.exitExecutionMode === "passive" ? "ASK" : "BID")
-              : position.pendingIntent === "EXIT_SHORT_AGGRESSIVE"
-                ? (automationConfig.exitExecutionMode === "passive" ? "BID" : "ASK")
-                : position.side === "Long"
-                  ? "ASK"
-                  : "BID",
-        status: position.status === "EXIT_BLOCKED" ? "BLOCKED" : "QUEUED",
-        reason: position.reason,
-        createdAt: now,
-      });
-    }
-
-    return intents.sort((a, b) => a.ticker.localeCompare(b.ticker) || a.intent.localeCompare(b.intent));
-  }
-
-  // UNREACHABLE under the current UI wiring, kept for reference: the only caller
-  // (streamEngine.ts's main refresh cycle) computes `autoEnabled` as
-  // `streamAutoEnabledRef.current && Boolean(automationConfig?.strategyModeEnabled) && !panicOff`,
-  // so autoEnabled=true here always implies strategyModeEnabled=true, meaning the
-  // `if (automationConfig?.strategyModeEnabled)` branch above already returned. This is a
-  // pre-Strategy-Mode code path (simpler, no latch queue, no ADD scaling) that predates
-  // strategyModeEnabled becoming the sole automation mechanism. Do not assume this code runs.
-  for (const row of decisions) {
-    if (row.status === "ENTRY_READY") {
-      if (entryCutoffEnabled && nowMinutes >= printStartMinutes) continue;
-      if (entryCutoffEnabled && nowMinutes >= startCutoffMinutes) continue;
-      intents.push({
-        id: intentId([legIdentityOf(row), "enter", row.side]),
-        ticker: row.ticker,
-        pairKey: row.pairKey ?? null,
-        benchmark: row.benchmark,
-        side: row.side,
-        intent: row.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
-        sequence: 1,
-        priceRef: row.side === "Long" ? "ASK" : "BID",
-        status: "QUEUED",
-        reason:
-          // Size is deliberately NOT quoted here. The order is a TradingApp hotkey and carries no
-          // quantity, so printing "usd 1000" made the action log assert a size the stream never
-          // sent — the traded amount is whatever that hotkey is configured for in TradingApp.
-          // notionalUsd on the log rows below is the same story: the toolbar's setting, recorded
-          // so a line can be tied back to the panel state, never a report of what was filled.
-          `${automationConfig?.hedgeMode === "hedged" ? "hedged" : "unhedged"} aggressive entry${automationConfig?.scaleMode === "scale_in" ? ` | step ${automationConfig?.dilutionStep}` : ""}`,
-        createdAt: now,
-      });
-    } else if (row.status === "BLOCKED_SPREAD" || row.status === "BLOCKED_EDGE") {
-      intents.push({
-        id: intentId([legIdentityOf(row), "blocked", row.status]),
-        ticker: row.ticker,
-        pairKey: row.pairKey ?? null,
-        benchmark: row.benchmark,
-        side: row.side,
-        intent: row.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
-        sequence: 1,
-        priceRef: row.side === "Long" ? "ASK" : "BID",
-        status: "BLOCKED",
-        reason: row.reason,
-        createdAt: now,
-      });
-    }
-  }
-
-  for (const position of positions) {
-    const decision = decisionMap.get(legIdentityOf(position));
-    const normalizeExitTriggered =
-      decision?.signal != null &&
-      Number.isFinite(decision.signal) &&
-      Math.abs(decision.signal) < Math.max(0, automationConfig?.endSignalThreshold ?? 0);
-    if (position.status === "EXIT_BLOCKED") {
-      intents.push({
-        id: intentId([legIdentityOf(position), "exit-blocked", position.side]),
-        ticker: position.ticker,
-        pairKey: position.pairKey ?? null,
-        benchmark: position.benchmark,
-        side: position.side,
-        intent: position.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE",
-        sequence: position.entryCount,
-        priceRef: position.side === "Long" ? "BID" : "ASK",
-        status: "BLOCKED",
-        reason: position.reason,
-        createdAt: now,
-      });
-      continue;
-    }
-
-    if (normalizeExitTriggered) {
-      const holdBlocked = automationConfig?.minHoldMinutes != null && automationConfig.minHoldMinutes > 0 && now - position.openedAt < automationConfig.minHoldMinutes * 60_000;
-      intents.push({
-        id: intentId([legIdentityOf(position), "normalize-exit", position.side]),
-        ticker: position.ticker,
-        pairKey: position.pairKey ?? null,
-        benchmark: position.benchmark,
-        side: position.side,
-        intent: position.side === "Long" ? "EXIT_LONG_AGGRESSIVE" : "EXIT_SHORT_AGGRESSIVE",
-        sequence: position.entryCount,
-        priceRef: automationConfig?.exitExecutionMode === "passive" ? (position.side === "Long" ? "ASK" : "BID") : (position.side === "Long" ? "BID" : "ASK"),
-        status: holdBlocked ? "BLOCKED" : "QUEUED",
-        reason: holdBlocked
-          ? `min hold ${automationConfig?.minHoldMinutes}min not reached`
-          : `normalization exit | abs(signal) ${Math.abs(decision.signal!).toFixed(2)} < ${Math.max(0, automationConfig?.endSignalThreshold ?? 0).toFixed(2)} | ${automationConfig?.exitExecutionMode === "passive" ? "passive" : "active"}`,
-        createdAt: now,
-      });
-    }
-  }
-
-  return intents.sort((a, b) => a.ticker.localeCompare(b.ticker) || a.intent.localeCompare(b.intent));
-}
-
-function buildFallbackPendingEntryPositions(
-  existingPositions: StreamPosition[],
-  qualifiedLatches: StreamSignalLatch[],
-  filteredSignals: ArbitrageSignal[],
-  automationConfig: StreamAutomationConfig | undefined,
-  entryCutoffEnabled: boolean,
-  sessionStartMinutes: number | null,
-  frozenEntrySignalMap: ReadonlyMap<string, number> = new Map(),
-  /** Leg-keyed, so a paired latch can be anchored on ITS pair's reading. */
-  decisions: readonly StreamDecisionRow[] = []
-): StreamPosition[] {
-  if (!qualifiedLatches.length) return existingPositions;
-  const decisionMap = new Map(decisions.map((row) => [legIdentityOf(row), row]));
-
-  const now = Date.now();
-  const nowMinutes = currentMinutesLocal();
-  const startCutoffMinutes = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
-  if (entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutes, sessionStartMinutes)) return existingPositions;
-  if (entryCutoffEnabled && sessionStartMinutes != null && isBeforeSessionStart(nowMinutes, sessionStartMinutes, startCutoffMinutes)) return existingPositions;
-
-  // Respect the same entryCutoffEnabled guard used everywhere else:
-  // global band (entryCutoffEnabled=false) has no position cap.
-  const maxOpenAllowed = entryCutoffEnabled
-    ? Math.max(1, automationConfig?.maxOpenPositions ?? 10)
-    : Number.MAX_SAFE_INTEGER;
-  const signalMap = new Map(filteredSignals.map((row) => [row.ticker, row]));
-  const next = existingPositions.slice();
-  // Per situation: a ticker already holding one pair can still open another.
-  const existingByLeg = new Set(existingPositions.map((row) => legIdentityOf(row)));
-  let openCount = existingPositions.filter((row) =>
-    row.status === "OPEN" ||
-    row.status === "PRINT_PENDING" ||
-    row.status === "PENDING_ENTRY"
-  ).length;
-
-  for (const latch of qualifiedLatches) {
-    if (existingByLeg.has(legIdentityOf(latch))) continue;
-    if (openCount >= maxOpenAllowed) break;
-
-    const raw = signalMap.get(latch.ticker);
-    // The pair's own reading first — a paired position must never be anchored to one leg's ZAP.
-    const pairedSigned = latch.pairKey
-      ? decisionMap.get(legIdentityOf(latch))?.signal ?? null
-      : null;
-    const signed = pairedSigned ?? (latch.side === "Long"
-      ? (toNum(raw?.zapLsigma) ?? signalSigned(raw) ?? signalAbs(raw))
-      : (toNum(raw?.zapSsigma) ?? signalSigned(raw) ?? signalAbs(raw)));
-    // See syncStreamPositions: anchor to the value at the closed minute's last poll, not
-    // whatever the live poll shows at dispatch time.
-    const frozenSigned = frozenEntrySignalMap.get(`${legIdentityOf(latch)}|${latch.side}`);
-    const entrySignedValue = frozenSigned ?? signed;
-
-    next.push({
-      ticker: latch.ticker,
-      pairKey: latch.pairKey ?? null,
-      benchmark: latch.benchmark,
-      side: latch.side,
-      entrySignal: entrySignedValue,
-      lastSignal: signed,
-      lastScaleSignal: entrySignedValue,
-      belowThresholdTicks: 0,
-      spread: signalSpread(raw),
-      spreadBidPct: signalSpreadBidPct(raw),
-      status: "PENDING_ENTRY",
-      reason: `fallback pending entry after hold ${automationConfig?.minHoldMinutes ?? 0}m`,
-      entryCount: 1,
-      lockedForPrint: false,
-      pendingIntent: latch.side === "Long" ? "ENTER_LONG_AGGRESSIVE" : "ENTER_SHORT_AGGRESSIVE",
-      entryDispatchedAt: null,
-      lastDispatchedAt: null,
-      lastConfirmedActiveAt: null,
-      lastAboveAddCapAt: null,
-      openedAt: latch.qualifiedSince,
-      updatedAt: now,
-    });
-
-    existingByLeg.add(legIdentityOf(latch));
-    openCount += 1;
-  }
-
-  return next.sort((a, b) => a.ticker.localeCompare(b.ticker));
-}
-
-/**
- * A strategy-specific entry gate, evaluated per signal after the shared filters.
- *
- * Exists because rating taxonomies are not shared: Arbitrage gates on session bands with a flat
- * rate/total floor, OpenDoor on per-bin, per-direction rules at a chosen exit horizon. A strategy
- * that supplies a gate has Arbitrage's session-rating filter skipped for it — see skipRatingFilter.
- *
- * Returns the verdict for BOTH directions; the engine keeps the signal only if the direction it
- * actually carries was approved.
- */
-export type StreamSignalGate = (signal: ArbitrageSignal) => { up: boolean; down: boolean };
-
-/**
- * What a decision row's SIGNAL and COUNTERPART are, when the strategy does not measure either the
- * way Arbitrage does.
- *
- * Arbitrage reads a per-ticker sigma against a benchmark ETF, and a row with no such sigma is not
- * a candidate at all. PairFlux measures a PAIR's spread and its counterpart is the other leg, so
- * without this its rows arrived carrying Arbitrage's numbers — a benchmark it does not trade
- * against and a reading it does not gate on — and any leg lacking that unrelated sigma was
- * silently dropped, which costs the pair one of its two orders.
- *
- * Returning null means "no opinion", and the Arbitrage reading is used unchanged.
- */
-export type StreamDecisionOverride = (
-  signal: ArbitrageSignal,
-  side: "Long" | "Short",
-) => {
-  signal: number;
-  benchmark: string;
-  /**
-   * The rows that must be judged together, if any.
-   *
-   * A strategy holding more than one leg per trade returns the SAME key on every leg. The engine
-   * then gives all of them one verdict — see reconcilePairedDecisions. Omit it and nothing
-   * changes: a single-leg strategy stays judged per ticker, as it always was.
-   */
-  pairKey?: string | null;
-  /**
-   * The edge, supplied outright, when the generic `|signal| - spread` does not measure it.
-   *
-   * The generic form assumes signal and spread share a unit. A pair spread quoted in sigmas or
-   * alphas does not share a unit with a dollar spread, and subtracting one from the other produced
-   * a number that was not an edge in any unit.
-   */
-  netEdge?: number | null;
-} | null;
-
-/**
- * Overrides for the live signals request, so a strategy can ask the server for exactly the same
- * universe its Sonar asks for.
- *
- * This matters more than it looks: `cls` selects which rating class the server computes `best`
- * from, and `minRate`/`minTotal` are a SERVER-SIDE pre-filter. Two tabs sending different values
- * receive different sets of tickers before any client filter or gate runs — which is why the
- * OpenDoor stream and OpenDoor Sonar could disagree even after both were made to share the same
- * gate function.
- */
-export type StreamSignalsRequestOverride = {
-  cls?: string;
-  minRate?: number;
-  minTotal?: number;
-  /**
-   * Skip the server-side sigma floor entirely. Sonar never sends `startAbs`; a strategy whose
-   * entry rule is not a sigma threshold (OpenDoor gates on per-bin rules) must not have its
-   * universe silently narrowed by one.
-   */
-  omitStartAbs?: boolean;
-  /**
-   * Skip the per-ticker corr / beta / sigma bounds in the server query.
-   *
-   * Those describe a TICKER against its benchmark ETF. On PairFlux the same three names describe
-   * the PAIR — its correlation, its hedge ratio, its residual spread — and computeLivePairs
-   * already applies the toolbar's ranges to the pair's own published values. Sending them to the
-   * server as per-ticker bounds narrows the universe by an unrelated measurement before a pair can
-   * form, and the leg it removes is not the one the user meant to exclude.
-   */
-  omitTickerRanges?: boolean;
-  /**
-   * Skip the per-TICKER rating floor in the server query.
-   *
-   * `minRate`/`minTotal` there mean "this ticker against its benchmark ETF". On PairFlux the rating
-   * that decides a trade belongs to the PAIR and to the class — signals/pairflux/summary.csv,
-   * `converged / total` — and computeLivePairs applies it to the pair's own published figures.
-   * Sending the ticker floor as well removes LEGS before a pair can form, and because a pair needs
-   * both legs the pass rate is squared: measured 26 of 16 923 INTRA pairs surviving on 2026-09-08.
-   */
-  omitTickerRating?: boolean;
-  /**
-   * Ask the server for the WHOLE universe rather than only the rows it already considers
-   * candidates. A strategy that decides on a live reading — OpenFade fades a deviation band — has
-   * to see every ticker, because the ones the server pre-filtered away are exactly the ones whose
-   * deviation it wants to judge for itself.
-   */
-  includeAll?: boolean;
-};
 
 type UseStreamEngineArgs = {
-  /** Optional strategy-specific entry gate. See StreamSignalGate. */
-  signalGate?: StreamSignalGate;
   /**
-   * Turn one signal row into one row PER SITUATION, when a ticker can be in more than one at once.
-   *
-   * PairFlux is the case: a ticker diverged from three partners is three trades, and the engine
-   * had no way to say that — a row was a ticker, and a ticker was one candidate. Supplied, this
-   * replaces the gate's keep/drop/re-point step entirely; each returned row carries its own
-   * `pairKey`, and everything downstream is keyed by (ticker, pairKey) instead of ticker.
-   *
-   * Returning [] drops the ticker, exactly as a refusing gate does.
+   * Which strategy's screen to draw: arbitrage, pairflux, opendoor, daytwo, openfade or openride.
+   * Omitted, it is the instance's own bridge id without its "stream." prefix.
    */
-  signalExpand?: (row: ArbitrageSignal) => ArbitrageSignal[];
-  /** Optional strategy-specific reading for a decision row. See StreamDecisionOverride. */
-  decisionOverride?: StreamDecisionOverride;
+  screenKey?: string;
   /**
-   * Optional strategy-specific EXIT reading for an already-open position. See syncStreamPositions'
-   * own exitOverride parameter for why this exists and cannot simply reuse decisionOverride: a
-   * decision is only computed for a ticker the entry gate still approves, and PairFlux positions
-   * routinely converge PAST that gate.
-   */
-  exitOverride?: (position: StreamPosition) => number | null;
-  /**
-   * What to send when CUTOFF is reached.
-   *
-   * - "print-close-pair" (default): Arbitrage's Ctrl+Q -> 1s -> Ctrl+O.
-   * - "exit-all": OpenDoor's single Ctrl+E. The operator sets the moment via CUTOFF; it is not
-   *   derived from the exit-class rating, which only ever decides entries.
-   */
-  cutoffAction?: "print-close-pair" | "exit-all";
-  /** Align the signals request with this strategy's Sonar. See StreamSignalsRequestOverride. */
-  /**
-   * Which order type an ENTRY fires, per side. The bridge derives the hotkey solely from this —
-   * see TradingAppActionResolver — so a strategy with its own key pair must say so here or its
-   * orders go out on OpenDoor's Ctrl+F1 / Ctrl+F2.
+   * Which order type a MANUAL entry fires, per side. The bridge derives the hotkey solely from the
+   * type — see TradingAppActionResolver — so a strategy with its own key pair must say so here or a
+   * manual order goes out on the wrong key.
    */
   entryIntentTypes?: { long: string; short: string };
-  signalsRequest?: StreamSignalsRequestOverride;
   /**
-   * Identity of this strategy instance. Several instances run in parallel over the same live
-   * feed, so every piece of state the engine owns — stores, localStorage keys, order intent ids,
-   * bridge ticker leases — is namespaced by this. Omit only in single-instance legacy usage.
+   * Identity of this strategy instance. Several instances run in parallel, so every store is
+   * namespaced by this. Omit only in single-instance legacy usage.
    */
   instance?: StreamInstance;
   enabled: boolean;
   ocrEnabled?: boolean;
-  trackedSignalsEnabled?: boolean;
   initialAutoEnabled?: boolean;
   signalClass: string;
-  ruleBand?: string | null;
-  ratingType: string | null | undefined;
-  metric: StreamDecisionMetric;
-  ratingRule: { minRate: number; minTotal: number };
-  startAbs?: number | null;
-  startAbsMax?: number | null;
-  endAbs?: number | null;
-  closeMode?: "Active" | "Passive";
-  minHoldCandles?: number | null;
-  ratingMode?: string | null;
-  session?: string | null;
-  ratingMinRate?: number | null;
-  ratingMinTotal?: number | null;
-  tickersCsv?: string;
-  minCorr?: number | null;
-  maxCorr?: number | null;
-  minBeta?: number | null;
-  maxBeta?: number | null;
-  minSigma?: number | null;
-  maxSigma?: number | null;
-  sideFilter?: "" | "Long" | "Short" | null;
-  filterConfig: ArbitrageFilterConfigV1;
-  exactSonarFilterSnapshot?: SonarExactFilterSnapshot;
-  maxSpreadValue: unknown;
   automationConfig?: StreamAutomationConfig;
-  /** Tickers currently active in SCANNER (already past minHoldCandles). Used as a
-   *  quick fallback seed before the async fetch completes. */
-  activeScannerTickers?: ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>;
-  /** Called once at automation startup to fetch the authoritative active list from the
-   *  tape API. Result overwrites activeScannerTickers so the seed is always fresh. */
-  onFetchActiveTickers?: () => Promise<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>;
   onUpdated?: () => void;
   onError?: (message: string | null) => void;
 };
+
+// The bridge's own records, as its read endpoints serialise them.
+type BridgeScreenRow = {
+  ticker: string;
+  benchmark?: string | null;
+  pairKey?: string | null;
+  side: string;
+  signal?: number | null;
+  spread?: number | null;
+  spreadBidPct?: number | null;
+  safePrice?: number | null;
+  netEdge?: number | null;
+  status: string;
+  reason?: string | null;
+  report?: string | null;
+};
+
+type BridgePosition = {
+  strategyId: string;
+  ticker: string;
+  pairKey?: string | null;
+  side: string;
+  entryDispatched?: boolean;
+  entrySignal?: number | null;
+  entryCount?: number;
+  openedAtUtc?: string;
+  lastReason?: string | null;
+  lastSignal?: number | null;
+  lastSpread?: number | null;
+};
+
+type BridgeIntent = {
+  atUtc: string;
+  strategyId: string;
+  ticker: string;
+  action: string;
+  side?: string | null;
+  reason?: string | null;
+  dispatched: boolean;
+  outcome?: string | null;
+};
+
+type BridgeState = {
+  positions: BridgePosition[];
+  intents: BridgeIntent[];
+  fetchedAt: number;
+};
+
+/** How often the candidate list is re-read while the page is visible. The bridge caches it for ~1.5 s. */
+const SCREEN_POLL_MS = 2000;
+/** How often the tab asks the bridge what it holds and what it sent. Nothing here is time critical. */
+const BRIDGE_STATE_POLL_MS = 4000;
+/** How often the TradingApp queue / panic flag is re-read while the page is visible. */
+const EXECUTION_STATUS_POLL_MS = 3000;
+/** A refused or arbitrated order stays on the "blocked" list this long. */
+const BLOCKED_INTENT_WINDOW_MS = 10 * 60_000;
+/** The bridge keeps a rolling window of recent orders; anything older than a session is not "today". */
+const ACTION_LOG_WINDOW_MS = 20 * 60 * 60_000;
+
+function pageIsHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function localDayKey(timestamp = Date.now()): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function sideOf(value: string | null | undefined): "Long" | "Short" {
+  return String(value ?? "").trim().toLowerCase().startsWith("s") ? "Short" : "Long";
+}
+
+function decisionStatusOf(value: string): StreamDecisionStatus {
+  switch (value) {
+    case "BLOCKED_SPREAD":
+    case "BLOCKED_EDGE":
+    case "HOLD":
+    case "EXIT_READY":
+    case "EXIT_BLOCKED":
+      return value;
+    default:
+      return "ENTRY_READY";
+  }
+}
+
+/** Bridge intent record -> the row the action log / blocked list shows. Null for actions we do not draw. */
+function intentTypeOf(action: string, side: "Long" | "Short"): StreamOrderIntentType | null {
+  const a = action.trim().toLowerCase();
+  if (a === "entry" || a === "add") return side === "Short" ? "ENTER_SHORT_AGGRESSIVE" : "ENTER_LONG_AGGRESSIVE";
+  if (a === "exit") return side === "Short" ? "EXIT_SHORT_AGGRESSIVE" : "EXIT_LONG_AGGRESSIVE";
+  return null;
+}
 
 type TradingAppBoundWindowResponse = {
   ok?: boolean;
@@ -2965,21 +654,9 @@ type TradingAppBoundWindowResponse = {
   error?: string;
 };
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_LOCAL_TRADING_APP_BRIDGE = "http://localhost:5197";
 const TRADING_APP_BRIDGE_QUERY_KEY = "tradingAppBridge";
 const TRADING_APP_BRIDGE_STORAGE_KEY = "tradingAppBridgeBase";
-const STREAM_AUTOMATION_TICK_MS = 1000;
-// Minimum real wall-clock time a signal must keep qualifying continuously, counting BACKWARD
-// from a minute boundary, before that boundary is allowed to seed a new latch (see
-// aboveSinceRef / minuteQualifiedTickers). E.g. for boundary 08:51:00, the signal must have been
-// continuously above threshold since at least 08:50:50. A bad tick that only appears right at
-// the boundary won't have an aboveSinceRef timestamp old enough and simply won't qualify that
-// minute — dispatch itself still fires exactly at the boundary, using the frozen boundary value.
-const ENTRY_HOLD_BEFORE_BOUNDARY_MS = 10_000;
-// Keeps this strategy's registration (and therefore its ticker leases) alive on the bridge. Must
-// stay well under the arbiter's StrategyTtlSeconds (90s) so a slow tab is never mistaken for dead.
-const STREAM_STRATEGY_HEARTBEAT_MS = 15_000;
 
 function sanitizeTradingAppBridgeBase(x: string | null | undefined): string | null {
   const raw = (x ?? "").trim();
@@ -3035,70 +712,27 @@ const tradingAppBridgeUrl = (path: string) => {
   return `${base}/api/execution/tradingapp${path.startsWith("/") ? path : `/${path}`}`;
 };
 
+
 export function useStreamEngine({
-  instance,
-  signalGate,
-  signalExpand,
-  decisionOverride,
-  exitOverride,
-  cutoffAction = "print-close-pair",
+  screenKey,
   entryIntentTypes,
-  signalsRequest,
+  instance,
   enabled,
   ocrEnabled = false,
-  trackedSignalsEnabled = true,
   initialAutoEnabled = true,
   signalClass,
-  ruleBand,
-  ratingType,
-  metric,
-  ratingRule,
-  startAbs,
-  startAbsMax,
-  endAbs,
-  closeMode,
-  minHoldCandles,
-  ratingMode,
-  session,
-  ratingMinRate,
-  ratingMinTotal,
-  tickersCsv,
-  minCorr,
-  maxCorr,
-  minBeta,
-  maxBeta,
-  minSigma,
-  maxSigma,
-  sideFilter,
-  filterConfig,
-  exactSonarFilterSnapshot,
-  maxSpreadValue,
   automationConfig,
-  activeScannerTickers,
-  onFetchActiveTickers,
   onUpdated,
   onError,
 }: UseStreamEngineArgs) {
-  const STATUS_REFRESH_INTERVAL_MS = 2500;
-  const AUTO_DISPATCH_COOLDOWN_MS = 15000;
-  // After dismissStreamActivePositions, block auto-entry for this ticker for 5 minutes.
-  // Prevents re-dispatch when signal is still ENTRY_READY after manual dismiss.
-  const DISMISS_ENTRY_BLOCK_MS = 5 * 60_000;
-  const SIGNAL_SURGE_GUARD_MIN_COUNT = 24;
-  const SIGNAL_SURGE_GUARD_MULTIPLIER = 3;
-  const SIGNAL_SURGE_GUARD_HOLD_MS = 10000;
-  const SIGNAL_SURGE_GUARD_STABLE_TICKS = 2;
-  const entryCutoffEnabled = hasStrategyEntryCutoff(signalClass);
-  const strategySessionStartMinutes = getStrategySessionStartMinutes(signalClass, automationConfig?.preStartTime);
-
   // --- instance scoping ----------------------------------------------------
-  // Falls back to the historical single-instance identity so existing call sites that do not
-  // pass an instance keep their current storage keys and stores.
+  // Falls back to the historical single-instance identity so call sites that do not pass an
+  // instance keep their current store keys.
   const contextInstance = useStreamInstance();
   const resolvedInstance = instance ?? contextInstance;
   const instanceId = resolvedInstance.instanceId;
   const strategyId = resolvedInstance.strategyId;
-  const strategyPriority = resolvedInstance.priority;
+  const resolvedScreenKey = (screenKey ?? strategyId.replace(/^stream\./i, "")).split(".")[0].toLowerCase();
   const stores = getStreamStores(instanceId);
   const {
     actionLog: streamActionLogStore,
@@ -3107,166 +741,40 @@ export function useStreamEngine({
     position: streamPositionStore,
     signal: streamSignalStore,
     updatedAt: streamUpdatedAtStore,
-    log: streamLogStore,
     filterPassLog: streamFilterPassLogStore,
   } = stores;
 
-  const actionLogStorageKey = streamActionLogStorageKey(instanceId, signalClass);
-
-  const [currentDayKey, setCurrentDayKey] = useState<string>(() => currentTradingDayKey(strategySessionStartMinutes));
-  useEffect(() => {
-    // Re-check day key every minute so the log resets at the session's own START (e.g. 21:00)
-    // rather than calendar midnight — an overnight session must stay one continuous "day".
-    const timer = setInterval(() => {
-      const next = currentTradingDayKey(strategySessionStartMinutes);
-      setCurrentDayKey((prev) => (prev === next ? prev : next));
-    }, 60_000);
-    return () => clearInterval(timer);
-  }, [strategySessionStartMinutes]);
-  // The extended (structured) log used to key its entries by CALENDAR day, so at 00:00 everything
-  // from the 21:00-23:59 stretch of an overnight session stopped matching "today" — and since the
-  // store rewrites storage right after filtering, that half of the session was deleted, not just
-  // hidden. Anchor it to the same START-based trading day the action log already uses.
-  useEffect(() => {
-    streamLogStore.setDayKeyResolver((timestamp) => tradingDayKeyAt(strategySessionStartMinutes, timestamp));
-  }, [streamLogStore, strategySessionStartMinutes]);
-
-  const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>(() => readStreamActionLog(actionLogStorageKey));
-  const [streamPositions, setStreamPositions] = useState<StreamPosition[]>(() => buildStreamPositionsFromActionLog(readStreamActionLog(actionLogStorageKey), currentDayKey));
+  // What the bridge says it holds and sent — mirrored into React state for the callers that read
+  // the hook's return value; the tables themselves read the stores.
+  const [streamActionLog, setStreamActionLog] = useState<StreamActionLogEntry[]>([]);
+  const [streamPositions, setStreamPositions] = useState<StreamPosition[]>([]);
   const [streamOrderIntents, setStreamOrderIntents] = useState<StreamOrderIntent[]>([]);
-  const [streamSignalLatches, setStreamSignalLatches] = useState<StreamSignalLatch[]>([]);
   const [streamAutoEnabled, setStreamAutoEnabledState] = useState<boolean>(initialAutoEnabled);
   const [streamEntryReadyCount, setStreamEntryReadyCount] = useState<number>(0);
   const [streamSessionStartedAt, setStreamSessionStartedAt] = useState<number | null>(null);
   const [streamSessionStoppedAt, setStreamSessionStoppedAt] = useState<number | null>(null);
   const [streamSentOrdersCount, setStreamSentOrdersCount] = useState<number>(0);
   const [streamManualExecutionBusy, setStreamManualExecutionBusy] = useState<boolean>(false);
-  const [executionRevision, setExecutionRevision] = useState(0);
-  const [accountPositionBookRevision, setAccountPositionBookRevision] = useState(0);
-  const dispatchedIntentIdsRef = useRef<Set<string>>(new Set());
-  const dispatchedHedgeIntentIdsRef = useRef<Set<string>>(new Set());
-  const recentDispatchAttemptsRef = useRef<Map<string, number>>(new Map());
-  // Tracks tickers whose initial ENTRY dispatch is currently in-flight (between
-  // dispatchedIntentIdsRef.add and the post-dispatch setStreamPositions that sets
-  // entryDispatchedAt). Checked synchronously in syncStreamPositions to prevent the
-  // engine from dropping the position (via HOLD/grace-timeout path) and allowing the
-  // latch to recreate it with a new qualifiedSince → different intentId → double entry.
-  const dispatchingEntryTickersRef = useRef<Set<string>>(new Set());
-  // Tickers manually dismissed via dismissStreamActivePositions: ticker → dismissedAt ms.
-  // Prevents automatic re-entry dispatch for DISMISS_ENTRY_BLOCK_MS (5 min) after dismiss,
-  // regardless of intentId or mode. Cleared on resetStreamAutomationState / startStreamAutomation.
-  const dismissedEntryTickersRef = useRef<Map<string, number>>(new Map());
-  const pendingActionLogEntriesRef = useRef<Map<string, StreamActionLogEntry[]>>(new Map());
+
   const streamAutoEnabledRef = useRef<boolean>(initialAutoEnabled);
-  const primaryStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
-  const trackedStreamSignalsRef = useRef<ArbitrageSignal[]>([]);
-  // Last time each SSE stream actually delivered a message (snapshot or diff). The server only
-  // sends a "diff" event when something genuinely changed (no periodic heartbeat — see
-  // SignalsStreamBroker), so a long gap alone doesn't prove a problem (could just be a quiet
-  // ticker). Connection health (below) is the reliable signal instead.
-  const primaryStreamLastMessageAtRef = useRef<number>(0);
-  const trackedStreamLastMessageAtRef = useRef<number>(0);
-  // Tracks actual SSE connection health via onerror/onopen (not "any message recently" — see
-  // above). If the backend goes down mid-session, EventSource auto-reconnects on its own but
-  // there's no built-in "this data might be stale" signal — primaryStreamSignalsRef/
-  // trackedStreamSignalsRef just freeze at their last values with nothing indicating anything is
-  // wrong, and automation would keep computing ADD/exit decisions off dead sigma readings
-  // instead of the real, moving live values. These refs make that state observable in the
-  // stream-gate-debug console log instead of only being inferable after the fact from a missing
-  // add.
-  const primaryStreamConnectedRef = useRef<boolean>(true);
-  const trackedStreamConnectedRef = useRef<boolean>(true);
-  const streamActionLogRef = useRef<StreamActionLogEntry[]>(streamActionLog);
-  const localRefreshTimerRef = useRef<number | null>(null);
   const streamExecutionSnapshotRef = useRef<TradingAppExecutionSnapshot | null>(streamExecutionStore.getSnapshot());
-  // Only explicit, fresh account rows participate in reconciliation. Missing data is unknown,
-  // never interpreted as flat.
-  const accountPositionBpByTickerRef = useRef<Map<string, number>>(new Map());
-  const hasFreshAccountPositionBookRef = useRef(false);
   const executionSnapshotSignatureRef = useRef<string>("");
-  const actionLogVersionRef = useRef(0);
   const lastStatusRefreshAtRef = useRef<number>(0);
-  const refreshInFlightRef = useRef(false);
   const statusRefreshInFlightRef = useRef(false);
-  const prevFilteredCountRef = useRef<number>(0);
-  const surgeGuardUntilRef = useRef<number>(0);
-  const surgeGuardStableTicksRef = useRef<number>(0);
-  const strategyAutoWasRunningRef = useRef<boolean>(false);
-  const primeImmediateEntriesRef = useRef<boolean>(false);
-  const activeScannerTickersRef = useRef<ReadonlyArray<{ ticker: string; side: "Long" | "Short" }>>(activeScannerTickers ?? []);
-  const primedFromScannerRef = useRef<ReadonlySet<string>>(new Set());
-  // Continuously tracked (NOT reset per minute) per ticker|side: wall-clock time the CURRENT
-  // unbroken "above threshold" streak began. Deleted the instant the ticker drops to HOLD status
-  // (streak broken), set fresh the instant it next qualifies. Used to gate new-latch creation on
-  // ENTRY_HOLD_BEFORE_BOUNDARY_MS: a signal must have been continuously qualifying for at least
-  // that many real seconds counting backward from a minute boundary for that boundary to seed a
-  // latch — see minuteQualifiedTickers at the syncStreamSignalLatches call site. Flickering
-  // (touch → drop → touch again) is fine as long as the LAST touch-back happened early enough
-  // that the streak since then already covers the required window by the boundary.
-  const aboveSinceRef = useRef<Map<string, { since: number; lastSeenAt: number }>>(new Map());
-  // Accumulates above-threshold tickers and hi/lo sigma across ALL polls within the current
-  // (in-progress) minute. aboveSet = boolean union above startAbs (existing gate logic).
-  // sigmaHiMap/sigmaLoMap = max/min |sigma| per ticker across every poll this minute,
-  // including HOLD rows — sent to the tape server on minute rollover so the scanner can use
-  // loAbs for the minHoldCandles consecutive check: the streak resets if loAbs < startAbs,
-  // meaning the signal dipped below the threshold at some point during the minute.
-  const minuteAccumRef = useRef<{
-    minuteIdx: number;
-    aboveSet: Set<string>;
-    sigmaHiMap: Map<string, number>;
-    sigmaLoMap: Map<string, number>;
-    lastSignedMap: Map<string, number>;
-  } | null>(null);
-  const minuteSnapshotRef = useRef<{
-    minuteIdx: number;
-    aboveSet: Set<string>;
-    sigmaHiMap: Map<string, number>;
-    sigmaLoMap: Map<string, number>;
-    lastSignedMap: Map<string, number>;
-  } | null>(null);
-  const latchQualifiedSinceHistoryRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
-  // Cross-poll memory for syncStreamPositions' pair-simultaneity gate — see its own doc. One
-  // long-lived Map, mutated in place inside syncStreamPositions itself.
-  const pairLegReadyMinutesRef = useRef<Map<string, number>>(new Map());
-  // Tickers that dropped out of the entry window (sigma < startAbs or > startAbsMax)
-  // during the current minute: ticker → minuteIdx when exit occurred. Used to force
-  // qualifiedSince = current minute boundary when the latch is recreated in the same
-  // minute, so dispatch waits until the NEXT minute boundary (matching scanner semantics).
-  const windowExitMinuteRef = useRef<Map<string, number>>(new Map());
-  // Tracks when each ticker first qualified above startAbs — always active, independent of automation.
-  // Used for minHoldCandles display filter (same consecutive-candle logic as tape Scanner).
-  const displayQualifiedSinceRef = useRef<Map<string, { qualifiedSince: number; lastSeenAt: number }>>(new Map());
-  // Tracks signals that passed minHoldCandles — stays alive (visible) until sigma < endAbs or >60s gap.
-  // Mirrors Scanner Active list: signal stays shown even when sigma decays below startAbs to [endAbs, startAbs).
-  const signalDisplayedRef = useRef<Map<string, number>>(new Map());
-  const streamPositionsRef = useRef<StreamPosition[]>(streamPositions);
-  const streamSignalLatchesRef = useRef<StreamSignalLatch[]>([]);
-  const rawSignalByTickerRef = useRef<Map<string, ArbitrageSignal>>(new Map());
-  const dispatchLoopActiveRef = useRef(false);
-  const dispatchLoopReplayRef = useRef(false);
-  // Tracks the last "dayKey|startCutoffTime" for which the Ctrl+Q cutoff hotkey was
-  // sent, so it fires exactly once per cutoff crossing (not once per dispatch tick).
-  const cutoffHotkeySentKeyRef = useRef<string | null>(null);
-  /**
-   * Whether this engine has yet SEEN a moment before its cutoff.
-   *
-   * The cutoff pair is meant to fire on a CROSSING. Without this it fired on a STATE — "it is
-   * later than the cutoff" — which is true all afternoon, so an engine mounted at 15:16 with a
-   * 09:00 cutoff sent Ctrl+Q and Ctrl+O into the live TradingApp the moment it woke up. Measured,
-   * not theorised: 2026-09-03 19:16:33 UTC, both Completed, note "entry cutoff reached at 09:00".
-   *
-   * That was survivable while a stream ran only in a tab someone opened in the morning. It is not
-   * survivable now that Caesar mounts engines when a SEGMENT starts, which is routinely after a
-   * strategy's own cutoff.
-   */
-  const cutoffArmedRef = useRef(false);
-  // Set by resetStreamAutomationState when called while a dispatch loop is active.
-  // The loop's finally block detects this and clears dedup refs AFTER the in-flight
-  // request completes, preventing the window where refs are clear but an order is in-flight.
-  const pendingResetDispatchRefsRef = useRef(false);
-  const refreshRef = useRef<((options?: { refreshBridge?: boolean }) => Promise<void>) | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
-  const onFetchActiveTickersRef = useRef<typeof onFetchActiveTickers>(onFetchActiveTickers);
+  const onUpdatedRef = useRef<typeof onUpdated>(onUpdated);
+  const strategyAutoWasRunningRef = useRef<boolean>(false);
+  const sessionStartedAtRef = useRef<number | null>(null);
+  // Tickers|legs the operator dismissed from the tables. Display only: the bridge keeps tracking
+  // a position until the account is flat, whatever this page hides.
+  const dismissedTickersRef = useRef<Set<string>>(new Set());
+  // Benchmark per listed ticker, so a position row can name its benchmark while it is held (the
+  // candidate list no longer carries a ticker once the book does).
+  const benchmarkByTickerRef = useRef<Map<string, string>>(new Map());
+  const bridgeStateRef = useRef<BridgeState | null>(null);
+  const bridgePollInFlightRef = useRef(false);
+  const screenPollInFlightRef = useRef(false);
+  const publishedRef = useRef({ positions: "", log: "", intents: "" });
 
   const setStreamAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
     const resolved = typeof nextValue === "function" ? nextValue(streamAutoEnabledRef.current) : nextValue;
@@ -3274,322 +782,213 @@ export function useStreamEngine({
     setStreamAutoEnabledState(resolved);
   }, []);
 
-  const appendStreamActionLogEntries = useCallback((entries: StreamActionLogEntry[]) => {
-    if (!entries.length) return;
-    const nextLog = pruneStreamActionLog([...streamActionLogRef.current, ...entries], Date.now());
-    // Per SITUATION. Keyed by ticker, logging the SFNC/AUB entry also dropped the still-unsent
-    // SFNC/FIBK and SFNC/UBSI intents, because all three carry the same symbol.
-    const entryLoggedTickers = new Set(
-      entries
-        .filter((row) => row.kind === "ENTRY" || row.kind === "ADD")
-        .map((row) => logLegId(row))
-    );
-    const closeLoggedTickers = new Set(
-      entries
-        .filter((row) => row.kind === "CLOSE")
-        .map((row) => logLegId(row))
-    );
-    actionLogVersionRef.current += 1;
-    streamActionLogRef.current = nextLog;
-    setStreamActionLog(nextLog);
-    setStreamPositions((prev) => mergeStreamPositionsWithActionLog(
-      prev,
-      nextLog,
-      localDayKey(),
-      accountPositionBpByTickerRef.current,
-      hasFreshAccountPositionBookRef.current,
-    ));
-    setStreamOrderIntents((prev) => prev.filter((intent) => {
-      if (
-        entryLoggedTickers.has(legIdentityOf(intent)) &&
-        (intent.intent === "ENTER_LONG_AGGRESSIVE" || intent.intent === "ENTER_SHORT_AGGRESSIVE")
-      ) {
-        return false;
-      }
-      if (
-        closeLoggedTickers.has(legIdentityOf(intent)) &&
-        (
-          intent.intent === "EXIT_LONG_AGGRESSIVE" ||
-          intent.intent === "EXIT_SHORT_AGGRESSIVE" ||
-          intent.intent === "EXIT_LONG_PRINT" ||
-          intent.intent === "EXIT_SHORT_PRINT"
-        )
-      ) {
-        return false;
-      }
-      if (intent.intent === "CLOSE_ALL_PRINT" && closeLoggedTickers.size > 0) {
-        return false;
-      }
-      return true;
-    }));
-    queueMicrotask(() => {
-      void refreshRef.current?.({ refreshBridge: false }).catch(() => {
-        // best-effort local recompute after action log append
-      });
-    });
-  }, []);
-
-  const flushConfirmedPendingActionLogEntries = useCallback((snapshot: TradingAppExecutionSnapshot | null) => {
-    if (!snapshot || pendingActionLogEntriesRef.current.size === 0) return;
-
-    const confirmedEntries: StreamActionLogEntry[] = [];
-    const confirmedIntentIds: string[] = [];
-
-    pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
-      if (!hasExecutionDispatchConfirmation(snapshot, intentId, entries)) return;
-      confirmedEntries.push(...normalizeConfirmedActionLogEntries(entries));
-      confirmedIntentIds.push(intentId);
-    });
-
-    if (!confirmedIntentIds.length) return;
-
-    for (const intentId of confirmedIntentIds) {
-      pendingActionLogEntriesRef.current.delete(intentId);
-    }
-
-    appendStreamActionLogEntries(confirmedEntries);
-  }, [appendStreamActionLogEntries]);
-
-  const queuePendingActionLogEntries = useCallback((intentId: string, entries: StreamActionLogEntry[]) => {
-    if (!intentId || !entries.length) return;
-    pendingActionLogEntriesRef.current.set(intentId, entries);
-    flushConfirmedPendingActionLogEntries(streamExecutionSnapshotRef.current);
-  }, [flushConfirmedPendingActionLogEntries]);
-
-  useEffect(() => {
-    return streamExecutionStore.subscribe(() => {
-      const snapshot = streamExecutionStore.getSnapshot();
-      streamExecutionSnapshotRef.current = snapshot;
-      flushConfirmedPendingActionLogEntries(snapshot);
-      setExecutionRevision((prev) => prev + 1);
-    });
-  }, [flushConfirmedPendingActionLogEntries]);
-
-  const openLoggedTickers = useMemo(
-    () => {
-      const open = buildOpenTickersFromActionLog(streamActionLog, currentDayKey);
-      if (hasFreshAccountPositionBookRef.current) {
-        for (const ticker of open) {
-          if ((accountPositionBpByTickerRef.current.get(ticker) ?? 0) === 0) open.delete(ticker);
-        }
-      }
-      return open;
-    },
-    [accountPositionBookRevision, currentDayKey, streamActionLog]
-  );
-
-  const primarySignalsStreamUrl = useMemo(() => buildSignalsStreamUrl({
-    cls: (signalsRequest?.cls ?? signalClass) as any,
-    type: (ratingType ?? "any") as any,
-    mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-    ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-    zapMode: (exactSonarFilterSnapshot?.zapMode ?? _zapModeForMetric(metric)) as any,
-    minRate: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minRate ?? ratingMinRate ?? ratingRule.minRate),
-    minTotal: signalsRequest?.omitTickerRating ? 0 : (signalsRequest?.minTotal ?? ratingMinTotal ?? ratingRule.minTotal),
-    // Active mode: lower server threshold to endAbs so decaying signals (sigma in [endAbs, startAbs)) are returned.
-    // Passive mode: endAbs is not a sigma threshold (exit = gap reversal) — keep server threshold at startAbs.
-    startAbs: signalsRequest?.omitStartAbs
-      ? undefined
-      : (closeMode !== "Passive" && endAbs != null && endAbs > 0 && endAbs < (startAbs ?? Infinity))
-        ? endAbs
-        : (startAbs ?? undefined),
-    tickers: tickersCsv || undefined,
-    minCorr: signalsRequest?.omitTickerRanges ? undefined : minCorr ?? undefined,
-    maxCorr: signalsRequest?.omitTickerRanges ? undefined : maxCorr ?? undefined,
-    minBeta: signalsRequest?.omitTickerRanges ? undefined : minBeta ?? undefined,
-    maxBeta: signalsRequest?.omitTickerRanges ? undefined : maxBeta ?? undefined,
-    minSigma: signalsRequest?.omitTickerRanges ? undefined : minSigma ?? undefined,
-    maxSigma: signalsRequest?.omitTickerRanges ? undefined : maxSigma ?? undefined,
-    limit: 5000,
-    // A strategy that decides on a live reading needs the whole universe, not the server's own
-    // candidate set — see StreamSignalsRequestOverride.includeAll.
-    includeAll: signalsRequest?.includeAll ?? false,
-  }), [
-    exactSonarFilterSnapshot,
-    maxBeta,
-    maxCorr,
-    maxSigma,
-    metric,
-    minBeta,
-    minCorr,
-    minSigma,
-    ratingMinRate,
-    ratingMinTotal,
-    ratingRule.minRate,
-    ratingRule.minTotal,
-    ratingType,
-    signalClass,
-    signalsRequest,
-    startAbs,
-    endAbs,
-    closeMode,
-    ratingMode,
-    tickersCsv,
-  ]);
-
-  const trackedSignalsStreamUrl = useMemo(() => {
-    if (!trackedSignalsEnabled) return null;
-    const activeTrackedTickers = Array.from(openLoggedTickers);
-    if (!activeTrackedTickers.length) return null;
-    return buildSignalsStreamUrl({
-      cls: (signalsRequest?.cls ?? signalClass) as any,
-      type: (ratingType ?? "any") as any,
-      mode: (exactSonarFilterSnapshot?.mode ?? "all") as any,
-      ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) as any,
-      zapMode: (exactSonarFilterSnapshot?.zapMode ?? _zapModeForMetric(metric)) as any,
-      minRate: 0,
-      minTotal: 1,
-      tickers: activeTrackedTickers.join(","),
-      minCorr: undefined,
-      maxCorr: undefined,
-      minBeta: undefined,
-      maxBeta: undefined,
-      minSigma: undefined,
-      maxSigma: undefined,
-      limit: Math.max(20, Math.min(80, activeTrackedTickers.length * 2)),
-      includeAll: true,
-    });
-  }, [
-    exactSonarFilterSnapshot,
-    metric,
-    openLoggedTickers,
-    ratingType,
-    signalClass,
-    signalsRequest,
-    trackedSignalsEnabled,
-  ]);
-
-  useEffect(() => {
-    const restoredLog = readStreamActionLog(actionLogStorageKey);
-    streamActionLogStore.clear();
-    streamDecisionStore.clear();
-    streamOrderIntentStore.clear();
-    streamPositionStore.clear();
-    streamSignalStore.clear();
-    streamUpdatedAtStore.clear();
-    streamFilterPassLogStore.clear();
-    actionLogVersionRef.current += 1;
-    setStreamActionLog(restoredLog);
-    setStreamPositions(buildStreamPositionsFromActionLog(restoredLog, localDayKey()));
-    setStreamSignalLatches([]);
-    setStreamOrderIntents([]);
-    setStreamEntryReadyCount(0);
-    setStreamSessionStartedAt(null);
-    setStreamSessionStoppedAt(null);
-    setStreamSentOrdersCount(0);
-    latchQualifiedSinceHistoryRef.current.clear();
-    displayQualifiedSinceRef.current.clear();
-    signalDisplayedRef.current.clear();
-    dispatchedIntentIdsRef.current.clear();
-    dispatchedHedgeIntentIdsRef.current.clear();
-    recentDispatchAttemptsRef.current.clear();
-    dispatchingEntryTickersRef.current.clear();
-    dismissedEntryTickersRef.current.clear();
-  }, [actionLogStorageKey]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  // ── THE CANDIDATE LIST ──────────────────────────────────────────────────────────────────────
+  // One small document, computed on the bridge from the SAME rows and the SAME screen the engine
+  // decides on. Nothing is filtered or judged here.
+  const pollScreen = useCallback(async () => {
+    if (screenPollInFlightRef.current) return;
+    screenPollInFlightRef.current = true;
     try {
-      const next = pruneStreamActionLog(streamActionLog, Date.now());
-      if (!next.length) {
-        window.localStorage.removeItem(actionLogStorageKey);
+      const response = await fetchWithTimeout(bridgeUrl(`/api/stream/screen/${encodeURIComponent(resolvedScreenKey)}`), { cache: "no-store" });
+      if (!response.ok) {
+        onErrorRef.current?.(`candidate list unavailable (${response.status})`);
         return;
       }
-      window.localStorage.setItem(actionLogStorageKey, JSON.stringify(next));
-    } catch {
-      // ignore storage issues
-    }
-  }, [actionLogStorageKey, streamActionLog]);
+      const json = await response.json().catch(() => null);
+      const screen = json?.screen;
+      if (!screen) return;
 
-  const scheduleLocalRefresh = useCallback(() => {
-    if (!enabled || typeof window === "undefined") return;
-    if (localRefreshTimerRef.current != null) return;
-    // 180ms keeps a dispatching tab's decisions current with the tape. Once the bridge holds real
-    // authority for this strategy, this tab is a monitor only (see bridgeHasAuthorityRef) — nothing
-    // here fires an order, so a slower redraw costs nothing but saves the full recompute (candidate
-    // rows, latches, positions, and for PairFlux the pair-expanded universe — tens of thousands of
-    // rows vs. Arbitrage's flat ticker list) from re-running on every SSE tick, which is what made
-    // the PairFlux tab visibly lag once it stopped being the one actually deciding anything.
-    const delayMs = bridgeHasAuthorityRef.current ? 1000 : 180;
-    localRefreshTimerRef.current = window.setTimeout(() => {
-      localRefreshTimerRef.current = null;
-      void refreshRef.current?.({ refreshBridge: false }).catch((error: any) => {
-        onErrorRef.current?.(error?.message ?? String(error));
+      const asOf = Date.parse(String(screen.asOfUtc ?? "")) || Date.now();
+      const rows: StreamDecisionRow[] = (Array.isArray(screen.rows) ? (screen.rows as BridgeScreenRow[]) : []).map((row) => ({
+        ticker: String(row.ticker ?? "").toUpperCase(),
+        benchmark: String(row.benchmark ?? "UNKNOWN"),
+        pairKey: row.pairKey ?? null,
+        side: sideOf(row.side),
+        signal: toNum(row.signal),
+        spread: toNum(row.spread),
+        spreadBidPct: toNum(row.spreadBidPct),
+        safePrice: toNum(row.safePrice),
+        netEdge: toNum(row.netEdge),
+        positionBp: null,
+        report: row.report ?? null,
+        status: decisionStatusOf(String(row.status ?? "")),
+        reason: String(row.reason ?? ""),
+        updatedAt: asOf,
+      }));
+
+      const benchmarks = new Map<string, string>();
+      for (const row of rows) benchmarks.set(row.ticker, row.benchmark);
+      benchmarkByTickerRef.current = benchmarks;
+
+      const changed = streamDecisionStore.applySnapshot(rows);
+      streamSignalStore.applyMeta({
+        totalCount: rows.length,
+        countries: Array.isArray(screen.countries) ? screen.countries : [],
+        exchanges: Array.isArray(screen.exchanges) ? screen.exchanges : [],
+        sectors: Array.isArray(screen.sectors) ? screen.sectors : [],
       });
-    }, delayMs);
-  }, [enabled]);
-
-  // Subscribes through the shared hub instead of owning an EventSource: several strategy
-  // instances in this tab usually resolve to the SAME stream URL, and each extra connection would
-  // re-download and re-parse an identical byte stream every tick. The hub keeps one connection per
-  // distinct URL and fans the parsed array out. Snapshot/diff merging now happens inside the hub,
-  // so this effect only mirrors the result into the refs the refresh cycle already reads.
-  useEffect(() => {
-    if (!enabled || typeof window === "undefined") return;
-
-    return subscribeToStreamSse(primarySignalsStreamUrl, (state) => {
-      const wasConnected = primaryStreamConnectedRef.current;
-      primaryStreamConnectedRef.current = state.connected;
-      if (wasConnected && !state.connected) {
-        logStreamGateBlock("sse:primaryStreamDisconnected", {
-          url: primarySignalsStreamUrl,
-          lastMessageAgeMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
-        });
-      } else if (!wasConnected && state.connected) {
-        logStreamGateBlock("sse:primaryStreamReconnected", {
-          downForMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
-        });
-      }
-      primaryStreamSignalsRef.current = state.signals;
-      primaryStreamLastMessageAtRef.current = state.lastMessageAt;
-      scheduleLocalRefresh();
-    });
-  }, [enabled, primarySignalsStreamUrl, scheduleLocalRefresh]);
-
-  useEffect(() => {
-    if (!enabled || !trackedSignalsStreamUrl || typeof window === "undefined") {
-      if (trackedStreamSignalsRef.current.length) {
-        trackedStreamSignalsRef.current = [];
-        scheduleLocalRefresh();
-      }
-      return;
+      // The UPDATED indicator moves only when a visible row actually changed.
+      if (changed) streamUpdatedAtStore.setValue(asOf);
+      startTransition(() => {
+        setStreamEntryReadyCount(rows.reduce((count, row) => (row.status === "ENTRY_READY" ? count + 1 : count), 0));
+      });
+      onUpdatedRef.current?.();
+      onErrorRef.current?.(null);
+    } catch (error: any) {
+      onErrorRef.current?.(error?.message ?? String(error));
+    } finally {
+      screenPollInFlightRef.current = false;
     }
+  }, [resolvedScreenKey, streamDecisionStore, streamSignalStore, streamUpdatedAtStore]);
 
-    return subscribeToStreamSse(trackedSignalsStreamUrl, (state) => {
-      const wasConnected = trackedStreamConnectedRef.current;
-      trackedStreamConnectedRef.current = state.connected;
-      if (wasConnected && !state.connected) {
-        logStreamGateBlock("sse:trackedStreamDisconnected", {
-          url: trackedSignalsStreamUrl,
-          lastMessageAgeMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
+  // ── THE BRIDGE'S POSITIONS AND ORDERS ───────────────────────────────────────────────────────
+  // Positions and recent orders come from the engine that made them; this only shapes them into
+  // the rows the tables already draw.
+  const publishBridgeState = useCallback(() => {
+    const state = bridgeStateRef.current;
+    if (!state) return;
+    const now = Date.now();
+    const benchmarks = benchmarkByTickerRef.current;
+    const mine = (row: { strategyId: string }) => row.strategyId.toLowerCase() === strategyId.toLowerCase();
+
+    const positions: StreamPosition[] = [];
+    for (const p of state.positions) {
+      if (!mine(p)) continue;
+      const ticker = p.ticker.toUpperCase();
+      const leg = legIdentityOf({ ticker, pairKey: p.pairKey ?? null });
+      if (dismissedTickersRef.current.has(leg) || dismissedTickersRef.current.has(ticker)) continue;
+      const openedAt = p.openedAtUtc ? Date.parse(p.openedAtUtc) : now;
+      const dispatched = p.entryDispatched !== false;
+      positions.push({
+        ticker,
+        pairKey: p.pairKey ?? null,
+        benchmark: benchmarks.get(ticker) ?? "",
+        side: sideOf(p.side),
+        entrySignal: p.entrySignal ?? null,
+        lastSignal: p.lastSignal ?? null,
+        lastScaleSignal: null,
+        spread: p.lastSpread ?? null,
+        spreadBidPct: null,
+        status: dispatched ? "OPEN" : "PENDING_ENTRY",
+        reason: p.lastReason ?? "",
+        entryCount: p.entryCount ?? 1,
+        belowThresholdTicks: 0,
+        lockedForPrint: false,
+        pendingIntent: null,
+        entryDispatchedAt: dispatched ? openedAt : null,
+        lastDispatchedAt: null,
+        lastConfirmedActiveAt: null,
+        lastAboveAddCapAt: null,
+        openedAt: Number.isFinite(openedAt) ? openedAt : now,
+        updatedAt: state.fetchedAt,
+      });
+    }
+    positions.sort((a, b) => a.ticker.localeCompare(b.ticker));
+
+    const log: StreamActionLogEntry[] = [];
+    const intents: StreamOrderIntent[] = [];
+    let sent = 0;
+    for (const r of state.intents) {
+      if (!mine(r)) continue;
+      const at = Date.parse(r.atUtc);
+      if (!Number.isFinite(at)) continue;
+      const side = sideOf(r.side);
+      const type = intentTypeOf(r.action, side);
+      if (!type) continue;
+      const action = r.action.trim().toLowerCase();
+      const ticker = r.ticker.toUpperCase();
+      const benchmark = benchmarks.get(ticker) ?? "";
+      const id = `${strategyId}|${r.atUtc}|${ticker}|${action}`;
+      if (r.dispatched) {
+        if (now - at > ACTION_LOG_WINDOW_MS) continue;
+        if (sessionStartedAtRef.current != null && at >= sessionStartedAtRef.current) sent += 1;
+        log.push({
+          id,
+          dayKey: localDayKey(at),
+          ticker,
+          pairKey: null,
+          benchmark,
+          side,
+          kind: action === "entry" ? "ENTRY" : action === "add" ? "ADD" : "CLOSE",
+          deviation: null,
+          at,
+          intent: type,
+          reason: r.reason ?? undefined,
         });
-      } else if (!wasConnected && state.connected) {
-        logStreamGateBlock("sse:trackedStreamReconnected", {
-          downForMs: state.lastMessageAt ? Date.now() - state.lastMessageAt : null,
+      } else if (now - at <= BLOCKED_INTENT_WINDOW_MS) {
+        const isEntry = action === "entry" || action === "add";
+        intents.push({
+          id,
+          ticker,
+          pairKey: null,
+          benchmark,
+          side,
+          intent: type,
+          sequence: action === "add" ? 2 : 1,
+          priceRef: isEntry === (side === "Long") ? "ASK" : "BID",
+          status: "BLOCKED",
+          reason: [r.outcome, r.reason].filter(Boolean).join(" | "),
+          createdAt: at,
         });
       }
-      trackedStreamSignalsRef.current = state.signals;
-      trackedStreamLastMessageAtRef.current = state.lastMessageAt;
-      scheduleLocalRefresh();
-    });
-  }, [enabled, scheduleLocalRefresh, trackedSignalsStreamUrl]);
+    }
+    log.sort((a, b) => b.at - a.at);
+    intents.sort((a, b) => b.createdAt - a.createdAt);
 
-  useEffect(() => {
-    setStreamPositions((prev) => {
-      return mergeStreamPositionsWithActionLog(
-        prev,
-        streamActionLog,
-        currentDayKey,
-        accountPositionBpByTickerRef.current,
-        hasFreshAccountPositionBookRef.current,
-      );
-    });
-  }, [accountPositionBookRevision, currentDayKey, streamActionLog]);
+    const positionsSig = positions
+      .map((p) => `${legIdentityOf(p)}|${p.side}|${p.status}|${p.entryCount}|${p.lastSignal ?? ""}|${p.spread ?? ""}|${p.benchmark}|${p.reason}`)
+      .join(";");
+    if (positionsSig !== publishedRef.current.positions) {
+      publishedRef.current.positions = positionsSig;
+      streamPositionStore.applySnapshot(positions);
+      startTransition(() => setStreamPositions(positions));
+    }
+    const logSig = log.map((row) => row.id).join(";");
+    if (logSig !== publishedRef.current.log) {
+      publishedRef.current.log = logSig;
+      streamActionLogStore.applySnapshot(log);
+      startTransition(() => setStreamActionLog(log));
+    }
+    const intentsSig = intents.map((row) => row.id).join(";");
+    if (intentsSig !== publishedRef.current.intents) {
+      publishedRef.current.intents = intentsSig;
+      streamOrderIntentStore.applySnapshot(intents);
+      startTransition(() => setStreamOrderIntents(intents));
+    }
+    setStreamSentOrdersCount((prev) => (prev === sent ? prev : sent));
+  }, [strategyId, streamActionLogStore, streamOrderIntentStore, streamPositionStore]);
 
+  const pollBridgeState = useCallback(async () => {
+    if (bridgePollInFlightRef.current) return;
+    bridgePollInFlightRef.current = true;
+    try {
+      const [positionsResponse, engineResponse] = await Promise.all([
+        fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" }),
+        fetchWithTimeout(bridgeUrl("/api/stream/caesar/engine"), { cache: "no-store" }),
+      ]);
+      const positionsJson = positionsResponse.ok ? await positionsResponse.json().catch(() => null) : null;
+      const engineJson = engineResponse.ok ? await engineResponse.json().catch(() => null) : null;
+      // Neither answered: keep showing the last picture rather than blanking the tables.
+      if (!positionsJson && !engineJson) return;
+      const previous = bridgeStateRef.current;
+      bridgeStateRef.current = {
+        positions: Array.isArray(positionsJson?.positions) ? positionsJson.positions : previous?.positions ?? [],
+        intents: Array.isArray(engineJson?.engine?.recentIntents) ? engineJson.engine.recentIntents : previous?.intents ?? [],
+        fetchedAt: Date.now(),
+      };
+      publishBridgeState();
+    } catch {
+      // The bridge may be down while the frontend is being worked on; the next tick tries again.
+    } finally {
+      bridgePollInFlightRef.current = false;
+    }
+  }, [publishBridgeState]);
+
+  // ── THE TRADINGAPP QUEUE ────────────────────────────────────────────────────────────────────
   const refreshExecutionStatus = useCallback(async (force = false): Promise<TradingAppExecutionSnapshot | null> => {
     const now = Date.now();
     const currentExecutionSnapshot = streamExecutionSnapshotRef.current;
-    if (!force && currentExecutionSnapshot && now - lastStatusRefreshAtRef.current < STATUS_REFRESH_INTERVAL_MS) {
+    if (!force && currentExecutionSnapshot && now - lastStatusRefreshAtRef.current < EXECUTION_STATUS_POLL_MS - 500) {
       return currentExecutionSnapshot;
     }
     if (!force && statusRefreshInFlightRef.current) {
@@ -3599,27 +998,7 @@ export function useStreamEngine({
       statusRefreshInFlightRef.current = true;
       const response = await fetchWithTimeout(tradingAppBridgeUrl("/status"), { cache: "no-store" });
       if (!response.ok) return null;
-      const json = await response.json();
-      const snapshot = json as TradingAppExecutionSnapshot;
-      const positionsResponse = await fetchWithTimeout(tradingAppBridgeUrl("/positions"), { cache: "no-store" });
-      const positionsJson = positionsResponse.ok ? await positionsResponse.json().catch(() => null) : null;
-      const ageSeconds = toNum(positionsJson?.ageSeconds);
-      if (Array.isArray(positionsJson?.positions) && ageSeconds != null && ageSeconds >= 0 && ageSeconds <= 15) {
-        const nextBook = new Map<string, number>();
-        for (const position of positionsJson.positions) {
-          const ticker = String(position?.ticker ?? "").trim().toUpperCase();
-          const positionBp = toNum(position?.positionBp);
-          if (ticker && positionBp != null) nextBook.set(ticker, positionBp);
-        }
-        const currentBook = accountPositionBpByTickerRef.current;
-        const changed = currentBook.size !== nextBook.size || Array.from(nextBook).some(([ticker, bp]) => currentBook.get(ticker) !== bp);
-        const becameAuthoritative = !hasFreshAccountPositionBookRef.current;
-        hasFreshAccountPositionBookRef.current = true;
-        if (changed || becameAuthoritative) {
-          accountPositionBpByTickerRef.current = nextBook;
-          setAccountPositionBookRevision((revision) => revision + 1);
-        }
-      }
+      const snapshot = (await response.json()) as TradingAppExecutionSnapshot;
       lastStatusRefreshAtRef.current = now;
       const signature = JSON.stringify(snapshot);
       if (signature !== executionSnapshotSignatureRef.current) {
@@ -3635,18 +1014,6 @@ export function useStreamEngine({
       statusRefreshInFlightRef.current = false;
     }
   }, []);
-
-  const bindStreamActiveWindow = useCallback(async () => {
-    const response = await fetchWithTimeout(tradingAppBridgeUrl("/bind-active-window"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    const json = await response.json().catch(() => ({}));
-    await refreshExecutionStatus(true);
-    if (!response.ok || json?.ok === false) {
-      throw new Error(json?.error || `Failed to bind active window (${response.status})`);
-    }
-  }, [refreshExecutionStatus]);
 
   const bindStreamWindows = useCallback(async () => {
     const activeResponse = await fetchWithTimeout(tradingAppBridgeUrl("/bind-active-window"), {
@@ -3670,17 +1037,6 @@ export function useStreamEngine({
     await refreshExecutionStatus(true);
   }, [refreshExecutionStatus]);
 
-  const bindStreamActiveWindowDelayed = useCallback(async (delayMs = 3000) => {
-    const response = await fetch(`${tradingAppBridgeUrl("/bind-active-window-delayed")}?delayMs=${Math.max(250, Math.trunc(delayMs || 3000))}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    const json = await response.json().catch(() => ({}));
-    await refreshExecutionStatus(true);
-    if (!response.ok || json?.ok === false) {
-      throw new Error(json?.error || `Failed to bind delayed active window (${response.status})`);
-    }
-  }, [refreshExecutionStatus]);
 
   /**
    * Whether the bridge is scraping the market-maker BOOK from the bound window.
@@ -3820,37 +1176,6 @@ export function useStreamEngine({
     }
   }, [refreshExecutionStatus, strategyId]);
 
-  // ONE QUEUE, SEVERAL STRATEGIES.
-  //
-  // The TradingApp queue is machine-wide: every strategy instance enqueues into it. An unscoped
-  // clear therefore aborts orders this strategy never created — measured under Caesar, where
-  // pressing STOP on one strategy dropped the other one's pending entries mid-boundary.
-  //
-  // `thisStrategyOnly` narrows it to intents this instance produced. Intent ids are namespaced by
-  // strategyId (see buildStreamOrderIntents), which is the same prefix the bridge itself uses when
-  // a strategy stops. The unscoped form is kept for the operator's own "clear queue" button, where
-  // clearing everything is the point.
-  /**
-   * Bridge strategy ids OTHER than this one that are currently running.
-   *
-   * Used by the CUTOFF path, which is the one place this engine reaches for a TradingApp hotkey
-   * that is not scoped to a ticker. Returns [] on any failure, which makes the caller behave
-   * exactly as it did before this check existed.
-   */
-  const runningStrategiesOtherThan = useCallback(async (selfId: string): Promise<string[]> => {
-    try {
-      const response = await fetch(bridgeUrl("/api/stream/automation/states"), { cache: "no-store" });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok || json?.ok === false) return [];
-      const rows: any[] = Array.isArray(json?.states) ? json.states : [];
-      return rows
-        .filter((row) => row?.autoEnabled === true && row?.strategyModeEnabled === true)
-        .map((row) => String(row?.strategyId ?? ""))
-        .filter((id) => id && id.toLowerCase() !== selfId.toLowerCase());
-    } catch {
-      return [];
-    }
-  }, []);
 
   const clearStreamExecutionQueue = useCallback(async (options?: { thisStrategyOnly?: boolean }) => {
     const scoped = options?.thisStrategyOnly === true && Boolean(strategyId);
@@ -3868,60 +1193,6 @@ export function useStreamEngine({
     }
   }, [refreshExecutionStatus, strategyId]);
 
-  const resetStreamAutomationState = useCallback(() => {
-    // Always safe: reset UI state. The dispatch loop uses a snapshot taken at loop start,
-    // so changing streamPositions/latches/intents mid-loop is harmless for the current batch.
-    setStreamSignalLatches([]);
-    setStreamPositions(buildStreamPositionsFromActionLog(streamActionLog, localDayKey()));
-    setStreamOrderIntents([]);
-    setStreamSentOrdersCount(0);
-    if (dispatchLoopActiveRef.current) {
-      // A dispatch is in-flight. Clearing dedup refs NOW would create a window where
-      // an in-flight order has no intentId or in-flight guard, letting the latch recreate
-      // with a new qualifiedSince → different intentId → second ENTRY order.
-      // Defer the ref-clear to the dispatch loop's finally block.
-      pendingResetDispatchRefsRef.current = true;
-      return;
-    }
-    dispatchedIntentIdsRef.current.clear();
-    dispatchedHedgeIntentIdsRef.current.clear();
-    recentDispatchAttemptsRef.current.clear();
-    dispatchingEntryTickersRef.current.clear();
-    dismissedEntryTickersRef.current.clear();
-  }, [streamActionLog]);
-
-  const dismissStreamActivePositions = useCallback((tickers: string[]) => {
-    if (!tickers.length) return;
-    const tickerSet = new Set(tickers.map((t) => t.toUpperCase()));
-    const nextLog = pruneStreamActionLog(
-      streamActionLogRef.current.filter((entry) => !tickerSet.has(entry.ticker)),
-      Date.now()
-    );
-    actionLogVersionRef.current += 1;
-    streamActionLogRef.current = nextLog;
-    setStreamActionLog(nextLog);
-    setStreamPositions((prev) => prev.filter((pos) => !tickerSet.has(pos.ticker)));
-    setStreamSignalLatches((prev) => prev.filter((latch) => !tickerSet.has(latch.ticker)));
-    setStreamOrderIntents((prev) => prev.filter((intent) => !tickerSet.has(intent.ticker)));
-    pendingActionLogEntriesRef.current.forEach((entries, intentId) => {
-      if (entries.some((e) => tickerSet.has(e.ticker))) {
-        pendingActionLogEntriesRef.current.delete(intentId);
-      }
-    });
-    // Block auto-entry re-dispatch for DISMISS_ENTRY_BLOCK_MS after dismiss.
-    // Without this: after cooldown expiry (15s) the dispatch loop sees no action-log entry
-    // and no dispatchedIntentId for the ticker → fires a second ENTRY order.
-    const now = Date.now();
-    tickerSet.forEach((ticker) => {
-      dismissedEntryTickersRef.current.set(ticker, now);
-      // Dismissing means this strategy no longer holds the ticker — release it so a competing
-      // strategy is not blocked by a lease nothing backs any more.
-      void releaseStreamTicker({ strategyId, ticker, reason: "dismissed by user" });
-    });
-    queueMicrotask(() => {
-      void refreshRef.current?.({ refreshBridge: false }).catch(() => {});
-    });
-  }, [strategyId]);
 
   const submitManualStreamOrders = useCallback(async (tickersText: string, action: StreamManualOrderAction) => {
     const tickers = Array.from(new Set(
@@ -3970,657 +1241,80 @@ export function useStreamEngine({
     }
   }, [automationConfig?.queueDelayMaxSeconds, automationConfig?.queueDelayMinSeconds, refreshExecutionStatus, signalClass]);
 
+
+
+
+
+  // ── REFRESH ─────────────────────────────────────────────────────────────────────────────────
+  // What a caller asking for "refresh" means now: re-read the three documents. `refreshBridge:
+  // false` skips the TradingApp queue read, which is the only one that talks to the desktop app.
   const refresh = useCallback(async (options?: { refreshBridge?: boolean }) => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
-
-    try {
-    // Surface SSE connection state alongside every other stream-gate-debug log, so a missed
-    // add/entry can be directly correlated with "was the live signal feed actually connected at
-    // that moment" instead of only inferred afterward from a gap in the data.
-    if (!primaryStreamConnectedRef.current || !trackedStreamConnectedRef.current) {
-      logStreamGateBlock("data:streamDisconnectedDuringRefresh", {
-        primaryConnected: primaryStreamConnectedRef.current,
-        trackedConnected: trackedStreamConnectedRef.current,
-        primaryTickerCount: primaryStreamSignalsRef.current.length,
-        trackedTickerCount: trackedStreamSignalsRef.current.length,
-      });
-    }
-    const refreshBridge = options?.refreshBridge !== false;
-    const normalizedByTicker = new Map(
-      primaryStreamSignalsRef.current.map((row) => [row.ticker, row] as const)
-    );
-
-    for (const row of trackedStreamSignalsRef.current) {
-      normalizedByTicker.set(row.ticker, row);
-    }
-
-    const nowMs = Date.now();
-    const normalizedMerged = Array.from(normalizedByTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
-    const normalized = normalizedMerged;
-    const executionSnapshot = refreshBridge
-      ? await refreshExecutionStatus(false)
-      : streamExecutionSnapshotRef.current;
-    const preFiltered = exactSonarFilterSnapshot
-      ? applyExactSonarClientFilters(normalizedMerged, exactSonarFilterSnapshot)
-      : applyArbitrageFilters(normalizedMerged, filterConfig) as ArbitrageSignal[];
-
-    const filtered = sideFilter
-      ? preFiltered.filter(row => {
-          const dir = (row.direction ?? "").toLowerCase();
-          const isLong = dir === "up" || dir === "long";
-          const isShort = dir === "down" || dir === "short";
-          if (sideFilter === "Long") return isLong;
-          if (sideFilter === "Short") return isShort;
-          return true;
-        })
-      : preFiltered;
-
-    // Apply BIN / BINS / SESSION rating filter using best_params attached to each signal.
-    // BIN/BINS only apply when metric is SigmaZap (same guard as Sonar zapMode=sigma / Scanner metric=SigmaZap).
-    // When exactSonarFilterSnapshot is present, BIN/BINS were already applied by applyExactSonarClientFilters — skip.
-    const ratingModeRaw = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")).toUpperCase();
-    const ratingModeUpper = (ratingModeRaw === "BIN" || ratingModeRaw === "BINS") && metric !== "SigmaZap"
-      ? "SESSION"
-      : ratingModeRaw;
-    const effectiveMinRate = ratingMinRate ?? ratingRule.minRate;
-    const effectiveMinTotal = ratingMinTotal ?? ratingRule.minTotal;
-    // A strategy-specific gate (OpenDoor's per-bin rule) IS that strategy's rating decision, so
-    // Arbitrage's session-rating filter must not also run — the two taxonomies describe different
-    // things and stacking them either double-cuts or passes everything.
-    const skipRatingFilter = signalGate != null
-      || (exactSonarFilterSnapshot && (ratingModeUpper === "BIN" || ratingModeUpper === "BINS"));
-    const ratingFiltered = skipRatingFilter ? filtered : filtered.filter(row => {
-      const rowSide = row.direction === "down" ? "Short" : "Long";
-      const rawSigma = rowSide === "Short"
-        ? toNum(row.zapSsigma ?? row.zapS)
-        : toNum(row.zapLsigma ?? row.zapL);
-      return passesStreamRatingFilter({
-        ratingMode: ratingModeUpper,
-        signal: row,
-        session: session ?? "GLOB",
-        side: rowSide,
-        sigmaAbs: rawSigma != null ? Math.abs(rawSigma) : null,
-        minRate: effectiveMinRate,
-        minTotal: effectiveMinTotal,
-        ratingType: ratingType ?? "any",
-      });
-    });
-
-    // Strategy-specific gate (OpenDoor's per-bin rule). Applied AFTER the shared bounds/exclude
-    // filters — those are correct for every strategy — and INSTEAD of Arbitrage's session rating.
-    // A signal is kept only if the direction it carries was the one approved, so a row gated for
-    // Long can never be traded as a Short.
-    // A strategy that can hold one ticker in several situations expands here instead of being
-    // gated: the row is duplicated per situation, each copy already pointed at the side that
-    // situation needs, so no re-pointing step is required for it.
-    const gated: ArbitrageSignal[] = signalExpand != null
-      ? ratingFiltered.flatMap((row) => signalExpand(row))
-      : signalGate == null ? ratingFiltered : ratingFiltered.flatMap((row): ArbitrageSignal[] => {
-      const verdict = signalGate(row);
-      if (!verdict.up && !verdict.down) return [];
-      const ownSide = (row.direction ?? "").toLowerCase() === "down" ? "down" : "up";
-      if (verdict[ownSide]) return [row];
-      // The row's own direction failed but the opposite side passed. Sonar lists a ticker under
-      // whichever side its GATE approves, independent of the direction the row happens to carry —
-      // so filtering on the row's direction silently dropped every candidate whose gate verdict
-      // pointed the other way (which is why the stream showed zero LONGs). Re-point the row at
-      // the side that actually passed; the engine derives Long/Short from `direction` downstream.
-      return [{ ...row, direction: (verdict.down ? "down" : "up") } as ArbitrageSignal];
-    });
-
-    const bookSnapshot = streamBookStore.getState().snapshot;
-    const decisions = computeStreamDecisionRows(
-      gated,
-      maxSpreadValue,
-      automationConfig,
-      bookSnapshot,
-      metric,
-      decisionOverride,
-    );
-
-    const autoEnabledNow =
-      streamAutoEnabledRef.current &&
-      Boolean(automationConfig?.strategyModeEnabled) &&
-      // Not the owner: decide, latch and display exactly as before, but build no intents. See
-      // dispatchClientIdRef — this is what keeps a second page from double-sending.
-      dispatchOwnerRef.current &&
-      // The bridge has confirmed real (non-shadow) dispatch authority for this strategy — stop
-      // building intents from here THE MOMENT this is learned, rather than waiting for the stale
-      // dispatchOwnerRef above to catch up (registerStrategyRef stops re-asserting ownership once
-      // this is true, but that only releases the lease after the arbiter's own TTL). See
-      // bridgeHasAuthorityRef and fetchServerEngineShadowMode.
-      !bridgeHasAuthorityRef.current &&
-      !(executionSnapshot?.panicOff ?? false);
-    const currentCount = filtered.length;
-    const prevCount = prevFilteredCountRef.current;
-    prevFilteredCountRef.current = currentCount;
-
-    const maxOpenPositions = Math.max(1, automationConfig?.maxOpenPositions ?? 10);
-    const absoluteSpikeThreshold = Math.max(SIGNAL_SURGE_GUARD_MIN_COUNT, maxOpenPositions * 4);
-    const relativeSpikeThreshold = Math.max(6, maxOpenPositions);
-    const relativeSpike =
-      prevCount >= relativeSpikeThreshold &&
-      currentCount >= prevCount * SIGNAL_SURGE_GUARD_MULTIPLIER;
-    const absoluteSpike = currentCount >= absoluteSpikeThreshold;
-
-    if (autoEnabledNow && (relativeSpike || absoluteSpike)) {
-      surgeGuardUntilRef.current = nowMs + SIGNAL_SURGE_GUARD_HOLD_MS;
-      surgeGuardStableTicksRef.current = 0;
-    }
-
-    let surgeGuardActive = autoEnabledNow && nowMs < surgeGuardUntilRef.current;
-    if (surgeGuardActive) {
-      const stableCountThreshold = Math.max(12, maxOpenPositions * 2);
-      if (currentCount <= stableCountThreshold) {
-        surgeGuardStableTicksRef.current += 1;
-      } else {
-        surgeGuardStableTicksRef.current = 0;
-      }
-
-      if (surgeGuardStableTicksRef.current >= SIGNAL_SURGE_GUARD_STABLE_TICKS) {
-        surgeGuardUntilRef.current = 0;
-        surgeGuardStableTicksRef.current = 0;
-        surgeGuardActive = false;
-      }
-    }
-
-    const startAbsMin = Math.max(0, startAbs ?? 0);
-    const effectiveStartAbsMax = (startAbsMax != null && startAbsMax > 0) ? startAbsMax : null;
-    const hasEntryWindowUpperBound = effectiveStartAbsMax != null;
-
-    const decisionsWithWindowGuard = decisions.map((row) => {
-      if (row.status !== "ENTRY_READY") return row;
-      const absSignal = Math.abs(row.signal ?? 0);
-      if (absSignal < startAbsMin) {
-        return { ...row, status: "HOLD" as const, reason: `entry guard: below start min ${startAbsMin.toFixed(2)}` };
-      }
-      if (hasEntryWindowUpperBound && effectiveStartAbsMax != null && absSignal > effectiveStartAbsMax) {
-        return { ...row, status: "HOLD" as const, reason: `entry guard: above start max ${effectiveStartAbsMax.toFixed(2)}` };
-      }
-      return row;
-    });
-
-    // PositionBp is the account's live truth. An active ticker is managed as an existing
-    // position (adds/exits), never shown or latched as a fresh entry candidate after a restart.
-    const entryDecisions = decisionsWithWindowGuard.filter(
-      (row) => row.positionBp == null || row.positionBp === 0
-    );
-
-    // Track display qualification time for minHoldCandles filter (always active, no automation needed).
-    // Mirrors Scanner's consecutive-candle logic: timer resets if signal exits [startAbs, startAbsMax] for >60s.
-    const nowForDisplay = Date.now();
-    const currentMinuteAligned = Math.floor(nowForDisplay / 60_000) * 60_000;
-    const effectiveMinHoldMs = Math.max(0, minHoldCandles ?? 0) * 60_000;
-    // endAbs close threshold — only applies in Active close mode (Passive exit = gap reversal, not sigma).
-    const effectiveEndAbs = (closeMode !== "Passive" && endAbs != null && endAbs > 0) ? endAbs : 0;
-
-    const currentMinuteIdx = Math.floor(nowForDisplay / 60_000);
-    // Roll the accumulator over into the frozen "completed minute" snapshot once the minute
-    // index advances. minuteAccumRef unions every poll's above-threshold tickers during the
-    // minute it covers, so a ticker that crosses threshold between two polls (not caught by
-    // whichever single poll used to define the old point-in-time snapshot) is still counted —
-    // avoiding poll-timing luck deciding whether a real signal ever gets a latch at all.
-    if (minuteAccumRef.current != null && minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
-      minuteSnapshotRef.current = minuteAccumRef.current;
-      const completed = minuteAccumRef.current;
-      if (completed.sigmaHiMap.size > 0) {
-        const items = Array.from(completed.sigmaHiMap.entries()).map(([key, hiAbs]) => {
-          const [ticker, side] = key.split("|") as [string, "Long" | "Short"];
-          const loAbs = completed.sigmaLoMap.get(key) ?? hiAbs;
-          return { ticker, side, hiAbs, loAbs };
-        });
-        // dateNy must be Scanner's NY-anchor date, not the browser's own local calendar day
-        // (localDayKey()) — for a browser timezone ahead of NY (e.g. Kyiv), those two diverge
-        // for hours around a wrapping overnight session (START > CUTOFF, e.g. 21:00->09:00),
-        // which would file this minute's sigma range under the wrong sidecar day and make
-        // TapeArbitrageEngine's LoadSigmaRange(dateNy) find nothing for the whole session.
-        const sigmaRangeCutoffMinutes = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-        const sigmaRangeIsWrapSession = strategySessionStartMinutes != null && strategySessionStartMinutes > sigmaRangeCutoffMinutes;
-        const sigmaRangeInYesterdaysTail = sigmaRangeIsWrapSession && currentMinutesLocal() < strategySessionStartMinutes!;
-        const sigmaRangeDateNy = currentNyDateKey(sigmaRangeInYesterdaysTail ? -1 : 0);
-        tapeClient.reportMinuteSigmaRange(sigmaRangeDateNy, completed.minuteIdx, items).catch(() => {});
-      }
-      minuteAccumRef.current = null;
-      // Purge window-exit records older than 1 minute. Keep the previous minute's entries
-      // so that cross-minute recovery (dip at T:40, signal back at T+1:30) is also caught.
-      windowExitMinuteRef.current.forEach((minuteIdx, ticker) => {
-        if (minuteIdx < currentMinuteIdx - 1) windowExitMinuteRef.current.delete(ticker);
-      });
-    }
-    // Mirror Scanner (TapeArbitrageEngine) exactly: at each minute boundary, any ticker whose
-    // sigma was below startAbs for the ENTIRE boundary minute has its hold streak broken
-    // (pending-start reset). Evict before the main loop so evicted tickers can be re-added with
-    // a fresh qualifiedSince (counter=0), matching Scanner's "new pending start" semantics.
-    const prevMinSnap = minuteSnapshotRef.current;
-    if (prevMinSnap != null) {
-      if (prevMinSnap.minuteIdx === currentMinuteIdx - 1) {
-        displayQualifiedSinceRef.current.forEach((_, k) => {
-          if (!prevMinSnap.aboveSet.has(k)) displayQualifiedSinceRef.current.delete(k);
-        });
-      } else if (prevMinSnap.minuteIdx < currentMinuteIdx - 1) {
-        // Snapshot is stale (minute gap in SSE data): can't verify continuity, reset all.
-        // Mirrors scanner which resets the consecutive-bar streak on any tape gap.
-        displayQualifiedSinceRef.current.clear();
-      }
-    }
-
-    for (const row of decisionsWithWindowGuard) {
-      // Per SITUATION, not per ticker: one ticker can be a leg of several pairs at once and each
-      // carries its own deviation, so a key without the pair would freeze one of them and then
-      // hand that value to all of them.
-      const key = `${legIdentityOf(row)}|${row.side}`;
-      const absSignal = Math.abs(row.signal ?? 0);
-      const isAboveStartAbs = absSignal >= (startAbs ?? 0) && row.status !== "HOLD";
-      const isAboveEndAbs = absSignal >= effectiveEndAbs;
-
-      if (isAboveStartAbs) {
-        // Fresh/strong signal: track timing for minHoldCandles
-        if (!displayQualifiedSinceRef.current.has(key)) {
-          displayQualifiedSinceRef.current.set(key, { qualifiedSince: currentMinuteAligned, lastSeenAt: nowForDisplay });
-        } else {
-          displayQualifiedSinceRef.current.get(key)!.lastSeenAt = nowForDisplay;
-        }
-        // Mark as displayed immediately — display shows all candidates, order dispatch is gated separately
-        signalDisplayedRef.current.set(key, nowForDisplay);
-      } else if (isAboveEndAbs && signalDisplayedRef.current.has(key)) {
-        // Decaying signal: sigma in [endAbs, startAbs) — still above endAbs close threshold, keep alive
-        signalDisplayedRef.current.set(key, nowForDisplay);
-      }
-    }
-    // Fallback eviction for data gaps: clear entries not seen for >2 minutes.
-    // The primary eviction happens at each minute boundary via prevMinSnap above.
-    displayQualifiedSinceRef.current.forEach((v, k) => {
-      if (nowForDisplay - v.lastSeenAt > 120_000) displayQualifiedSinceRef.current.delete(k);
-    });
-    // aboveSinceRef has no minute-boundary eviction of its own (it's intentionally cross-minute
-    // persistent) — same 2-minute fallback so a ticker that drops out of the decisions feed
-    // entirely (not just flips to HOLD) doesn't linger forever.
-    aboveSinceRef.current.forEach((v, k) => {
-      if (nowForDisplay - v.lastSeenAt > 120_000) aboveSinceRef.current.delete(k);
-    });
-    // Evict displayed: not seen >60s = dropped below endAbs or disappeared.
-    signalDisplayedRef.current.forEach((lastSeen, k) => {
-      if (nowForDisplay - lastSeen > 60_000) signalDisplayedRef.current.delete(k);
-    });
-
-    const displayDecisions = entryDecisions
-      .filter(row => {
-        const absSignal = Math.abs(row.signal ?? 0);
-        // Never show above startAbsMax
-        if (effectiveStartAbsMax != null && absSignal > effectiveStartAbsMax) return false;
-        const key = `${legIdentityOf(row)}|${row.side}`;
-        // Decaying signals: below startAbs but above endAbs, previously passed minHoldCandles
-        if (absSignal < (startAbs ?? 0)) {
-          return signalDisplayedRef.current.has(key);
-        }
-        // Fresh signals: show immediately — order dispatch is gated by minHold via latch path
-        return true;
-      })
-      .sort((a, b) => a.ticker.localeCompare(b.ticker));
-
-    // Track this poll's above-threshold tickers into the current (in-progress) minute's
-    // accumulator. New latches are gated on minuteSnapshotRef — the frozen, fully-completed
-    // previous minute — not this in-progress accumulator. aboveSet reflects the state as of
-    // the LAST poll before the minute closed (see the add/delete below), not "touched at any
-    // point" — a single-instant spike (e.g. a bad tick) that reverted before the boundary must
-    // not be enough to qualify a brand-new latch.
-    if (decisionsWithWindowGuard.length > 0) {
-      if (minuteAccumRef.current == null || minuteAccumRef.current.minuteIdx !== currentMinuteIdx) {
-        minuteAccumRef.current = {
-          minuteIdx: currentMinuteIdx,
-          aboveSet: new Set<string>(),
-          sigmaHiMap: new Map(),
-          sigmaLoMap: new Map(),
-          lastSignedMap: new Map(),
-        };
-      }
-      for (const row of decisionsWithWindowGuard) {
-        const key = `${legIdentityOf(row)}|${row.side}`;
-        // aboveSet reflects the LATEST poll's state, not "was ever above threshold this
-        // minute" — add/delete on every poll (not just add) so a ticker that touched
-        // threshold, dropped, and never recovered is correctly absent by the time the
-        // minute closes. Flickering (touch → drop → touch again) is fine as long as it's
-        // back above threshold by the last poll before the boundary — see isMinuteQualified
-        // below, which gates new latches on this snapshot.
-        if (row.status !== "HOLD") minuteAccumRef.current.aboveSet.add(key);
-        else minuteAccumRef.current.aboveSet.delete(key);
-        // aboveSinceRef: continuous (cross-minute) streak tracker — see its declaration doc.
-        // Unlike aboveSet above, this is never reset on minute rollover; it only resets when
-        // the streak itself actually breaks (status flips to HOLD).
-        if (row.status !== "HOLD") {
-          const existingSince = aboveSinceRef.current.get(key);
-          if (!existingSince) aboveSinceRef.current.set(key, { since: nowForDisplay, lastSeenAt: nowForDisplay });
-          else existingSince.lastSeenAt = nowForDisplay;
-        } else {
-          aboveSinceRef.current.delete(key);
-        }
-        if (row.signal != null) {
-          const absVal = Math.abs(row.signal);
-          const prevHi = minuteAccumRef.current.sigmaHiMap.get(key);
-          const prevLo = minuteAccumRef.current.sigmaLoMap.get(key);
-          if (prevHi == null || absVal > prevHi) minuteAccumRef.current.sigmaHiMap.set(key, absVal);
-          if (prevLo == null || absVal < prevLo) minuteAccumRef.current.sigmaLoMap.set(key, absVal);
-          // Unconditional overwrite (not min/max) — the LAST poll's signed value seen this
-          // minute, i.e. the value as of the moment the minute closes. Used to anchor a new
-          // entry's dispatched signal to "value at the boundary", not whatever a later poll
-          // happens to show once dispatch actually fires — mirrors SCANNER's single bar-close
-          // read at the start of the same minute (same physical instant, from either side).
-          minuteAccumRef.current.lastSignedMap.set(key, row.signal);
-        }
-      }
-    }
-
-    const decisionsForAutomation = entryDecisions;
-    const wantsPrime = primeImmediateEntriesRef.current;
-    const nextLatches = syncStreamSignalLatches(
-      streamSignalLatches,
-      decisionsForAutomation,
-      autoEnabledNow,
-      automationConfig,
-      entryCutoffEnabled,
-      strategySessionStartMinutes,
-      wantsPrime,
-      latchQualifiedSinceHistoryRef.current,
-      wantsPrime ? primedFromScannerRef.current : undefined,
-      // A ticker|side qualifies to seed a brand-new latch only once it's been continuously
-      // above threshold for at least ENTRY_HOLD_BEFORE_BOUNDARY_MS real seconds, counted
-      // backward from the current minute boundary — see aboveSinceRef doc. Replaces the old
-      // single-instant "was it above at the last poll before the boundary" snapshot check with
-      // a genuine multi-second confirmation window, so dispatch can fire right at the boundary
-      // (no separate post-creation delay needed) while still rejecting a bad tick that only
-      // appeared right at the boundary itself.
-      (() => {
-        const qualified = new Set<string>();
-        aboveSinceRef.current.forEach((v, key) => {
-          if (v.since <= currentMinuteAligned - ENTRY_HOLD_BEFORE_BOUNDARY_MS) qualified.add(key);
-        });
-        return qualified as ReadonlySet<string>;
-      })(),
-      windowExitMinuteRef.current
-    );
-    // Consume the prime flag only when automation is running AND there were signals
-    // to latch. If the stream wasn't ready yet (no decisions → no latches), keep the
-    // flag so the next refresh that finds signals will still prime.
-    // Also reset if automation is disabled — prime shouldn't outlive the enabled window.
-    if (!wantsPrime || !autoEnabledNow || nextLatches.length > 0) {
-      primeImmediateEntriesRef.current = false;
-      if (primedFromScannerRef.current.size > 0) primedFromScannerRef.current = new Set();
-    }
-    // Update latch history so qualifiedSince survives brief signal bounces.
-    // TTL = 60s (1 tape candle) — matches SCANNER's consecutive-candle behavior.
-    // Any bounce lasting > 1 min resets the latch, just as a candle below threshold
-    // resets the SCANNER consecutive count.
-    const latchHistoryTTL = 60_000;
-    for (const latch of nextLatches) {
-      // Leg-keyed to match the lookup in syncStreamSignalLatches, which reads it by legId.
-      latchQualifiedSinceHistoryRef.current.set(legIdentityOf(latch), { qualifiedSince: latch.qualifiedSince, lastSeenAt: latch.lastSeenAt });
-    }
-    latchQualifiedSinceHistoryRef.current.forEach((v, k) => {
-      if (nowMs - v.lastSeenAt > latchHistoryTTL) latchQualifiedSinceHistoryRef.current.delete(k);
-    });
-    // If a ticker's signal left the valid entry window [startAbsMin, startAbsMax] in
-    // either direction, clear it from latch history so the hold timer restarts from
-    // zero when the signal returns to range. The 60s TTL recovery is only meant for
-    // brief spread/edge blocks (BLOCKED_SPREAD/BLOCKED_EDGE), not for signals that
-    // exited the window — those must re-qualify from scratch.
-    for (const row of decisionsWithWindowGuard) {
-      if (row.status !== "HOLD") continue;
-      const absSignal = Math.abs(row.signal ?? 0);
-      const exitedBelow = absSignal < startAbsMin;
-      const exitedAbove = hasEntryWindowUpperBound && startAbsMax != null && absSignal > startAbsMax;
-      if (exitedBelow || exitedAbove) {
-        latchQualifiedSinceHistoryRef.current.delete(legIdentityOf(row));
-        // Record that this ticker exited the window this minute. If signal recovers
-        // in the same minute, the latch will use currentMinute (not previousMinute)
-        // as qualifiedSince — forcing the hold wait to restart from this minute.
-        // Leg-keyed: syncStreamSignalLatches reads this map by legId, and a ticker-keyed write
-        // would simply never be found on a paired strategy.
-        windowExitMinuteRef.current.set(legIdentityOf(row), currentMinuteIdx);
-      }
-    }
-    const positionsBaseline = hydrateLiveActivePositions(
-      mergeStreamPositionsWithActionLog(
-        streamPositions,
-        streamActionLog,
-        currentDayKey,
-        accountPositionBpByTickerRef.current,
-        hasFreshAccountPositionBookRef.current,
-      ),
-      decisionsWithWindowGuard
-    );
-    const nextPositionsBase = syncStreamPositions(positionsBaseline, decisionsWithWindowGuard, normalized, filtered, nextLatches, autoEnabledNow, maxSpreadValue, automationConfig, entryCutoffEnabled, strategySessionStartMinutes, openLoggedTickers, dispatchingEntryTickersRef.current, minuteSnapshotRef.current?.lastSignedMap, startAbsMax ?? null, exitOverride, pairLegReadyMinutesRef.current);
-    // Clear latch history for tickers whose positions just closed.
-    // This prevents STREAM from reusing a stale qualifiedSince on re-entry after close,
-    // which would cause STREAM to fire much faster than SCANNER (which requires fresh
-    // consecutive tape candles after each episode close).
-    for (const pos of nextPositionsBase) {
-      if (pos.status === "CLOSED") {
-        latchQualifiedSinceHistoryRef.current.delete(legIdentityOf(pos));
-      }
-    }
-    const minHoldMinutesForDisplay = Math.max(0, automationConfig?.minHoldMinutes ?? 0);
-    const now2 = Date.now();
-    const now2MinuteIdx = Math.floor(now2 / 60_000);
-    const entryReady = decisionsForAutomation.filter(d => d.status === "ENTRY_READY").length;
-    const latched = nextLatches.length;
-    const qualifiedLatches = nextLatches.filter((l) =>
-      hasCompletedStreamHoldWindow(l.qualifiedSince, now2MinuteIdx, minHoldMinutesForDisplay)
-    );
-    let nextPositions = nextPositionsBase;
-    let intents = buildStreamOrderIntents(decisionsWithWindowGuard, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
-
-    if (
-      autoEnabledNow &&
-      automationConfig?.strategyModeEnabled &&
-      intents.length === 0 &&
-      qualifiedLatches.length > 0
-    ) {
-      nextPositions = buildFallbackPendingEntryPositions(
-        nextPositions,
-        qualifiedLatches,
-        filtered,
-        automationConfig,
-        entryCutoffEnabled,
-        strategySessionStartMinutes,
-        minuteSnapshotRef.current?.lastSignedMap,
-        decisionsForAutomation,
-      );
-      intents = buildStreamOrderIntents(decisionsWithWindowGuard, nextPositions, autoEnabledNow, automationConfig, entryCutoffEnabled, strategyId);
-    }
-
-    const qualified = qualifiedLatches.length;
-    const pendingEntry = nextPositions.filter(p => p.status === "PENDING_ENTRY").length;
-    const dilutionStep = automationConfig?.dilutionStep ?? 0.3;
-
-    if (intents.length > 0) {
-      const ts = () => new Date().toTimeString().slice(0, 8);
-      const sig = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
-      const maxOpenCap = entryCutoffEnabled ? (automationConfig?.maxOpenPositions ?? "∞") : "∞";
-      const openNow = nextPositions.filter(p => p.status === "OPEN" || p.status === "PENDING_ENTRY" || p.status === "PRINT_PENDING").length;
-      const decisionMap2 = new Map(decisionsWithWindowGuard.map(d => [legIdentityOf(d), d]));
-      const positionMap2 = new Map(nextPositions.map(p => [legIdentityOf(p), p]));
-      console.group(`[AUTO ${ts()}] auto=${autoEnabledNow} | entryReady=${entryReady} latched=${latched} qualified=${qualified} pendingEntry=${pendingEntry} intents=${intents.length} | open=${openNow}/${maxOpenCap} minHold=${minHoldMinutesForDisplay}min`);
-      console.group(`  INTENTS (${intents.length}):`);
-      for (const intent of intents) {
-        const d2 = decisionMap2.get(legIdentityOf(intent));
-        const pos2 = positionMap2.get(legIdentityOf(intent));
-        // pendingAddTrigger was captured exactly at decision time in syncStreamPositions.
-        const entryBase2 = pos2?.lastScaleSignal ?? pos2?.entrySignal;
-        const isAdd2 = intent.sequence > 1;
-        const isShort2 = intent.side === "Short";
-        const addNum2 = intent.sequence - 1;
-        const triggerMag2 = isAdd2 ? (pos2?.pendingAddTrigger ?? null) : null;
-        const thresholdStr2 = triggerMag2 != null
-          ? `${isShort2 ? "≤-" : "≥+"}${triggerMag2.toFixed(3)}σ`
-          : "";
-        console.log(
-          `  [${intent.status}] ${intent.intent} ${intent.ticker}/${intent.benchmark}` +
-          ` | ${isAdd2 ? `add#${addNum2}` : "entry"} ${intent.side}` +
-          ` sig=${sig(d2?.signal)}${isAdd2 ? ` threshold=${thresholdStr2} (|last-add ${sig(entryBase2)}|+${dilutionStep})` : ""}` +
-          ` | "${intent.reason}"`
-        );
-      }
-      console.groupEnd();
-      console.groupEnd();
-    }
-
-    const decisionsChanged = streamDecisionStore.applySnapshot(displayDecisions);
-    streamSignalStore.applySnapshot(filtered.filter((row) => !isActiveByPositionBp(row)));
-    // The automation ticker runs every second even on a quiet market. Only move the UI's
-    // UPDATED indicator when a visible decision row actually changed.
-    if (decisionsChanged) {
-      streamUpdatedAtStore.setValue(Date.now());
-    }
-
-    // keep sync refs current so sendQueuedIntents can read signal/latch state without closure staleness
-    // Use normalized (all signals) as base so open-position tickers that dropped out of
-    // filtered (e.g. spread/edge gate closed temporarily) still have signal data for log entries.
-    // filtered overrides normalized where both are present.
-    const rawSigMap = new Map<string, ArbitrageSignal>();
-    for (const sig of normalized) rawSigMap.set(sig.ticker, sig);
-    for (const sig of filtered) rawSigMap.set(sig.ticker, sig);
-    rawSignalByTickerRef.current = rawSigMap;
-
-    // Log every ticker the first time it becomes ENTRY_READY — for comparison with Scanner backtest.
-    const filterPassNow = Date.now();
-    const readN = (...args: unknown[]): number | null => {
-      for (const a of args) { const n = toNum(a); if (n != null) return n; }
-      return null;
-    };
-    for (const decision of displayDecisions) {
-      if (decision.status !== "ENTRY_READY") continue;
-      const sig = rawSigMap.get(decision.ticker);
-      const bp = sig ? (sig.best_params ?? sig.bestParams ?? sig.BestParams ?? null) : null;
-      const bpBest = bp ? (bp.best ?? bp.Best ?? null) : null;
-      const bpMeta = bp ? (bp.meta ?? bp.Meta ?? null) : null;
-      const bpSt = bp ? (bp.static ?? bp.Static ?? null) : null;
-      streamFilterPassLogStore.tryLog({
-        ts: filterPassNow,
-        ticker: decision.ticker,
-        benchmark: decision.benchmark,
-        side: decision.side,
-        signal: decision.signal,
-        zapLsigma: toNum(sig?.zapLsigma) ?? null,
-        zapSsigma: toNum(sig?.zapSsigma) ?? null,
-        zapLgamma: toNum(sig?.zapLgamma) ?? null,
-        zapSgamma: toNum(sig?.zapSgamma) ?? null,
-        zapLalpha: toNum(sig?.zapLalpha) ?? null,
-        zapSalpha: toNum(sig?.zapSalpha) ?? null,
-        zapL: toNum(sig?.zapL) ?? null,
-        zapS: toNum(sig?.zapS) ?? null,
-        spread: decision.spread,
-        netEdge: decision.netEdge,
-        safePrice: decision.safePrice,
-        bidPct: toNum(sig?.["BidLstClsΔ%"]) ?? toNum(sig?.bidPct) ?? null,
-        askPct: toNum(sig?.["AskLstClsΔ%"]) ?? toNum(sig?.askPct) ?? null,
-        benchBidPct: toNum(sig?.["BenchBidLstClsΔ%"]) ?? toNum(sig?.benchBidPct) ?? null,
-        benchAskPct: toNum(sig?.["BenchAskLstClsΔ%"]) ?? toNum(sig?.benchAskPct) ?? null,
-        lstCls: toNum(sig?.LstCls ?? sig?.lstCls) ?? null,
-        yCls: toNum(sig?.YCls ?? sig?.yCls) ?? null,
-        vwap: toNum(sig?.VWAP ?? sig?.vwap) ?? null,
-        lstPrcL: toNum(sig?.LstPrcL ?? sig?.lstPrcL) ?? null,
-        rating: readN(sig?._bestRating, sig?.bestRating, bpBest?.rating, bpBest?.Rating),
-        ratingTotal: readN(sig?._bestTotal, sig?.bestTotal, bpBest?.total, bpBest?.Total),
-        corr: readN(bpBest?.corr, bpBest?.Corr, bpMeta?.corr, bpMeta?.Corr, bpSt?.corr, bpSt?.Corr),
-        beta: readN(sig?.beta, sig?.Beta, bpBest?.beta, bpBest?.Beta, bpMeta?.beta, bpMeta?.Beta),
-        sigma: readN(bpBest?.sigma, bpBest?.Sigma, bpMeta?.sigma, bpMeta?.Sigma, bpSt?.sigma, bpSt?.Sigma),
-        adv20: toNum(sig?.ADV20 ?? sig?.adv20) ?? null,
-        adv20NF: toNum(sig?.ADV20NF ?? sig?.adv20NF) ?? null,
-        adv90: toNum(sig?.ADV90 ?? sig?.adv90) ?? null,
-        marketCapM: toNum(sig?.MarketCapM ?? sig?.marketCapM) ?? null,
-        avPreMhv: toNum(sig?.AvPreMhv ?? sig?.avPreMhv) ?? null,
-        country: String(sig?.country ?? sig?.Country ?? sig?.CountryCode ?? "").trim() || null,
-        exchange: String(sig?.exchange ?? sig?.Exchange ?? "").trim() || null,
-        sectorL3: String(sig?.sectorL3 ?? sig?.SectorL3 ?? sig?.sector ?? "").trim() || null,
-        decisionStatus: decision.status,
-      });
-    }
-    streamSignalLatchesRef.current = nextLatches;
-
-    startTransition(() => {
-      setStreamEntryReadyCount(displayDecisions.reduce((count, row) => row.status === "ENTRY_READY" ? count + 1 : count, 0));
-      setStreamSignalLatches(nextLatches);
-      setStreamPositions(nextPositions);
-      setStreamOrderIntents(intents);
-    });
-    onUpdated?.();
-    onError?.(null);
-    } finally {
-      refreshInFlightRef.current = false;
-    }
-  }, [
-    automationConfig,
-    entryCutoffEnabled,
-    filterConfig,
-    exactSonarFilterSnapshot,
-    maxBeta,
-    maxCorr,
-    maxSigma,
-    maxSpreadValue,
-    metric,
-    minBeta,
-    minCorr,
-    minSigma,
-    streamActionLog,
-    streamPositions,
-    streamSignalLatches,
-    streamAutoEnabled,
-    currentDayKey,
-    openLoggedTickers,
-    onError,
-    onUpdated,
-    refreshExecutionStatus,
-    ratingRule.minRate,
-    ratingRule.minTotal,
-    ratingType,
-    signalClass,
-    tickersCsv,
-  ]);
-
-  useEffect(() => {
-    refreshRef.current = refresh;
-  }, [refresh]);
+    await Promise.all([
+      pollScreen(),
+      pollBridgeState(),
+      options?.refreshBridge === false ? Promise.resolve(null) : refreshExecutionStatus(false),
+    ]);
+  }, [pollBridgeState, pollScreen, refreshExecutionStatus]);
 
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
 
   useEffect(() => {
-    onFetchActiveTickersRef.current = onFetchActiveTickers;
-  }, [onFetchActiveTickers]);
-
-  useEffect(() => {
-    activeScannerTickersRef.current = activeScannerTickers ?? [];
-  }, [activeScannerTickers]);
-
-  useEffect(() => () => {
-    if (localRefreshTimerRef.current != null) {
-      window.clearTimeout(localRefreshTimerRef.current);
-      localRefreshTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    streamActionLogRef.current = streamActionLog;
-  }, [streamActionLog]);
+    onUpdatedRef.current = onUpdated;
+  }, [onUpdated]);
 
   useEffect(() => {
     if (!enabled) return;
-    let cancelled = false;
-    const bootstrapBridgeState = async () => {
-      if (cancelled) return;
-      try {
-        await refreshRef.current?.({ refreshBridge: true });
-      } catch (error: any) {
-        if (!cancelled) onErrorRef.current?.(error?.message ?? String(error));
-      }
+    void refresh();
+  }, [enabled, refresh]);
+
+  // Three small documents, fetched only while the page is on screen. A hidden tab does nothing at
+  // all, and catches up the moment it is shown.
+  useEffect(() => {
+    if (!enabled || typeof window === "undefined") return;
+    const screenTimer = window.setInterval(() => {
+      if (!pageIsHidden()) void pollScreen();
+    }, SCREEN_POLL_MS);
+    const bridgeTimer = window.setInterval(() => {
+      if (!pageIsHidden()) void pollBridgeState();
+    }, BRIDGE_STATE_POLL_MS);
+    const statusTimer = window.setInterval(() => {
+      if (!pageIsHidden()) void refreshExecutionStatus(false);
+    }, EXECUTION_STATUS_POLL_MS);
+    const onVisibilityChange = () => {
+      if (!pageIsHidden()) void refresh();
     };
-    void bootstrapBridgeState();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      cancelled = true;
+      window.clearInterval(screenTimer);
+      window.clearInterval(bridgeTimer);
+      window.clearInterval(statusTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [enabled]);
+  }, [enabled, pollBridgeState, pollScreen, refresh, refreshExecutionStatus]);
+
+  // A different instance is a different set of tables.
+  useEffect(() => {
+    streamActionLogStore.clear();
+    streamDecisionStore.clear();
+    streamOrderIntentStore.clear();
+    streamPositionStore.clear();
+    streamSignalStore.clear();
+    streamUpdatedAtStore.clear();
+    streamFilterPassLogStore.clear();
+    bridgeStateRef.current = null;
+    publishedRef.current = { positions: "", log: "", intents: "" };
+    dismissedTickersRef.current.clear();
+    benchmarkByTickerRef.current = new Map();
+    setStreamActionLog([]);
+    setStreamPositions([]);
+    setStreamOrderIntents([]);
+    setStreamEntryReadyCount(0);
+    setStreamSessionStartedAt(null);
+    setStreamSessionStoppedAt(null);
+    setStreamSentOrdersCount(0);
+  }, [instanceId, streamActionLogStore, streamDecisionStore, streamFilterPassLogStore, streamOrderIntentStore, streamPositionStore, streamSignalStore, streamUpdatedAtStore]);
 
   // Marks this instance as a live consumer of the SHARED bridge stores (execution snapshot, OCR
   // book/main window). Those reflect global TradingApp state, so they are torn down only when the
@@ -4638,10 +1332,9 @@ export function useStreamEngine({
     streamExecutionSnapshotRef.current = null;
     executionSnapshotSignatureRef.current = "";
     lastStatusRefreshAtRef.current = 0;
-    pendingActionLogEntriesRef.current.clear();
     // Only this instance's own stores are cleared here. The shared execution/OCR stores are
     // released via the refcount effect above — clearing them directly would blank the execution
-    // snapshot that OTHER running strategies are trading against.
+    // snapshot that OTHER running strategies show.
     streamActionLogStore.clear();
     streamDecisionStore.clear();
     streamOrderIntentStore.clear();
@@ -4649,195 +1342,9 @@ export function useStreamEngine({
     streamSignalStore.clear();
     streamUpdatedAtStore.clear();
     streamFilterPassLogStore.clear();
+    bridgeStateRef.current = null;
+    publishedRef.current = { positions: "", log: "", intents: "" };
   }, [enabled, streamActionLogStore, streamDecisionStore, streamFilterPassLogStore, streamOrderIntentStore, streamPositionStore, streamSignalStore, streamUpdatedAtStore]);
-
-  // Registers this strategy with the bridge arbiter and keeps the registration alive. The arbiter
-  // frees a strategy's ticker leases once it stops heartbeating, so a closed/crashed tab cannot
-  // block a symbol for the other strategies. Re-registers (rather than only heartbeating) when
-  // the bridge reports it does not know us — the normal path after a bridge restart.
-  // Kept in a ref so the dispatch loop can re-register on demand when the arbiter reports it no
-  // longer knows this strategy (see acquireStreamTicker's ensureRegistered).
-  //
-  // DISPATCH OWNERSHIP. This engine identifies itself to the bridge, which grants exactly one
-  // owner per strategy. Losing that race is not an error — it is the normal outcome of opening a
-  // stream page while Caesar is already hosting the same strategy — and a non-owner keeps
-  // rendering everything, minus the sending.
-  const dispatchClientIdRef = useRef<string>("");
-  if (!dispatchClientIdRef.current) {
-    dispatchClientIdRef.current =
-      typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function"
-        ? globalThis.crypto.randomUUID()
-        : `engine-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-  const [dispatchOwner, setDispatchOwner] = useState<{ isOwner: boolean; ownerClientId: string | null }>(
-    { isOwner: true, ownerClientId: null },
-  );
-  /**
-   * WHY this engine is not the owner, which the boolean above cannot say.
-   *
-   * A failed registration and a lost one both leave isOwner false — deliberately, since a page
-   * that cannot confirm it owns the strategy must not send. But they are opposite situations for
-   * the operator. "other" means a live client (normally Caesar) holds dispatch and SEND FROM HERE
-   * takes it. "unreachable" means the register call never got an answer at all, so nobody may be
-   * hosting — and pressing the button only repeats the call that just failed.
-   *
-   * The two were shown as one banner, "another client is hosting this strategy". Measured
-   * 2026-09-10: the bridge's registry was EMPTY while that banner was on screen, because the
-   * TradingTool dev server was down and every fetch was, at the time, routed through a Next.js
-   * proxy route that only worked on the SAME machine as the bridge. That proxy is gone as of
-   * 2026-09-11 (it broke a Vercel-hosted page talking to a local bridge, which is the normal
-   * deployment) — every fetch here goes straight from this browser tab to the bridge, same as
-   * EventSource always did. "unreachable" now means the bridge itself did not answer: down, the
-   * wrong base URL, or a rejected CORS origin.
-   */
-  const [dispatchState, setDispatchState] = useState<"owner" | "other" | "unreachable" | "pending">("pending");
-  const dispatchOwnerRef = useRef(true);
-  dispatchOwnerRef.current = dispatchOwner.isOwner;
-
-  /**
-   * True once the BRIDGE has confirmed real (non-shadow) dispatch authority for this strategy —
-   * see fetchServerEngineShadowMode / ServerEngineControlService.IsShadow. Defaults false (this
-   * tab keeps competing for ownership) until a poll positively says otherwise; any failure to
-   * reach the bridge falls back to false too, so an unreachable bridge never silently stops this
-   * tab from dispatching.
-   */
-  const bridgeHasAuthorityRef = useRef(false);
-
-  const registerStrategyRef = useRef<(takeOwnership?: boolean) => Promise<boolean>>(async () => false);
-  registerStrategyRef.current = async (takeOwnership = false) => {
-    if (bridgeHasAuthorityRef.current && !takeOwnership) {
-      // The bridge now has real dispatch authority for this strategy — stand down instead of
-      // re-registering, so THIS registration lapses via the arbiter's own TTL (90s,
-      // StreamStrategyRegistry) instead of being kept alive by our own heartbeat. Deliberately not
-      // an explicit unregister/release call here: that would also hand back every ticker lease
-      // this engine holds RIGHT NOW, including ones protecting positions still open, and the TTL
-      // path avoids that race entirely — ServerPositionTracker tracks open positions from real
-      // TradingApp account state, never from these leases, so the slower handoff costs nothing.
-      //
-      // takeOwnership=true (the operator's own "take dispatch back" button) deliberately bypasses
-      // this: a human explicitly reclaiming control is a safety escape hatch, not something this
-      // automatic cede should silently swallow.
-      setDispatchOwner((prev) => (prev.isOwner === false && prev.ownerClientId === null
-        ? prev
-        : { isOwner: false, ownerClientId: null }));
-      setDispatchState("other");
-      dispatchOwnerRef.current = false;
-      return false;
-    }
-    const result = await registerStreamStrategy({
-      strategyId,
-      label: resolvedInstance.label,
-      priority: strategyPriority,
-      clientId: dispatchClientIdRef.current,
-      signalClass,
-      betaMode: automationConfig?.betaMode === true,
-      takeOwnership,
-    });
-    setDispatchOwner((prev) =>
-      prev.isOwner === result.isOwner && prev.ownerClientId === result.ownerClientId
-        ? prev
-        : { isOwner: result.isOwner, ownerClientId: result.ownerClientId },
-    );
-    setDispatchState(!result.registered ? "unreachable" : result.isOwner ? "owner" : "other");
-    // Mirror into the ref now rather than on the next render, so a caller awaiting this call (the
-    // SEND FROM HERE button) reads the answer it just got instead of the one before it.
-    dispatchOwnerRef.current = result.isOwner;
-    return result.registered;
-  };
-
-  /**
-   * Take dispatch over from a client that still holds it. Only ever called from a user action.
-   * Resolves to whether this engine owns dispatch afterwards, so the button can say it failed
-   * instead of silently leaving the banner where it was.
-   */
-  const takeDispatchOwnership = useCallback(async (): Promise<boolean> => {
-    const reached = await registerStrategyRef.current(true);
-    return reached && dispatchOwnerRef.current;
-  }, []);
-
-  // Polls whether the BRIDGE has taken real dispatch authority for this strategy (shadow off) —
-  // see bridgeHasAuthorityRef. Independent of the registration lifecycle below: this keeps polling
-  // even while this tab is not the owner, because the moment the answer flips is exactly the
-  // moment this tab must stop trying to become the owner again.
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-
-    const poll = async () => {
-      const shadow = await fetchServerEngineShadowMode(strategyId);
-      if (cancelled) return;
-      bridgeHasAuthorityRef.current = !shadow;
-    };
-
-    void poll();
-    const ticker = startStreamTicker({ intervalMs: 20_000, onTick: () => void poll() });
-    return () => {
-      cancelled = true;
-      ticker.stop();
-    };
-  }, [enabled, strategyId]);
-
-  // LIFECYCLE. Keyed on identity ALONE, because the cleanup hands back every ticker lease this
-  // strategy holds — including the ones protecting positions that are still open.
-  //
-  // This used to also depend on priority, signal class, label and betaMode, so changing any of
-  // them tore the registration down and released the locks. Under Caesar that is not a theoretical
-  // path: the plan gives a strategy its priority PER SEGMENT, so crossing a segment boundary
-  // changed the number and dropped every lease the strategy was holding at that moment — leaving
-  // its open symbols claimable by another strategy on the opposite side.
-  //
-  // Those four are re-asserted by the effect below instead, which re-registers without releasing.
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-
-    const register = async () => {
-      await registerStrategyRef.current();
-    };
-
-    void register();
-    // Worker-backed too: a throttled heartbeat can slip past the arbiter's 90s TTL, which frees
-    // this strategy's ticker leases and makes its next claim come back "not registered".
-    const ticker = startStreamTicker({
-      intervalMs: STREAM_STRATEGY_HEARTBEAT_MS,
-      onTick: () => {
-        void (async () => {
-          const result = await heartbeatStreamStrategy(strategyId);
-          if (cancelled) return;
-          // The plain heartbeat keeps the strategy record alive but deliberately carries no
-          // client id, so it cannot refresh ownership. A Caesar tab could therefore remain a
-          // non-owner forever after an old stream tab disappeared: it kept calculating READY
-          // signals while `autoEnabledNow` refused to build intents. Register is an idempotent
-          // upsert: it refreshes OUR owner lease when we own it, claims it only after a stale
-          // owner expires, and never steals it from a live tab.
-          if (!result || result.registered === false) {
-            await register();
-            return;
-          }
-          await register();
-        })();
-      },
-    });
-
-    return () => {
-      cancelled = true;
-      ticker.stop();
-      // Hand the tickers back immediately instead of waiting out the arbiter's TTL — otherwise a
-      // strategy that is simply switched off keeps its symbols locked for another 90 seconds.
-      void releaseAllStreamTickers(strategyId);
-    };
-  }, [enabled, strategyId]);
-
-  // Re-assert what the ARBITER reads when it changes. Register is an upsert on the bridge: it
-  // updates priority, class and label in place and rewrites the priority onto leases this
-  // strategy already holds, so the locks survive the change instead of being handed back.
-  const registrationSignature = `${strategyPriority}|${signalClass}|${resolvedInstance.label}|${automationConfig?.betaMode === true}`;
-  useEffect(() => {
-    if (!enabled) return;
-    void registerStrategyRef.current();
-    // registrationSignature is the whole dependency: it is what the bridge stores about us.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, strategyId, registrationSignature]);
 
   useEffect(() => {
     if (!enabled || !ocrEnabled) return;
@@ -4851,15 +1358,7 @@ export function useStreamEngine({
     if (!hasOtherSharedStreamUsers(instanceId)) resetStreamOcrStores();
   }, [enabled, instanceId, ocrEnabled]);
 
-  useEffect(() => {
-    streamPositionStore.applySnapshot(streamPositions);
-    streamPositionsRef.current = streamPositions;
-  }, [streamPositions]);
-
-  useEffect(() => {
-    streamOrderIntentStore.applySnapshot(streamOrderIntents);
-  }, [streamOrderIntents]);
-
+  // Session clock for the header: when the strategy was switched on / off.
   useEffect(() => {
     if (!enabled) return;
     const strategyAutoRunning = streamAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
@@ -4870,1145 +1369,35 @@ export function useStreamEngine({
       strategyAutoWasRunningRef.current = false;
       return;
     }
-
     if (!strategyAutoWasRunningRef.current) {
       strategyAutoWasRunningRef.current = true;
-      setStreamSessionStartedAt(Date.now());
+      const startedAt = Date.now();
+      sessionStartedAtRef.current = startedAt;
+      setStreamSessionStartedAt(startedAt);
       setStreamSessionStoppedAt(null);
       setStreamSentOrdersCount(0);
-
-      void (async () => {
-        // Seed immediately from whatever activeRows the UI has right now so the
-        // first refresh cycle doesn't wait for the fetch.
-        const immediate = activeScannerTickersRef.current;
-        if (immediate.length > 0) {
-          primedFromScannerRef.current = new Set(immediate.map((r) => `${r.ticker}|${r.side}`));
-        }
-
-        // Fetch the authoritative active list from the tape API. This works even
-        // when the user is not on the "active" tab (activeRows would be empty).
-        const fetched = await onFetchActiveTickersRef.current?.().catch(() => null);
-        if (fetched && fetched.length > 0) {
-          primedFromScannerRef.current = new Set(fetched.map((r) => `${r.ticker}|${r.side}`));
-        }
-
-        primeImmediateEntriesRef.current = true;
-        void refreshRef.current?.({ refreshBridge: true }).catch((err: any) => {
-          onErrorRef.current?.(err?.message ?? String(err));
-        });
-      })();
-      return;
     }
+    void pollBridgeState();
+  }, [automationConfig?.strategyModeEnabled, enabled, pollBridgeState, streamAutoEnabled]);
 
-    void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
-      onErrorRef.current?.(error?.message ?? String(error));
-    });
-  }, [automationConfig?.minHoldMinutes, automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
+  // The bridge owns the position book, so there is nothing local to reset: this just re-reads it.
+  const resetStreamAutomationState = useCallback(() => {
+    void pollBridgeState();
+  }, [pollBridgeState]);
 
-  useEffect(() => {
-    const activeQueuedIds = new Set(
-      streamOrderIntents
-        .filter((intent) => intent.status === "QUEUED")
-        .map((intent) => intent.id)
-    );
-    const activeQueuedHedgeIds = new Set(Array.from(activeQueuedIds, (id) => `${id}|benchmark`));
-
-    const now = Date.now();
-
-    // Do not evict an ID while it is still within the dispatch cooldown window.
-    // Evicting early creates a race where entryCount resets via mergeStreamPositionsWithActionLog
-    // (before the action log confirms the ADD) and the same intent re-dispatches.
-    dispatchedIntentIdsRef.current.forEach((id) => {
-      if (!activeQueuedIds.has(id)) {
-        const lastAttemptAt = recentDispatchAttemptsRef.current.get(id) ?? 0;
-        if (now - lastAttemptAt >= AUTO_DISPATCH_COOLDOWN_MS) {
-          dispatchedIntentIdsRef.current.delete(id);
-        }
-      }
-    });
-    dispatchedHedgeIntentIdsRef.current.forEach((id) => {
-      if (!activeQueuedHedgeIds.has(id)) {
-        const lastAttemptAt = recentDispatchAttemptsRef.current.get(id) ?? 0;
-        if (now - lastAttemptAt >= AUTO_DISPATCH_COOLDOWN_MS) {
-          dispatchedHedgeIntentIdsRef.current.delete(id);
-        }
-      }
-    });
-
-    recentDispatchAttemptsRef.current.forEach((timestamp, key) => {
-      if (now - timestamp >= AUTO_DISPATCH_COOLDOWN_MS) {
-        recentDispatchAttemptsRef.current.delete(key);
-      }
-    });
-  }, [streamOrderIntents]);
-
-  useEffect(() => {
-    if (!enabled || !streamAutoEnabled) return;
-    if (streamExecutionSnapshotRef.current?.panicOff) return;
-
-    const nowMinutes = currentMinutesLocal();
-    const startCutoffMinutesNow = parseTimeToMinutes(automationConfig?.startCutoffTime, 9 * 60 + 20);
-    // Entry dispatch stops at entryStopTime; the close hotkey still fires at startCutoffMinutesNow.
-    const entryStopMinutesNow = parseTimeToMinutes(automationConfig?.entryStopTime ?? automationConfig?.startCutoffTime, 9 * 60 + 20);
-    const cutoffKey = `${localDayKey()}|${automationConfig?.startCutoffTime ?? "09:20"}`;
-    const cutoffDue =
-      entryCutoffEnabled &&
-      isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes) &&
-      cutoffHotkeySentKeyRef.current !== cutoffKey;
-
-    // Print exit mode is retired (CLOSE_ALL_PRINT is never generated anymore), so queued
-    // intents are no longer gated by printStartTime here — only by CUTOFF, handled below.
-    const queued = streamOrderIntents.filter((intent) => intent.status === "QUEUED");
-    if (!queued.length && !cutoffDue) return;
-
-    // Use a ref snapshot so setStreamPositions calls inside the loop don't abort and
-    // restart the effect (streamPositions is excluded from deps for the same reason).
-    const positionsSnapshot = streamPositionsRef.current;
-    // Leg-keyed: one symbol can hold several positions at once, and the log must name the right one.
-    const positionByTicker = new Map(positionsSnapshot.map((row) => [legIdentityOf(row), row]));
-    const openLoggedPositions = positionsSnapshot.filter((row) =>
-      row.status !== "CLOSED" &&
-      row.entryDispatchedAt != null &&
-      openLoggedTickers.has(row.ticker)
-    );
-
-    if (dispatchLoopActiveRef.current) {
-      dispatchLoopReplayRef.current = true;
-      return;
-    }
-
-    const sendQueuedIntents = async () => {
-      dispatchLoopActiveRef.current = true;
-      const sentDispatchKeys = new Set<string>();
-
-      // Session-end pair: at the moment startCutoffTime is reached, fire Ctrl+Q then, 1s later,
-      // Ctrl+O — exactly once per cutoff crossing.
-      //
-      // Ctrl+Q is a PREPARATORY step for the Ctrl+O close, not a "stop new entries" switch, and
-      // it does not latch TradingApp into any state. That matters: nothing here has to be undone
-      // at the next START, and the pair leaves no residue that could block the following
-      // session. (An earlier version of this comment claimed Ctrl+Q stops new entries — it does
-      // not; entries are stopped purely by the START/CUTOFF gates in this engine.)
-      const pastCutoffNow =
-        entryCutoffEnabled && isPastSessionCutoff(nowMinutes, startCutoffMinutesNow, strategySessionStartMinutes);
-
-      // ARMING. The pair belongs to the moment the cutoff is CROSSED, so it can only fire once
-      // this engine has observed a tick on the near side of it. Starting up already past the
-      // cutoff marks the pair as spent for today instead of sending it: there is no session to
-      // close that this engine ever opened.
-      if (entryCutoffEnabled && !cutoffArmedRef.current) {
-        cutoffArmedRef.current = true;
-        if (pastCutoffNow) {
-          cutoffHotkeySentKeyRef.current = cutoffKey;
-          console.log(
-            `[CUTOFF] started past ${automationConfig?.startCutoffTime ?? "09:20"} — session-end pair skipped, nothing was opened to close`,
-          );
-        }
-      }
-
-      if (pastCutoffNow) {
-        if (cutoffHotkeySentKeyRef.current !== cutoffKey) {
-          cutoffHotkeySentKeyRef.current = cutoffKey;
-          try {
-            // Mirror CLOSE_ALL_PRINT (Ctrl+O): the executor always injects intent.Ticker into
-            // TradingApp's ticker field before sending the hotkey (TradingAppHotkeyExecutor.cs),
-            // with no special case for a sentinel like "ALL". Ctrl+Q is a global hotkey — which
-            // ticker gets injected doesn't matter for its effect — but it must be a real, valid
-            // symbol or the injection step itself can fail/misbehave. Reuse an open position's
-            // ticker the same way CLOSE_ALL_PRINT does; fall back to a always-valid ETF symbol
-            // if nothing is open yet.
-            const cutoffTicker =
-              positionsSnapshot.find((p) => p.status !== "CLOSED" && p.status !== "PENDING_ENTRY")?.ticker ??
-              positionsSnapshot[0]?.ticker ??
-              "SPY";
-            /*
-              THE CUTOFF HOTKEYS ARE THE ONE THING HERE THAT IS NOT SCOPED TO A TICKER.
-
-              Ctrl+Q -> Ctrl+O and Ctrl+E close EVERY open position in TradingApp, not just this
-              strategy's — the comments below the pair say so, and the bookkeeping that follows
-              marks every one of this strategy's positions closed because of it.
-
-              With one strategy running that is exactly right. With two it is destructive, and it
-              lands inside the pre-market window rather than at its edge: Arbitrage's cutoff
-              defaults to 09:20 while PairFlux runs to 09:30, so the strategy that finishes first
-              flattens the book of the one that is still trading — and the survivor never learns,
-              because its own action log still shows those positions open, its position cap stays
-              full of ghosts, and it takes no further entries.
-
-              So when anything else is running, close this strategy's OWN positions one ticker at
-              a time instead. That is the same ExitPrint the engine sends for an ordinary print
-              exit, which IS ticker-scoped: the executor types the symbol before firing the key,
-              and the ordinary exit path releases exactly one lease. The global pair is kept for
-              the case it is correct for — this strategy being the only one running.
-            */
-            const contenders = await runningStrategiesOtherThan(strategyId);
-            const scopedCutoff = contenders.length > 0;
-
-            if (scopedCutoff) {
-              console.log(
-                `[CUTOFF] ${contenders.join(", ")} still running — closing only ${strategyId} positions, ` +
-                `not the global ${cutoffAction === "exit-all" ? "Ctrl+E" : "Ctrl+Q/Ctrl+O"}`
-              );
-              logStreamGateBlock("cutoff:scopedToStrategy", {
-                strategyId,
-                contenders: contenders.join(","),
-                openPositions: openLoggedPositions.length,
-              });
-
-              // Both legs of every open position: on a hedged strategy the partner is a real
-              // position too, and the global close would have taken it.
-              const closeTickers: string[] = [];
-              for (const row of positionsSnapshot) {
-                if (row.status === "CLOSED" || row.status === "PENDING_ENTRY") continue;
-                if (!closeTickers.includes(row.ticker)) closeTickers.push(row.ticker);
-                const partner = row.benchmark;
-                if (
-                  automationConfig?.hedgeMode === "hedged" &&
-                  partner && partner !== "UNKNOWN" && partner !== "PRINT" && partner !== row.ticker &&
-                  !closeTickers.includes(partner)
-                ) {
-                  closeTickers.push(partner);
-                }
-              }
-
-              // Simulation must stay a simulation. The global branches below queue real orders
-              // even in beta mode; that is pre-existing behaviour and not changed here, but new
-              // code has no reason to repeat it.
-              if (automationConfig?.betaMode !== true) {
-                for (const ticker of closeTickers) {
-                  const responseS = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      // strategyId-prefixed like every other intent this engine makes, so a stop
-                      // or a scoped queue clear can still find and drop it.
-                      intentId: `${strategyId}|cutoff-scoped|${cutoffKey}|${ticker}`,
-                      ticker,
-                      type: "ExitPrint",
-                      note: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"} (scoped: ${contenders.join(",")} still running)`,
-                      source: "stream-auto",
-                      signalClass: signalClass ?? null,
-                    }),
-                  });
-                  const jsonS = await responseS.json().catch(() => ({}));
-                  if (!responseS.ok || jsonS?.ok === false) {
-                    throw new Error(jsonS?.error || `Failed to queue scoped cutoff close for ${ticker} (${responseS.status})`);
-                  }
-                }
-              }
-              console.log(`[CUTOFF] scoped print-close queued for ${closeTickers.length} ticker(s)`);
-
-              void releaseAllStreamTickers(strategyId);
-
-              if (openLoggedPositions.length > 0) {
-                const dispatchAtS = Date.now();
-                const closeEntriesS: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
-                  id: `${row.ticker}|CLOSE|${dispatchAtS}`,
-                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
-                  ticker: row.ticker,
-                  pairKey: row.pairKey ?? null,
-                  benchmark: row.benchmark,
-                  side: row.side,
-                  kind: "CLOSE" as const,
-                  deviation: row.lastSignal ?? row.entrySignal,
-                  at: dispatchAtS,
-                  intent: "CLOSE_ALL_PRINT" as const,
-                  reason: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"} (scoped)`,
-                }));
-                appendStreamActionLogEntries(closeEntriesS);
-              }
-              // Same reason the exit-all branch returns: the global Ctrl+Q -> Ctrl+O pair below
-              // must not run after a scoped close, or the very thing this branch exists to avoid
-              // happens anyway. Remaining intents are picked up on the next tick.
-              return;
-            }
-            // OpenDoor ends its session with ONE hotkey (Ctrl+E) rather than the Ctrl+Q -> Ctrl+O
-            // pair. Same trigger — the operator's CUTOFF time — but a different key and no second
-            // leg, so the pair's 1s wait and its print-close bookkeeping are skipped entirely.
-            else if (cutoffAction === "exit-all") {
-              const responseE = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  intentId: `cutoff-exit-all|${cutoffKey}`,
-                  ticker: cutoffTicker,
-                  // Dedicated intent type, not an override: the live PythonScript transport picks
-                  // its --action from intent.Type alone and ignores hotkeyOverride.
-                  type: "CutoffExitAll",
-                  note: `cutoff exit-all at ${automationConfig?.startCutoffTime ?? "09:20"}`,
-                  source: "stream-auto",
-                  signalClass: signalClass ?? null,
-                }),
-              });
-              const jsonE = await responseE.json().catch(() => ({}));
-              if (!responseE.ok || jsonE?.ok === false) {
-                throw new Error(jsonE?.error || `Failed to queue cutoff exit-all (${responseE.status})`);
-              }
-              console.log(`[CUTOFF] Ctrl+E sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
-              void releaseAllStreamTickers(strategyId);
-
-              // Ctrl+E closes everything this strategy had open, so mirror that in the action log
-              // exactly as the Ctrl+O path does — otherwise positions stay "open" here forever.
-              if (openLoggedPositions.length > 0) {
-                const dispatchAtE = Date.now();
-                const closeEntriesE: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
-                  id: `${row.ticker}|CLOSE|${dispatchAtE}`,
-                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
-                  ticker: row.ticker,
-                  pairKey: row.pairKey ?? null,
-                  benchmark: row.benchmark,
-                  side: row.side,
-                  kind: "CLOSE" as const,
-                  deviation: row.lastSignal ?? row.entrySignal,
-                  at: dispatchAtE,
-                  intent: "CLOSE_ALL_PRINT" as const,
-                  reason: `cutoff exit-all at ${automationConfig?.startCutoffTime ?? "09:20"}`,
-                }));
-                if (automationConfig?.betaMode === true) {
-                  appendStreamActionLogEntries(closeEntriesE);
-                } else {
-                  queuePendingActionLogEntries(`cutoff-exit-all|${cutoffKey}`, closeEntriesE);
-                }
-              }
-              // Returns before the Ctrl+Q/Ctrl+O pair below. Any intents still queued this tick
-              // are picked up on the next one (the cutoff block is skipped from then on, since
-              // cutoffHotkeySentKeyRef is now set) — a one-tick delay, and Ctrl+E has already
-              // closed what those exits would have targeted.
-              return;
-            }
-
-            const response = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                intentId: `cutoff-hotkey|${cutoffKey}`,
-                ticker: cutoffTicker,
-                // CutoffStop is a dedicated intent type (not ExitActive) because the live
-                // transport is TransportMode=PythonScript (TradingAppPythonScriptRunner), which
-                // derives its --action arg solely from intent.Type and ignores hotkeyOverride
-                // entirely. Sending "ExitActive" here would run the python "exit" action (Ctrl+F)
-                // instead of Ctrl+Q — hotkeyOverride only affects the unused Internal transport.
-                type: "CutoffStop",
-                note: `entry cutoff reached at ${automationConfig?.startCutoffTime ?? "09:20"}`,
-                source: "stream-auto",
-                hotkeyOverride: "Ctrl+Q",
-              }),
-            });
-            const json = await response.json().catch(() => ({}));
-            if (!response.ok || json?.ok === false) {
-              throw new Error(json?.error || `Failed to queue cutoff hotkey (${response.status})`);
-            }
-            console.log(`[CUTOFF] Ctrl+Q sent at ${automationConfig?.startCutoffTime ?? "09:20"}`);
-
-            // Ctrl+O follows Ctrl+Q by exactly 1s, same cutoff moment: Ctrl+Q prepares the close,
-            // Ctrl+O then print-closes everything open — one sequential pair, and the 1s gap is
-            // what gives TradingApp time to act on the first before the second lands.
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            const responseO = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                intentId: `cutoff-hotkey-o|${cutoffKey}`,
-                ticker: cutoffTicker,
-                type: "ExitPrint",
-                note: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"}`,
-                source: "stream-auto",
-                signalClass: signalClass ?? null,
-                hotkeyOverride: "Ctrl+O",
-              }),
-            });
-            const jsonO = await responseO.json().catch(() => ({}));
-            if (!responseO.ok || jsonO?.ok === false) {
-              throw new Error(jsonO?.error || `Failed to queue cutoff Ctrl+O (${responseO.status})`);
-            }
-            console.log(`[CUTOFF] Ctrl+O sent 1s after Ctrl+Q at ${automationConfig?.startCutoffTime ?? "09:20"}`);
-
-            // Ctrl+O closes everything this strategy had open, so none of its tickers are held
-            // any more. Releasing them here (instead of waiting out the arbiter TTL) lets a
-            // later-session strategy pick them up immediately.
-            void releaseAllStreamTickers(strategyId);
-
-            // Ctrl+O is one global hotkey — TradingApp closes every open position at once, not
-            // just cutoffTicker. Mirror that in STREAM's own action log/state (same bookkeeping
-            // the removed CLOSE_ALL_PRINT intent path used to do), so positions that never
-            // self-normalized (ACTIVE mode) or never had another exit path (PASSIVE mode) show
-            // as closed here too, not just in TradingApp.
-            if (openLoggedPositions.length > 0) {
-              const dispatchAt = Date.now();
-              const closeEntries: StreamActionLogEntry[] = openLoggedPositions.map((row) => ({
-                id: `${row.ticker}|CLOSE|${dispatchAt}`,
-                dayKey: currentTradingDayKey(strategySessionStartMinutes),
-                ticker: row.ticker,
-                pairKey: row.pairKey ?? null,
-                benchmark: row.benchmark,
-                side: row.side,
-                kind: "CLOSE" as const,
-                deviation: row.lastSignal ?? row.entrySignal,
-                at: dispatchAt,
-                intent: "CLOSE_ALL_PRINT" as const,
-                reason: `entry cutoff print-close at ${automationConfig?.startCutoffTime ?? "09:20"}`,
-              }));
-              if (automationConfig?.betaMode === true) {
-                appendStreamActionLogEntries(closeEntries);
-              } else {
-                queuePendingActionLogEntries(`cutoff-hotkey-o|${cutoffKey}`, closeEntries);
-              }
-            }
-          } catch (err) {
-            // Allow retry on the next tick instead of silently giving up for the day.
-            cutoffHotkeySentKeyRef.current = null;
-            console.error("[CUTOFF] Failed to send Ctrl+Q/Ctrl+O pair", err);
-          }
-        }
-      }
-
-      for (const intent of queued) {
-        const type =
-          intent.intent === "ENTER_LONG_AGGRESSIVE" ? (entryIntentTypes?.long ?? "EnterLongAggressive")
-            : intent.intent === "ENTER_SHORT_AGGRESSIVE" ? (entryIntentTypes?.short ?? "EnterShortAggressive")
-              : intent.intent === "EXIT_LONG_AGGRESSIVE" || intent.intent === "EXIT_SHORT_AGGRESSIVE" ? "ExitActive"
-                : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT" ? "ExitPrint"
-                  : null;
-
-        if (!type) continue;
-
-        const isEntryIntent =
-          intent.intent === "ENTER_LONG_AGGRESSIVE" ||
-          intent.intent === "ENTER_SHORT_AGGRESSIVE";
-        const isExitIntent =
-          intent.intent === "EXIT_LONG_AGGRESSIVE" ||
-          intent.intent === "EXIT_SHORT_AGGRESSIVE" ||
-          intent.intent === "EXIT_LONG_PRINT" ||
-          intent.intent === "EXIT_SHORT_PRINT";
-        const hedgeIntentId = `${intent.id}|benchmark`;
-        const hedgeRequired =
-          (isEntryIntent || isExitIntent) &&
-          automationConfig?.hedgeMode === "hedged" &&
-          intent.benchmark &&
-          intent.benchmark !== "UNKNOWN" &&
-          intent.benchmark !== "PRINT" &&
-          intent.benchmark !== intent.ticker;
-        const primaryAlreadyDispatched = dispatchedIntentIdsRef.current.has(intent.id);
-        const hedgeAlreadyDispatched = dispatchedHedgeIntentIdsRef.current.has(hedgeIntentId);
-        if (primaryAlreadyDispatched && (!hedgeRequired || hedgeAlreadyDispatched)) continue;
-
-        const dispatchKey = intent.id;
-        if (!primaryAlreadyDispatched && sentDispatchKeys.has(dispatchKey)) continue;
-        const lastAttemptAt = recentDispatchAttemptsRef.current.get(dispatchKey) ?? 0;
-        if (!primaryAlreadyDispatched && Date.now() - lastAttemptAt < AUTO_DISPATCH_COOLDOWN_MS) continue;
-
-        // Block auto-entry re-dispatch for tickers recently dismissed by the user.
-        // Covers the race where: dismiss clears action log → cooldown expires → signal still
-        // ENTRY_READY → engine re-dispatches (same or new intentId depending on latch history).
-        if (!primaryAlreadyDispatched && isEntryIntent && !intent.id.startsWith("manual|")) {
-          const dismissedAt = dismissedEntryTickersRef.current.get(intent.ticker) ?? 0;
-          if (Date.now() - dismissedAt < DISMISS_ENTRY_BLOCK_MS) continue;
-        }
-
-        // Re-check the trading window HERE, immediately before sending. Every other gate runs
-        // when the intent is BUILT, but this loop is async and long-lived: it awaits a lease
-        // handshake plus up to three queue retries per intent, so a batch that began just before
-        // CUTOFF can still be mid-flight minutes later. Without this re-check those queued
-        // entries/adds would keep landing after CUTOFF — position-taking past the window the
-        // user configured. Recomputed per intent (not once per batch) because the crossing can
-        // happen between two intents of the same batch. Exits are deliberately exempt: refusing
-        // to close a live position is strictly more dangerous than closing one late.
-        if (isEntryIntent && !intent.id.startsWith("manual|")) {
-          const nowMinutesAtDispatch = currentMinutesLocal();
-          const pastCutoffNow = entryCutoffEnabled &&
-            isPastSessionCutoff(nowMinutesAtDispatch, entryStopMinutesNow, strategySessionStartMinutes);
-          const beforeStartNow = entryCutoffEnabled &&
-            strategySessionStartMinutes != null &&
-            isBeforeSessionStart(nowMinutesAtDispatch, strategySessionStartMinutes, entryStopMinutesNow);
-          if (pastCutoffNow || beforeStartNow) {
-            logStreamGateBlock("dispatch:outsideWindow", {
-              ticker: intent.ticker,
-              sequence: intent.sequence,
-              nowMinutes: nowMinutesAtDispatch,
-              startCutoffMinutes: startCutoffMinutesNow,
-              sessionStartMinutes: strategySessionStartMinutes,
-              pastCutoffNow,
-              beforeStartNow,
-            });
-            continue;
-          }
-        }
-
-        const correspondingDecision = streamDecisionStore.getRow(legIdentityOf(intent));
-        const correspondingPosition = positionByTicker.get(legIdentityOf(intent)) ?? null;
-        const actualPositionIsActive = openLoggedTickers.has(intent.ticker);
-
-        if (!primaryAlreadyDispatched && isEntryIntent && intent.sequence <= 1 && actualPositionIsActive) {
-          dispatchedIntentIdsRef.current.add(intent.id);
-          continue;
-        }
-
-        // Pre-04:00 NY "early session" hotkey switching (Ctrl+F3/F4/B) is decided server-side,
-        // off the server's own NY clock, via TradingAppActionResolver.cs — purely a function of
-        // wall-clock time now, applies to every session class (not just BLUE/PRE), since classes
-        // no longer have built-in time windows. (Previously a client-clock-based
-        // getNightHotkeyOverride computed a hotkeyOverride here, but the live PythonScript
-        // transport never consulted that field — dead code, removed.)
-        const queueLeg = async (payload: {
-          intentId: string;
-          ticker: string;
-          type: string;
-          note: string;
-        }) => {
-          const response = await fetchWithTimeout(tradingAppBridgeUrl("/queue"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              intentId: payload.intentId,
-              ticker: payload.ticker,
-              type: payload.type,
-              note: payload.note,
-              source: "stream-auto",
-              priority: strategyPriority,
-              signalClass: signalClass ?? null,
-              delayMinMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMinSeconds ?? 0) * 1000)),
-              delayMaxMs: Math.max(0, Math.trunc((automationConfig?.queueDelayMaxSeconds ?? 0) * 1000)),
-            }),
-          });
-
-          const json = await response.json().catch(() => ({}));
-          if (!response.ok || json?.ok === false) {
-            throw new Error(json?.error || `Failed to queue TradingApp intent (${response.status})`);
-          }
-        };
-
-        const queueLegWithRetry = async (payload: {
-          intentId: string;
-          ticker: string;
-          type: string;
-          note: string;
-        }) => {
-          let lastError: unknown = null;
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            try {
-              await queueLeg(payload);
-              return;
-            } catch (error) {
-              lastError = error;
-              if (attempt < 2) {
-                await delay(180);
-              }
-            }
-          }
-          throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Failed to queue TradingApp intent."));
-        };
-
-        if (!primaryAlreadyDispatched) {
-          const dispatchAt = Date.now();
-          const dispatchTs = new Date(dispatchAt).toTimeString().slice(0, 8);
-          const sigStr = (v: number | null | undefined) => v != null ? v.toFixed(3) + "σ" : "n/a";
-          const isAdd = intent.sequence > 1;
-
-          // Dispatch-time entry window check: cancel initial ENTRY (not ADD) if the live
-          // signal has moved outside [startAbsMin, startAbsMax] since the tick that
-          // created the PENDING_ENTRY. SSE can update rawSignalByTickerRef between ticks.
-          /**
-           * THE LIVE READING THIS INTENT IS JUDGED ON.
-           *
-           * The two checks below re-test the entry window at the moment of dispatch, against
-           * `startAbs` — and on a paired strategy `startAbs` is the PAIR's threshold while
-           * zapL/zapS is the ticker's own distance from its benchmark ETF. Those are different
-           * quantities, and the mismatch was not symmetric: the leg that ran ahead has a large own
-           * ZAP and passed, the leg that LAGGED has a small one by construction and was cancelled
-           * here every single time.
-           *
-           * Observed live: four SFNC shorts dispatched while FFBC, FULT, ONB and UCB — their
-           * long partners — sat in PENDING_ENTRY with queued orders, re-cancelled on every tick,
-           * because `continue` deliberately does not mark them dispatched.
-           */
-          const _pairedSignal = intent.pairKey ? correspondingDecision?.signal ?? null : null;
-          if (isAdd && isEntryIntent) {
-            const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
-            const _liveSigned = _pairedSignal ?? (intent.side === "Long"
-              ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
-              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS)));
-            const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
-            if (_liveAbs != null && _liveAbs > 4.0) {
-              console.log(`[CANCEL ADD] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} above ADD_MAX_SIGMA 4.0 at dispatch`);
-              continue;
-            }
-          }
-          if (!isAdd && isEntryIntent) {
-            const _liveRaw = rawSignalByTickerRef.current.get(intent.ticker);
-            const _liveSigned = _pairedSignal ?? (intent.side === "Long"
-              ? (toNum(_liveRaw?.zapLsigma) ?? toNum(_liveRaw?.zapL))
-              : (toNum(_liveRaw?.zapSsigma) ?? toNum(_liveRaw?.zapS)));
-            const _liveAbs = _liveSigned != null ? Math.abs(_liveSigned) : null;
-            const _dispatchStartMin = Math.max(0, startAbs ?? 0);
-            const _dispatchStartMax = (startAbsMax != null && startAbsMax > 0) ? startAbsMax : null;
-            if (_liveAbs != null) {
-              if (_liveAbs < _dispatchStartMin) {
-                console.log(`[CANCEL ENTRY] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} below min ${_dispatchStartMin} at dispatch`);
-                continue;
-              }
-              if (_dispatchStartMax != null && _liveAbs > _dispatchStartMax) {
-                console.log(`[CANCEL ENTRY] ${intent.ticker} live σ=${_liveAbs.toFixed(3)} above max ${_dispatchStartMax} at dispatch`);
-                continue;
-              }
-            }
-          }
-          // Cross-strategy arbitration. Several strategy instances (separate tabs) evaluate the
-          // same feed and reach this point at the same minute boundary; only one of them may
-          // actually send for a given ticker, or the position doubles on that symbol. The bridge
-          // decides by strategy priority — see StreamStrategyRegistry.cs. Applied to ENTRY/ADD
-          // only: an EXIT must never be blocked, since refusing to close a live position is
-          // strictly more dangerous than closing one twice.
-          if (isEntryIntent && !intent.id.startsWith("manual|")) {
-            const lease = await acquireStreamTicker({
-              strategyId,
-              ticker: intent.ticker,
-              side: intent.side,
-              intentId: intent.id,
-              ensureRegistered: () => registerStrategyRef.current(),
-            });
-            if (!lease.granted) {
-              console.log(`[LEASE DENIED] ${intent.ticker} ${intent.intent} — ${lease.reason}`);
-              logStreamGateBlock("dispatch:leaseDenied", {
-                ticker: intent.ticker,
-                strategyId,
-                priority: strategyPriority,
-                reason: lease.reason,
-                sequence: intent.sequence,
-              });
-              // Deliberately NOT marked as dispatched: if the winner's entry never materialises
-              // and the ticker frees up while the signal is still valid, the next tick may retry.
-              continue;
-            }
-
-            // BOTH LEGS, OR NEITHER.
-            //
-            // Arbitration used to cover intent.ticker alone, so the SECOND leg went to TradingApp
-            // with no lease at all. On PairFlux that leg is not a detail — it is a full position of
-            // equal notional — and on Arbitrage it is the beta hedge. Either way, with two
-            // strategies live on the same pre-market universe nothing stopped one of them taking
-            // the opposite side of a symbol the other was already holding through its partner leg:
-            // the account ends up flat on that name having paid two spreads, and both strategies
-            // believe they have a position.
-            //
-            // The partner is claimed on the side it will actually be sent on — the OPPOSITE of the
-            // ticker leg for an entry, which is exactly the case the arbiter exists to catch (same
-            // side is not a conflict; see StreamStrategyRegistry.Claim).
-            //
-            // A denial here aborts the WHOLE intent. Sending the ticker leg alone would leave a
-            // naked single leg, which is strictly worse than not trading: on PairFlux it is an
-            // unhedged directional bet the strategy never asked for.
-            if (hedgeRequired && intent.benchmark) {
-              const partnerLease = await acquireStreamTicker({
-                strategyId,
-                ticker: intent.benchmark,
-                side: intent.side === "Long" ? "Short" : "Long",
-                intentId: hedgeIntentId,
-                ensureRegistered: () => registerStrategyRef.current(),
-              });
-              if (!partnerLease.granted) {
-                console.log(`[LEASE DENIED] ${intent.benchmark} (partner leg of ${intent.ticker}) — ${partnerLease.reason}`);
-                logStreamGateBlock("dispatch:partnerLeaseDenied", {
-                  ticker: intent.benchmark,
-                  primaryTicker: intent.ticker,
-                  strategyId,
-                  priority: strategyPriority,
-                  reason: partnerLease.reason,
-                  sequence: intent.sequence,
-                });
-                // Hand the ticker leg back — we took it a moment ago and are not going to use it,
-                // and a committed lease blocks everyone else until it is released or times out.
-                // ONLY on a first entry: on an ADD the strategy already holds a live position in
-                // this symbol, and releasing there would drop the lock that protects it.
-                if (!isAdd) {
-                  void releaseStreamTicker({
-                    strategyId,
-                    ticker: intent.ticker,
-                    reason: "partner leg denied — entry abandoned",
-                  });
-                }
-                continue;
-              }
-            }
-          }
-
-          const pos3 = correspondingPosition;
-          const curSig3 = correspondingDecision?.signal;
-          const dilution3 = automationConfig?.dilutionStep ?? 0.3;
-          const addNum3 = intent.sequence - 1;
-          const isShort3 = intent.side === "Short";
-          // pendingAddTrigger was captured exactly at decision time (syncStreamPositions) —
-          // read it rather than recomputing, since lastScaleSignal has already been overwritten
-          // to this add's own signal by the time we get here.
-          const triggerMag3 = pos3?.pendingAddTrigger ?? null;
-          const triggerStr3 = triggerMag3 != null
-            ? `${isShort3 ? "≤-" : "≥+"}${triggerMag3.toFixed(3)}σ`
-            : "n/a";
-          console.log(
-            `[SEND ${dispatchTs}] ${intent.intent} ${intent.ticker}/${intent.benchmark} ${intent.side}` +
-            ` | ${isAdd
-              ? `add#${addNum3} sig=${sigStr(curSig3)} threshold=${triggerStr3}`
-              : `entry sig=${sigStr(curSig3)}`}` +
-            ` | hedged=${hedgeRequired} reason="${intent.reason}"`
-          );
-          // Mark as dispatched and record attempt BEFORE the await so that
-          // concurrent effect re-runs see this intent as already in-flight
-          // and do not send it a second time.
-          dispatchedIntentIdsRef.current.add(intent.id);
-          recentDispatchAttemptsRef.current.set(dispatchKey, dispatchAt);
-          sentDispatchKeys.add(dispatchKey);
-
-          // Pre-build structured log fields (shared between SENT and FAILED paths)
-          const _rawSig = rawSignalByTickerRef.current.get(intent.ticker);
-          // Match the LEG. `find(l => l.ticker === ...)` returned the first latch wearing this
-          // symbol, so with five SFNC pairs open every log line described whichever of them came
-          // first — which is why an order stamped SFNC/AUB carried FULT's deviation.
-          const _latch = streamSignalLatchesRef.current.find(
-            (l) => l.ticker === intent.ticker && (l.pairKey ?? null) === (intent.pairKey ?? null),
-          );
-          const _fmtMs = (ts: number) => {
-            const d = new Date(ts);
-            return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
-          };
-          const _isLong = intent.side === "Long";
-          const _logEvent: StreamLogEvent =
-            intent.intent === "CLOSE_ALL_PRINT" ? "CLOSE_ALL"
-            : isExitIntent ? (intent.intent.includes("PRINT") ? "EXIT_PRINT" : "EXIT")
-            : isAdd ? "ADD" : "ENTRY";
-          // Helper: read best-params enrichment fields from signal
-          const _bp = _rawSig ? (_rawSig.best_params ?? _rawSig.bestParams ?? _rawSig.BestParams ?? null) : null;
-          const _bpSt = _bp ? (_bp.static ?? _bp.Static ?? null) : null;
-          const _bpBest = _rawSig ? (_rawSig.best ?? _rawSig.Best ?? null) : null;
-          const _bpMeta = _rawSig ? (_rawSig.meta ?? _rawSig.Meta ?? null) : null;
-          const _readNum = (a: any, b: any, c: any, d: any) =>
-            toNum(a) ?? toNum(b) ?? toNum(c) ?? toNum(d) ?? null;
-          const _corr = _readNum(_bpBest?.corr ?? _bpBest?.Corr, _bpMeta?.corr ?? _bpMeta?.Corr, _bpSt?.corr ?? _bpSt?.Corr, null);
-          const _beta = _readNum(_rawSig?.beta ?? _rawSig?.Beta, _bpBest?.beta ?? _bpBest?.Beta, _bpMeta?.beta ?? _bpMeta?.Beta, _bpSt?.beta ?? _bpSt?.Beta);
-          const _stockSigma = _readNum(_bpBest?.sigma ?? _bpBest?.Sigma, _bpMeta?.sigma ?? _bpMeta?.Sigma, _bpSt?.sigma ?? _bpSt?.Sigma, null);
-          const _rating = toNum(_rawSig?._bestRating ?? _rawSig?.bestRating) ?? null;
-          const _ratingTotal = toNum(_rawSig?._bestTotal ?? _rawSig?.bestTotal ?? _bpBest?.total ?? _bpBest?.Total) ?? null;
-          // Build filters-ok summary string
-          const _cfg = automationConfig;
-          const _sigAbs = Math.abs(correspondingDecision?.signal ?? 0);
-          const _filterParts: string[] = [];
-          if (_cfg) {
-            if (_sigAbs > 0) _filterParts.push(`σ${_sigAbs.toFixed(2)}`);
-            if (_cfg.minNetEdge > 0 && correspondingDecision?.netEdge != null) _filterParts.push(`edge${(correspondingDecision.netEdge).toFixed(3)}`);
-            if (_cfg.noSpreadExit && correspondingDecision?.spread != null) _filterParts.push(`sprd${(correspondingDecision.spread).toFixed(3)}`);
-            if (_cfg.minHoldMinutes > 0) _filterParts.push(`hold≥${_cfg.minHoldMinutes}m`);
-            if (isEntryIntent && isAdd && triggerMag3 != null) _filterParts.push(`add#${addNum3}@${triggerMag3.toFixed(2)}`);
-          }
-          const _isBeta = automationConfig?.betaMode === true;
-          const _effectiveRatingMode = (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null;
-          const _effectiveRatingType = ratingType ?? "any";
-          // For EXIT events: capture the opposite-side sigma that triggered the cover
-          const _exitSigmaAbs = isExitIntent
-            ? (toNum(_rawSig ? (_isLong ? _rawSig.zapSsigma : _rawSig.zapLsigma) : null) ?? null)
-            : null;
-          const _logBase = {
-            ts: dispatchAt,
-            timeStr: _fmtMs(dispatchAt),
-            event: _logEvent,
-            betaMode: _isBeta,
-            session: session ?? null,
-            ruleBand: ruleBand ?? null,
-            signalClass: signalClass ?? null,
-            ratingMode: _effectiveRatingMode,
-            ratingType: _effectiveRatingType,
-            // Diagnostic fields
-            intentId: intent.id,
-            isHedge: false,
-            latchBounces: _latch?.bounceCount ?? 0,
-            latchOrigin: _latch?.latchOrigin ?? null,
-            exitSigmaAbs: _exitSigmaAbs,
-            ticker: intent.ticker,
-            pairKey: intent.pairKey ?? null,
-            benchmark: intent.benchmark,
-            side: intent.side as "Long" | "Short",
-            sigmaZap: _isLong
-              ? (toNum(_rawSig?.zapLsigma) ?? correspondingDecision?.signal ?? null)
-              : (toNum(_rawSig?.zapSsigma) ?? correspondingDecision?.signal ?? null),
-            zapSsigma: _rawSig?.zapSsigma ?? null,
-            zapLsigma: _rawSig?.zapLsigma ?? null,
-            zapSgamma: _rawSig?.zapSgamma ?? null,
-            zapLgamma: _rawSig?.zapLgamma ?? null,
-            zapSalpha: _rawSig?.zapSalpha ?? null,
-            zapLalpha: _rawSig?.zapLalpha ?? null,
-            zapPct: _rawSig ? (_isLong ? (_rawSig.zapL ?? null) : (_rawSig.zapS ?? null)) : null,
-            bidPct: _rawSig ? toNum(_rawSig["BidLstClsΔ%"]) : null,
-            askPct: _rawSig ? toNum(_rawSig["AskLstClsΔ%"]) : null,
-            benchBidPct: _rawSig ? toNum(_rawSig["BenchBidLstClsΔ%"]) : null,
-            benchAskPct: _rawSig ? toNum(_rawSig["BenchAskLstClsΔ%"]) : null,
-            corr: _corr,
-            beta: _beta,
-            stockSigma: _stockSigma,
-            rating: _rating,
-            ratingTotal: _ratingTotal,
-            filtersOk: _filterParts.join(" | "),
-            spread: correspondingDecision?.spread ?? null,
-            netEdge: correspondingDecision?.netEdge ?? null,
-            holdMs: _latch ? dispatchAt - _latch.qualifiedSince : null,
-            qualifiedAtStr: _latch ? _fmtMs(_latch.qualifiedSince) : null,
-            sequence: intent.sequence,
-            entrySignal: pos3?.entrySignal ?? null,
-            addThreshold: isAdd ? (triggerMag3 ?? null) : null,
-            dilutionStep: dilution3,
-            maxAdds: automationConfig?.maxAdds ?? null,
-            exitMode: automationConfig?.exitExecutionMode ?? "n/a",
-            hedgeMode: automationConfig?.hedgeMode ?? "n/a",
-            scaleMode: automationConfig?.scaleMode ?? "n/a",
-            minNetEdge: automationConfig?.minNetEdge ?? null,
-            minHoldMinutes: automationConfig?.minHoldMinutes ?? null,
-            notionalUsd: automationConfig?.sizeValue ?? null,
-            hedgeRequired: !!hedgeRequired,
-            reason: intent.reason,
-          };
-
-          // BETA MODE: simulate dispatch — skip real order, log as SIMULATED
-          if (_isBeta) {
-            streamLogStore.push({ ..._logBase, status: "SIMULATED" });
-            console.log(`[BETA SIM] ${intent.ticker} ${intent.intent} — no order sent`);
-          } else {
-          // Mark ticker as having an in-flight ENTRY dispatch. This is checked
-          // synchronously in syncStreamPositions to prevent the engine from dropping
-          // the position (HOLD/grace path) while the HTTP request is outstanding.
-          // The ref update is synchronous, guaranteeing visibility on the next engine
-          // tick regardless of React's async state update scheduling.
-          if (!isAdd && isEntryIntent) {
-            dispatchingEntryTickersRef.current.add(legIdentityOf(intent));
-          }
-          // Pre-mark entryDispatchedAt before the HTTP round-trip so the engine
-          // never sees entryDispatchedAt==null on the next tick and drops the position.
-          // (Belt-and-suspenders alongside dispatchingEntryTickersRef.)
-          if (!isAdd && isEntryIntent) {
-            setStreamPositions((prev) => prev.map((row) => {
-              if (row.ticker !== intent.ticker || row.entryDispatchedAt != null) return row;
-              return { ...row, entryDispatchedAt: dispatchAt };
-            }));
-          }
-          try {
-            await queueLegWithRetry({
-              intentId: intent.id,
-              ticker: intent.ticker,
-              type,
-              note: intent.reason,
-            });
-          } catch (err) {
-            // Dispatch failed — roll back so it can be retried next cycle.
-            dispatchedIntentIdsRef.current.delete(intent.id);
-            recentDispatchAttemptsRef.current.delete(dispatchKey);
-            sentDispatchKeys.delete(dispatchKey);
-            if (!isAdd && isEntryIntent) {
-              // Remove from in-flight tracking so next cycle can retry.
-              dispatchingEntryTickersRef.current.delete(legIdentityOf(intent));
-              // Roll back the pre-marked entryDispatchedAt so the engine re-generates the intent.
-              setStreamPositions((prev) => prev.map((row) => {
-                if (row.ticker !== intent.ticker) return row;
-                return { ...row, entryDispatchedAt: null };
-              }));
-            }
-            console.error(`[SEND FAIL] ${intent.ticker} ${intent.intent}`, err);
-            streamLogStore.push({ ..._logBase, status: "FAILED" });
-            throw err;
-          }
-          streamLogStore.push({ ..._logBase, status: "SENT" });
-          } // end if (!_isBeta)
-          if (!_isBeta) console.log(`[SENT OK] ${intent.ticker} → bridge queued`);
-          if (!_isBeta) setStreamSentOrdersCount((prev) => prev + 1);
-          setStreamPositions((prev) => prev.map((row) => {
-            if (row.ticker !== intent.ticker) return row;
-            return {
-              ...row,
-              // Beta mode: immediately mark entries as OPEN (no backend confirmation to wait for).
-              // Real mode: keep PENDING_ENTRY until hasExecutionDispatchConfirmation.
-              status: isEntryIntent
-                ? (_isBeta ? "OPEN" : row.status)
-                : intent.intent === "EXIT_LONG_PRINT" || intent.intent === "EXIT_SHORT_PRINT" || intent.intent === "CLOSE_ALL_PRINT"
-                  ? "PRINT_PENDING"
-                  : row.status,
-              pendingIntent: isEntryIntent ? null : row.pendingIntent,
-              entryDispatchedAt: row.entryDispatchedAt ?? dispatchAt,
-              lastDispatchedAt: isEntryIntent ? dispatchAt : row.lastDispatchedAt,
-              lastConfirmedActiveAt: _isBeta && isEntryIntent ? dispatchAt : row.lastConfirmedActiveAt,
-              reason: _isBeta ? `[BETA] ${intent.reason}` : isEntryIntent && row.lastConfirmedActiveAt == null
-                ? "order queued | waiting for execution confirmation"
-                : row.reason,
-              updatedAt: dispatchAt,
-            };
-          }));
-          // entryDispatchedAt is now permanently set in state — the in-flight guard is no longer needed.
-          if (!isAdd && isEntryIntent) {
-            dispatchingEntryTickersRef.current.delete(legIdentityOf(intent));
-          }
-          // In beta mode: immediately confirm action log entries (no backend to confirm them).
-          // In real mode: queue pending entries and wait for execution snapshot confirmation.
-          const _dispatchActionLog = (entries: StreamActionLogEntry[]) => {
-            if (_isBeta) {
-              appendStreamActionLogEntries(entries);
-            } else {
-              queuePendingActionLogEntries(intent.id, entries);
-            }
-          };
-          if (intent.intent === "CLOSE_ALL_PRINT") {
-            _dispatchActionLog(
-              openLoggedPositions
-                .map((row) => ({
-                  id: `${row.ticker}|CLOSE|${dispatchAt}`,
-                  dayKey: currentTradingDayKey(strategySessionStartMinutes),
-                  ticker: row.ticker,
-                  pairKey: row.pairKey ?? null,
-                  benchmark: row.benchmark,
-                  side: row.side,
-                  kind: "CLOSE" as const,
-                  deviation: row.lastSignal ?? row.entrySignal,
-                  at: dispatchAt,
-                  intent: "CLOSE_ALL_PRINT" as const,
-                  reason: "print window close all",
-                }))
-            );
-          } else if (isEntryIntent) {
-            const isAdd = intent.sequence > 1;
-            const deviation = isAdd
-              ? (
-                correspondingPosition?.lastScaleSignal ??
-                correspondingPosition?.lastSignal ??
-                correspondingPosition?.entrySignal ??
-                curSig3 ??
-                null
-              )
-              : (
-                correspondingPosition?.entrySignal ??
-                correspondingPosition?.lastSignal ??
-                curSig3 ??
-                null
-              );
-            const _prevDispatch = correspondingPosition?.lastDispatchedAt ?? correspondingPosition?.entryDispatchedAt ?? null;
-            _dispatchActionLog([{
-              id: `${legIdentityOf(intent)}|${isAdd ? "ADD" : "ENTRY"}|${dispatchAt}`,
-              dayKey: currentTradingDayKey(strategySessionStartMinutes),
-              ticker: intent.ticker,
-              pairKey: intent.pairKey ?? null,
-              benchmark: intent.benchmark,
-              side: intent.side,
-              kind: isAdd ? "ADD" : "ENTRY",
-              deviation,
-              at: dispatchAt,
-              intent: intent.intent,
-              reason: correspondingPosition?.reason || intent.reason || undefined,
-              sequence: intent.sequence,
-              addThreshold: isAdd ? (triggerMag3 ?? null) : null,
-              sinceLastMs: isAdd && _prevDispatch != null ? Math.max(0, dispatchAt - _prevDispatch) : null,
-              delayRequiredMs: isAdd ? Math.max(0, (automationConfig?.addDelayMinutes ?? 0) * 60_000) : null,
-              filtersOk: _filterParts.join(" | ") || undefined,
-            }]);
-          } else if (isExitIntent && correspondingPosition) {
-            // Position is being closed — hand the ticker back so another strategy can take it.
-            void releaseStreamTicker({ strategyId, ticker: intent.ticker, reason: "position closed" });
-            // And the PARTNER leg with it. The entry now claims both legs, so releasing only the
-            // ticker would leave the partner's lease committed for the rest of the session and
-            // block every other strategy from a symbol nobody is holding any more.
-            if (hedgeRequired && intent.benchmark) {
-              void releaseStreamTicker({
-                strategyId,
-                ticker: intent.benchmark,
-                reason: "partner leg closed",
-              });
-            }
-            _dispatchActionLog([{
-              id: `${intent.ticker}|CLOSE|${dispatchAt}`,
-              dayKey: currentTradingDayKey(strategySessionStartMinutes),
-              ticker: intent.ticker,
-              pairKey: intent.pairKey ?? null,
-              benchmark: intent.benchmark,
-              side: intent.side,
-              kind: "CLOSE",
-              deviation: correspondingPosition.lastSignal ?? correspondingPosition.entrySignal,
-              at: dispatchAt,
-              intent: intent.intent,
-              reason: correspondingPosition.reason || undefined,
-              sequence: intent.sequence,
-              holdMs: correspondingPosition.entryDispatchedAt != null
-                ? Math.max(0, dispatchAt - correspondingPosition.entryDispatchedAt)
-                : null,
-              entryCount: correspondingPosition.entryCount ?? null,
-              filtersOk: _filterParts.join(" | ") || undefined,
-            }]);
-          }
-        }
-
-        // Hedge leg: simulate in beta mode (log without sending), send real order otherwise
-        if (hedgeRequired && !hedgeAlreadyDispatched) {
-          const hedgeIsBeta = automationConfig?.betaMode === true;
-          const benchmarkType =
-            isEntryIntent
-              ? (type === "EnterLongAggressive" ? "EnterShortAggressive" : "EnterLongAggressive")
-              : type;
-          const hedgeSide: "Long" | "Short" = isEntryIntent
-            ? (intent.side === "Long" ? "Short" : "Long")
-            : intent.side;
-          dispatchedHedgeIntentIdsRef.current.add(hedgeIntentId);
-          if (hedgeIsBeta) {
-            const hedgeNow = Date.now();
-            const hedgeRaw = rawSignalByTickerRef.current.get(intent.benchmark);
-            const hedgeIsLong = hedgeSide === "Long";
-            const hedgeLogEvent: StreamLogEvent =
-              intent.intent === "CLOSE_ALL_PRINT" ? "CLOSE_ALL"
-              : isExitIntent ? (intent.intent.includes("PRINT") ? "EXIT_PRINT" : "EXIT")
-              : intent.sequence > 1 ? "ADD" : "ENTRY";
-            const fmtHedgeMs = (ts: number) => {
-              const d = new Date(ts);
-              return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}.${String(d.getMilliseconds()).padStart(3,"0")}`;
-            };
-            streamLogStore.push({
-              ts: hedgeNow,
-              timeStr: fmtHedgeMs(hedgeNow),
-              event: hedgeLogEvent,
-              betaMode: true,
-              status: "SIMULATED",
-              session: session ?? null,
-              ruleBand: ruleBand ?? null,
-              signalClass: signalClass ?? null,
-              ratingMode: (ratingMode ?? (metric === "SigmaZap" ? "BIN" : "SESSION")) || null,
-              ratingType: ratingType ?? "any",
-              intentId: hedgeIntentId,
-              isHedge: true,
-              latchBounces: 0,
-              latchOrigin: null,
-              exitSigmaAbs: isExitIntent
-                ? (toNum(hedgeRaw ? (hedgeIsLong ? hedgeRaw.zapSsigma : hedgeRaw.zapLsigma) : null) ?? null)
-                : null,
-              ticker: intent.benchmark,
-              benchmark: intent.ticker,
-              side: hedgeSide,
-              sigmaZap: hedgeIsLong ? (toNum(hedgeRaw?.zapLsigma) ?? null) : (toNum(hedgeRaw?.zapSsigma) ?? null),
-              zapSsigma: toNum(hedgeRaw?.zapSsigma) ?? null,
-              zapLsigma: toNum(hedgeRaw?.zapLsigma) ?? null,
-              zapSgamma: toNum(hedgeRaw?.zapSgamma) ?? null,
-              zapLgamma: toNum(hedgeRaw?.zapLgamma) ?? null,
-              zapSalpha: toNum(hedgeRaw?.zapSalpha) ?? null,
-              zapLalpha: toNum(hedgeRaw?.zapLalpha) ?? null,
-              zapPct: hedgeRaw ? (hedgeIsLong ? (hedgeRaw.zapL ?? null) : (hedgeRaw.zapS ?? null)) : null,
-              bidPct: hedgeRaw ? toNum(hedgeRaw["BidLstClsΔ%"]) : null,
-              askPct: hedgeRaw ? toNum(hedgeRaw["AskLstClsΔ%"]) : null,
-              benchBidPct: null,
-              benchAskPct: null,
-              spread: null,
-              netEdge: null,
-              corr: null,
-              beta: null,
-              stockSigma: null,
-              rating: null,
-              ratingTotal: null,
-              filtersOk: "",
-              holdMs: null,
-              qualifiedAtStr: null,
-              sequence: intent.sequence,
-              entrySignal: null,
-              addThreshold: null,
-              dilutionStep: automationConfig?.dilutionStep ?? null,
-              maxAdds: automationConfig?.maxAdds ?? null,
-              exitMode: automationConfig?.exitExecutionMode ?? "n/a",
-              hedgeMode: automationConfig?.hedgeMode ?? "n/a",
-              scaleMode: automationConfig?.scaleMode ?? "n/a",
-              minNetEdge: automationConfig?.minNetEdge ?? null,
-              minHoldMinutes: automationConfig?.minHoldMinutes ?? null,
-              notionalUsd: automationConfig?.sizeValue ?? null,
-              hedgeRequired: true,
-              reason: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
-            });
-            console.log(`[BETA HEDGE SIM] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
-          } else {
-            console.log(`[HEDGE] ${intent.benchmark} ${benchmarkType} (hedge for ${intent.ticker})`);
-            try {
-              await queueLegWithRetry({
-                intentId: hedgeIntentId,
-                ticker: intent.benchmark,
-                type: benchmarkType,
-                note: `${intent.reason} | benchmark ${isExitIntent ? "hedge exit" : "hedge"}`,
-              });
-            } catch (err) {
-              dispatchedHedgeIntentIdsRef.current.delete(hedgeIntentId);
-              throw err;
-            }
-            setStreamSentOrdersCount((prev) => prev + 1);
-          }
-        }
-      }
-      // Single status refresh after the full batch — avoids one round-trip per intent.
-      await refreshExecutionStatus(true);
-    };
-
-    void sendQueuedIntents().catch((error: any) => {
-      onError?.(error?.message ?? String(error));
-    }).finally(() => {
-      dispatchLoopActiveRef.current = false;
-      // If resetStreamAutomationState was called while we were in-flight, it deferred
-      // the ref-clear to here so no in-flight order loses its dedup coverage mid-flight.
-      if (pendingResetDispatchRefsRef.current) {
-        pendingResetDispatchRefsRef.current = false;
-        dispatchedIntentIdsRef.current.clear();
-        dispatchedHedgeIntentIdsRef.current.clear();
-        recentDispatchAttemptsRef.current.clear();
-        dispatchingEntryTickersRef.current.clear();
-        dismissedEntryTickersRef.current.clear();
-      }
-      if (dispatchLoopReplayRef.current) {
-        dispatchLoopReplayRef.current = false;
-        queueMicrotask(() => setExecutionRevision((prev) => prev + 1));
-      }
-    });
-  }, [automationConfig, enabled, entryCutoffEnabled, executionRevision, streamAutoEnabled, streamOrderIntents, onError, openLoggedTickers, queuePendingActionLogEntries, appendStreamActionLogEntries, refreshExecutionStatus]);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const strategyAutoRunning = streamAutoEnabled && Boolean(automationConfig?.strategyModeEnabled);
-    if (!strategyAutoRunning) return;
-
-    // Worker-backed so the tick keeps its real 1s cadence while the tab sits in the background —
-    // see streamTicker.ts for why a plain setInterval cannot carry this engine.
-    const ticker = startStreamTicker({
-      intervalMs: STREAM_AUTOMATION_TICK_MS,
-      onTick: () => {
-        void refreshRef.current?.({ refreshBridge: true }).catch((error: any) => {
-          onErrorRef.current?.(error?.message ?? String(error));
-        });
-      },
-      // A gap this large means the engine was not polling: the machine slept, or the browser
-      // throttled us anyway. The minute-level state (streaks, minute accumulator) is unreliable
-      // across such a gap, so make it loud instead of letting entries quietly not happen.
-      onMissedTicks: (gapMs) => {
-        // eslint-disable-next-line no-console
-        console.warn(`[stream-ticker] missed ticks — engine was idle for ${(gapMs / 1000).toFixed(1)}s`, {
-          at: new Date().toISOString(),
-          visibility: typeof document !== "undefined" ? document.visibilityState : "unknown",
-          note: "entry streaks reset across this gap; new entries need a fresh qualification window",
-        });
-      },
-    });
-
-    if (!ticker.isWorkerBacked) {
-      // eslint-disable-next-line no-console
-      console.warn("[stream-ticker] worker unavailable — falling back to setInterval, which the browser WILL throttle in a background tab. Keep this tab visible.");
-    }
-
-    return () => {
-      ticker.stop();
-    };
-  }, [automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
-
-  const todaysStreamActionLog = useMemo(() => (
-    streamActionLog
-      .filter((row) => row.dayKey === currentDayKey)
-      .sort((a, b) => b.at - a.at)
-  ), [currentDayKey, streamActionLog]);
-
-  useEffect(() => {
-    streamActionLogStore.applySnapshot(todaysStreamActionLog);
-  }, [todaysStreamActionLog]);
+  // Hides rows from THIS page's tables. The bridge keeps tracking a position until the account is
+  // flat, and nothing here can stop it re-entering — that is what the bridge's own manual-close
+  // memory is for.
+  const dismissStreamActivePositions = useCallback((tickers: string[]) => {
+    if (!tickers.length) return;
+    for (const ticker of tickers) dismissedTickersRef.current.add(ticker.toUpperCase());
+    publishBridgeState();
+  }, [publishBridgeState]);
 
   return {
     streamEntryReadyCount,
     streamPositions,
-    streamActionLog: todaysStreamActionLog,
+    streamActionLog,
     streamOrderIntents,
     streamAutoEnabled,
     streamSessionStartedAt,
@@ -6020,8 +1409,6 @@ export function useStreamEngine({
     streamBookReading,
     setStreamBookReading,
     refreshStreamBookReading,
-    bindStreamActiveWindow,
-    bindStreamActiveWindowDelayed,
     clearStreamBoundWindow,
     captureStreamTickerPoint,
     captureStreamTickerPointDelayed,
@@ -6034,14 +1421,5 @@ export function useStreamEngine({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh,
-    /**
-     * Whether this engine is the one allowed to SEND for its strategy. False means another client
-     * — normally the Caesar tab — is hosting it; everything is still computed and shown.
-     */
-    streamDispatchOwner: dispatchOwner.isOwner,
-    /** "other" = a live client holds it; "unreachable" = registration got no answer. See dispatchState. */
-    streamDispatchState: dispatchState,
-    streamDispatchOwnerClientId: dispatchOwner.ownerClientId,
-    takeDispatchOwnership,
   };
 }

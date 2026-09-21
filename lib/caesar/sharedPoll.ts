@@ -99,7 +99,11 @@ export function subscribeSharedPoll<T>(
 
   if (ch.timer == null) {
     void tick(key, fetcher);
-    ch.timer = window.setInterval(() => void tick(key, fetcher), intervalMs);
+    // A hidden tab draws nothing, so it fetches nothing; the next tick after it is shown catches up.
+    ch.timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void tick(key, fetcher);
+    }, intervalMs);
   }
 
   return () => {

@@ -46,6 +46,10 @@ export type OpenRideSonarRow = {
 export type OpenRideSonarSnapshot = {
   timedOut: boolean;
   rows: OpenRideSonarRow[];
+  /** Full signal rows for the listed tickers plus the few the panel's widgets read — chosen on the bridge. */
+  items: unknown[];
+  /** How many tickers the bridge looked at before choosing. */
+  rawCount: number;
 };
 
 export function toOpenRideSonarLiveParams(args: {

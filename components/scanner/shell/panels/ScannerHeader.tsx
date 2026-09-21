@@ -20,6 +20,8 @@ export type ScannerHeaderProps = {
   navStreamHref: string;
   navScannerHref: string;
   navSonarHref: string;
+  /** Renders a fourth SCOUT link when set; only Arbitrage has a Scout page. */
+  navScoutHref?: string;
   /** "sonar" marks the third link as the current page; the Scanner never passes it. */
   primaryPanel: PrimaryPanelKey | "sonar";
   listMode: PaperListMode;
@@ -50,6 +52,7 @@ export default function ScannerHeader({
   navStreamHref,
   navScannerHref,
   navSonarHref,
+  navScoutHref,
   primaryPanel,
   listMode,
   ignCount,
@@ -123,6 +126,21 @@ export default function ScannerHeader({
             </svg>
             SONAR
           </Link>
+          {navScoutHref && (
+            <Link
+              href={navScoutHref}
+              className={clsx(
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
+                headerNavInactiveClass
+              )}
+              title="Open SCOUT"
+            >
+              <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
+              </svg>
+              SCOUT
+            </Link>
+          )}
         </div>
 
         <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">

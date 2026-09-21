@@ -289,6 +289,7 @@ export type PaperArbClosedDto = {
 };
 
 export type ScannerLogContext = {
+  startAbsNeg?: number | null;
   session: string;
   ruleBand: string;
   metric: string;
@@ -326,6 +327,11 @@ export type PaperArbAnalyticsRequest = {
    */
   unit?: string | null;
   startAbsMax?: number | null;
+  /**
+   * Separate start threshold for NEGATIVE deviations (a Long entry); `startAbs` is then the positive
+   * one (a Short entry). Null / absent = one threshold for both, as it always was.
+   */
+  startAbsNeg?: number | null;
   endAbs?: number;
   session?: PaperArbSession;
   closeMode?: PaperArbCloseMode;
@@ -397,6 +403,8 @@ export type PaperArbAnalyticsRequest = {
 
   minSpread?: number | null;
   maxSpread?: number | null;
+  minSpreadBidPct?: number | null;
+  maxSpreadBidPct?: number | null;
   minSpreadBps?: number | null;
   maxSpreadBps?: number | null;
 

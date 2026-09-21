@@ -162,9 +162,16 @@ export function useSectorCorrExclusion(
   return state;
 }
 
-/** True when this row must be dropped by CORR. Seeds themselves are left to the REP button. */
+/**
+ * True when this row must be dropped by CORR. Seeds themselves are left to the REP button.
+ *
+ * A row with no ticker cannot be looked up at all, so it is dropped (unknown rejects). A ticker
+ * that is simply absent from the peer set is NOT unknown: sector_corr is pre-cut to |corr| >= 0.5,
+ * so presence is the only thing it encodes — absence means "not correlated", the same reading the
+ * news flag has.
+ */
 export function rowExcludedByCorr(row: any, excluded: Set<string>): boolean {
-  if (!excluded.size) return false;
   const ticker = rowTicker(row);
-  return ticker.length > 0 && excluded.has(ticker);
+  if (!ticker) return true;
+  return excluded.has(ticker);
 }

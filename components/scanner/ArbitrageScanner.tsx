@@ -23,6 +23,7 @@ import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { pushArbitrageLiveParams, toArbitrageLiveParams } from "../../lib/arbitrage/liveParamsClient";
+import { useDirectionBalanceStatus } from "../../lib/arbitrage/directionBalanceClient";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
@@ -31,7 +32,7 @@ import type { SonarExactFilterSnapshot } from "../sonar/ArbitrageSonar";
 import { useTapeMeta } from "./tapeMetaStore";
 import { GlitchTitle } from "../ui/GlitchTitle";
 import clsx from "clsx";
-import { parseSessionDay, rowReportAffectsSession } from "../../lib/filters/reportTiming";
+import { parseSessionDay, rowReportClassification } from "../../lib/filters/reportTiming";
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
 import {
   SECTOR_CORR_DEFAULT,
@@ -67,7 +68,6 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
-import DispatchOwnerBanner from "../stream/DispatchOwnerBanner";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -83,11 +83,11 @@ const STRATEGY = defineScannerStrategy({
 // the threshold inputs, which is why they used to fight each other: five hand-copied handlers, and
 // three of them reset the metric to SigmaZap on their way out. One table, one handler.
 const ZAP_UNITS: { mode: Exclude<ZapMode, "off">; metric: PaperArbMetric; label: string; title: string }[] = [
-  { mode: "zap", metric: "ZapPct", label: "% ZAP", title: "Thresholds in PERCENT — the raw deviation off the tape." },
-  { mode: "sigma", metric: "SigmaZap", label: "σ ZAP", title: "Thresholds in SIGMAS — the ticker's own dispersion." },
-  { mode: "delta", metric: "SigmaZap", label: "Δ ZAP", title: "Require start sigma to be above direction-specific print median plus the first input delta" },
-  { mode: "gamma", metric: "GammaZap", label: "γ ZAP", title: "Thresholds in GAMMAS — the ticker's PRE reversal level. Tickers with no gamma produce no signal in this metric." },
-  { mode: "alpha", metric: "AlphaZap", label: "α ZAP", title: "Thresholds in ALPHAS — the level the ticker reaches often and far. Not Δ ZAP, which uses the five-day median print." },
+  { mode: "zap", metric: "ZapPct", label: "%", title: "Thresholds in PERCENT — the raw deviation off the tape." },
+  { mode: "sigma", metric: "SigmaZap", label: "σ", title: "Thresholds in SIGMAS — the ticker's own dispersion." },
+  { mode: "delta", metric: "SigmaZap", label: "Δ", title: "Require start sigma to be above direction-specific print median plus the first input delta" },
+  { mode: "gamma", metric: "GammaZap", label: "γ", title: "Thresholds in GAMMAS — the ticker's PRE reversal level. Tickers with no gamma produce no signal in this metric." },
+  { mode: "alpha", metric: "AlphaZap", label: "α", title: "Thresholds in ALPHAS — the level the ticker reaches often and far. Not Δ ZAP, which uses the five-day median print." },
 ];
 
 // =========================
@@ -127,6 +127,7 @@ type ArbitrageScannerProps = {
   navStreamHref?: string;
   navScannerHref?: string;
   navSonarHref?: string;
+  navScoutHref?: string;
 };
 
 const ACTIVE_TICKER_STRATEGY = "arbitrage" as const;
@@ -161,6 +162,7 @@ export default function ArbitrageScanner({
   navStreamHref = STRATEGY.nav.stream,
   navScannerHref = STRATEGY.nav.scanner,
   navSonarHref = STRATEGY.nav.sonar,
+  navScoutHref = STRATEGY.nav.scout,
 }: ArbitrageScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
@@ -176,6 +178,17 @@ export default function ArbitrageScanner({
       return "scanner";
     }
   });
+  // The four classes the v13 notebook still publishes (BLUE/ARK folded into PRE, PRINT into
+  // INTRA, GLOBAL retired as a gate), taken from the registry rather than written out again — the
+  // band buttons below read the same list, so the toolbar and the state cannot describe different
+  // worlds. Passing it also moves the default session/band off GLOB/GLOBAL onto PRE and refuses a
+  // session outside the list, so a filters blob saved before this change degrades to PRE instead
+  // of restoring a class that no longer has a button.
+  const ARB_SESSIONS = useMemo(
+    () => STRATEGY.ratingClasses.keys.map((k) => k.toUpperCase() as PaperArbSession),
+    [],
+  );
+
   // Every filter/view field below used to be declared here AND, identically, in
   // OpenDoorScanner - 226 of them. They now live in useScannerFilters; the bag is destructured
   // so the several thousand references throughout this file stay exactly as they were.
@@ -183,6 +196,7 @@ export default function ArbitrageScanner({
     strategy: STRATEGY,
     streamAutomationConfigOverride,
     startAbsDefault: 0.1,
+    sessions: ARB_SESSIONS,
   });
   const {
     internalTab,
@@ -215,6 +229,8 @@ export default function ArbitrageScanner({
     setStartAbs,
     startAbsMax,
     setStartAbsMax,
+    startAbsNeg,
+    setStartAbsNeg,
     endAbs,
     setEndAbs,
     minHoldCandles,
@@ -1067,6 +1083,13 @@ export default function ArbitrageScanner({
   const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
     sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
 
+  // Direction auto-balance. The switch and its trigger ratio are the operator's; the DECISIONS (count the
+  // book by side every few minutes, lower the under-represented side's entry threshold) are the
+  // bridge's, so they keep working with this tab closed. See DirectionBalancer on the bridge.
+  const [autoBalance, setAutoBalance] = useState<boolean>(false);
+  const [autoBalanceRatio, setAutoBalanceRatio] = useState<number>(2);
+  const directionBalanceStatus = useDirectionBalanceStatus(autoBalance);
+
   // ========= Derived: variant (for display)
   const variantString = useMemo(() => {
     // EndAbs always participates in variant (even if Passive ignores for closing)
@@ -1074,6 +1097,7 @@ export default function ArbitrageScanner({
       `metric=${metric}`,
       `startAbs=${startAbs}`,
       `deltaPrint=${zapMode === "delta" ? "on" : "off"}`,
+      `startAbsNeg=${startAbsNeg.trim() || "same"}`,
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
@@ -1086,15 +1110,15 @@ export default function ArbitrageScanner({
       `pnlMode=${pnlMode}`,
       `maxAdds=${maxAdds}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
+    const s = `${metric}|${startAbs}|${startAbsNeg}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   // ========= Preflight validation
   const validationErrors = useMemo(() => {
@@ -1113,11 +1137,18 @@ export default function ArbitrageScanner({
     if (!(startAbs > 0)) e.push("startAbs must be > 0");
     if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
     if (zapMode !== "delta" && endAbs > startAbs) e.push("endAbs must be <= startAbs");
+    // The negative-side threshold has to clear the same bars, or a Long could enter a position its own
+    // exit rule already counts as closed. Empty means "same as start +", which needs no check.
+    if (startAbsNeg.trim() !== "") {
+      const neg = Number(startAbsNeg.replace(",", "."));
+      if (!Number.isFinite(neg) || !(neg > 0)) e.push("start − must be > 0 (or empty = same as start +)");
+      else if (zapMode !== "delta" && endAbs > neg) e.push("endAbs must be <= start −");
+    }
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
 
     return e;
-  }, [dateMode, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
+  }, [dateMode, dateNy, dateFrom, dateTo, startAbs, startAbsNeg, endAbs, minHoldCandles, zapMode]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const bumpStartAbsMax = (delta: number) => {
@@ -1293,7 +1324,10 @@ export default function ArbitrageScanner({
 
         if (!routeLocksPrimaryPanel && (s.primaryPanel === "stream" || s.primaryPanel === "scanner")) setPrimaryPanel(s.primaryPanel);
         if (controlledTab == null && (s.tab === "active" || s.tab === "episodes" || s.tab === "analytics")) setInternalTab(s.tab);
-        if (controlledRuleBand == null && (s.ruleBand === "BLUE" || s.ruleBand === "ARK" || s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "PRINT" || s.ruleBand === "POST" || s.ruleBand === "GLOBAL")) setInternalRuleBand(s.ruleBand);
+        // A saved BLUE/ARK/PRINT/GLOBAL band has no button anymore (folded into PRE/INTRA or
+        // retired) — restoring it would leave the row with nothing highlighted, so it is dropped
+        // here rather than passed through; useScannerFilters' own PRE default takes over.
+        if (controlledRuleBand == null && (s.ruleBand === "PRE" || s.ruleBand === "OPEN" || s.ruleBand === "INTRA" || s.ruleBand === "POST")) setInternalRuleBand(s.ruleBand);
         if (s.zapMode === "off" || s.zapMode === "zap" || s.zapMode === "sigma" || s.zapMode === "delta" || s.zapMode === "gamma" || s.zapMode === "alpha") setZapMode(s.zapMode);
         if (typeof s.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
 
@@ -1302,7 +1336,7 @@ export default function ArbitrageScanner({
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
 
-        if (controlledSession == null && (s.session === "BLUE" || s.session === "ARK" || s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST" || s.session === "NIGHT" || s.session === "GLOB")) {
+        if (controlledSession == null && (s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST")) {
           setSession(s.session);
           const restoredBand = ratingBandFromSession(s.session);
           if (controlledRuleBand != null) {
@@ -1315,6 +1349,9 @@ export default function ArbitrageScanner({
         if (s.closeMode === "Active" || s.closeMode === "Passive") setCloseMode(s.closeMode);
         if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
         if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
+        if (typeof s.startAbsNeg === "string") setStartAbsNeg(s.startAbsNeg);
+        if (typeof s.autoBalance === "boolean") setAutoBalance(s.autoBalance);
+        if (typeof s.autoBalanceRatio === "number" && s.autoBalanceRatio >= 1.1) setAutoBalanceRatio(s.autoBalanceRatio);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (typeof s.startCutoffMinuteIdx === "number" && s.startCutoffMinuteIdx >= 0) {
@@ -1402,10 +1439,8 @@ export default function ArbitrageScanner({
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
         if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
-        if (typeof s.topMode === "boolean") setTopMode(s.topMode);
-        if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
+        // ALL/TOP switcher removed from the toolbar - a stale topMode:true from before would
+        // otherwise keep the extra ranges/bench filtering active with no visible control for it.
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -1567,6 +1602,9 @@ export default function ArbitrageScanner({
       closeMode,
       startAbs,
       startAbsMax,
+      startAbsNeg,
+      autoBalance,
+      autoBalanceRatio,
       endAbs,
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
@@ -1741,7 +1779,7 @@ export default function ArbitrageScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
       // changing any of them left persistedFilters identical and the debounced write never fired —
       // they reached localStorage only by accident, whenever some other field changed next. All of
@@ -2023,10 +2061,7 @@ export default function ArbitrageScanner({
   // Debounced write + unmount flush, shared with the other scanners.
   usePersistedFilters(filtersLsKey, persistedFilters, filtersHydratedRef, filtersRestoringRef);
 
-  const derivedStreamSignalClass = useMemo(() => {
-    if (ruleBand === "GLOBAL") return "global";
-    return ruleBand.toLowerCase();
-  }, [ruleBand]);
+  const derivedStreamSignalClass = useMemo(() => ruleBand.toLowerCase(), [ruleBand]);
   const streamSignalClass = streamExecutionDescriptorOverride?.signalClass ?? derivedStreamSignalClass;
 
   const derivedStreamRatingRule = useMemo(() => {
@@ -2276,6 +2311,9 @@ export default function ArbitrageScanner({
       sigmaMax: maxSigma,
       zapMode: zapMode,
       zapShowAbs: startAbs,
+      // The Long's own threshold; absent = the same as start +. Without it the stream traded one threshold
+      // for both sides while the backtest above used two.
+      zapShowAbsNeg: (() => { const n = optNumOrNull(startAbsNeg); return n != null && n > 0 ? n : null; })(),
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
       topMode,
@@ -2388,6 +2426,7 @@ export default function ArbitrageScanner({
       streamSignalClass,
       ratingType,
       startAbs,
+      startAbsNeg,
       tickersText,
       zapMode,
       sharedRangeFilterModes,
@@ -2463,6 +2502,7 @@ export default function ArbitrageScanner({
         signalsType: ratingType,
         signalsMinRate: streamRatingRule.minRate,
         signalsMinTotal: streamRatingRule.minTotal,
+        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio },
         source: "arbitrage-scanner",
       }));
     }, 600);
@@ -2476,16 +2516,10 @@ export default function ArbitrageScanner({
     streamSignalClass,
     ratingType,
     streamRatingRule,
+    autoBalance,
+    autoBalanceRatio,
   ]);
 
-
-  const streamTrackedSignalsEnabled =
-    !isStreamOnlyShell ||
-    tab !== "active" ||
-    streamViewModeOverride === "auto" ||
-    Boolean(streamAutoEnabledOverride) ||
-    Boolean(streamAutoStartEnabledOverride) ||
-    Boolean(effectiveStreamAutomationConfig.strategyModeEnabled);
 
   const {
     streamEntryReadyCount,
@@ -2511,55 +2545,14 @@ export default function ArbitrageScanner({
     dismissStreamActivePositions,
     submitManualStreamOrders,
     refresh: refreshStreamSignals,
-    streamDispatchOwner,
-    streamDispatchState,
-    streamDispatchOwnerClientId,
-    takeDispatchOwnership,
   } = useStreamEngine({
+    // This page only DRAWS: the bridge screens the candidates and makes every decision, so
+    // nothing about filters, gates or signal metrics is passed to the engine any more.
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
-    trackedSignalsEnabled: streamTrackedSignalsEnabled,
     initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
     signalClass: streamSignalClass,
-    ruleBand,
-    ratingType,
-    metric,
-    ratingRule: { minRate: streamRatingRule.minRate, minTotal: streamRatingRule.minTotal },
-    startAbs,
-    startAbsMax: optNumOrNull(startAbsMax),
-    endAbs,
-    closeMode,
-    minHoldCandles,
-    ratingMode,
-    session,
-    ratingMinRate: streamRatingRule.minRate,
-    ratingMinTotal: streamRatingRule.minTotal,
-    tickersCsv: splitListUpper(tickersText).join(",") || undefined,
-    minCorr: optNumOrNull(minCorr),
-    maxCorr: optNumOrNull(maxCorr),
-    minBeta: optNumOrNull(minBeta),
-    maxBeta: optNumOrNull(maxBeta),
-    minSigma: optNumOrNull(minSigma),
-    maxSigma: optNumOrNull(maxSigma),
-    sideFilter: sideFilter || undefined,
-    filterConfig: streamFilterConfig,
-    exactSonarFilterSnapshot: streamExactSonarFilterSnapshot,
-    maxSpreadValue: maxSpread,
     automationConfig: effectiveStreamAutomationConfig,
-    activeScannerTickers: activeRows.map((r) => ({
-      ticker: r.ticker,
-      side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-    })),
-    onFetchActiveTickers: async () => {
-      const params = buildGetParams(dateNy);
-      const qs = buildPaperQuery(params);
-      const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
-      const rows = normalizeRows<PaperArbActiveRow>(j) ?? [];
-      return rows.map((r) => ({
-        ticker: r.ticker,
-        side: normalizeSide(r.side).isLong ? "Long" : "Short" as "Long" | "Short",
-      }));
-    },
     onUpdated: isStreamOnlyShell ? undefined : () => setUpdatedAt(new Date()),
     onError: (message) => setErr(message),
   });
@@ -2767,6 +2760,7 @@ export default function ArbitrageScanner({
       dateNy: d,
       metric,
       startAbs,
+      startAbsNeg: (() => { const n = optNumOrNull(startAbsNeg); return n != null && n > 0 ? n : undefined; })(),
       usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: optNumOrNull(startAbsMax),
       endAbs,
@@ -2820,8 +2814,8 @@ export default function ArbitrageScanner({
       maxRoundLot: rangeValueOrNull("roundlot", maxRoundLot),
       minVWAP: rangeValueOrNull("vwap", minVWAP),
       maxVWAP: rangeValueOrNull("vwap", maxVWAP),
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minLstPrcL: rangeValueOrNull("lstprcl", minLstPrcL),
       maxLstPrcL: rangeValueOrNull("lstprcl", maxLstPrcL),
       minLstCls: rangeValueOrNull("lstcls", minLstCls),
@@ -2925,7 +2919,10 @@ export default function ArbitrageScanner({
 
   function buildPostRequest(from: string, to: string): PaperArbAnalyticsRequest {
     const startAbsMaxNum = optNumOrNull(startAbsMax);
-    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= startAbs) ? startAbsMaxNum : null;
+    // A separate negative-side threshold only exists when it is a real, positive number.
+    const startAbsNegNum = optNumOrNull(startAbsNeg);
+    const startAbsNegEff = startAbsNegNum != null && startAbsNegNum > 0 ? startAbsNegNum : null;
+    const startAbsMaxEff = startAbsMaxNum != null && startAbsMaxNum > 0 && (zapMode === "delta" || startAbsMaxNum >= Math.max(startAbs, startAbsNegEff ?? 0)) ? startAbsMaxNum : null;
     const reqTickers = requestScopedTickers;
 
     const sessionBand = ratingBandFromSession(session);
@@ -2941,6 +2938,7 @@ export default function ArbitrageScanner({
 
       metric,
       startAbs,
+      startAbsNeg: startAbsNegEff,
       usePrintMedianDelta: zapMode === "delta" ? true : undefined,
       startAbsMax: startAbsMaxEff,
       endAbs,
@@ -3004,8 +3002,8 @@ export default function ArbitrageScanner({
       minPreMktVolNF: rangeValueOrNull("premhvolnf", minPreMktVolNF),
       maxPreMktVolNF: rangeValueOrNull("premhvolnf", maxPreMktVolNF),
 
-      minSpread: rangeValueOrNull("spread", minSpread),
-      maxSpread: rangeValueOrNull("spread", maxSpread),
+      minSpreadBidPct: rangeValueOrNull("spread", minSpread),
+      maxSpreadBidPct: rangeValueOrNull("spread", maxSpread),
       minSpreadBps: optNumOrNull(minSpreadBps),
       maxSpreadBps: optNumOrNull(maxSpreadBps),
 
@@ -3934,8 +3932,6 @@ export default function ArbitrageScanner({
   const _minSigmaV = optNumOrNull(deferredMinSigma);
   const _maxSigmaV = optNumOrNull(deferredMaxSigma);
 
-  const _metaLoaded = Object.keys(arbitrageTickerMetaByTicker).length > 0;
-
   const passesStaticMetricRangeFilters = (row: PaperArbClosedDto) => {
     // Report gate: the same rule Sonar and Stream apply to the raw vendor marker, but judged
     // against the TAPE DAY this row belongs to rather than against today. The marker carries only
@@ -3944,7 +3940,9 @@ export default function ArbitrageScanner({
     // Deliberately NOT the server's HasReport boolean: the tape collapses the marker to "any
     // marker means yes", discarding the date and release time the rule is built on.
     if (requireHasReport || excludeHasReport) {
-      const affectsSession = rowReportAffectsSession(row, reportSessionForRow(row));
+      const affectsSession = rowReportClassification(row, reportSessionForRow(row));
+      // No report marker at all is unknown, and unknown is rejected whichever way the toggle is set.
+      if (affectsSession == null) return false;
       if (excludeHasReport && affectsSession) return false;
       if (requireHasReport && !affectsSession) return false;
     }
@@ -3958,8 +3956,9 @@ export default function ArbitrageScanner({
     if (_minCorrV != null || _maxCorrV != null) {
       const value = getOptimizerFallbackValue(row, "corr", tickerMeta);
       if (value == null) {
-        // Meta not yet loaded — don't reject; filter will re-apply once meta arrives
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        // No value is unknown, so the row is rejected - also while the meta is still loading; the
+        // memo re-runs when it arrives.
+        return false;
       } else {
         if (_minCorrV != null && value < _minCorrV) return false;
         if (_maxCorrV != null && value > _maxCorrV) return false;
@@ -3968,7 +3967,7 @@ export default function ArbitrageScanner({
     if (_minBetaV != null || _maxBetaV != null) {
       const value = getOptimizerFallbackValue(row, "beta", tickerMeta);
       if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        return false;
       } else {
         if (_minBetaV != null && value < _minBetaV) return false;
         if (_maxBetaV != null && value > _maxBetaV) return false;
@@ -3977,7 +3976,7 @@ export default function ArbitrageScanner({
     if (_minSigmaV != null || _maxSigmaV != null) {
       const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
       if (value == null) {
-        if (!_metaLoaded) { /* pass through */ } else return false;
+        return false;
       } else {
         if (_minSigmaV != null && value < _minSigmaV) return false;
         if (_maxSigmaV != null && value > _maxSigmaV) return false;
@@ -4004,7 +4003,7 @@ export default function ArbitrageScanner({
       if (zapMode === "delta" && !passesDeltaZapGate({
         side: r.side,
         metricAbs: r.start?.metricAbs,
-        deltaAbs: startAbs,
+        deltaAbs: normalizeSide(r.side).isLong === true ? (optNumOrNull(startAbsNeg) ?? startAbs) : startAbs,
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
@@ -4065,7 +4064,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4083,7 +4082,7 @@ export default function ArbitrageScanner({
       if (zapMode === "delta" && !passesDeltaZapGate({
         side: r.side,
         metricAbs: r.startMetricAbs,
-        deltaAbs: startAbs,
+        deltaAbs: normalizeSide(r.side).isLong === true ? (optNumOrNull(startAbsNeg) ?? startAbs) : startAbs,
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
@@ -4142,7 +4141,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -5074,6 +5073,7 @@ export default function ArbitrageScanner({
       offset,
       startAbs,
       startAbsMax,
+      startAbsNeg: (() => { const n = optNumOrNull(startAbsNeg); return n != null && n > 0 ? n : null; })(),
       endAbs,
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
@@ -5085,7 +5085,7 @@ export default function ArbitrageScanner({
     }),
     [
       session, ruleBand, metric, closeMode, priceMode, pnlMode, scopeMode, topN, offset,
-      startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime,
+      startAbs, startAbsMax, startAbsNeg, endAbs, minHoldCandles, startCutoffTime, preStartTime,
       dilutionMode, dilutionStep, maxAdds, zapMode,
     ]
   );
@@ -5371,6 +5371,7 @@ export default function ArbitrageScanner({
           navStreamHref={navStreamHref}
           navScannerHref={navScannerHref}
           navSonarHref={navSonarHref}
+          navScoutHref={navScoutHref}
           primaryPanel={primaryPanel}
           listMode={listMode}
           ignCount={ignCount}
@@ -5473,51 +5474,8 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* TOP mode toggle */}
-          <div className="flex h-7 items-center gap-1.5">
-            <div className="flex h-7 items-center rounded-lg bg-black/20">
-              {([false, true] as const).map((isTop) => (
-                <button
-                  key={String(isTop)}
-                  type="button"
-                  onClick={() => setTopMode(isTop)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    topMode === isTop
-                      ? isTop
-                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {isTop ? "TOP" : "ALL"}
-                </button>
-              ))}
-            </div>
-            {topMode && (
-              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                {([
-                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                ] as const).map(({ key, label, on, set }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => set((v) => !v)}
-                    className={clsx(
-                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                      on
-                        ? "bg-emerald-500/80 text-white"
-                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* ALL/TOP switcher removed from the toolbar - topMode stays at its useScannerFilters
+              default (false = ALL); nothing in the UI can flip it to TOP anymore. */}
 
           <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
             {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => {
@@ -5852,11 +5810,7 @@ export default function ArbitrageScanner({
           
             <div className="flex h-7 items-center gap-2">
               {[
-                { key: "GLOBAL", label: "GLOB" },
-                { key: "BLUE", label: "BLUE" },
                 { key: "PRE", label: "PRE" },
-                { key: "ARK", label: "ARK" },
-                { key: "PRINT", label: "PRINT" },
                 { key: "OPEN", label: "OPEN" },
                 { key: "INTRA", label: "INTRA" },
                 { key: "POST", label: "POST" },
@@ -5869,23 +5823,20 @@ export default function ArbitrageScanner({
                     if (controlledSession == null) {
                       setRuleBand(nextBand);
                     }
+                    // BLUE/ARK/PRINT/GLOBAL keep a slot in the shared record (every other scanner
+                    // fork reads the same type) but the toolbar no longer offers them, so they
+                    // never go true from here.
                     setRatingEnabledBands({
-                      BLUE: nextBand === "BLUE",
-                      ARK: nextBand === "ARK",
+                      BLUE: false,
+                      ARK: false,
                       PRE: nextBand === "PRE",
                       OPEN: nextBand === "OPEN",
                       INTRA: nextBand === "INTRA",
-                      PRINT: nextBand === "PRINT",
+                      PRINT: false,
                       POST: nextBand === "POST",
-                      GLOBAL: nextBand === "GLOBAL",
+                      GLOBAL: false,
                     });
-                    if (nextBand === "GLOBAL") setSession("GLOB");
-                    if (nextBand === "BLUE") setSession("BLUE");
-                    if (nextBand === "PRE") setSession("PRE");
-                    if (nextBand === "ARK") setSession("ARK");
-                    if (nextBand === "OPEN") setSession("OPEN");
-                    if (nextBand === "INTRA") setSession("INTRA");
-                    if (nextBand === "POST") setSession("POST");
+                    setSession(nextBand as PaperArbSession);
                   }}
                   className={clsx(
                     TOOLBAR_BUTTON_BASE,
@@ -6121,6 +6072,13 @@ export default function ArbitrageScanner({
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}
+          directionBalance={{
+            enabled: autoBalance,
+            ratio: autoBalanceRatio,
+            onToggle: () => setAutoBalance((v) => !v),
+            onRatio: (v) => setAutoBalanceRatio(Math.max(1.1, Math.min(20, Number.isFinite(v) ? v : 2))),
+            status: directionBalanceStatus,
+          }}
           applyDilutionMode={applyDilutionMode}
           applyDilutionStep={applyDilutionStep}
           applyMaxAdds={applyMaxAdds}
@@ -6246,6 +6204,7 @@ export default function ArbitrageScanner({
                 })}
 
                 <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                  <span aria-hidden="true" className="pointer-events-none absolute left-2 top-0 bottom-0 flex items-center text-[11px] font-mono font-bold leading-none text-emerald-400/80 select-none">+</span>
                   <input
                     type="number"
                     step={0.1}
@@ -6253,7 +6212,7 @@ export default function ArbitrageScanner({
                     value={startAbs}
                     disabled={zapMode === "off"}
                     onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-5 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6273,6 +6232,47 @@ export default function ArbitrageScanner({
                       onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease start abs"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a Long entry). Empty = the same threshold as start +. Start max and end stay shared.">
+                  <span aria-hidden="true" className="pointer-events-none absolute left-2 top-0 bottom-0 flex items-center text-[11px] font-mono font-bold leading-none text-rose-400/80 select-none">−</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    value={startAbsNeg}
+                    disabled={zapMode === "off"}
+                    onChange={(e) => setStartAbsNeg(e.target.value)}
+                    placeholder="as +"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-5 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbsNeg((prev) => {
+                        const cur = optNumOrNull(prev) ?? startAbs;
+                        return String(Math.max(0.1, +(cur + 0.1).toFixed(4)));
+                      })}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                      aria-label="Increase start for negative deviations"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      disabled={zapMode === "off"}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStartAbsNeg((prev) => {
+                        const cur = optNumOrNull(prev) ?? startAbs;
+                        return String(Math.max(0.1, +(cur - 0.1).toFixed(4)));
+                      })}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                      aria-label="Decrease start for negative deviations"
                     >
                       ▼
                     </button>
@@ -6570,13 +6570,6 @@ export default function ArbitrageScanner({
         </div>
 
         {/* CONTENT */}
-        {primaryPanel === "stream" && !streamDispatchOwner && (
-          <DispatchOwnerBanner
-            state={streamDispatchState}
-            ownerClientId={streamDispatchOwnerClientId}
-            onTakeOwnership={takeDispatchOwnership}
-          />
-        )}
         {primaryPanel === "stream" && (
           <ArbitrageStreamView
             tab={tab}
@@ -6605,7 +6598,8 @@ export default function ArbitrageScanner({
             accentActiveTextClass={STREAM_FIXED_ACTIVE_TEXT}
             viewMode={streamViewModeOverride ?? "stream"}
             automationLaunchEnabled={streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab"}
-            entryCutoffActive={streamSignalClass === "ark"}
+            // ARK is folded into PRE in v13 - the pre-market class this banner was always about.
+            entryCutoffActive={streamSignalClass === "pre"}
             hideAutomationButtons
           />
         )}
