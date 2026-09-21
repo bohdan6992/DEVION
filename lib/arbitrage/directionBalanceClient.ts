@@ -5,7 +5,7 @@ import { bridgeUrl } from "../bridgeBase";
 
 /**
  * What the bridge's direction auto-balance has done. The bridge decides everything - it counts the
- * book by side every few minutes and lowers the entry threshold of the under-represented side - and
+ * book by side (every 10 min, every minute once a skew has triggered) and lowers the entry threshold of the under-represented side until the book is balanced - and
  * this is only its report, for the page to show.
  */
 export type DirectionBalanceEvent = {
@@ -20,6 +20,8 @@ export type DirectionBalanceEvent = {
 
 export type DirectionBalanceState = {
   enabled: boolean;
+  /** "watching" = trigger check every 10 min; "balancing" = a lowering is in force, re-checked every minute. */
+  phase: string;
   /** How far the SHORT entry threshold (positive deviations) is currently lowered. */
   shortAdjust: number;
   /** How far the LONG entry threshold (negative deviations) is currently lowered. */
@@ -43,6 +45,7 @@ export async function fetchDirectionBalance(): Promise<DirectionBalanceState | n
     if (!state || typeof state !== "object") return null;
     return {
       enabled: !!state.enabled,
+      phase: String(state.phase ?? "watching"),
       shortAdjust: Number(state.shortAdjust) || 0,
       longAdjust: Number(state.longAdjust) || 0,
       lastLongs: Number(state.lastLongs) || 0,

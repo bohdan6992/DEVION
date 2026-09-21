@@ -1,4 +1,5 @@
 import type { ArbitrageFilterConfigV1, MinMax, ReportMode, ZapMode } from "@/lib/filters/arbitrageFilterConfigV1";
+import { rowExcludedByBorrow } from "@/lib/filters/borrow";
 import { parseReportDateAffectsTodaySession, rowReportClassification } from "@/lib/filters/reportTiming";
 
 type AnyRow = Record<string, any>;
@@ -228,7 +229,8 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       if (readRowBool(r.isPtp ?? r.IsPTP ?? r.isPTP) !== false) return false;
     }
     if (exclude.ssr) {
-      if (readRowBool(r.isSsr ?? r.IsSSR ?? r.isSSR) !== false) return false;
+      // "SSR" is the feed's own spelling (a live row's Meta), the others the DTO's.
+      if (readRowBool(r.isSsr ?? r.IsSSR ?? r.isSSR ?? getField(r, "SSR")) !== false) return false;
     }
     if (exclude.report) {
       // Only a row KNOWN not to report survives; no report field is unknown, so it goes too.
@@ -241,6 +243,7 @@ export function applyArbitrageFilters(rows: AnyRow[], cfg: ArbitrageFilterConfig
       if (eqt && eqt.includes("etf")) return false;
       if (readRowBool(r.isEtf ?? r.IsETF ?? r.isETF ?? r.etf ?? r.ETF ?? r.IsEtf) !== false) return false;
     }
+    if ((exclude.itb || exclude.hard) && rowExcludedByBorrow(r, !!exclude.itb, !!exclude.hard)) return false;
     if (exclude.crap) {
       // YCls, not LstCls: TapeWriter switched to yesterday's close because the running LstCls is
       // null pre-market, which silently disabled this filter there. Unknown now rejects, so the

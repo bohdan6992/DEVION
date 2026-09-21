@@ -67,6 +67,8 @@ export type ArbitrageServerFilters = {
   excludeReport: boolean;
   excludeEtf: boolean;
   excludeCrap: boolean;
+  excludeItb: boolean;
+  excludeHardToBorrow: boolean;
   hasReport: boolean | null;
   equityType: string | null;
   bounds: Record<string, Bound>;
@@ -188,6 +190,8 @@ export function toArbitrageServerFilters(cfg: ArbitrageFilterConfigV1): Arbitrag
     excludeReport: !!cfg.exclude?.report,
     excludeEtf: !!cfg.exclude?.etf,
     excludeCrap: !!cfg.exclude?.crap,
+    excludeItb: !!cfg.exclude?.itb,
+    excludeHardToBorrow: !!cfg.exclude?.hard,
     hasReport: reportTriState(cfg.report?.hasReport),
     equityType: cfg.equityType?.trim() || null,
     bounds,

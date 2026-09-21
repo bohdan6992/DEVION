@@ -1141,8 +1141,8 @@ export default function ArbitrageScanner({
     // exit rule already counts as closed. Empty means "same as start +", which needs no check.
     if (startAbsNeg.trim() !== "") {
       const neg = Number(startAbsNeg.replace(",", "."));
-      if (!Number.isFinite(neg) || !(neg > 0)) e.push("start − must be > 0 (or empty = same as start +)");
-      else if (zapMode !== "delta" && endAbs > neg) e.push("endAbs must be <= start −");
+      if (!Number.isFinite(neg) || !(neg > 0)) e.push("long start must be > 0 (or empty = same as short start)");
+      else if (zapMode !== "delta" && endAbs > neg) e.push("endAbs must be <= long start");
     }
 
     if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
@@ -2135,6 +2135,8 @@ export default function ArbitrageScanner({
         report: excludeHasReport,
         etf: excludeETF,
         crap: excludeCrap,
+        itb: excludeItb,
+        hard: excludeHard,
       },
       include: {
         usaOnly: includeUSA,
@@ -2171,7 +2173,7 @@ export default function ArbitrageScanner({
     minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
     minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
     minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
-    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
+    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap, excludeItb, excludeHard,
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
@@ -6098,14 +6100,14 @@ export default function ArbitrageScanner({
           <FilterFlagsRow
               className="order-1"
             exclusions={[
-              { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
-              { label: "HARD", value: excludeHard, set: setExcludeHard, title: "B5ETB = NO (hard to borrow)" },
-              { label: "Div", value: excludeDividend, set: setExcludeDividend, title: "Exclude dividend=true" },
-              { label: "News", value: excludeHasNews, set: (v) => { setExcludeHasNews(v); setRequireHasNews(false); }, title: "Exclude news=true" },
-              { label: "PTP", value: excludePTP, set: (v) => { setExcludePTP(v); setRequireIsPTP(false); } },
-              { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); } },
-              { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); } },
-              { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); } },
+              { label: "ITB", value: excludeItb, set: setExcludeItb, title: "Exclude B5ETB = ITB (a row with no borrow status is rejected). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "HARD", value: excludeHard, set: setExcludeHard, title: "Exclude B5ETB = NO, hard to borrow (a row with no borrow status is rejected). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "Div", value: excludeDividend, set: setExcludeDividend, title: "Exclude a name with a dividend today. LIVE Stream only: the tape never recorded dividends, so historical Scanner rows cannot be filtered by it." },
+              { label: "News", value: excludeHasNews, set: (v) => { setExcludeHasNews(v); setRequireHasNews(false); }, title: "Exclude a name with news: NewsCnt, else LstClsNewsCnt, above 0 (the tape's HasNews). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "PTP", value: excludePTP, set: (v) => { setExcludePTP(v); setRequireIsPTP(false); }, title: "Exclude IsPTP = YES (a row with no PTP flag is rejected). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); }, title: "Exclude SSR = YES, short-sale restricted (a row with no SSR flag is rejected). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); }, title: "Exclude ETF = YES (a row with no ETF flag is rejected). Applies to the Scanner rows and to the live Stream engine." },
+              { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); }, title: "Exclude YCls (yesterday's close) below $5; a row with no YCls is rejected. Applies to the Scanner rows and to the live Stream engine." },
             ]}
             report={{
               label: "REP",
@@ -6203,8 +6205,7 @@ export default function ArbitrageScanner({
                   );
                 })}
 
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
-                  <span aria-hidden="true" className="pointer-events-none absolute left-2 top-0 bottom-0 flex items-center text-[11px] font-mono font-bold leading-none text-emerald-400/80 select-none">+</span>
+                <div className={clsx("group relative w-[78px] rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
                   <input
                     type="number"
                     step={0.1}
@@ -6212,7 +6213,7 @@ export default function ArbitrageScanner({
                     value={startAbs}
                     disabled={zapMode === "off"}
                     onChange={(e) => setStartAbs(clampNumber(e.target.value, 0.1))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-5 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6237,8 +6238,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a Long entry). Empty = the same threshold as start +. Start max and end stay shared.">
-                  <span aria-hidden="true" className="pointer-events-none absolute left-2 top-0 bottom-0 flex items-center text-[11px] font-mono font-bold leading-none text-rose-400/80 select-none">−</span>
+                <div className={clsx("group relative w-[78px] rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a Long entry). Empty = the same threshold as the short one. Start max and end stay shared. Mint = long.">
                   <input
                     type="number"
                     step={0.1}
@@ -6246,8 +6246,8 @@ export default function ArbitrageScanner({
                     value={startAbsNeg}
                     disabled={zapMode === "off"}
                     onChange={(e) => setStartAbsNeg(e.target.value)}
-                    placeholder="as +"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-5 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    placeholder="as short"
+                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6278,7 +6278,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <div className={clsx("group relative w-[78px] rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound on the start threshold (empty = none): a deviation beyond it is not taken. Silver = the ceiling.">
                   <input
                     type="number"
                     step={0.1}
@@ -6312,7 +6312,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+                <div className={clsx("group relative w-[78px] rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold: a situation is closed once its deviation falls back to this. Gold = the exit.">
                   <input
                     type="number"
                     step={0.05}

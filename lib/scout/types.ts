@@ -55,6 +55,8 @@ export type ScoutMetaWire = {
     softRatio: number;
     pnlBasis: string | null;
     levelsAvailable: boolean;
+    /** the published file carries the 04:02 PRE track */
+    model0402?: boolean;
     windowsDays: number[];
     /** Oldest → newest. A trade's date index points into this list. */
     recentDates: string[];
@@ -118,6 +120,8 @@ export type ScoutSliceWire = {
   /** minute the exit mark was actually printed (PRE-wrapped); minutes of silence before birth */
   xm?: Array<number | null>;
   bg?: Array<number | null>;
+  /** 1 = a trade of the 04:02 PRE track; absent when the slice has none */
+  al?: number[];
 };
 
 /** Columnar trade log, decoded once into typed arrays so the per-keystroke passes stay allocation-free. */
@@ -143,6 +147,8 @@ export type ScoutSlice = {
   exitMinuteIdx: Float64Array;
   /** minutes without a print before the run that became this trade; NaN = unknown */
   birthGapMin: Float64Array;
+  /** 1 = a trade of the 04:02 PRE track (0 for the ordinary 21:00 model and for every other class) */
+  alt: Uint8Array;
 };
 
 /** One published rating: rate = (hard+soft)/total over the ticker's whole history for a class and side. */
@@ -171,6 +177,8 @@ export type ScoutMeta = {
   mostRecentSession: string | null;
   positionUsd: number;
   levelsAvailable: boolean;
+  /** the published file carries the 04:02 PRE track (else the FROM 04:02 toggle is disabled) */
+  model0402: boolean;
   pnlBasis: string | null;
   recentDates: string[];
   tickers: ScoutTicker[];
@@ -200,8 +208,11 @@ export type ScoutParams = {
   sizeUsd: number;
   /** true = drop every ticker DailyStaticStore says is an ETF (unknown ETF status still passes) */
   excludeEtf: boolean;
-  /** true = drop trades born just after, or alive across, the feed's 00:00 / 04:00 rollover (lib/scout/rollover.ts) */
-  excludeRollover: boolean;
+  /**
+   * true = the "trading only STARTS at 04:02" model: PRE shows the notebook's second track (births only from 04:02, every
+   * deviation already open then picked up at its 04:02 price) INSTEAD of the 21:00 one. Other classes are unaffected.
+   */
+  model0402: boolean;
   countryMode: TriMode;
   countries: Set<string>;
   sectorMode: TriMode;

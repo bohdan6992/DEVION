@@ -55,6 +55,8 @@ export type PfScoutMetaWire = {
     startBinMax: number;
     pnlBasis: string | null;
     levelsAvailable: boolean;
+    /** the published file carries the 04:02 PRE set */
+    model0402?: boolean;
     windowsDays: number[];
     /** Oldest → newest. An episode's date index points into this list. */
     recentDates: string[];
@@ -95,6 +97,8 @@ export type PfScoutSliceWire = {
   /** NY session-minute at the confirmed entry/exit row, PRE-wrapped; null = unknown */
   em: Array<number | null>;
   xm: Array<number | null>;
+  /** 1 = an episode of the 04:02 PRE set; absent when the slice has none */
+  al?: number[];
 };
 
 /** Columnar episode log, decoded once into typed arrays so the per-keystroke passes stay allocation-free. */
@@ -110,6 +114,8 @@ export type PfScoutSlice = {
   capture: Float64Array; // NaN = unknown
   entryMinute: Float64Array;
   exitMinute: Float64Array;
+  /** 1 = an episode of the 04:02 PRE set (0 for the ordinary model and every other class) */
+  alt: Uint8Array;
 };
 
 /** rate = converged / total over the pair's whole history for a class and direction. */
@@ -132,6 +138,8 @@ export type PfScoutMeta = {
   mostRecentSession: string | null;
   positionUsd: number;
   levelsAvailable: boolean;
+  /** the published file carries the 04:02 PRE set (else the FROM 04:02 toggle is disabled) */
+  model0402: boolean;
   pnlBasis: string | null;
   recentDates: string[];
   pairs: PfScoutPair[];
@@ -148,8 +156,11 @@ export type PfScoutParams = {
   minTotal: number;
   /** ρ/β/σ/α of the PAIR for the episode's own class; a set bound rejects a pair with no such number */
   ranges: ScoutRanges;
-  /** true = drop episodes born just after, or alive across, the feed's 00:00 / 04:00 rollover */
-  excludeRollover: boolean;
+  /**
+   * true = the "trading only STARTS at 04:02" model: PRE shows the notebook's second set of episodes (divergences may only
+   * begin from 04:02; those already open are picked up at their 04:02 level) INSTEAD of the ordinary one. Other classes untouched.
+   */
+  model0402: boolean;
   /** |capture| above this (percentage points) is a data fault, not an episode; 0 = keep everything */
   capPct: number;
   sizeUsd: number;

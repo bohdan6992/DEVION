@@ -76,6 +76,8 @@ export type ArbitrageFilterConfigV1 = {
     report?: boolean;
     etf?: boolean;
     crap?: boolean; // LastClose < 5
+    itb?: boolean; // B5ETB = ITB
+    hard?: boolean; // B5ETB = NO (hard to borrow)
   };
 
   include?: {

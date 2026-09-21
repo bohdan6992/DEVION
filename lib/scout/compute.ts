@@ -25,7 +25,6 @@ import type {
   ScoutTickerRow,
   ScoutTradeRow,
 } from "./types";
-import { touchesRollover } from "./rollover";
 
 /** Display facts per start mode. `step` is the spinner increment. */
 export const SCOUT_MODES: Record<ScoutMode, { label: string; unit: string; step: number; hint: string }> = {
@@ -61,6 +60,7 @@ export function decodeMeta(w: ScoutMetaWire): ScoutMeta {
     mostRecentSession: w.meta.mostRecentSession,
     positionUsd: w.meta.positionUsd,
     levelsAvailable: w.meta.levelsAvailable,
+    model0402: w.meta.model0402 === true,
     pnlBasis: w.meta.pnlBasis,
     recentDates: w.meta.recentDates,
     tickers: w.tickers.map((r) => ({
@@ -95,6 +95,8 @@ export function decodeSlice(w: ScoutSliceWire): ScoutSlice {
   const endGapPct = new Float64Array(n);
   const exitMinuteIdx = new Float64Array(n);
   const birthGapMin = new Float64Array(n);
+  const alt = new Uint8Array(n);
+  if (w.al) for (let i = 0; i < n; i++) alt[i] = w.al[i] ? 1 : 0;
   for (let i = 0; i < n; i++) {
     ticker[i] = w.t[i];
     date[i] = w.d[i];
@@ -110,7 +112,7 @@ export function decodeSlice(w: ScoutSliceWire): ScoutSlice {
     exitMinuteIdx[i] = num(w.xm?.[i]);
     birthGapMin[i] = num(w.bg?.[i]);
   }
-  return { cls: w.cls, sign: w.sign, n, ticker, date, status, startDev, gap, pnl, startMinuteIdx, peakMinuteIdx, peakDevAbs, endDevAbs, endGapPct, exitMinuteIdx, birthGapMin };
+  return { cls: w.cls, sign: w.sign, n, ticker, date, status, startDev, gap, pnl, startMinuteIdx, peakMinuteIdx, peakDevAbs, endDevAbs, endGapPct, exitMinuteIdx, birthGapMin, alt };
 }
 
 /** The class's own window-close minute (NY minute-of-day, PRE-wrapped) — every trade's exit mark. */
@@ -215,11 +217,8 @@ export function scan(
     for (let i = 0; i < s.n; i++) {
       if (s.date[i] < minDate) continue;
       if (!tickerAllowed(meta, p, s.ticker[i])) continue;
-      if (p.excludeRollover) {
-        const ex = s.exitMinuteIdx[i];
-        // an older file has no real exit minute: the class close is what the P&L was marked at
-        if (touchesRollover(s.startMinuteIdx[i], ex === ex ? ex : CLASS_CLOSE_MINUTE_IDX[s.cls])) continue;
-      }
+      // PRE has two separate sets of trades: the ordinary 21:00 model and the 04:02 one; the toggle picks which
+      if (s.cls === "pre" && s.alt[i] !== (p.model0402 ? 1 : 0)) continue;
       if (!ratingPasses(meta.tickers[s.ticker[i]].rating[s.cls][s.sign], p)) continue;
       if (!inBound(Math.abs(meta.tickers[s.ticker[i]].alpha[signIdx]), p.ranges.alpha)) continue; // the trade's own side
 

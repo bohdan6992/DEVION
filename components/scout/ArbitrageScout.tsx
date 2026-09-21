@@ -60,7 +60,7 @@ import type {
 } from "../../lib/scout/types";
 import SpinnerInput from "./SpinnerInput";
 import ScoutUnitBar from "./ScoutUnitBar";
-import { daysBehind } from "../../lib/scout/rollover";
+import { daysBehind } from "../../lib/scout/freshness";
 import ScoutRangeBoxes from "./ScoutRangeBoxes";
 import ScoutOptimizer from "./ScoutOptimizer";
 import { boundText, findBestSettings, type OptConfig, type OptObjective, type OptProgress } from "../../lib/scout/optimizeCore";
@@ -101,7 +101,7 @@ type UiState = {
   minRate: number;
   minTotal: number;
   ranges: RangeText;
-  excludeRollover: boolean;
+  model0402: boolean;
   capPct: number;
   sizeUsd: number;
   sortKey: ScoutSortKey;
@@ -128,7 +128,7 @@ const DEFAULT_UI: UiState = {
   minRate: 0,
   minTotal: 2,
   ranges: EMPTY_RANGE_TEXT,
-  excludeRollover: false,
+  model0402: false,
   // GAMMA drops any single result past 25pp as "a data fault, not a trade"; the published file has
   // ~1.6k of them (one Stack% print of +2854pp alone is worth $28k at $1000). Same bar here.
   capPct: 25,
@@ -165,7 +165,7 @@ function loadUi(): UiState {
       minRate: numOr(j.minRate, DEFAULT_UI.minRate),
       minTotal: numOr(j.minTotal, DEFAULT_UI.minTotal),
       ranges: loadRangeText(j.ranges),
-      excludeRollover: j.excludeRollover === true,
+      model0402: j.model0402 === true,
       capPct: numOr(j.capPct, DEFAULT_UI.capPct),
       sizeUsd: numOr(j.sizeUsd, DEFAULT_UI.sizeUsd),
       sortKey: pick(j.sortKey, ["ticker", "beta", "rating", "hard", "soft", "start", "entryTime", "trades", "pnl", "avgPnl", "win", "corr", "sigma"] as ScoutSortKey[], DEFAULT_UI.sortKey),
@@ -293,7 +293,7 @@ export default function ArbitrageScout() {
     minRate: ui.minRate,
     minTotal: ui.minTotal,
     ranges: parseRanges(ui.ranges),
-    excludeRollover: ui.excludeRollover,
+    model0402: ui.model0402,
     capPct: ui.capPct,
     sizeUsd: ui.sizeUsd,
     excludeEtf: ui.excludeEtf,
@@ -301,7 +301,7 @@ export default function ArbitrageScout() {
     countries: countriesSet,
     sectorMode: ui.sectorMode,
     sectors: sectorsSet,
-  }), [ui.window, ui.mode, ui.bounds, ui.minRate, ui.minTotal, ui.ranges, ui.excludeRollover, ui.capPct, ui.sizeUsd, ui.excludeEtf, ui.countryMode, countriesSet, ui.sectorMode, sectorsSet]);
+  }), [ui.window, ui.mode, ui.bounds, ui.minRate, ui.minTotal, ui.ranges, ui.model0402, ui.capPct, ui.sizeUsd, ui.excludeEtf, ui.countryMode, countriesSet, ui.sectorMode, sectorsSet]);
 
   // distinct COUNTRY/SECTOR values observed across the published ticker universe
   const countryOptions = useMemo(() => {
@@ -327,7 +327,7 @@ export default function ArbitrageScout() {
   // ---- BEST SETTINGS: the search runs over the trades in view, with everything it tunes switched off
   const [optOpen, setOptOpen] = useState(false);
   const [optSeq, setOptSeq] = useState(0);
-  const optScopeKeyAll = `${ui.cls}|${ui.side}|${ui.excludeRollover}|${ui.capPct}|${ui.sizeUsd}|${ui.excludeEtf}|${ui.countryMode}:${ui.countries.join(",")}|${ui.sectorMode}:${ui.sectors.join(",")}`;
+  const optScopeKeyAll = `${ui.cls}|${ui.side}|${ui.model0402}|${ui.capPct}|${ui.sizeUsd}|${ui.excludeEtf}|${ui.countryMode}:${ui.countries.join(",")}|${ui.sectorMode}:${ui.sectors.join(",")}`;
   const optScopeKey = `${optScopeKeyAll}|${ui.window}`;
   const runOpt = useCallback(
     (o: { objective: OptObjective; minTrades: number; multi: boolean; validate: boolean; onProgress: OptProgress; cancelled: () => boolean }) => {
@@ -412,6 +412,7 @@ export default function ArbitrageScout() {
   const winTo = meta ? meta.recentDates[D - 1] : null;
   const busy = metaBusy || sliceLoading;
   const behind = meta ? daysBehind(meta.mostRecentSession) : null;
+  const model0402Ready = !!meta?.model0402 && ui.cls === "pre";
   const selectedTicker = meta && selected !== null ? meta.tickers[selected].t : null;
 
 
@@ -555,6 +556,7 @@ export default function ArbitrageScout() {
             {meta && (
               <>
                 <span>SESSIONS {winFrom} → {winTo}</span>
+                {ui.model0402 && model0402Ready && <span className="accent-text">MODEL: trading starts 04:02</span>}
                 <span>{ui.cls.toUpperCase()} · {ui.side === "both" ? "SHORT+LONG" : ui.side.toUpperCase()} · ${ui.sizeUsd.toLocaleString("en-US")}/trade · exit = last print inside the window</span>
                 {result && result.cappedOut > 0 && <span>{result.cappedOut.toLocaleString("en-US")} trades excluded by CAP</span>}
                 {meta.generatedAt && <span>file {meta.generatedAt.slice(0, 16).replace("T", " ")}Z</span>}
@@ -595,11 +597,18 @@ export default function ArbitrageScout() {
             value={ui.sizeUsd} onChange={(v) => patch({ sizeUsd: v })} step={100} min={0} decimals={0} widthClass="w-16" />
           <button
             type="button"
-            onClick={() => patch({ excludeRollover: !ui.excludeRollover })}
-            className={btn(ui.excludeRollover)}
-            title="Drop trades born in the first 10 minutes after the feed's 00:00 / 04:00 rollover, or alive across one - the baseline resets there, so a deviation appears or vanishes on the clock (measured: PairFlux PRE exits pile up at exactly 00:00)"
+            disabled={!model0402Ready}
+            onClick={() => patch({ model0402: !ui.model0402 })}
+            className={btn(ui.model0402 && model0402Ready, !model0402Ready)}
+            title={
+              !meta?.model0402
+                ? "Not in the published file yet - re-run ArbitRage.ipynb (it now also writes the 04:02 track)."
+                : ui.cls !== "pre"
+                  ? "The 04:02 model only exists for PRE - switch the class to PRE."
+                  : "MODEL: trading only STARTS at 04:02. PRE then shows the second track from the notebook - every deviation already open at 04:02 is taken at its 04:02 price (not the overnight one), a name whose overnight deviation had normalised can start a new one later, all held to 09:30 - and every table, chart and total is recomputed on it. The MINRATE/MINTOTAL ratings stay the published ones, computed on the 21:00 model."
+            }
           >
-            EXCL 00:00/04:00
+            FROM 04:02
           </button>
           <button
             type="button"

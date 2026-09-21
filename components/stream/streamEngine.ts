@@ -376,6 +376,9 @@ export type StreamFilterBuilderArgs = {
     report: boolean;
     etf: boolean;
     crap: boolean;
+    /** B5ETB = ITB / NO (hard to borrow). Optional: only the Arbitrage toolbar has these two. */
+    itb?: boolean;
+    hard?: boolean;
   };
   include: {
     usaOnly: boolean;

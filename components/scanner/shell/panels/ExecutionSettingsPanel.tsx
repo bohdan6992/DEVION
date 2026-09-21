@@ -123,10 +123,11 @@ const fmtAdj = (v: number) => (v > 0 ? `−${(+v.toFixed(2)).toString()}` : "0")
 
 function balanceTitle(status: DirectionBalanceState | null): string {
   const base =
-    "AUTO BALANCE. The bridge counts its open positions by side every few minutes. If one side outnumbers the other by the trigger ratio (e.g. 10 longs : 5 shorts at 2), the entry threshold of the SIDE THAT IS SHORT OF POSITIONS is lowered by a step, so the stream takes setups it was leaving alone; it repeats each check while the skew lasts, and lowers the other side if the book flips. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
+    "AUTO BALANCE. Every 10 minutes the bridge counts its open positions by side. If one side holds at least 10 positions and outnumbers the other by the trigger ratio (e.g. 14 longs : 6 shorts at 2), the entry threshold of the SIDE THAT IS SHORT OF POSITIONS is lowered by 0.1 (in the current ZAP unit). From then on the book is re-checked EVERY MINUTE and the threshold keeps coming down by 0.1 (never below 0.2) until the smaller side has reached 90% of the larger one. Then both thresholds go back to the toolbar values and the 10-minute trigger checks resume. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
   if (!status) return base;
   const next = status.nextCheckUtc ? new Date(status.nextCheckUtc).toLocaleTimeString() : "-";
-  return `${base}\n\nNow: short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}. Last check saw ${status.lastLongs} long / ${status.lastShorts} short: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
+  const phase = status.phase === "balancing" ? "BALANCING (checked every minute)" : "watching (trigger check every 10 min)";
+  return `${base}\n\nNow: ${phase}. Short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}. Last check saw ${status.lastLongs} long / ${status.lastShorts} short: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
 }
 
 export default function ExecutionSettingsPanel({

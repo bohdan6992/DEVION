@@ -28,7 +28,6 @@ import type {
   PfScoutSortKey,
   PfScoutTradeRow,
 } from "./types";
-import { touchesRollover } from "../scout/rollover";
 
 /** Display facts per start mode. `step` is the spinner increment. sigma/gamma/alpha are a
  * MULTIPLE of the pair's own published level for the CURRENT class (see PfScoutMode's doc
@@ -60,6 +59,7 @@ export function decodePfMeta(w: PfScoutMetaWire): PfScoutMeta {
     mostRecentSession: w.meta.mostRecentSession,
     positionUsd: w.meta.positionUsd,
     levelsAvailable: w.meta.levelsAvailable,
+    model0402: w.meta.model0402 === true,
     pnlBasis: w.meta.pnlBasis,
     recentDates: w.meta.recentDates,
     pairs: w.pairs.map((r) => {
@@ -87,6 +87,8 @@ export function decodePfSlice(w: PfScoutSliceWire): PfScoutSlice {
   const capture = new Float64Array(n);
   const entryMinute = new Float64Array(n);
   const exitMinute = new Float64Array(n);
+  const alt = new Uint8Array(n);
+  if (w.al) for (let i = 0; i < n; i++) alt[i] = w.al[i] ? 1 : 0;
   for (let i = 0; i < n; i++) {
     pair[i] = w.p[i];
     date[i] = w.d[i];
@@ -97,7 +99,7 @@ export function decodePfSlice(w: PfScoutSliceWire): PfScoutSlice {
     entryMinute[i] = num(w.em[i]);
     exitMinute[i] = num(w.xm[i]);
   }
-  return { cls: w.cls, sign: w.sign, n, pair, date, status, entryDev, peak, capture, entryMinute, exitMinute };
+  return { cls: w.cls, sign: w.sign, n, pair, date, status, entryDev, peak, capture, entryMinute, exitMinute, alt };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -167,7 +169,8 @@ export function scan(
     const s = slices[si];
     for (let i = 0; i < s.n; i++) {
       if (s.date[i] < minDate) continue;
-      if (p.excludeRollover && touchesRollover(s.entryMinute[i], s.exitMinute[i])) continue;
+      // PRE has two separate sets of episodes: the ordinary model and the 04:02 one; the toggle picks which
+      if (s.cls === "pre" && s.alt[i] !== (p.model0402 ? 1 : 0)) continue;
       if (!ratingPasses(meta.pairs[s.pair[i]].rating[s.cls][s.sign], p)) continue;
       if (!pairStatsPass(meta.pairs[s.pair[i]].levels[s.cls], p)) continue;
 

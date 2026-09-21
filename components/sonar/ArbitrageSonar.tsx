@@ -1346,6 +1346,8 @@ interface SignalCardProps {
 
   zapMode: "zap" | "sigma" | "delta" | "gamma" | "alpha" | "off";
   zapShowAbs: number;    // NEW
+  /** the Long's own show threshold (a negative deviation); null = the same as zapShowAbs */
+  zapShowAbsNeg?: number | null;
   zapSilverAbs: number;  // NEW
   zapGoldAbs: number;    // NEW (only ACTIVE)
 
@@ -1363,6 +1365,7 @@ const SignalCard: React.FC<SignalCardProps> = ({
 
   zapMode,
   zapShowAbs,
+  zapShowAbsNeg = null,
   zapSilverAbs,
   zapGoldAbs,
 
@@ -1397,9 +1400,11 @@ const SignalCard: React.FC<SignalCardProps> = ({
     absM >= Math.max(0, Number(zapSilverAbs ?? 0));
 
   const deltaBase = Math.abs(getSignalDeltaThreshold(s) ?? 0.1);
+  // a Long is judged on its own threshold when one is set (the Sonar's "-" box), else on the short's
+  const showAbsEff = !isShort && zapShowAbsNeg != null && zapShowAbsNeg > 0 ? zapShowAbsNeg : zapShowAbs;
   const minShowAbs = zapMode === "delta"
-    ? deltaBase + Math.max(0.05, Number(zapShowAbs ?? 0))
-    : Math.max(zapMode === "sigma" || zapMode === "gamma" || zapMode === "alpha" ? 0.05 : 0.3, Number(zapShowAbs ?? 0));
+    ? deltaBase + Math.max(0.05, Number(showAbsEff ?? 0))
+    : Math.max(zapMode === "sigma" || zapMode === "gamma" || zapMode === "alpha" ? 0.05 : 0.3, Number(showAbsEff ?? 0));
 
   const isBelowShow =
     !posActive &&
@@ -2378,6 +2383,12 @@ export default function ArbitrageSonar() {
   // 3 inputs:
   // 1) filter/display threshold (single, depends on zapMode)
   const [zapShowAbs, setZapShowAbs] = useState<number>(0.3);
+  // the Long's own threshold, as typed; empty = the same as zapShowAbs (like the Scanner's "-" box)
+  const [zapShowAbsNeg, setZapShowAbsNeg] = useState<string>("");
+  const zapShowAbsNegNum = (() => {
+    const n = Number(String(zapShowAbsNeg).replace(",", "."));
+    return zapShowAbsNeg.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
+  })();
 
   // 2) silver: too high highlight (active + inactive)
   const [zapSilverAbs, setZapSilverAbs] = useState<number>(2.0);
@@ -2838,6 +2849,7 @@ export default function ArbitrageSonar() {
         if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
         if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
         if (typeof s?.zapShowAbs === "number") setZapShowAbs(s.zapShowAbs);
+        if (typeof s?.zapShowAbsNeg === "string") setZapShowAbsNeg(s.zapShowAbsNeg);
         if (typeof s?.zapSilverAbs === "number") setZapSilverAbs(s.zapSilverAbs);
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
@@ -3029,7 +3041,7 @@ export default function ArbitrageSonar() {
           cls, type, mode, listMode, bpCls,
 
           // zap/sort
-          zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+          zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
@@ -3091,7 +3103,7 @@ export default function ArbitrageSonar() {
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapSilverAbs, zapGoldAbs,
+    zapMode, activeMode, sortKey, sortDir, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
@@ -3585,6 +3597,7 @@ export default function ArbitrageSonar() {
 
       zapMode,
       zapShowAbs,
+      zapShowAbsNeg: zapShowAbsNegNum,
       zapSilverAbs,
       zapGoldAbs,
 
@@ -3605,7 +3618,7 @@ export default function ArbitrageSonar() {
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
-    zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
+    zapMode, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
     topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
@@ -4053,7 +4066,7 @@ export default function ArbitrageSonar() {
     if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
-    if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
+    if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}${zapShowAbsNegNum != null ? ` (long ${zapShowAbsNegNum.toFixed(2)})` : ""}`);
     // BIN/BINS are not ported server-side yet — the Sonar snapshot always rates SESSION-only, a
     // known gap (see the handoff doc). Surfacing it here so "0 visible" is not mistaken for a bug
     // when the real cause is a rating mode silently substituted underneath the operator's choice.
@@ -4100,6 +4113,7 @@ export default function ArbitrageSonar() {
     volNFfromLstClsMin,
     zapMode,
     zapShowAbs,
+    zapShowAbsNegNum,
   ]);
   const resetSonarUiState = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -4689,14 +4703,14 @@ export default function ArbitrageSonar() {
             equivalent. */}
         <FilterFlagsRow
           exclusions={[
-            { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
-            { label: "HARD", value: excludeHard, set: setExcludeHard, title: "B5ETB = NO (hard to borrow)" },
-            { label: "Div", value: excludeDividend, set: setExcludeDividend },
-            { label: "News", value: excludeNews, set: setExcludeNews },
-            { label: "PTP", value: excludePTP, set: setExcludePTP },
-            { label: "SSR", value: excludeSSR, set: setExcludeSSR },
-            { label: "ETF", value: excludeETF, set: setExcludeETF },
-            { label: "CRAP", value: excludeCrap, set: setExcludeCrap, title: "LstClose < 5" },
+            { label: "ITB", value: excludeItb, set: setExcludeItb, title: "Exclude B5ETB = ITB (a row with no borrow status is rejected)" },
+            { label: "HARD", value: excludeHard, set: setExcludeHard, title: "Exclude B5ETB = NO (hard to borrow; a row with no borrow status is rejected)" },
+            { label: "Div", value: excludeDividend, set: setExcludeDividend, title: "Exclude a name with a dividend today (Dividend field present and not zero)" },
+            { label: "News", value: excludeNews, set: setExcludeNews, title: "Exclude a name with news: NewsCnt, else LstClsNewsCnt, above 0 (the tape's own HasNews)" },
+            { label: "PTP", value: excludePTP, set: setExcludePTP, title: "Exclude IsPTP = YES (a row with no PTP flag is rejected)" },
+            { label: "SSR", value: excludeSSR, set: setExcludeSSR, title: "Exclude SSR = YES, short-sale restricted (a row with no SSR flag is rejected)" },
+            { label: "ETF", value: excludeETF, set: setExcludeETF, title: "Exclude ETF = YES or EquityType ETF (a row with no ETF flag is rejected)" },
+            { label: "CRAP", value: excludeCrap, set: setExcludeCrap, title: "Exclude YCls (yesterday's close) below $5; a row with no YCls is rejected" },
           ]}
           report={{ label: "REP", value: excludeReport, set: setExcludeReport, title: "Exclude report=true" }}
           corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}
@@ -4839,8 +4853,8 @@ export default function ArbitrageSonar() {
                 <span className="leading-none" style={{ textTransform: "none" }}>α</span>
               </button>
 
-              {/* 1) show/filter threshold (single) */}
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              {/* 1) SHORT start: a positive deviation (coral) */}
+              <div className={clsx("group relative w-[78px] rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
                 <input
                   type="number"
                   step={zapMode === "zap" ? 0.1 : 0.05}
@@ -4878,8 +4892,44 @@ export default function ArbitrageSonar() {
                 </div>
               </div>
 
-              {/* 2) SILVER (too high) */}
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              {/* 2) LONG start: a negative deviation (mint); empty = the same as the short one */}
+              <div className={clsx("group relative w-[78px] rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
+                <input
+                  type="number"
+                  step={zapMode === "zap" ? 0.1 : 0.05}
+                  min={zapMode === "zap" ? 0.3 : 0.05}
+                  value={zapShowAbsNeg}
+                  disabled={zapMode === "off"}
+                  onChange={(e) => setZapShowAbsNeg(e.target.value)}
+                  placeholder="as short"
+                  className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                />
+                <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapShowAbsNeg(() => String(Math.max(zapMode === "zap" ? 0.3 : 0.05, +((zapShowAbsNegNum ?? zapShowAbs) + (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    aria-label="Increase long zap threshold"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    disabled={zapMode === "off"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setZapShowAbsNeg(() => String(Math.max(zapMode === "zap" ? 0.3 : 0.05, +((zapShowAbsNegNum ?? zapShowAbs) - (zapMode === "zap" ? 0.1 : 0.05)).toFixed(4))))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
+                    aria-label="Decrease long zap threshold"
+                  >
+                    ▼
+                  </button>
+                </div>
+              </div>
+
+              {/* 3) MAX = SILVER: too stretched (silver) */}
+              <div className={clsx("group relative w-[78px] rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound (silver): a signal whose deviation is at or above this is highlighted silver as too stretched (active and inactive).">
                 <input
                   type="number"
                   step={zapMode === "sigma" ? 0.1 : 0.5}
@@ -4914,8 +4964,8 @@ export default function ArbitrageSonar() {
                 </div>
               </div>
 
-              {/* 3) GOLD (only active normalization) */}
-              <div className={clsx("group relative w-[78px]", zapMode === "off" && "opacity-60")}>
+              {/* 4) EXIT = GOLD: normalisation of an ACTIVE position (gold) */}
+              <div className={clsx("group relative w-[78px] rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold (gold): an ACTIVE position whose deviation has fallen back to this or below is highlighted gold - time to exit.">
                 <input
                   type="number"
                   step={zapMode === "sigma" ? 0.05 : 0.1}
@@ -4949,6 +4999,8 @@ export default function ArbitrageSonar() {
                   </button>
                 </div>
               </div>
+
+
 
             </div>
             </>
@@ -5639,6 +5691,7 @@ export default function ArbitrageSonar() {
                                   flashClass={flashClass}
                                   zapMode={zapMode}
                                   zapShowAbs={zapShowAbs}
+                                  zapShowAbsNeg={zapShowAbsNegNum}
                                   zapSilverAbs={zapSilverAbs}
                                   zapGoldAbs={zapGoldAbs}
                                   pinColor={pinMap[s.ticker] ?? null}
@@ -5661,6 +5714,7 @@ export default function ArbitrageSonar() {
                                   flashClass={flashClass}
                                   zapMode={zapMode}
                                   zapShowAbs={zapShowAbs}
+                                  zapShowAbsNeg={zapShowAbsNegNum}
                                   zapSilverAbs={zapSilverAbs}
                                   zapGoldAbs={zapGoldAbs}
                                   pinColor={pinMap[s.ticker] ?? null}
