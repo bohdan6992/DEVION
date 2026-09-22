@@ -114,10 +114,26 @@ function clockLabel(axisMin: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 }
 
-/** ms since epoch -> minutes on the NY axis where 0 = 21:00. */
+const NY_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/**
+ * ms since epoch -> minutes on the NY axis where 0 = 21:00.
+ *
+ * Read off the NEW YORK wall clock, not the browser's. This used `getHours()`, i.e. the viewer's
+ * own zone, which only agrees with the axis (and with the bridge's NY-anchored samples and the
+ * "now" marker, both NY) on a machine whose clock is set to New York: opened from any other zone,
+ * every entry and every P&L sample slid sideways by the zone offset.
+ */
 function axisMinuteOf(ts: number): number {
-  const d = new Date(ts);
-  return ((d.getHours() * 60 + d.getMinutes()) - 21 * 60 + 1440) % 1440;
+  const parts = NY_CLOCK.formatToParts(new Date(ts));
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return ((h * 60 + m) - 21 * 60 + 1440) % 1440;
 }
 
 function dist(x0: number, y0: number, x1: number, y1: number): number {
@@ -508,8 +524,8 @@ function LinesChart({
           </filter>
         </defs>
 
-        {yTicks.map((t) => (
-          <g key={`y-${t.y.toFixed(2)}`}>
+        {yTicks.map((t, i) => (
+          <g key={`y-${i}`}>
             <line x1={PAD_L} x2={width - PAD_R} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
             <text x={width - 8} y={t.y - 5} fontSize="17" textAnchor="end" className="fill-zinc-300 font-mono">
               {valueFmt(t.val)}
@@ -690,10 +706,12 @@ function LongShortHistogram({
           </linearGradient>
         </defs>
 
-        {yTicks.map((t) => {
+        {yTicks.map((t, i) => {
           const ty = y(t);
+          // Index, not the tick value: at a small max the ticks collide ([0,1,1,1]), and duplicate
+          // keys make React drop or duplicate the gridlines.
           return (
-            <g key={`y-${t}`}>
+            <g key={`y-${i}`}>
               <line x1={PAD_L} x2={width - PAD_R} y1={ty} y2={ty} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
               {t > 0 && (
                 <text x={width - 8} y={ty - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
@@ -834,7 +852,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   }, []);
 
   const series = useMemo<Series[]>(() => instances.map((inst, index) => {
-    // One step per ENTRY, in time order, carried forward as a running total.
+    // One step per ENTRY, in time order, carried forward as a running total — of the entries that
+    // fall INSIDE the selected segment only. The chart is titled "Entered during the segment"; it
+    // used to count every entry since 21:00, so on INTRA the line started at zero, jumped to
+    // the whole morning's count in a vertical wall on the left edge, and "N total" disagreed with
+    // the longs/shorts chart right beside it (which already counted the segment alone).
+    const segFrom = fromMin ?? 0;
+    const segTo = toMin ?? 1440;
     const orderedAt = (bridgeEntries[inst.instanceId] ?? [])
       .map((e) => new Date(e.atUtc).getTime())
       .filter((ts) => Number.isFinite(ts))
@@ -843,8 +867,10 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     const points: Point[] = [];
     let running = 0;
     for (const ts of orderedAt) {
+      const min = axisMinuteOf(ts);
+      if (min < segFrom || min >= segTo) continue;
       running += 1;
-      points.push({ min: axisMinuteOf(ts), count: running });
+      points.push({ min, count: running });
     }
 
     // Real (dispatched, not shadow) positions the bridge currently tracks for this strategy — the
@@ -859,7 +885,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       entered: running,
       points,
     };
-  }), [instances, bridgeEntries, bridgePositions]);
+  }), [instances, bridgeEntries, bridgePositions, fromMin, toMin]);
 
   const activeSeries = useMemo<Series[]>(() => {
     // Until the first account response, preserve the bridge-only display rather than pretending

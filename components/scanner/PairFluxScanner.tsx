@@ -45,6 +45,7 @@ import {
 } from "../../lib/filters/sectorCorr";
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
+import { useScheduledStartArm } from "../../lib/scanner/useScheduledStartArm";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
@@ -2569,6 +2570,14 @@ export default function PairFluxScanner({
       ? false
       : streamAutomationEnabled;
   const streamAutomationToggleBusy = streamAutomationTogglePending !== null;
+  // The bridge owns the scheduled START (armed from the START/CUTOFF steppers while running), so it
+  // fires with this tab closed, asleep or reloaded. This only reports what the bridge holds.
+  const scheduledStartStatus = useScheduledStartArm({
+    strategyId: streamInstance.strategyId,
+    running: streamAutomationRunning,
+    startNyTime: preStartTime,
+    cutoffNyTime: startCutoffTime,
+  });
   const streamExecutionSnapshot = useStreamExecutionSnapshot();
   const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
@@ -2671,34 +2680,9 @@ export default function PairFluxScanner({
       onStreamAutomationConfigChange?.({ strategyModeEnabled: true });
       applyStreamAutoEnabled(true);
 
-      // Arming while START is still in the future is what makes "press Start now, walk away"
-      // actually reliable: the server itself re-flips AutoEnabled/StrategyModeEnabled on at
-      // START, independent of whether this tab is still open/in-sync when that moment arrives.
-      // It complements (doesn't replace) the browser-side wait — the signal/dispatch engine
-      // that decides entries and adds still only runs while this tab is alive.
-      const startMinuteIdx = parseTimeToMinuteIdx(preStartTime);
-      if (startMinuteIdx != null) {
-        try {
-          const nowNyParts = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/New_York",
-            hour12: false,
-            hour: "2-digit",
-            minute: "2-digit",
-          }).formatToParts(new Date());
-          const nowHh = Number(nowNyParts.find((p) => p.type === "hour")?.value ?? NaN);
-          const nowMm = Number(nowNyParts.find((p) => p.type === "minute")?.value ?? NaN);
-          const nowMinuteIdx = Number.isFinite(nowHh) && Number.isFinite(nowMm) ? nowHh * 60 + nowMm : null;
-          if (nowMinuteIdx != null && nowMinuteIdx < startMinuteIdx) {
-            await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ enabled: true, nyTime: preStartTime, strategyId: streamInstance.strategyId }),
-            });
-          }
-        } catch {
-          // best-effort resilience layer — the immediate /start above already covers this tab's own session
-        }
-      }
+      // The scheduled START is armed on the BRIDGE by useScheduledStartArm (called near the top of
+      // this component), which reacts to "running" and to the START/CUTOFF steppers. Nothing here
+      // compares clocks any more: that browser-side check could not arm a start after midnight.
     } finally {
       setStreamAutomationTogglePending(null);
     }
@@ -6146,6 +6130,7 @@ export default function PairFluxScanner({
 
         <div className="flex flex-col gap-3">
         <ExecutionSettingsPanel
+          scheduledStart={scheduledStartStatus}
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}

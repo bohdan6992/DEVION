@@ -70,7 +70,15 @@ export type CaesarPositionsProps = {
  * (components/stream/streamEngine.ts) and extending it would ripple into every stream page that
  * uses it, for three fields only this panel ever reads.
  */
-type Claim = { strategyKey: string; position: StreamPosition; beta: number | null; corr: number | null; sigma: number | null };
+type Claim = {
+  strategyKey: string;
+  position: StreamPosition;
+  beta: number | null;
+  corr: number | null;
+  sigma: number | null;
+  /** Sent to TradingApp but not in the account yet (the bridge keeps it on its book for a few minutes). */
+  awaitingFill?: boolean;
+};
 
 /** One of the bridge's own tracked positions — see CaesarPlanController's StreamOpenPositionDto. */
 type BridgeTrackedPosition = {
@@ -79,6 +87,7 @@ type BridgeTrackedPosition = {
   pairKey: string | null;
   side: "Long" | "Short";
   entryDispatched: boolean;
+  awaitingFill?: boolean;
   entrySignal: number | null;
   entryCount: number;
   openedAtUtc: string;
@@ -92,7 +101,23 @@ type BridgeTrackedPosition = {
 /** Ticker -> strategy id(s) that closed it today — see ServerPositionTracker.GetClosedOwners. */
 type ClosedOwners = Record<string, string[]>;
 
-type BridgeTrackedPositionsResponse = { ok: boolean; positions: BridgeTrackedPosition[]; closedOwners?: ClosedOwners };
+/** Why the bridge stopped tracking a position — see ServerPositionTracker.GetPruneEvents. */
+type PruneEvent = {
+  atUtc: string;
+  strategyId: string;
+  ticker: string;
+  pairKey: string | null;
+  reason: string;
+  wasEverSeenLive: boolean;
+  exitEmitted: boolean;
+};
+
+type BridgeTrackedPositionsResponse = {
+  ok: boolean;
+  positions: BridgeTrackedPosition[];
+  closedOwners?: ClosedOwners;
+  prunes?: PruneEvent[];
+};
 
 /** One Caesar segment (pre/open/intra/post) — see CaesarPlanController's own segment-pnl routes. */
 type SegmentInfo = { segmentKey: string; fromMinuteIdx: number; toMinuteIdx: number; hasData: boolean };
@@ -170,7 +195,21 @@ type Row = {
   open: boolean;
   /** The ticker is held by more than one strategy, so its money belongs to neither alone. */
   shared: boolean;
+  /**
+   * The account still holds it, but the bridge has stopped tracking it: the owner is only
+   * remembered from a close (closedClaim), so nothing is managing adds or exits for it any more.
+   * Shown as UNTRACKED rather than CLOSED — it is not closed, it is unmanaged.
+   */
+  untracked: boolean;
 };
+
+/** Long/Short as the ACCOUNT holds it: a negative size is a short, whatever a placeholder claim says. */
+function accountSide(p: BridgePosition, fallback: string): string {
+  const size = p.posSize ?? 0;
+  if (size < 0) return "Short";
+  if (size > 0) return "Long";
+  return fallback;
+}
 
 // See useMarketMakerWindow's POLL_MS comment — the account snapshot matters more for freshness
 // than the MM bind does, so this only backs off moderately rather than as far.
@@ -211,6 +250,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   const [error, setError] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [closedOwners, setClosedOwners] = useState<ClosedOwners>({});
+  const [prunes, setPrunes] = useState<PruneEvent[]>([]);
   /**
    * 0 = the table's own default order (open first, then ticker/strategy — see `view.rows`'s own
    * sort). 1/-1 = sorted by strategy, ascending/descending; a third click on the header returns
@@ -305,7 +345,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         value.flatMap((p) => {
           const strategy = getLiveStrategyByBridgeId(p.strategyId);
           return strategy
-            ? [{ strategyKey: strategy.key, position: positionFromBridge(p), beta: p.beta, corr: p.corr, sigma: p.sigma }]
+            ? [{ strategyKey: strategy.key, position: positionFromBridge(p), beta: p.beta, corr: p.corr, sigma: p.sigma, awaitingFill: p.awaitingFill === true }]
             : [];
         }),
       );
@@ -328,10 +368,11 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     const fetchClosedOwners = () =>
       fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
         .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
-        .then((body) => body.closedOwners ?? {});
+        .then((body) => ({ closedOwners: body.closedOwners ?? {}, prunes: body.prunes ?? [] }));
     const unsubscribe = subscribeSharedPoll("bridge-closed-owners", fetchClosedOwners, 2000, (value, err) => {
       if (!alive || err || !value) return;
-      setClosedOwners(value);
+      setClosedOwners(value.closedOwners);
+      setPrunes(value.prunes);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -383,10 +424,13 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         // card and the grand total disagreeing by exactly that ticker's P&L (reported 2026-09-18).
         const shared = new Set(owners.map((o) => o.strategyKey)).size > 1;
         if (owners.length === 0) {
-          return [{ bridge: p, claim: null, ticker: t, open, shared: false }];
+          return [{ bridge: p, claim: null, ticker: t, open, shared: false, untracked: false }];
         }
         // One row each: entry count, status and reason belong to the strategy, not the account.
-        return owners.map((claim) => ({ bridge: p, claim, ticker: t, open, shared }));
+        return owners.map((claim) => ({
+          bridge: p, claim, ticker: t, open, shared,
+          untracked: open && claim.position.status === "CLOSED",
+        }));
       })
       // Open first, then the realised ones — what is still at risk reads above what is settled.
       .sort((a, b) =>
@@ -404,13 +448,13 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     );
 
     type Agg = {
-      open: number; long: number; short: number; adds: number; priority: number;
+      open: number; untracked: number; long: number; short: number; adds: number; priority: number;
       openPnl: number; closedPnl: number; closedCount: number;
     };
     const perStrategy = new Map<string, Agg>();
     for (const inst of instances) {
       perStrategy.set(inst.key, {
-        open: 0, long: 0, short: 0, adds: 0, priority: inst.priority,
+        open: 0, untracked: 0, long: 0, short: 0, adds: 0, priority: inst.priority,
         openPnl: 0, closedPnl: 0, closedCount: 0,
       });
     }
@@ -418,6 +462,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     let unclaimedOpenPnl = 0;
     let unclaimedClosedPnl = 0;
     let openCount = 0;
+    let untrackedCount = 0;
 
     // The account reports ONE P&L per ticker and does not say who owns which part of it, so a
     // shared ticker's money is counted once into a shared bucket rather than added to both
@@ -432,6 +477,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       if (firstForTicker) {
         countedTickers.add(r.ticker);
         if (r.open) openCount += 1;
+        if (r.untracked) untrackedCount += 1;
       }
 
       const openPnl = r.open ? r.bridge.openPnL ?? 0 : 0;
@@ -451,7 +497,11 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       if (!agg) continue;
 
       // Counts are per strategy: both really do hold the position.
-      if (r.open) {
+      if (r.untracked) {
+        // Held in the account, but the bridge has stopped managing it: counted apart, and never
+        // as a tracked Long/Short (the placeholder claim's side is not real).
+        agg.untracked += 1;
+      } else if (r.open) {
         agg.open += 1;
         if (r.claim.position.side === "Short") agg.short += 1;
         else agg.long += 1;
@@ -486,7 +536,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
       unclaimedCount, unclaimedOpenPnl, unclaimedClosedPnl,
       sharedCount, sharedOpenPnl, sharedClosedPnl,
       grandOpenPnl, grandClosedPnl,
-      openCount, rowCount: countedTickers.size,
+      openCount, untrackedCount, rowCount: countedTickers.size,
     };
   }, [claims, closedOwners, snapshot, instances]);
 
@@ -614,6 +664,12 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           <span className="ml-2 font-normal tracking-normal text-zinc-600">
             {snapshot?.account ? `acct ${snapshot.account} · ` : ""}
             {view.openCount} open across the account
+            {view.untrackedCount > 0 && (
+              <span
+                className="text-amber-300/90"
+                title="Held in the account, but the bridge stopped tracking them (they are not closed). Nothing is managing their adds or exits."
+              > · {view.untrackedCount} not tracked by the bridge</span>
+            )}
             {cardFilter && <> · filtered to {cardFilter}</>}
           </span>
         </div>
@@ -632,7 +688,7 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           // filtering HERE — what to show — rather than upstream — what to track — is what keeps
           // that intact while still decluttering a card grid that used to list four strategies
           // at "0 · +0.00" next to the two actually doing anything.
-          .filter(([, strategy]) => strategy.open > 0 || strategy.closedCount > 0)
+          .filter(([, strategy]) => strategy.open > 0 || strategy.untracked > 0 || strategy.closedCount > 0)
           .map(([key, strategy]) => {
             const total = strategy.openPnl + strategy.closedPnl;
             const active = cardFilter === key;
@@ -656,6 +712,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                     <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{key}</span>
                     <span className="shrink-0 text-[10px] text-zinc-500">
                       {strategy.open} open <span className="ml-1 text-emerald-300/80">{strategy.long}L</span><span className="ml-1 text-rose-300/80">{strategy.short}S</span>
+                      {strategy.untracked > 0 && (
+                        <span
+                          className="ml-2 text-amber-300/90"
+                          title="Still held in the account, but the bridge no longer tracks them — nothing is managing their adds or exits."
+                        >
+                          · {strategy.untracked} untracked
+                        </span>
+                      )}
                     </span>
                   </div>
                   <span className="shrink-0 text-[10px] text-zinc-600">#{strategy.priority}</span>
@@ -730,7 +794,15 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
               const openPnl = r.open ? r.bridge.openPnL ?? 0 : null;
               // null (field absent) contributes nothing rather than a fabricated zero.
       const closedPnl = r.bridge.closedPnL ?? 0;
-              const side = (r.claim?.position.side ?? r.bridge.side ?? "").toString();
+              const side = r.untracked
+                ? accountSide(r.bridge, (r.bridge.side ?? "").toString())
+                : (r.claim?.position.side ?? r.bridge.side ?? "").toString();
+              // Why the bridge dropped it, from its own prune log — the newest event for this ticker + strategy.
+              const prune = r.untracked && r.claim
+                ? [...prunes].reverse().find((e) =>
+                    e.ticker.toUpperCase() === r.ticker &&
+                    getLiveStrategyByBridgeId(e.strategyId)?.key === r.claim?.strategyKey)
+                : undefined;
               const money = (v: number | null) =>
                 v == null
                   ? "text-zinc-700"
@@ -811,10 +883,17 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                   <td className="text-right tabular-nums text-zinc-400">
                     {r.claim ? r.claim.position.entryCount : "—"}
                   </td>
-                  <td className="text-zinc-400">
-                    {r.open ? r.claim?.position.status ?? r.bridge.status ?? "—" : "CLOSED"}
+                  <td className={r.untracked ? "font-bold text-amber-300" : "text-zinc-400"}>
+                    {r.untracked ? "UNTRACKED" : r.open ? r.claim?.position.status ?? r.bridge.status ?? "—" : "CLOSED"}
                   </td>
-                  <td className="truncate text-zinc-600">{r.claim?.position.reason ?? ""}</td>
+                  <td
+                    className={"truncate " + (r.untracked ? "text-amber-300/70" : "text-zinc-600")}
+                    title={r.untracked ? prune?.reason : undefined}
+                  >
+                    {r.untracked
+                      ? `still held in the account — the bridge stopped tracking it${prune ? `: ${prune.reason}` : " (only remembers who traded it)"}`
+                      : r.claim?.position.reason ?? ""}
+                  </td>
                 </tr>
               );
             })}
@@ -833,7 +912,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                 <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.beta)}</td>
                 <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.corr)}</td>
                 <td className="text-right tabular-nums text-fuchsia-200/70">{fmt(c.sigma)}</td>
-                <td className="text-right text-rose-300">not in account</td>
+                <td className={c.awaitingFill ? "text-right text-amber-300" : "text-right text-rose-300"}>
+                  {c.awaitingFill ? "sent · waiting for fill" : "not in account"}
+                </td>
                 <td className="text-right text-zinc-600">—</td>
                 <td className="text-right text-zinc-600">—</td>
                 <td className="text-right text-zinc-600">—</td>

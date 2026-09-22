@@ -39,11 +39,12 @@ export type ArbitrageLiveParams = {
   filters: ArbitrageServerFilters | null;
   sonar: ArbitrageServerSonarFilters | null;
   /**
-   * The direction auto-balance switch. The bridge acts on it: every few minutes it counts its book by
-   * side and lowers the entry threshold of the under-represented one. Null/disabled = it never
-   * touches a threshold.
+   * The direction auto-balance switch. The bridge acts on it: every few minutes it sums the book's
+   * BPUsed by side (not a position count) and either lowers the entry threshold of the under-
+   * represented side (classic) or sends real QQQ hedge orders to close the gap directly (hedged).
+   * Null/disabled = it never touches a threshold or sends a hedge order.
    */
-  autoBalance: { enabled: boolean; ratio: number } | null;
+  autoBalance: { enabled: boolean; ratio: number; hedged: boolean } | null;
   source: string;
 };
 
@@ -261,7 +262,7 @@ export function toArbitrageLiveParams(args: {
   signalsType: string;
   signalsMinRate: number;
   signalsMinTotal: number;
-  autoBalance?: { enabled: boolean; ratio: number } | null;
+  autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean } | null;
   source: string;
 }): ArbitrageLiveParams {
   const a = args.automation;
@@ -291,7 +292,9 @@ export function toArbitrageLiveParams(args: {
     // The page runs EITHER Sonar or the toolbar set, never both — the bridge expects the same.
     filters: args.sonar ? null : toArbitrageServerFilters(args.filters),
     sonar: args.sonar ? toArbitrageServerSonarFilters(args.sonar) : null,
-    autoBalance: args.autoBalance ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2 } : null,
+    autoBalance: args.autoBalance
+      ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2, hedged: !!args.autoBalance.hedged }
+      : null,
     source: args.source,
   };
 }

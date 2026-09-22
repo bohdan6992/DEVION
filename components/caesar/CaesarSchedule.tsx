@@ -100,7 +100,10 @@ export default function CaesarSchedule() {
   // The plan lives in localStorage, so it can only be read after mount — rendering the default
   // during SSR and swapping on mount would flash a wrong plan, so hold the UI until it is loaded.
   const [plan, setPlan] = useState<CaesarPlan | null>(null);
-  const [selected, setSelected] = useState<CaesarSegmentKey>("intra");
+  // null = follow the clock. Used to default to a hard-coded "intra", so at 08:55 the whole chart
+  // row sat on INTRA's empty 11:00-16:00 axis (and INTRA's strategy list) next to a positions panel
+  // reading the live account — two different times on one screen (reported 2026-09-21).
+  const [selectedOverride, setSelectedOverride] = useState<CaesarSegmentKey | null>(null);
   const [pickerFor, setPickerFor] = useState<CaesarSegmentKey | null>(null);
   const [nowMin, setNowMin] = useState<number | null>(null);
   /**
@@ -350,11 +353,14 @@ export default function CaesarSchedule() {
   }, [plan, scheduleEnabled, scheduleBusy, scheduleError, pullSchedule]);
 
   const nowSegment = nowMin == null ? null : segmentAtAxisMinute(nowMin);
-  // The charts follow whichever segment card is SELECTED in the timeline above, not whatever is
-  // live by the clock — switching to OPEN or POST must re-scope the whole row (x-axis window AND
-  // which strategies' lines are drawn) to that segment's own assignments, not silently keep
-  // showing PRE's. SEGMENT_BY_KEY always has an entry (unlike nowSegment, which is null before
-  // the clock loads), so this needs no null branch of its own.
+  // The charts follow whichever segment card is SELECTED in the timeline above — switching to
+  // OPEN or POST must re-scope the whole row (x-axis window AND which strategies' lines are drawn)
+  // to that segment's own assignments. Until the operator picks one, "selected" is simply the
+  // segment the clock is in; clicking the live segment again hands control back to the clock.
+  const selected: CaesarSegmentKey = selectedOverride ?? nowSegment?.key ?? "intra";
+  const setSelected = useCallback((key: CaesarSegmentKey) => {
+    setSelectedOverride(key === nowSegment?.key ? null : key);
+  }, [nowSegment?.key]);
   const selectedSegment = SEGMENT_BY_KEY[selected];
   const chartInstances = useMemo(() => {
     if (!plan) return [];

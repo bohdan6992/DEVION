@@ -45,6 +45,7 @@ import {
 } from "../../lib/filters/sectorCorr";
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
+import { useScheduledStartArm } from "../../lib/scanner/useScheduledStartArm";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
@@ -67,7 +68,7 @@ import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTI
 import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
-import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import ExecutionSettingsPanel, { DirectionBalanceControls } from "./shell/panels/ExecutionSettingsPanel";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -1083,12 +1084,30 @@ export default function ArbitrageScanner({
   const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
     sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
 
-  // Direction auto-balance. The switch and its trigger ratio are the operator's; the DECISIONS (count the
-  // book by side every few minutes, lower the under-represented side's entry threshold) are the
-  // bridge's, so they keep working with this tab closed. See DirectionBalancer on the bridge.
+  // Direction auto-balance. The switch, its trigger ratio and the HEDGED mode flag are the operator's;
+  // the DECISIONS (sum the book's BPUsed by side every few minutes, then either lower the under-
+  // represented side's entry threshold or send real QQQ hedge orders) are the bridge's, so they keep
+  // working with this tab closed. See DirectionBalancer on the bridge.
   const [autoBalance, setAutoBalance] = useState<boolean>(false);
   const [autoBalanceRatio, setAutoBalanceRatio] = useState<number>(2);
+  const [autoBalanceHedged, setAutoBalanceHedged] = useState<boolean>(false);
   const directionBalanceStatus = useDirectionBalanceStatus(autoBalance);
+
+  // BALANCE and HEDGED are two mutually exclusive MODES of the one switch, not two independent
+  // toggles: at most one is ever active. Pressing the active one turns everything off; pressing the
+  // other one switches straight to it (off -> that mode, or mode A -> mode B in one click).
+  const setDirectionBalanceMode = useCallback((mode: "off" | "balance" | "hedged") => {
+    setAutoBalance(mode !== "off");
+    setAutoBalanceHedged(mode === "hedged");
+  }, []);
+  const toggleBalanceMode = useCallback(
+    () => setDirectionBalanceMode(autoBalance && !autoBalanceHedged ? "off" : "balance"),
+    [autoBalance, autoBalanceHedged, setDirectionBalanceMode],
+  );
+  const toggleHedgedMode = useCallback(
+    () => setDirectionBalanceMode(autoBalance && autoBalanceHedged ? "off" : "hedged"),
+    [autoBalance, autoBalanceHedged, setDirectionBalanceMode],
+  );
 
   // ========= Derived: variant (for display)
   const variantString = useMemo(() => {
@@ -1352,6 +1371,7 @@ export default function ArbitrageScanner({
         if (typeof s.startAbsNeg === "string") setStartAbsNeg(s.startAbsNeg);
         if (typeof s.autoBalance === "boolean") setAutoBalance(s.autoBalance);
         if (typeof s.autoBalanceRatio === "number" && s.autoBalanceRatio >= 1.1) setAutoBalanceRatio(s.autoBalanceRatio);
+        if (typeof s.autoBalanceHedged === "boolean") setAutoBalanceHedged(s.autoBalanceHedged);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (typeof s.startCutoffMinuteIdx === "number" && s.startCutoffMinuteIdx >= 0) {
@@ -1605,6 +1625,7 @@ export default function ArbitrageScanner({
       startAbsNeg,
       autoBalance,
       autoBalanceRatio,
+      autoBalanceHedged,
       endAbs,
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
@@ -2504,7 +2525,7 @@ export default function ArbitrageScanner({
         signalsType: ratingType,
         signalsMinRate: streamRatingRule.minRate,
         signalsMinTotal: streamRatingRule.minTotal,
-        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio },
+        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged },
         source: "arbitrage-scanner",
       }));
     }, 600);
@@ -2520,6 +2541,7 @@ export default function ArbitrageScanner({
     streamRatingRule,
     autoBalance,
     autoBalanceRatio,
+    autoBalanceHedged,
   ]);
 
 
@@ -2581,6 +2603,14 @@ export default function ArbitrageScanner({
       ? false
       : streamAutomationEnabled;
   const streamAutomationToggleBusy = streamAutomationTogglePending !== null;
+  // The bridge owns the scheduled START (armed from the START/CUTOFF steppers while running), so it
+  // fires with this tab closed, asleep or reloaded. This only reports what the bridge holds.
+  const scheduledStartStatus = useScheduledStartArm({
+    strategyId: streamInstance.strategyId,
+    running: streamAutomationRunning,
+    startNyTime: preStartTime,
+    cutoffNyTime: startCutoffTime,
+  });
   const streamExecutionSnapshot = useStreamExecutionSnapshot();
   const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
@@ -2683,34 +2713,9 @@ export default function ArbitrageScanner({
       onStreamAutomationConfigChange?.({ strategyModeEnabled: true });
       applyStreamAutoEnabled(true);
 
-      // Arming while START is still in the future is what makes "press Start now, walk away"
-      // actually reliable: the server itself re-flips AutoEnabled/StrategyModeEnabled on at
-      // START, independent of whether this tab is still open/in-sync when that moment arrives.
-      // It complements (doesn't replace) the browser-side wait — the signal/dispatch engine
-      // that decides entries and adds still only runs while this tab is alive.
-      const startMinuteIdx = parseTimeToMinuteIdx(preStartTime);
-      if (startMinuteIdx != null) {
-        try {
-          const nowNyParts = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/New_York",
-            hour12: false,
-            hour: "2-digit",
-            minute: "2-digit",
-          }).formatToParts(new Date());
-          const nowHh = Number(nowNyParts.find((p) => p.type === "hour")?.value ?? NaN);
-          const nowMm = Number(nowNyParts.find((p) => p.type === "minute")?.value ?? NaN);
-          const nowMinuteIdx = Number.isFinite(nowHh) && Number.isFinite(nowMm) ? nowHh * 60 + nowMm : null;
-          if (nowMinuteIdx != null && nowMinuteIdx < startMinuteIdx) {
-            await fetch(apiUrl("/api/stream/automation/scheduled-start"), {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ enabled: true, nyTime: preStartTime, strategyId: streamInstance.strategyId }),
-            });
-          }
-        } catch {
-          // best-effort resilience layer — the immediate /start above already covers this tab's own session
-        }
-      }
+      // The scheduled START is armed on the BRIDGE by useScheduledStartArm (called near the top of
+      // this component), which reacts to "running" and to the START/CUTOFF steppers. Nothing here
+      // compares clocks any more: that browser-side check could not arm a start after midnight.
     } finally {
       setStreamAutomationTogglePending(null);
     }
@@ -6071,16 +6076,10 @@ export default function ArbitrageScanner({
 
         <div className="flex flex-col gap-3">
         <ExecutionSettingsPanel
+          scheduledStart={scheduledStartStatus}
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}
-          directionBalance={{
-            enabled: autoBalance,
-            ratio: autoBalanceRatio,
-            onToggle: () => setAutoBalance((v) => !v),
-            onRatio: (v) => setAutoBalanceRatio(Math.max(1.1, Math.min(20, Number.isFinite(v) ? v : 2))),
-            status: directionBalanceStatus,
-          }}
           applyDilutionMode={applyDilutionMode}
           applyDilutionStep={applyDilutionStep}
           applyMaxAdds={applyMaxAdds}
@@ -6465,7 +6464,7 @@ export default function ArbitrageScanner({
               </div>
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className={clsx("flex items-center gap-2", primaryPanel !== "stream" && "ml-auto")}>
           {primaryPanel === "stream" ? (
             streamAutomationLaunchEnabled ? (
               <>
@@ -6566,6 +6565,22 @@ export default function ArbitrageScanner({
               {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
             </div>
           )}
+          </div>
+          {/* BALANCE + RATIO: opposite the auto-start buttons, flush to the right edge. In the Stream
+              view the auto group is alone on the left, so this group takes the free space (ml-auto);
+              on the other tabs the auto group already sits right and this simply follows it. */}
+          <div className={clsx("flex items-center gap-2", primaryPanel === "stream" && "ml-auto")}>
+            <DirectionBalanceControls
+              directionBalance={{
+                enabled: autoBalance,
+                ratio: autoBalanceRatio,
+                onToggle: toggleBalanceMode,
+                onRatio: (v) => setAutoBalanceRatio(Math.max(1.1, Math.min(20, Number.isFinite(v) ? v : 2))),
+                hedged: autoBalanceHedged,
+                onToggleHedged: toggleHedgedMode,
+                status: directionBalanceStatus,
+              }}
+            />
           </div>
         </div>
 

@@ -6,6 +6,7 @@ import type { ScannerFilterBag } from "../../../../lib/scanner/filterState";
 import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArbPriceMode, PaperArbSizingMode, TabKey } from "../../../../lib/scanner/types";
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
 import type { DirectionBalanceState } from "../../../../lib/arbitrage/directionBalanceClient";
+import type { ScheduledStartStatus } from "../../../../lib/scanner/useScheduledStartArm";
 
 /**
  * THESE FOUR GROUPS DESCRIBE THE BACKTEST'S ARITHMETIC, NOT THE LIVE ORDER.
@@ -36,16 +37,24 @@ const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
  */
 export type DirectionBalanceControl = {
   enabled: boolean;
-  /** Majority : minority that counts as skewed - 2 means two longs for every short. */
+  /** Majority : minority BP that counts as skewed - 2 means twice the notional on one side. */
   ratio: number;
   onToggle: () => void;
   onRatio: (value: number) => void;
+  /**
+   * HEDGED mode: on a skew, send real QQQ orders (buy/sell) to close the BP gap directly instead of
+   * lowering the starved side's entry threshold. Only matters while `enabled` is true, and only
+   * takes effect at that episode's OWN trigger — flipping it mid-episode changes nothing until the
+   * next one (see the bridge's own DirectionBalancer doc comment).
+   */
+  hedged: boolean;
+  onToggleHedged: () => void;
   status: DirectionBalanceState | null;
 };
 
 export type ExecutionSettingsPanelProps = {
-  /** When present the panel shows the BALANCE switch beside UNDILUTED / DILUTED. */
-  directionBalance?: DirectionBalanceControl;
+  /** What the bridge holds for this strategy's scheduled START; shown beside the START stepper. */
+  scheduledStart?: ScheduledStartStatus | null;
   filters: ScannerFilterBag;
   tab: TabKey;
   isStreamOnlyShell: boolean;
@@ -120,18 +129,131 @@ function BalanceRatioInput({ value, onChange, disabled }: { value: number; onCha
 }
 
 const fmtAdj = (v: number) => (v > 0 ? `−${(+v.toFixed(2)).toString()}` : "0");
+const fmtBp = (v: number) => Math.round(v).toLocaleString("en-US");
 
-function balanceTitle(status: DirectionBalanceState | null): string {
-  const base =
-    "AUTO BALANCE. Every 10 minutes the bridge counts its open positions by side. If one side holds at least 10 positions and outnumbers the other by the trigger ratio (e.g. 14 longs : 6 shorts at 2), the entry threshold of the SIDE THAT IS SHORT OF POSITIONS is lowered by 0.1 (in the current ZAP unit). From then on the book is re-checked EVERY MINUTE and the threshold keeps coming down by 0.1 (never below 0.2) until the smaller side has reached 90% of the larger one. Then both thresholds go back to the toolbar values and the 10-minute trigger checks resume. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
+function balanceTitle(status: DirectionBalanceState | null, hedged: boolean): string {
+  const base = hedged
+    ? "AUTO BALANCE — HEDGED. Every 10 minutes the bridge sums its own open positions' BPUsed by side (not a position count — a ticker scaled into several times weighs more than a single-shot one). If one side's BP holds at least 10,000 and outnumbers the other's by the trigger ratio, the bridge sends real QQQ orders — SELL when longs are the majority, BUY when shorts are — one order per 1,000 BP of the gap. The book is then re-checked EVERY MINUTE and the hedge is grown (never partially unwound) if the gap grows, until the smaller side reaches 90% of the larger one — then the whole hedge is unwound with the opposite order, the same count, and 10-minute trigger checks resume. Switching it off (or a new trading day) unwinds an open hedge the same way. An episode's mode is fixed at its own trigger; flipping this switch mid-episode only changes the NEXT one."
+    : "AUTO BALANCE. Every 10 minutes the bridge sums its own open positions' BPUsed by side (not a position count — a ticker scaled into several times weighs more than a single-shot one). If one side's BP holds at least 10,000 and outnumbers the other's by the trigger ratio (e.g. 14,000 : 6,000 at ratio 2), the entry threshold of the SIDE THAT IS SHORT OF BP is lowered by 0.1 (in the current ZAP unit). From then on the book is re-checked EVERY MINUTE and the threshold keeps coming down by 0.1 (never below 0.2) until the smaller side has reached 90% of the larger one. Then both thresholds go back to the toolbar values and the 10-minute trigger checks resume. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
   if (!status) return base;
   const next = status.nextCheckUtc ? new Date(status.nextCheckUtc).toLocaleTimeString() : "-";
   const phase = status.phase === "balancing" ? "BALANCING (checked every minute)" : "watching (trigger check every 10 min)";
-  return `${base}\n\nNow: ${phase}. Short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}. Last check saw ${status.lastLongs} long / ${status.lastShorts} short: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
+  const action = status.hedgedEpisode
+    ? `QQQ hedge: ${status.hedgeOrdersOut} order(s) open${status.hedgeSide ? ` (manufacturing ${status.hedgeSide})` : ""}.`
+    : `Short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}.`;
+  return `${base}\n\nNow: ${phase}. ${action} Last check saw ${fmtBp(status.lastLongsBp)} long / ${fmtBp(status.lastShortsBp)} short BP: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
+}
+
+/** "in 3h 12m" / "in 42m" from an ISO instant; empty when it is not in the future. */
+function untilLabel(iso: string): string {
+  const ms = Date.parse(iso) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const totalMin = Math.round(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `in ${h}h ${String(m).padStart(2, "0")}m` : `in ${m}m`;
+}
+
+function scheduledStartTitle(status: ScheduledStartStatus | null | undefined): string {
+  const base =
+    "SCHEDULED START. The bridge starts this strategy at START (New York time) even if this tab is closed, asleep or reloaded, and even if the bridge itself was restarted meanwhile: the schedule is saved on disk. If the bridge was down through START it still starts as soon as it is back, as long as the START..CUTOFF session is still running; if the whole session is over it does not start and says \"missed\".";
+  if (!status) return base;
+  const armed = status.armedAtUtc
+    ? `\n\nArmed: starts ${new Date(status.armedAtUtc).toLocaleString()} (${status.startNyTime ?? "START"} NY).`
+    : "\n\nNothing armed (the strategy is stopped, or already inside its START..CUTOFF session).";
+  const last = status.lastOutcome
+    ? `\nLast scheduled start: ${status.lastOutcome}${status.lastAtUtc ? ` at ${new Date(status.lastAtUtc).toLocaleString()}` : ""}.`
+    : "";
+  return base + armed + last;
+}
+
+/**
+ * The BALANCE/HEDGED mode pair, the RATIO box and the state chip. Not part of the toolbar card any
+ * more: the Arbitrage page renders it in the header row opposite the auto-start buttons (crosshair,
+ * book, lock, START AUTO), right-aligned - see ArbitrageScanner. Same pill styling as before, one
+ * h-7 row.
+ *
+ * BALANCE and HEDGED are mutually exclusive MODES of one switch, not two independent toggles — at
+ * most one is ever active (`directionBalance.enabled` is true for either; `.hedged` picks which).
+ * Pressing the currently active one turns the whole thing off; pressing the other one switches
+ * straight to it. Both buttons stay clickable regardless of the current state — see
+ * ArbitrageScanner's own `toggleBalanceMode`/`toggleHedgedMode` for the exact rule.
+ */
+export function DirectionBalanceControls({ directionBalance }: { directionBalance: DirectionBalanceControl }) {
+  const title = balanceTitle(directionBalance.status, directionBalance.hedged);
+  const hedgeLive = directionBalance.status?.hedgedEpisode ?? false;
+  const balanceActive = directionBalance.enabled && !directionBalance.hedged;
+  const hedgedActive = directionBalance.enabled && directionBalance.hedged;
+  return (
+    <>
+      <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={title}>
+        <button
+          type="button"
+          aria-pressed={balanceActive}
+          onClick={directionBalance.onToggle}
+          title="On a skew, lower the starved side's own entry threshold. Press again to turn it off."
+          className={clsx(
+            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+            balanceActive
+              ? "accent-soft"
+              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+          )}
+        >
+          BALANCE
+        </button>
+        {/* The OTHER mode of the same switch, not a second switch of its own — clicking it while
+            BALANCE is active switches straight to HEDGED (and back again switches straight back);
+            clicking whichever one is currently active turns everything off. An episode's mode is
+            fixed at its own trigger (see DirectionBalancer's own doc comment), so the CHIP below
+            keeps showing whatever mode the CURRENT episode actually started in, even for a moment
+            after this button itself has already moved on to the next one. */}
+        <button
+          type="button"
+          aria-pressed={hedgedActive}
+          onClick={directionBalance.onToggleHedged}
+          title="On a skew, send real QQQ buy/sell orders to close the BP gap directly instead of lowering a threshold. Takes effect at the next episode's own trigger. Press again to turn it off."
+          className={clsx(
+            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+            hedgedActive
+              ? "accent-soft"
+              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+          )}
+        >
+          HEDGED
+        </button>
+      </div>
+
+      <div
+        className={clsx("flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20", !directionBalance.enabled && "opacity-60")}
+        title="Trigger ratio: how many times more BP one side must hold than the other before the balance acts. 2 = twice the notional on one side."
+      >
+        <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
+        <BalanceRatioInput value={directionBalance.ratio} onChange={directionBalance.onRatio} disabled={!directionBalance.enabled} />
+        {directionBalance.enabled && (
+          <span
+            className="flex h-8 items-center gap-1.5 pr-2 text-[10px] font-mono tabular-nums select-none"
+            title={title}
+          >
+            {hedgeLive ? (
+              // HEDGED episode in force: the QQQ order count, coral/mint by direction (sell/short = coral, buy/long = mint — sign, not identity).
+              <span className={directionBalance.status?.hedgeSide === "short" ? "text-rose-400/80" : "text-emerald-400/80"}>
+                QQQ {directionBalance.status?.hedgeSide === "short" ? "−" : "+"}{directionBalance.status?.hedgeOrdersOut ?? 0}
+              </span>
+            ) : (
+              <>
+                <span className="text-emerald-400/80">S {directionBalance.status ? fmtAdj(directionBalance.status.shortAdjust) : "·"}</span>
+                <span className="text-rose-400/80">L {directionBalance.status ? fmtAdj(directionBalance.status.longAdjust) : "·"}</span>
+              </>
+            )}
+          </span>
+        )}
+      </div>
+    </>
+  );
 }
 
 export default function ExecutionSettingsPanel({
-  directionBalance,
+  scheduledStart,
   filters,
   tab,
   isStreamOnlyShell,
@@ -327,42 +449,6 @@ export default function ExecutionSettingsPanel({
       ))}
     </div>
 
-    {directionBalance && (
-      <>
-        <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={balanceTitle(directionBalance.status)}>
-          <button
-            type="button"
-            aria-pressed={directionBalance.enabled}
-            onClick={directionBalance.onToggle}
-            className={clsx(
-              "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-              directionBalance.enabled
-                ? "accent-soft"
-                : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-            )}
-          >
-            BALANCE
-          </button>
-        </div>
-
-        <div
-          className={clsx("flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20", !directionBalance.enabled && "opacity-60")}
-          title="Trigger ratio: how many times more positions one side must hold than the other before the balance acts. 2 = two longs for every short."
-        >
-          <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
-          <BalanceRatioInput value={directionBalance.ratio} onChange={directionBalance.onRatio} disabled={!directionBalance.enabled} />
-          {directionBalance.enabled && (
-            <span
-              className="flex h-8 items-center gap-1.5 pr-2 text-[10px] font-mono tabular-nums select-none"
-              title={balanceTitle(directionBalance.status)}
-            >
-              <span className="text-emerald-400/80">S {directionBalance.status ? fmtAdj(directionBalance.status.shortAdjust) : "·"}</span>
-              <span className="text-rose-400/80">L {directionBalance.status ? fmtAdj(directionBalance.status.longAdjust) : "·"}</span>
-            </span>
-          )}
-        </div>
-      </>
-    )}
 
     <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
       <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">STEP</span>
@@ -735,6 +821,28 @@ export default function ExecutionSettingsPanel({
         </div>
       </div>
     </div>
+
+    {scheduledStart && (scheduledStart.armedAtUtc || scheduledStart.lastOutcome) && (
+      <span
+        className={clsx(
+          "inline-flex h-7 items-center whitespace-nowrap text-[10px] font-mono font-bold uppercase leading-none",
+          scheduledStart.armedAtUtc
+            ? "text-amber-300/90"
+            : scheduledStart.lastOutcome?.startsWith("missed")
+              ? "text-rose-300/90"
+              : "text-zinc-500",
+        )}
+        title={scheduledStartTitle(scheduledStart)}
+      >
+        {scheduledStart.armedAtUtc
+          ? `armed ${untilLabel(scheduledStart.armedAtUtc)}`.trim()
+          : scheduledStart.lastOutcome?.startsWith("missed")
+            ? "start missed"
+            : scheduledStart.lastOutcome?.startsWith("started")
+              ? "started"
+              : ""}
+      </span>
+    )}
 
     <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
       <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>

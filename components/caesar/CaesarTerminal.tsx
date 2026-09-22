@@ -78,6 +78,10 @@ const ACTION_TONE: Record<string, string> = {
   entry: "text-emerald-300",
   add: "text-sky-300",
   exit: "text-amber-300",
+  // HEDGED mode's own QQQ orders — logged under the "hedge" strategy category (see the bridge's
+  // ServerStrategyRunner.Record), not the strategy that triggered them, so this line's own tone
+  // needs to read as neither an entry nor an exit: a third thing.
+  hedge: "text-fuchsia-300",
 };
 
 function outcomeBadge(i: IntentRecord): { text: string; tone: string } {
