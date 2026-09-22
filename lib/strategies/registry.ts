@@ -195,6 +195,44 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // Reversal: fade a stack extreme at 15:50, entry 16:00, exit at one of five clock-time classes
+  // (18:00 / 21:00 / 04:00+1 / 07:00+1 / PRINT 09:30+1) — see ReversalTiming.Default and
+  // ReversalGate.cs. Flipped to "bridge" (2026-09-22): ReversalServerStrategy is now a real
+  // IServerStrategy (Program.cs), the same flip Arbitrage got 2026-09-15 — see that entry's own
+  // comment. Its live dispatch is registered but NOT live: StreamAutomationControlService's
+  // AutoEnabled defaults false for "stream.reversal" (nobody has ever turned it on), and
+  // TradingAppOrderIntentType.ReversalEnterLong/Short still has no real TradingApp hotkey bound
+  // (see that enum member's own doc comment) — an operator has two separate, deliberate steps left
+  // before this can ever send a real order, not one. The live-params PUSH from this page is still
+  // not wired (see ReversalScanner.tsx's own note by its entryIntentTypes) — the bridge's
+  // ReversalLiveParamsService (api/stream/reversal/params) runs on its own defaults until that
+  // exists. priority 24 — one below Day Two's 25, deliberately: the two strategies share almost the
+  // same 15:45-16:05 trading window, and there is no reason for Reversal to win a contested ticker
+  // over the already-live Day Two before it has traded for real even once.
+  reversal: {
+    key: "reversal",
+    bridgeStrategyId: "stream.reversal",
+    nav: {
+      stream: "/reversal/stream",
+      scanner: "/reversal/scanner",
+      sonar: "/reversal/sonar",
+      scout: "/reversal/scout",
+    },
+    tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
+    priority: 24,
+    api: { paperBase: "/api/paper/reversal", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.reversal", sonarPrefix: "bridge.reversal", streamPrefix: "stream.reversal" },
+    // Reversal's own rating classes: the five clock-time exits from ReversalTiming.Default's
+    // ExitTargetMinByClass, read from /api/paper/reversal's gamma table (a single gamma per
+    // ticker x class x sign, not a rate/total bin like OpenDoor/Day Two).
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit18", "exit21", "exit04", "exit07", "print"],
+      labels: { exit18: "18:00", exit21: "21:00", exit04: "04:00+1", exit07: "07:00+1", print: "PRINT" },
+    },
+  },
+
   openfade: {
     key: "openfade",
     bridgeStrategyId: "stream.openfade",

@@ -79,6 +79,13 @@ export type FilterFlagsRowProps = {
   regions: FilterToggle[];
   /** COUNTRY/EXCHANGE/SECTOR — each surface passes its own control. */
   selectsSlot?: React.ReactNode;
+  /**
+   * Rendered immediately after selectsSlot, BEFORE the `flex-1` spacer that pushes the sort/trailing/
+   * zap groups to the row's far right edge — for a strategy-specific control that belongs beside
+   * COUNTRY/EXCHANGE/SECTOR rather than pinned to the far edge (e.g. Reversal's GAMMA/RAW + threshold
+   * group, which the user asked to sit right after SECTOR and before the sort dropdown).
+   */
+  strategySlot?: React.ReactNode;
   /** Sort control. */
   sortSlot?: React.ReactNode;
   /**
@@ -109,6 +116,7 @@ export default function FilterFlagsRow({
   corrStatus,
   regions,
   selectsSlot,
+  strategySlot,
   sortSlot,
   trailingSlot,
   zapSlot,
@@ -177,6 +185,8 @@ export default function FilterFlagsRow({
       {selectsSlot != null && (
         <div className={`${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.select.group}`}>{selectsSlot}</div>
       )}
+
+      {strategySlot}
 
       <div className="flex-1" />
 
