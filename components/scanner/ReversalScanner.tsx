@@ -1158,7 +1158,7 @@ export default function ReversalScanner({
   // the same request-body string episodesSearchCache itself keys on, so a TTL cache HIT (no
   // fetcher call) still has a summary to hand back — see fetchEpisodesSearchRows below.
   const reversalSummaryByKeyRef = useRef<Map<string, ReversalAnalyticsSummaryDto | null>>(new Map());
-  const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<ReversalAnalyticsSummaryDto | null>(null);
+  const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: ReversalAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
 
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
@@ -1404,36 +1404,8 @@ export default function ReversalScanner({
   // flag row, the country/exchange/sector selects) changed nothing in the P&L, trade count and win
   // rate on this screen, while the charts beside them, fed by filteredEpisodes, honoured all of it.
   // One fetch, one set of rows, one answer.
-  useEffect(() => {
-    // Must mirror the SNAPSHOT block's own render condition exactly - in a streamOnly shell the
-    // table renders under the "episodes" tab, so gating the fetch on "analytics" alone left it
-    // permanently empty there.
-    if (!(primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")))) return;
-    if (!toYmd(dateFrom) || !toYmd(dateTo)) return;
-
-    let cancelled = false;
-    (async () => {
-      setReversalSnapshotLoading(true);
-      try {
-        // Same call RUN makes on this tab, and episodesSearchCache keys on the request body, so
-        // the two no longer hit the bridge twice for the same day.
-        const rows = await fetchEpisodesSearchRows(buildPostRequest(dateFrom, dateTo));
-        if (cancelled) return;
-        setEpisodesRows(rows);
-        setReversalSnapshotError(null);
-      } catch (e: any) {
-        if (!cancelled) setReversalSnapshotError(e?.message || "Failed to load Reversal snapshot");
-      } finally {
-        if (!cancelled) setReversalSnapshotLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [
-    primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, reversalExitClass,
-    reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal,
-    reversalMinRate, reversalMinTotal, reversalUnitMode,
-    sizeValue,
-  ]);
+  // No automatic fetch on parameter changes: the operator loads/refreshes with the RUN button only
+  // (run() below covers the SNAPSHOT/analytics tab and the streamOnly-shell episodes tab).
 
   // ========= Drop loaded rows as soon as the selected date changes
   //
@@ -1448,6 +1420,7 @@ export default function ReversalScanner({
     loadedForDateKeyRef.current = key;
     setActiveRows([]);
     setEpisodesRows([]);
+    setServerAnalyticsSummary(null);
     setAnalytics(null);
     setUpdatedAt(null);
   }, [dateMode, dateNy, dateFrom, dateTo]);
@@ -3159,7 +3132,8 @@ export default function ReversalScanner({
     );
     // Every caller of this function wants the SNAPSHOT cards to reflect whatever rows it just
     // fetched (or reused from cache) — one call site to keep in sync instead of three.
-    setServerAnalyticsSummary(reversalSummaryByKeyRef.current.get(key) ?? null);
+    const fetchedSummary = reversalSummaryByKeyRef.current.get(key) ?? null;
+    setServerAnalyticsSummary(fetchedSummary ? { summary: fetchedSummary, equityCurveMode: String(body.equityCurveMode ?? "Daily") } : null);
     return rows;
   }
 
@@ -3183,7 +3157,7 @@ export default function ReversalScanner({
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
         setAnalytics(null);
-        if (!(episodesUseSearch || forceEpisodesSearch)) {
+        if (!(episodesUseSearch || forceEpisodesSearch || isStreamOnlyShell)) {
           const qs = buildPaperQuery(buildReversalGetParams(dateNy));
           const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
@@ -4691,7 +4665,15 @@ export default function ReversalScanner({
     return { total, wins, losses, avg, count: rows.length };
   }, [filteredEpisodes]);
 
+  // The SCOPE / VISUAL SCOPE panels live in the EPISODES tab only; same gate ArbitrageScanner has.
+  // Without it these passes over every filtered episode ran on every filter change on ANY tab.
+  const scopePanelsMounted = primaryPanel === "scanner" && tab === "episodes" && !isStreamOnlyShell;
+
   const scopeResearchObservedBoundsByPanel = useMemo<Record<ScopePanelKey, { min: number | null; max: number | null; count: number }>>(() => {
+    if (!scopePanelsMounted) {
+      const empty = { min: null as number | null, max: null as number | null, count: 0 };
+      return { left: empty, right: empty };
+    }
     const buildBounds = (parameterKey: ScopeResearchParameterKey) => {
       let min = Infinity, max = -Infinity, count = 0;
       for (const row of filteredEpisodes) {
@@ -4710,14 +4692,17 @@ export default function ReversalScanner({
       left: buildBounds(scopeResearchDrafts.left.parameterKey),
       right: buildBounds(scopeResearchDrafts.right.parameterKey),
     };
-  }, [filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
+  }, [scopePanelsMounted, filteredEpisodes, scopeResearchDrafts.left.parameterKey, scopeResearchDrafts.right.parameterKey]);
 
   const scopeResearchComputedByPanel = useMemo<Record<ScopePanelKey, ScopeResearchComputed | null>>(
-    () => ({
-      left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
-      right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
-    }),
-    [dateFrom, filteredEpisodes, scopeResearchSelections]
+    () =>
+      scopePanelsMounted
+        ? {
+            left: computeScopeResearch(filteredEpisodes, scopeResearchSelections.left, dateFrom),
+            right: computeScopeResearch(filteredEpisodes, scopeResearchSelections.right, dateFrom),
+          }
+        : { left: null, right: null },
+    [scopePanelsMounted, dateFrom, filteredEpisodes, scopeResearchSelections]
   );
   const scopePanels: Array<{ key: ScopePanelKey; label: string }> = [
     { key: "left", label: "LEFT" },
@@ -5151,7 +5136,16 @@ export default function ReversalScanner({
     // a fetch that hasn't resolved, or a strictly local/offline dev session) — see that method's own
     // doc comment for the scope tradeoff (this reflects the request's date/class/threshold scope,
     // not the fine client-only filters filteredEpisodes applies on top).
-    if (serverAnalyticsSummary) return serverAnalyticsSummary;
+    // Only trusted while it provably describes what is on screen: same row count as the loaded
+    // rows AND as filteredEpisodes (any client-only filter narrowing them falls through to the
+    // live computation below), and the same Daily/Trade mode. Otherwise the cards would disagree
+    // with the table/charts beside them.
+    if (
+      serverAnalyticsSummary &&
+      serverAnalyticsSummary.equityCurveMode === equityCurveMode &&
+      serverAnalyticsSummary.summary.situations === episodesRows.length &&
+      episodesRows.length === filteredEpisodes.length
+    ) return serverAnalyticsSummary.summary;
 
     // Single pass instead of one map plus eight filter/reduce scans and two spread-based extremes.
     const situations = filteredEpisodes.length;
@@ -5308,7 +5302,7 @@ export default function ReversalScanner({
       top2WinShare,
       top2LossShare,
     };
-  }, [serverAnalyticsSummary, filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
+  }, [serverAnalyticsSummary, episodesRows.length, filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
 
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
