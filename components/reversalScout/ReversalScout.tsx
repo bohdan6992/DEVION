@@ -7,8 +7,8 @@
  *
  *   5 exit classes (EXIT18/EXIT21/EXIT04/EXIT07/PRINT=09:30), not 4 birth windows
  *   4 unit modes (%/σ/α/γ), not Arbitrage's own set — Reversal has no beta/corr/delta per ticker;
- *   σ here is a LOCAL per-ticker stdev of entry deviations in view, distinct from the published
- *   per-ticker sigma the v2 wire also carries (parsed, not yet wired into this toggle)
+ *   σ here is the PUBLISHED per-ticker static sigma (final.parquet's own "sigma" column, passed
+ *   through untouched end to end), not a locally recomputed stdev
  *   WIN/LOSS, not hard/soft — RATING (published) and WIN (of the trades in view) both survive
  *   no peak/gap → no "by time" reversion chart group, only the equity curve
  *   BEST SETTINGS is not wired yet (said out loud below, not silently dropped)
@@ -449,7 +449,10 @@ export default function ReversalScout() {
           <ReversalRangeBox
             value={ui.ranges}
             onChange={(ranges) => patch({ ranges })}
-            title="Alpha — the ticker's own modal |15:50 reading|, sign-matched (pos/short vs alphaPos, neg/long vs alphaNeg)"
+            titles={{
+              alpha: "Alpha — the ticker's own modal |15:50 reading|, sign-matched (pos/short vs alphaPos, neg/long vs alphaNeg)",
+              sigma: "Sigma — the ticker's published static Stack% dispersion (final.parquet's own \"sigma\" column)",
+            }}
           />
         </div>
 
@@ -710,7 +713,8 @@ export default function ReversalScout() {
                           <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-400">{alphaCell(r.i)}</td>
                           <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{gammaCell(r.i)}</td>
                           <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-300">{fx(r.start, 2)}</td>
-                          <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-400">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
+                          {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23). */}
+                          <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-400">16:00</td>
                           <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
                           <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-300">{r.trades}</td>
                           <td className={clsx("whitespace-nowrap px-2.5 py-[5px] text-right font-bold", ratingTone(r.rating))}>{pct1(r.rating)}</td>
@@ -763,6 +767,8 @@ export default function ReversalScout() {
                       <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap">P&L $</th>
                       <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap" title="the 15:50 reading, %">DEV %</th>
                       <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap" title="the 15:50 reading, × the ticker's own alpha">DEV α</th>
+                      <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap" title="the 15:50 reading, × the ticker's published sigma">DEV σ</th>
+                      <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap" title="the 15:50 reading, × the published gamma for this class and side">DEV γ</th>
                       <th className="px-2.5 py-2 text-right text-[9px] font-semibold whitespace-nowrap">STATUS</th>
                     </tr>
                   </thead>
@@ -776,12 +782,15 @@ export default function ReversalScout() {
                           {t.side.toUpperCase()}
                         </td>
                         <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{minuteIdxToClockLabel(t.signalMinuteIdx)}</td>
-                        <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-300">{minuteIdxToClockLabel(t.entryMinuteIdx)}</td>
+                        {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23). */}
+                        <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-300">16:00</td>
                         <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{minuteIdxToClockLabel(t.exitMinuteIdx)}</td>
                         <td className={clsx("whitespace-nowrap px-2.5 py-[5px] text-right font-semibold", signTone(t.pnlPct, isLightTheme))}>{fx(t.pnlPct, 3)}</td>
                         <td className={clsx("whitespace-nowrap px-2.5 py-[5px] text-right", signTone(t.pnlUsd, isLightTheme))}>{usd(t.pnlUsd, 2)}</td>
                         <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{fx(t.devPct, 3)}</td>
                         <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{fx(t.devAlpha, 2)}</td>
+                        <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{fx(t.devSigma, 2)}</td>
+                        <td className="whitespace-nowrap px-2.5 py-[5px] text-right text-zinc-500">{fx(t.devGamma, 2)}</td>
                         <td className={clsx("whitespace-nowrap px-2.5 py-[5px] text-right uppercase", t.status === "win" ? "text-[#6ee7b7]" : SOFT_LOSS_TEXT_CLASS)}>
                           {t.status}
                         </td>
@@ -789,7 +798,7 @@ export default function ReversalScout() {
                     ))}
                     {tradeRows.length === 0 && (
                       <tr>
-                        <td colSpan={12} className="px-4 py-10 text-center text-[11px] text-zinc-600">
+                        <td colSpan={14} className="px-4 py-10 text-center text-[11px] text-zinc-600">
                           No trades in scope for these settings.
                         </td>
                       </tr>

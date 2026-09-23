@@ -50,8 +50,8 @@ import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeD
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
-import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart } from "./shared/charts";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ReversalAnalyticsSummaryDto, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
@@ -358,6 +358,10 @@ export default function ReversalScanner({
     setMinSigma,
     maxSigma,
     setMaxSigma,
+    minAlpha,
+    setMinAlpha,
+    maxAlpha,
+    setMaxAlpha,
     minMarketCapM,
     setMinMarketCapM,
     maxMarketCapM,
@@ -684,10 +688,20 @@ export default function ReversalScanner({
   // Sample-size floor on the ticker's own published gamma (ReversalGammaEntry.GammaN) — same spirit
   // as OpenDoorGate.TryGetRatedBin's minTotalGate. 0 (or below) turns this off.
   const [reversalMinGammaTotal, setReversalMinGammaTotal] = useState(0);
-  // Backtest escape hatch: drop the per-ticker gamma lookup (and the MinGammaTotal floor riding on
-  // it) and simulate every ticker whose |15:50 deviation| clears the flat floor/cap alone — the same
-  // escape hatch OpenDoor/Day Two's IgnoreRatings gives their toolbars.
-  const [reversalIgnoreRatings, setReversalIgnoreRatings] = useState(false);
+  // Floor on the matched (class, sign) cell's own published win_rate/total — Arbitrage's MINRATE/
+  // MINTOTAL, mirrored onto Reversal's own rating cell (reversal_rolling_perf's win_rate/total, NOT
+  // GammaN — see ReversalGate.cs). Own separate pills (see below), not the black ρ/β/σ-style range
+  // boxes — those are a different kind of gate (a STATIC ticker value, filtered min/max), while
+  // MINRATE/MINTOTAL are a threshold ON the trade's own rating. 0 (or below) turns each off.
+  const [reversalMinRate, setReversalMinRate] = useState(0);
+  const [reversalMinTotal, setReversalMinTotal] = useState(0);
+  // GAMMA's own black ρ/β/σ-style min/max box — the (class, sign) gamma level a row actually
+  // cleared (rides on Rating/RatingTotal, same as the table's own γ column — see PaperReversalMapper).
+  // Local state, not the shared useScannerFilters hook: no other strategy has a per-row gamma to
+  // range-filter on, so there is no shared minGamma/maxGamma slot to reuse (unlike minAlpha/minSigma,
+  // which PairFlux/every strategy's tape row already carry).
+  const [minGamma, setMinGamma] = useState("");
+  const [maxGamma, setMaxGamma] = useState("");
   // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
   // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
   // the short-side floor when the field is empty.
@@ -701,29 +715,50 @@ export default function ReversalScanner({
     });
   };
 
-  // Display-only unit toggle for the deviation-related numbers the tables render (Signal Dev):
-  // %  — raw Stack% points, today's only mode, the default (matches current behavior byte-for-byte).
-  // α — the reading as a multiple of the ticker's own published alpha (ReversalTickerRow.Alpha).
-  //     NOT wired: /api/paper/reversal/episodes|active never joins Alpha onto a row (only Gamma/
-  //     GammaN ride the shared DTO's Rating/RatingTotal slots — see PaperReversalMapper.cs), and
-  //     ReversalScanner fetches neither /scout/meta nor any other alpha source. Rather than add a
-  //     new backend join out of scope for this pass, the pill is greyed out/disabled and always
-  //     renders "—" — see the report for this finding.
-  // γ — the reading as a multiple of the ticker's own MATCHED gamma for this (class, sign), which
-  //     IS already on every row (r.gamma, via Rating) — computed client-side, no new fetch needed.
-  const [reversalUnitMode, setReversalUnitMode] = useState<"pct" | "alpha" | "gamma">("pct");
+  // The %/σ/α/γ strip: what MinDevAbsShort/Long/Max (the coral/mint/silver boxes below) are
+  // ENTERED and ENFORCED in, sent to the bridge as `thresholdUnit` and resolved PER TICKER inside
+  // ReversalGate.Check (see that file's own doc comment) — "2" under σ means "reject unless |dev|
+  // clears 2x THIS ticker's own published sigma", not a flat 2pp for everyone. Also drives the
+  // Signal Dev column's display (formatReversalDev below), same unit, so the number typed into the
+  // threshold box and the number shown in the table are always directly comparable.
+  // %     — raw Stack% points, the original, only-ever behavior.
+  // σ     — divided by the ticker's own published static sigma (r.sigma — real on every row, same
+  //         TapeStaticMeta.Sigma the black σ range box already reads).
+  // α     — divided by the ticker's own published alpha, sign-matched (r.alpha — real on every row
+  //         as of this pass; previously unwired, see ReversalClosed.Alpha/PaperReversalMapper.cs).
+  // γ     — divided by the ticker's own MATCHED gamma for this (class, sign) (r.gamma, via Rating).
+  const [reversalUnitMode, setReversalUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma">("pct");
 
-  /** Formats the Signal Dev column under the selected unit. Recomputes client-side from fields
-   * already on the row; see reversalUnitMode's own comment for why alpha always reads "—" today. */
-  function formatReversalDev(raw: number | null | undefined, gamma: number | null | undefined): string {
+  /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
+   * are now enforced in server-side (see reversalUnitMode's own comment), so what's typed into the
+   * threshold boxes and what's shown here always mean the same thing. */
+  function formatReversalDev(
+    raw: number | null | undefined,
+    gamma: number | null | undefined,
+    sigma?: number | null,
+    alpha?: number | null,
+  ): string {
     if (raw == null || !Number.isFinite(raw)) return "—";
     if (reversalUnitMode === "pct") return num(raw, 3);
     if (reversalUnitMode === "gamma") {
       if (gamma == null || !Number.isFinite(gamma) || gamma === 0) return "—";
       return `${num(raw / gamma, 2)}γ`;
     }
-    return "—"; // alpha: no per-row alpha available to the Scanner today
+    if (reversalUnitMode === "sigma") {
+      if (sigma == null || !Number.isFinite(sigma) || sigma === 0) return "—";
+      return `${num(raw / sigma, 2)}σ`;
+    }
+    if (alpha == null || !Number.isFinite(alpha) || alpha === 0) return "—";
+    return `${num(raw / alpha, 2)}α`;
   }
+
+  /** What SHORT/LONG/MAX are currently entered in, for their own tooltips — mirrors
+   * ReversalThresholdUnit's own labels 1-to-1. */
+  const reversalThresholdUnitLabel =
+    reversalUnitMode === "pct" ? "raw percentage points" :
+    reversalUnitMode === "sigma" ? "× this ticker's own published sigma" :
+    reversalUnitMode === "alpha" ? "× this ticker's own published alpha (sign-matched)" :
+    "× this ticker's own matched gamma for this (class, sign)";
 
 
 
@@ -1117,6 +1152,14 @@ export default function ReversalScanner({
 
   const episodesSearchCache = useEpisodesSearchCache<PaperArbClosedDto>();
 
+  // The SNAPSHOT cards' own aggregate, now computed server-side (PaperReversalController.
+  // BuildAnalyticsSummary, 2026-09-23) instead of re-derived from filteredEpisodes on every
+  // render — see that method's own doc comment for the tradeoff this was chosen over. Keyed by
+  // the same request-body string episodesSearchCache itself keys on, so a TTL cache HIT (no
+  // fetcher call) still has a summary to hand back — see fetchEpisodesSearchRows below.
+  const reversalSummaryByKeyRef = useRef<Map<string, ReversalAnalyticsSummaryDto | null>>(new Map());
+  const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<ReversalAnalyticsSummaryDto | null>(null);
+
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
       if (!prev.length) return prev;
@@ -1244,6 +1287,16 @@ export default function ReversalScanner({
   ]);
 
   // ========= Preflight validation
+  // BUG FIXED (self-caught, found while investigating a "RUN silently does nothing" report): this
+  // used to validate startAbs/endAbs/zapMode/minHoldCandles — ArbitrageScanner's own continuous-
+  // threshold/hold-candle fields, inherited from the shared useScannerFilters hook but with NO
+  // visible control anywhere in Reversal's own toolbar (confirmed dead in the same-session filter
+  // audit) and no error text ever rendered from validationErrors on this screen either. A stale or
+  // preset-restored startAbs/endAbs combination could silently fail `endAbs must be <= startAbs`
+  // and permanently disable RUN for a reason that has no corresponding control on screen at all —
+  // the operator would see a greyed-out RUN button and nothing else. Reversal has its own real
+  // preflight surface (MinDevAbsShort/Long/Max — see buildReversalParams), which is what this now
+  // actually checks.
   const validationErrors = useMemo(() => {
     const e: string[] = [];
 
@@ -1257,15 +1310,14 @@ export default function ReversalScanner({
       if (toYmd(dateFrom) && toYmd(dateTo) && dateFrom > dateTo) e.push("dateFrom must be <= dateTo");
     }
 
-    if (!(startAbs >= 0)) e.push("startAbs must be >= 0");
-    if (!(endAbs >= 0)) e.push("endAbs must be >= 0");
-    // With startAbs = 0 the start gate is off, so "close tighter than you entered" is vacuous.
-    if (zapMode !== "delta" && startAbs > 0 && endAbs > startAbs) e.push("endAbs must be <= startAbs");
-
-    if (minHoldCandles < 0) e.push("minHoldCandles must be >= 0");
+    if (!(reversalMinDevAbsShort >= 0)) e.push("SHORT floor must be >= 0");
+    const longNum = optNumOrNull(reversalMinDevAbsLong);
+    if (longNum != null && longNum < 0) e.push("LONG floor must be >= 0");
+    const maxNum = optNumOrNull(reversalMinDevAbsMax);
+    if (maxNum != null && maxNum < 0) e.push("MAX cap must be >= 0");
 
     return e;
-  }, [dateMode, dateNy, dateFrom, dateTo, startAbs, endAbs, minHoldCandles, zapMode]);
+  }, [dateMode, dateNy, dateFrom, dateTo, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -1378,7 +1430,8 @@ export default function ReversalScanner({
     return () => { cancelled = true; };
   }, [
     primaryPanel, tab, isStreamOnlyShell, dateFrom, dateTo, reversalExitClass,
-    reversalIgnoreRatings, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal,
+    reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal,
+    reversalMinRate, reversalMinTotal, reversalUnitMode,
     sizeValue,
   ]);
 
@@ -1537,8 +1590,9 @@ export default function ReversalScanner({
         if (typeof s.reversalMinDevAbsLong === "string") setReversalMinDevAbsLong(s.reversalMinDevAbsLong);
         if (typeof s.reversalMinDevAbsMax === "string") setReversalMinDevAbsMax(s.reversalMinDevAbsMax);
         if (typeof s.reversalMinGammaTotal === "number") setReversalMinGammaTotal(s.reversalMinGammaTotal);
-        if (typeof s.reversalIgnoreRatings === "boolean") setReversalIgnoreRatings(s.reversalIgnoreRatings);
-        if (s.reversalUnitMode === "pct" || s.reversalUnitMode === "alpha" || s.reversalUnitMode === "gamma") setReversalUnitMode(s.reversalUnitMode);
+        if (typeof s.reversalMinRate === "number") setReversalMinRate(s.reversalMinRate);
+        if (typeof s.reversalMinTotal === "number") setReversalMinTotal(s.reversalMinTotal);
+        if (s.reversalUnitMode === "pct" || s.reversalUnitMode === "sigma" || s.reversalUnitMode === "alpha" || s.reversalUnitMode === "gamma") setReversalUnitMode(s.reversalUnitMode);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -1662,6 +1716,8 @@ export default function ReversalScanner({
         applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
         applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
+        applyStr(s.minAlpha, setMinAlpha); applyStr(s.maxAlpha, setMaxAlpha);
+        applyStr(s.minGamma, setMinGamma); applyStr(s.maxGamma, setMaxGamma);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
         applyStr(s.minRoundLot, setMinRoundLot); applyStr(s.maxRoundLot, setMaxRoundLot);
         applyStr(s.minAdv20, setMinAdv20); applyStr(s.maxAdv20, setMaxAdv20);
@@ -1778,7 +1834,8 @@ export default function ReversalScanner({
       reversalMinDevAbsLong,
       reversalMinDevAbsMax,
       reversalMinGammaTotal,
-      reversalIgnoreRatings,
+      reversalMinRate,
+      reversalMinTotal,
       reversalUnitMode,
       dilutionMode,
       dilutionStep,
@@ -1827,6 +1884,10 @@ export default function ReversalScanner({
       maxBeta,
       minSigma,
       maxSigma,
+      minAlpha,
+      maxAlpha,
+      minGamma,
+      maxGamma,
       minMarketCapM,
       maxMarketCapM,
       minRoundLot,
@@ -1958,7 +2019,7 @@ export default function ReversalScanner({
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
-      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
+      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
       minSpreadBps, maxSpreadBps, minGap, maxGap, minGapPct, maxGapPct, minClsToClsPct,
@@ -1981,7 +2042,8 @@ export default function ReversalScanner({
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
-      reversalExitClass, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal, reversalIgnoreRatings, reversalUnitMode,
+      reversalExitClass, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal,
+      reversalMinRate, reversalMinTotal, reversalUnitMode,
     ]
   );
 
@@ -2645,11 +2707,38 @@ export default function ReversalScanner({
     const reqTickers = requestScopedTickers;
     return {
       exitClass: reversalExitClass,
+      // Was missing entirely: the PRINT/BIDASK toggle (ExecutionSettingsPanel) updated local state
+      // but this request never carried it, so the bridge always computed LastPrint regardless of
+      // what the toolbar showed pressed. Now paired with the bridge actually reading it (see
+      // ReversalPaperScanner.ToParams/TapeReversalEngine.EntryPricedPct|ExitPricedPct).
+      priceMode,
+      // Same bug, same fix: the ACTIVE/PASSIVE toggle (same panel) was never sent either. PASSIVE
+      // only changes anything for the "print" exit class — see ReversalCloseMode's own doc comment
+      // (exit by settled Gap% instead of the nearest print/bid-ask to 09:30). Entry stays exactly
+      // where it always was: whatever the 15:50 stack reading qualified.
+      closeMode,
+      // A THIRD instance of the same bug, and the worst one: the USD/TIER toggle (same panel) was
+      // also never sent, so pressing TIER silently sized every Reversal position off the raw
+      // per-unit multiplier as if it were a flat $ notional (~1000x too small) instead of scaling by
+      // the ticker's own TierBp — wrong P&L on screen, no error. See ReversalSizingMode's own doc
+      // comment and TapeReversalEngine.ResolvePositionNotionalUsd.
+      sizingMode,
       minDevAbsShort: reversalMinDevAbsShort,
       minDevAbsLong: optNumOrNull(reversalMinDevAbsLong) ?? reversalMinDevAbsShort,
       minDevAbsMax: optNumOrNull(reversalMinDevAbsMax),
       minGammaTotal: reversalMinGammaTotal,
-      ignoreRatings: reversalIgnoreRatings,
+      // Real bridge-side gate on the published (class, sign) cell's own win_rate/total — added
+      // alongside ReversalGate.cs's own minRate/minTotal floor. 0 = off, same convention as the rest
+      // of this toolbar.
+      minRate: reversalMinRate,
+      minTotal: reversalMinTotal,
+      // What minDevAbsShort/Long/Max above are MEASURED in — the %/σ/α/γ strip; resolved per
+      // ticker inside ReversalGate.Check (see that file's own doc comment on ReversalThresholdUnit).
+      thresholdUnit: reversalUnitMode,
+      // The GAMMA/RAW (Γ/Ø) toggle that used to drive this was removed from the toolbar — always
+      // gate on the ticker's own published gamma now (the bridge's own default too, see
+      // PaperReversalRequest.IgnoreRatings).
+      ignoreRatings: false,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
@@ -2679,6 +2768,12 @@ export default function ReversalScanner({
       excludeExchanges: exchangeEnabled === "exclude" && selExchanges.size ? Array.from(selExchanges) : null,
       excludeCountries: countryEnabled === "exclude" && selCountries.size ? Array.from(selCountries) : null,
       excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
+
+      // The SNAPSHOT equity curve's own Daily/Trade toggle — read by
+      // PaperReversalController.BuildAnalyticsSummary so the server-computed curve matches whichever
+      // mode the toolbar is actually showing, same as ArbitrageController's own /analytics action
+      // already reads it.
+      equityCurveMode,
     };
   }
 
@@ -3049,12 +3144,23 @@ export default function ReversalScanner({
     // shared. Translating here keeps every call site untouched.
     const body = buildReversalPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
     const key = JSON.stringify(body);
-    return episodesSearchCache.get(key, () =>
+    const rows = await episodesSearchCache.get(key, () =>
       // See the same call in ArbitrageScanner: ask for best_params once per ticker rather than on
-      // every row, and reattach it as a shared reference.
+      // every row, and reattach it as a shared reference. The response's own `summary` (the
+      // SNAPSHOT aggregate, computed server-side — see BuildAnalyticsSummary) is stashed in
+      // reversalSummaryByKeyRef, keyed the SAME way episodesSearchCache itself keys `rows`, so a
+      // later TTL cache HIT on this exact request (fetcher not re-run) still has a summary to
+      // hand back below.
       apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
-        .then((j) => normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [])
+        .then((j) => {
+          reversalSummaryByKeyRef.current.set(key, (j?.summary as ReversalAnalyticsSummaryDto | undefined) ?? null);
+          return normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [];
+        })
     );
+    // Every caller of this function wants the SNAPSHOT cards to reflect whatever rows it just
+    // fetched (or reused from cache) — one call site to keep in sync instead of three.
+    setServerAnalyticsSummary(reversalSummaryByKeyRef.current.get(key) ?? null);
+    return rows;
   }
 
   // ========= Run handler
@@ -3879,6 +3985,10 @@ export default function ReversalScanner({
   const _maxBetaV = optNumOrNull(maxBeta);
   const _minSigmaV = optNumOrNull(minSigma);
   const _maxSigmaV = optNumOrNull(maxSigma);
+  const _minAlphaV = optNumOrNull(minAlpha);
+  const _maxAlphaV = optNumOrNull(maxAlpha);
+  const _minGammaV = optNumOrNull(minGamma);
+  const _maxGammaV = optNumOrNull(maxGamma);
 
   // Shared min/max filters used to be enforced only by the Arbitrage endpoint, which received them
   // in the request body. OpenDoor talks to its own endpoint, whose request carries none of them, so
@@ -3986,6 +4096,10 @@ export default function ReversalScanner({
       }
     }
     if (_minSigmaV != null || _maxSigmaV != null) {
+      // Reversal's own published static sigma — getOptimizerFallbackValue already prefers the ROW's
+      // own value (row.sigma/Sigma, populated by TapeStaticMeta.EnrichFrom off the tape's own "sigma"
+      // column — the SAME per-ticker figure the notebook publishes) before falling back to
+      // tickerMeta (Arbitrage's own corr/beta/sigma), so this needs no Reversal-specific plumbing.
       const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
       if (value == null) {
         // No value is unknown, so the row is rejected - also while the meta is still loading
@@ -3995,6 +4109,27 @@ export default function ReversalScanner({
         if (_minSigmaV != null && value < _minSigmaV) return false;
         if (_maxSigmaV != null && value > _maxSigmaV) return false;
       }
+    }
+    if (_minAlphaV != null || _maxAlphaV != null) {
+      // Reversal's own published ALPHA, sign-matched to the row's own side — rides the PairFlux-
+      // shaped Alpha slot (see ReversalClosed.Alpha/PaperReversalMapper). No tape column, so read
+      // directly off the row rather than through getOptimizerFallbackValue (which has no "alpha" key).
+      const raw = (row as any)?.alpha ?? (row as any)?.Alpha;
+      const n = typeof raw === "number" ? raw : Number(raw);
+      const value = Number.isFinite(n) ? n : null;
+      if (value == null) return false;
+      if (_minAlphaV != null && value < _minAlphaV) return false;
+      if (_maxAlphaV != null && value > _maxAlphaV) return false;
+    }
+    if (_minGammaV != null || _maxGammaV != null) {
+      // The (class, sign) GAMMA level this row actually cleared — rides Rating (same slot the
+      // table's own γ column already reads as `r?.rating`, see PaperReversalMapper: Rating = a.Gamma).
+      const raw = (row as any)?.rating ?? (row as any)?.Rating;
+      const n = typeof raw === "number" ? raw : Number(raw);
+      const value = Number.isFinite(n) ? n : null;
+      if (value == null) return false;
+      if (_minGammaV != null && value < _minGammaV) return false;
+      if (_maxGammaV != null && value > _maxGammaV) return false;
     }
 
     return true;
@@ -4009,8 +4144,8 @@ export default function ReversalScanner({
   // urgent (per-keystroke) render and only runs it once, on the low-priority render where the bundle
   // (and so the raw fields it captured) has caught up.
   const rangeFilterBundle = useMemo(() => ({
-    minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555]);
+    minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
+  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555]);
   const deferredRangeFilterBundle = React.useDeferredValue(rangeFilterBundle);
 
   // ========= Client-side filters
@@ -5008,6 +5143,16 @@ export default function ReversalScanner({
     return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
+    // Server-computed, 2026-09-23 (PaperReversalController.BuildAnalyticsSummary) — the operator's
+    // own instruction to move this off the browser. When present, this short-circuits BEFORE any of
+    // the reduce/sort work below runs, so a filter/session/rating/date tweak that only changes
+    // filteredEpisodes (not the request that produced serverAnalyticsSummary) costs nothing here.
+    // Falls back to the client computation only when no server summary has landed yet (first paint,
+    // a fetch that hasn't resolved, or a strictly local/offline dev session) — see that method's own
+    // doc comment for the scope tradeoff (this reflects the request's date/class/threshold scope,
+    // not the fine client-only filters filteredEpisodes applies on top).
+    if (serverAnalyticsSummary) return serverAnalyticsSummary;
+
     // Single pass instead of one map plus eight filter/reduce scans and two spread-based extremes.
     const situations = filteredEpisodes.length;
     let trades = 0;
@@ -5163,7 +5308,7 @@ export default function ReversalScanner({
       top2WinShare,
       top2LossShare,
     };
-  }, [filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
+  }, [serverAnalyticsSummary, filteredEpisodes, equityCurveMode, dateMode, dateNy, pnlMode]);
 
   const topTickerTimeByTicker = useMemo(() => {
     const m = new Map<
@@ -5541,58 +5686,97 @@ export default function ReversalScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* TOP mode toggle */}
-          <div className="flex h-7 items-center gap-1.5">
-            <div className="flex h-7 items-center rounded-lg bg-black/20">
-              {([false, true] as const).map((isTop) => (
+          {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
+              win_rate/total (ReversalGate.cs), reaching ReversalGate.Check via buildReversalParams.
+              Own separate pills, copied 1-to-1 off ArbitrageScanner's own MINRATE/MINTOTAL boxes —
+              NOT folded into the violet ZAP strip below (that strip is reserved for the Spinner Input
+              Standard's colored per-role boxes, per the user's own correction). This used to be an
+              ALL/TOP toggle + ρ/β/σ range boxes reading arbitrageTickerMetaByTicker — Arbitrage's OWN
+              corr/beta/sigma, wrong data entirely for a Reversal ticker (Reversal has no corr/beta
+              concept at all) — removed. */}
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="decimal"
+                step={0.05}
+                min={0}
+                max={1}
+                value={reversalMinRate}
+                onChange={(e) => setReversalMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
-                  key={String(isTop)}
                   type="button"
-                  onClick={() => setTopMode(isTop)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    topMode === isTop
-                      ? isTop
-                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setReversalMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min rate"
                 >
-                  {isTop ? "TOP" : "ALL"}
+                  ▲
                 </button>
-              ))}
-            </div>
-            {topMode && (
-              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                {([
-                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                ] as const).map(({ key, label, on, set }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => set((v) => !v)}
-                    className={clsx(
-                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                      on
-                        ? "bg-emerald-500/80 text-white"
-                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setReversalMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min rate"
+                >
+                  ▼
+                </button>
               </div>
-            )}
+            </div>
           </div>
 
-        </div>
+          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title="Floor on the matched cell's own published total trade count (not GammaN — see ReversalGate.cs). 0 = off.">
+            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+              <input
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={0}
+                value={reversalMinTotal}
+                onChange={(e) => setReversalMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+              />
+              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setReversalMinTotal((v) => Math.max(0, v + 1))}
+                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Increase min total"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setReversalMinTotal((v) => Math.max(0, v - 1))}
+                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                  aria-label="Decrease min total"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
 
+          {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with Reversal's OWN static
+              values (not Arbitrage's arbitrageTickerMetaByTicker corr/beta/sigma the old ρ/β/σ read).
+              σ = published static sigma (row.Sigma, already real — see getOptimizerFallbackValue's
+              own row-first lookup). α = published alpha, sign-matched to the row's side (rides the
+              PairFlux-shaped Alpha slot). γ = the (class, sign) gamma level the row actually cleared
+              (rides Rating, same slot the table's own γ column reads). These are a DIFFERENT kind of
+              filter than MINRATE/MINTOTAL above: a floor/ceiling on a STATIC published value, not a
+              threshold on the trade's own win_rate. */}
           {[
-            { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
-            { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
-            { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+            { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+            { label: "α", title: "Alpha — the ticker's own modal |15:50 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
+            { label: "γ", title: "Gamma — the (class, sign) reversal-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
           ].map((field) => (
             <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
               <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
@@ -5658,6 +5842,7 @@ export default function ReversalScanner({
               </div>
             </div>
           ))}
+        </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
@@ -5939,20 +6124,23 @@ export default function ReversalScanner({
                   user's own reference — "зроби як на скауті"): a single rounded-xl violet-bordered
                   strip (not FILTER_GROUP_TONES.zap's separate boxed groups), pills with a solid
                   violet fill + glow when active (`bg-violet-500 ... shadow-[0_0_16px_rgba(139,92,246,
-                  0.36)]`) rather than just a tinted border. Two sub-groups share this one strip,
-                  split by a thin divider: the display-only unit toggle (%/α/γ — see reversalUnitMode's
-                  own comment; α stays disabled, no per-row alpha is fetched here — see
-                  PaperReversalMapper.cs) and the actual gate mode (GAMMA/RAW, the same
-                  reversalIgnoreRatings boolean the old two-box switch drove — RAW bypasses the
-                  per-ticker gamma lookup and the MinGammaTotal floor riding on it, gating on the flat
-                  floors/cap alone). The four color-coded spinner boxes after it are unchanged —
-                  coral/mint/silver/amber in the same startAbs/startAbsNeg/startAbsMax/MinGammaTotal
-                  roles as before, per the Spinner Input Standard. */}
+                  0.36)]`) rather than just a tinted border. Just the %/σ/α/γ threshold-unit toggle
+                  now (see reversalUnitMode's own comment — NOT display-only: sent to the bridge as
+                  `thresholdUnit` and resolved PER TICKER inside ReversalGate.Check, so the coral/
+                  mint/silver boxes right after this strip are ENTERED in whichever unit is active
+                  here). The old GAMMA/RAW (Γ/Ø) gate-mode toggle that used to sit after it was
+                  removed (the user's own call, 2026-09-23 — "не потрібні"): the gate always reads
+                  the ticker's own published gamma now, see buildReversalParams's own `ignoreRatings:
+                  false`. The four color-coded spinner boxes after this strip are unchanged in
+                  POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
+                  startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
+                  first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
               <div className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-violet-500/20 bg-violet-500/[0.06]">
                 {([
-                  { key: "pct", label: "%", title: "Raw Stack% points (default)", disabled: false },
-                  { key: "alpha", label: "α", title: "Unavailable in the Scanner today: no per-row alpha is fetched (only Gamma/GammaN ride the episode/active DTO) — see the report for this finding", disabled: true },
-                  { key: "gamma", label: "γ", title: "The reading as a multiple of the ticker's own matched gamma for this (class, sign)", disabled: false },
+                  { key: "pct", label: "%", title: "Raw Stack% points (default) — SHORT/LONG/MAX entered as flat percentage points", disabled: false },
+                  { key: "sigma", label: "σ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published static sigma — resolved per ticker server-side", disabled: false },
+                  { key: "alpha", label: "α", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published alpha, sign-matched — resolved per ticker server-side", disabled: false },
+                  { key: "gamma", label: "γ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own matched gamma for this (class, sign) — resolved per ticker server-side", disabled: false },
                 ] as const).map((u) => {
                   const on = reversalUnitMode === u.key;
                   return (
@@ -5976,36 +6164,7 @@ export default function ReversalScanner({
                   );
                 })}
 
-                {/* No divider — the user's own reference (2026-09-22, "завжди має виглядати так")
-                    is ONE unbroken run of symbol pills before the fields, whatever their own
-                    meanings; a divider between two radio groups was our own invention, not the
-                    standard. Symbols, not spelled-out words, same reason as the pills above: Γ
-                    (capital gamma, distinct from the lowercase γ unit pill) = gate applies the
-                    ticker's own gamma; Ø = raw, that gate dropped. Full meaning in each title. */}
-                {([
-                  { off: false, key: "gate-gamma", label: "Γ", title: "GAMMA — gate on the flat floors/cap AND the ticker's own published gamma for (class, sign)" },
-                  { off: true, key: "gate-raw", label: "Ø", title: "RAW — ignore ratings: drop the per-ticker gamma lookup (and MinGammaTotal), gate on the flat floors/cap alone" },
-                ] as const).map((m) => {
-                  const on = reversalIgnoreRatings === m.off;
-                  return (
-                    <button
-                      key={m.key}
-                      type="button"
-                      onClick={() => setReversalIgnoreRatings(m.off)}
-                      title={m.title}
-                      className={clsx(
-                        "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all gap-1",
-                        on
-                          ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                          : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                      )}
-                    >
-                      <span className="leading-none" style={{ textTransform: "none" }}>{m.label}</span>
-                    </button>
-                  );
-                })}
-
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Flat floor on |15:50 deviation| for a POSITIVE reading (a SHORT entry). Coral = short.">
+                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |15:50 deviation| for a POSITIVE reading (a SHORT entry), entered in ${reversalThresholdUnitLabel}. Coral = short.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6036,7 +6195,7 @@ export default function ReversalScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Flat floor on |15:50 deviation| for a NEGATIVE reading (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
+                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |15:50 deviation| for a NEGATIVE reading (a LONG entry), entered in ${reversalThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6074,7 +6233,7 @@ export default function ReversalScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on |15:50 deviation|, either side (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
+                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |15:50 deviation|, either side (empty = none), entered in ${reversalThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6188,7 +6347,15 @@ export default function ReversalScanner({
                     type="button"
                     onClick={() => {
                       const wants = m.key as DateMode;
-                      const canRange = tab === "analytics" || (tab === "episodes" && episodesUseSearchEffective);
+                      // BUG FIXED (self-caught): this used to also require episodesUseSearchEffective
+                      // to already be true — but the ONLY place that flag ever becomes true is the
+                      // `setEpisodesUseSearch(true)` call a few lines below, itself gated behind this
+                      // same check, so LAST/RANGE could never be reached from a fresh "episodes" tab
+                      // (canRange read the flag's value from BEFORE this click, not after). Matches
+                      // ArbitrageScanner's own canRange (`tab === "analytics" || tab === "episodes"`),
+                      // which has no such extra condition — ArbitrageScanner has no episodesUseSearch
+                      // concept at all.
+                      const canRange = tab === "analytics" || tab === "episodes";
                       if ((wants === "range" || wants === "last") && !canRange) return;
                       if (tab === "episodes") {
                         if (wants === "day") {
@@ -6522,11 +6689,13 @@ export default function ReversalScanner({
                       >
                         <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
+                        {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23); the
+                            actual internal search-target minute stays 16:01, this is display-only. */}
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">16:00</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.minutesToExit ?? "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.lastStack ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{formatReversalDev(r.signalDev ?? null, r.gamma ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{formatReversalDev(r.signalDev ?? null, r.gamma ?? null, (r as any).sigma ?? null, (r as any).alpha ?? null)}</td>
                         <td
                           className={clsx(
                             "p-2.5 text-right tabular-nums font-bold",
@@ -8230,74 +8399,140 @@ export default function ReversalScanner({
               {reversalSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{reversalSnapshotError}</span>}
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <SummaryMetricCard
-                label="TOTAL PNL ($)"
-                value={num(reversalSnapshotStats.totalPnl, 2)}
-                className="xl:row-span-2 xl:min-h-[124px]"
-                valueClassName={
-                  clsx(
-                    "text-4xl md:text-6xl font-bold",
-                    reversalSnapshotStats.totalPnl > 0
-                      ? "text-[#6ee7b7]"
-                      : reversalSnapshotStats.totalPnl < 0
-                        ? SOFT_LOSS_TEXT_CLASS
-                        : "text-zinc-200"
-                  )
-                }
-              />
-              <SummaryMetricCard label="TRADES" value={intn(reversalSnapshotStats.trades)} inline />
-              <SummaryMetricCard label="WIN RATE" value={`${num(reversalSnapshotStats.winRate * 100, 1)}%`} inline />
-              <SummaryMetricCard
-                label="AVG TRADE ($)"
-                value={num(reversalSnapshotStats.avgTrade, 2)}
-                inline
-                valueClassName={reversalSnapshotStats.avgTrade > 0 ? "text-emerald-300" : reversalSnapshotStats.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="MAX WIN ($)"
-                value={num(reversalSnapshotStats.maxWin, 2)}
-                inline
-                valueClassName={reversalSnapshotStats.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG WIN ($)"
-                value={num(reversalSnapshotStats.avgWin, 2)}
-                inline
-                valueClassName={reversalSnapshotStats.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
-              />
-              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(reversalSnapshotStats.profitFactor) ? num(reversalSnapshotStats.profitFactor, 2) : "∞"} inline />
-              <SummaryMetricCard label="EXPECTANCY ($)" value={num(reversalSnapshotStats.expectancy, 2)} inline />
-              <SummaryMetricCard
-                label="MAX LOSS ($)"
-                value={num(reversalSnapshotStats.maxLoss, 2)}
-                inline
-                valueClassName={reversalSnapshotStats.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
-              <SummaryMetricCard
-                label="AVG LOSS ($)"
-                value={num(reversalSnapshotStats.avgLoss, 2)}
-                inline
-                valueClassName={reversalSnapshotStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
-              />
+            {/* Full card row, ported 1-to-1 off ArbitrageScanner's own SNAPSHOT block (the user's own
+                reference, 2026-09-23 — "зроби точно так само"): analyticsSummary already computes
+                every one of these fields off filteredEpisodes in exactly Arbitrage's own shape
+                (situations/longs/shorts/streamflowUsd/maxDrawdownUsd/top2WinShare/top2LossShare/
+                medianTradeUsd/medianDayUsd all real for Reversal, same as trades/winRate/etc already
+                were) — this replaces the narrower reversalSnapshotStats-based card row, which only
+                ever showed a subset of what was already being computed one scroll down for the
+                equity curve. */}
+            <div className="flex flex-col xl:flex-row gap-3">
+              <div className="w-full xl:w-[220px] xl:flex-shrink-0">
+                <SummaryMetricCard
+                  label="TOTAL PNL ($)"
+                  value={num(analyticsSummary.totalPnlUsd, 2)}
+                  className="h-full xl:min-h-[124px]"
+                  valueClassName={
+                    clsx(
+                      "text-4xl md:text-6xl font-bold",
+                      analyticsSummary.totalPnlUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.totalPnlUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                    )
+                  }
+                />
+              </div>
+              {/* Nine columns of two, filled column by column — same layout ArbitrageScanner uses. */}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+                <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
+                <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
+
+                <SummaryMetricCard label="TRADES" value={intn(analyticsSummary.trades)} inline />
+                <SummaryMetricCard label="SHORTS" value={intn(analyticsSummary.shorts)} inline valueClassName={SOFT_LOSS_TEXT_CLASS} />
+
+                <SummaryMetricCard label="MONEYFLOW" value={numSpaced(analyticsSummary.streamflowUsd, 2)} inline valueClassName="accent-text" />
+                <SummaryMetricCard label="MAX DRAWDOWN" value={num(analyticsSummary.maxDrawdownUsd, 2)} inline />
+
+                <SummaryMetricCard label="WIN RATE" value={`${num(analyticsSummary.winRate * 100, 1)}%`} inline />
+                <SummaryMetricCard label="EXPECTANCY" value={num(analyticsSummary.expectancyUsd, 2)} inline />
+
+                <SummaryMetricCard label="MAX WIN" value={num(analyticsSummary.maxWinUsd, 2)} inline valueClassName={analyticsSummary.maxWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="MAX LOSS" value={num(analyticsSummary.maxLossUsd, 2)} inline valueClassName={analyticsSummary.maxLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                <SummaryMetricCard label="AVG WIN" value={num(analyticsSummary.avgWinUsd, 2)} inline valueClassName={analyticsSummary.avgWinUsd > 0 ? "text-[#6ee7b7]" : "text-zinc-200"} />
+                <SummaryMetricCard label="AVG LOSS" value={num(analyticsSummary.avgLossUsd, 2)} inline valueClassName={analyticsSummary.avgLossUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"} />
+
+                <SummaryMetricCard
+                  label="TOP2 WIN %"
+                  value={analyticsSummary.top2WinShare == null ? "-" : `${num(analyticsSummary.top2WinShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2WinShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2WinShare >= 0.6
+                        ? "text-amber-300"
+                        : "text-[#6ee7b7]"
+                  }
+                />
+                <SummaryMetricCard
+                  label="TOP2 LOSS %"
+                  value={analyticsSummary.top2LossShare == null ? "-" : `${num(analyticsSummary.top2LossShare * 100, 1)}%`}
+                  inline
+                  valueClassName={
+                    analyticsSummary.top2LossShare == null
+                      ? "text-zinc-500"
+                      : analyticsSummary.top2LossShare >= 0.6
+                        ? "text-amber-300"
+                        : SOFT_LOSS_TEXT_CLASS
+                  }
+                />
+
+                <SummaryMetricCard
+                  label="AVG TRADE"
+                  value={num(analyticsSummary.avgPnlUsd, 2)}
+                  inline
+                  valueClassName={analyticsSummary.avgPnlUsd > 0 ? "text-emerald-300" : analyticsSummary.avgPnlUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                />
+                <SummaryMetricCard
+                  label="MEDIAN TRADE"
+                  value={num(analyticsSummary.medianTradeUsd, 2)}
+                  inline
+                  valueClassName={analyticsSummary.medianTradeUsd > 0 ? "text-[#6ee7b7]" : analyticsSummary.medianTradeUsd < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                />
+
+                <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(analyticsSummary.profitFactor) ? num(analyticsSummary.profitFactor, 2) : "∞"} inline />
+                <SummaryMetricCard
+                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
+                  inline
+                  valueClassName={
+                    analyticsSummary.dayCount <= 1
+                      ? "text-zinc-500"
+                      : analyticsSummary.medianDayUsd > 0
+                        ? "text-[#6ee7b7]"
+                        : analyticsSummary.medianDayUsd < 0
+                          ? SOFT_LOSS_TEXT_CLASS
+                          : "text-zinc-200"
+                  }
+                />
+              </div>
             </div>
 
-            {/* Equity curve, the one Arbitrage chart that carries over to this strategy.
-              *
-              * Arbitrage renders four more here (START VS END BY TIME, START EVENTS BY TIME, PEAK
-              * STRENGTH, PEAK REVERSION 2/3). None of them can say anything about an OpenDoor trade:
-              * measured over 21 days / 13,958 episodes the entry is ALWAYS minuteIdx 560 (09:20) and
-              * the exit always 580/581 (10m) or 600 (30m), so both time charts collapse to a single
-              * bar, and startMetricAbs/peakMetricAbs are null on every row, which is why this
-              * strategy already excludes those research axes in its descriptor.
-              */}
+            {/* Equity curve + start/end time distribution — ported off ArbitrageScanner's own
+                SNAPSHOT block. PEAK STRENGTH BY TIME / PEAK REVERSION ≥ 2/3 are deliberately NOT
+                ported (the user's own call, 2026-09-23): both need a continuously-tracked PEAK
+                reading during the hold, which Reversal's signal→entry→exit thesis has no equivalent
+                of — every row's PeakMinuteIdx already just mirrors EntryMinuteIdx and PeakMetricAbs
+                is always null (see PaperReversalMapper.cs), so those two charts would render a flat
+                zero line rather than being genuinely absent, which is worse than omitting them. */}
             {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
-              <div className="grid grid-cols-1 gap-3">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                 <div className="p-0">
                   <EquityChart
                     points={analyticsSummary.equityCurve}
                     title={`EQUITY CURVE | ${equityCurveMode}`}
                     meta={`points ${intn(analyticsSummary.equityCurve?.length ?? 0)} | situations ${intn(analyticsSummary.situations)} | trades ${intn(analyticsSummary.trades)}`}
+                  />
+                </div>
+                <div className="p-0">
+                  <StartsEndsByTimeChart
+                    rows={filteredEpisodes}
+                    title="START VS END BY TIME | 5M"
+                    meta={`rows ${intn(filteredEpisodes.length)}`}
+                  />
+                </div>
+              </div>
+            )}
+            {filteredEpisodes.length > 0 && (
+              <div className="grid grid-cols-1 gap-3">
+                <div className="p-0">
+                  <StartsByTimeChart
+                    rows={filteredEpisodes}
+                    title="START EVENTS BY TIME (OK/BAD) | 5M"
+                    meta={`rows ${intn(filteredEpisodes.length)}`}
                   />
                 </div>
               </div>
@@ -8338,7 +8573,9 @@ export default function ReversalScanner({
                       >
                         <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
+                        {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23); the
+                            actual internal search-target minute stays 16:01, this is display-only. */}
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">16:00</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
@@ -8351,7 +8588,7 @@ export default function ReversalScanner({
                         >
                           {num(r.pnl ?? null, 2)}
                         </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{formatReversalDev(r.signalDev ?? null, r.gamma ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{formatReversalDev(r.signalDev ?? null, r.gamma ?? null, (r as any).sigma ?? null, (r as any).alpha ?? null)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
                           {r.gamma != null ? num(r.gamma, 3) : "—"}×{r.gammaN ?? "—"}
                         </td>

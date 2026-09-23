@@ -1,7 +1,7 @@
 /**
  * Reversal Scout — every number on the page is computed here, from the decoded trade log.
  * Mirrors lib/scout/compute.ts (Arbitrage) 1-to-1 in shape; see that file for the pure-function
- * rationale. The differences are exactly the ones types.ts documents: 5 classes, 2 modes (%/α), no
+ * rationale. The differences are exactly the ones types.ts documents: 5 classes, 4 modes (%/σ/α/γ), no
  * hard/soft, no peak/gap.
  */
 
@@ -27,7 +27,7 @@ import type {
 
 export const REVERSAL_MODES: Record<ReversalMode, { label: string; unit: string; step: number; hint: string }> = {
   pct: { label: "%", unit: "pp", step: 0.1, hint: "raw |Stack%| at the 15:50 reading, percentage points" },
-  sigma: { label: "\u03c3", unit: "\u00d7\u03c3", step: 0.1, hint: "|Stack%| at 15:50 divided by the ticker's historical Stack% standard deviation" },
+  sigma: { label: "\u03c3", unit: "\u00d7\u03c3", step: 0.1, hint: "|Stack%| at 15:50 divided by the ticker's published static sigma (final.parquet's own \"sigma\" column)" },
   alpha: { label: "α", unit: "×α", step: 0.1, hint: "multiple of the ticker's own alpha (modal |15:50 reading|), sign-matched: pos/short over alphaPos, neg/long over alphaNeg" },
   gamma: { label: "\u03b3", unit: "\u00d7\u03b3", step: 0.1, hint: "|Stack%| at 15:50 divided by the published gamma for this exit class and side" },
 };
@@ -104,41 +104,18 @@ export function decodeSlice(w: ReversalSliceWire): ReversalSlice {
 // scope: the one place a trade is admitted or dropped
 // ---------------------------------------------------------------------------------------------
 
-function buildSigmaByTicker(meta: ReversalMeta, slices: ReversalSlice[]): Float64Array {
-  const count = new Uint32Array(meta.tickers.length);
-  const sum = new Float64Array(meta.tickers.length);
-  const sumSquares = new Float64Array(meta.tickers.length);
-  for (const s of slices) {
-    for (let i = 0; i < s.n; i++) {
-      const ticker = s.ticker[i];
-      const value = s.entryDev[i];
-      if (!Number.isFinite(value) || ticker < 0 || ticker >= meta.tickers.length) continue;
-      // The wire stores |Stack%|; the slice sign restores its direction for sigma.
-      const signedValue = s.sign === "pos" ? value : -value;
-      count[ticker]++;
-      sum[ticker] += signedValue;
-      sumSquares[ticker] += signedValue * signedValue;
-    }
-  }
-  const sigma = new Float64Array(meta.tickers.length);
-  sigma.fill(NAN);
-  for (let i = 0; i < sigma.length; i++) {
-    if (count[i] < 2) continue;
-    const variance = (sumSquares[i] - (sum[i] * sum[i]) / count[i]) / (count[i] - 1);
-    if (variance > 0 && Number.isFinite(variance)) sigma[i] = Math.sqrt(variance);
-  }
-  return sigma;
-}
-
 /** The ticker's own alpha for a trade's SIGN — pos/short reads alphaPos, neg/long reads alphaNeg,
  * the same sign-matching gamma already does per (class, sign). */
 function alphaForSign(ticker: ReversalTicker, sign: "pos" | "neg"): number {
   return sign === "pos" ? ticker.alphaPos : ticker.alphaNeg;
 }
 
-function startValue(mode: ReversalMode, s: ReversalSlice, i: number, ticker: ReversalTicker, sigma: number): number {
+/** entry_dev (raw |Stack%| at 15:50) expressed as a multiple of the ticker's own metric, in the
+ * given MODE. σ reads the notebook-PUBLISHED static sigma straight off the ticker (final.parquet's
+ * own "sigma" column, passed through unmodified end to end) — not a locally recomputed stdev. */
+function startValue(mode: ReversalMode, s: ReversalSlice, i: number, ticker: ReversalTicker): number {
   if (mode === "pct") return s.entryDev[i];
-  if (mode === "sigma") return sigma > 0 ? s.entryDev[i] / sigma : NAN;
+  if (mode === "sigma") return ticker.sigma > 0 ? s.entryDev[i] / ticker.sigma : NAN;
   if (mode === "alpha") {
     const a = alphaForSign(ticker, s.sign);
     return a > 0 ? s.entryDev[i] / a : NAN;
@@ -161,6 +138,7 @@ function tickerAllowed(meta: ReversalMeta, p: ReversalParams, t: number, sign: "
   const tk = meta.tickers[t];
   if (p.excludeEtf && tk.etf === true) return false;
   if (!inBound(alphaForSign(tk, sign), p.ranges.alpha)) return false;
+  if (!inBound(tk.sigma, p.ranges.sigma)) return false;
   if (p.countryMode !== "off" && p.countries.size > 0) {
     const has = tk.country != null && p.countries.has(tk.country);
     if (p.countryMode === "include" && !has) return false;
@@ -195,7 +173,6 @@ export function scan(
   const hasStart = p.start > 0;
   const hasTo = p.to > 0 && p.to > p.start;
   const needsScale = p.mode !== "pct";
-  const sigmas = p.mode === "sigma" ? buildSigmaByTicker(meta, slices) : null;
   let cappedOut = 0;
 
   for (let si = 0; si < slices.length; si++) {
@@ -211,7 +188,7 @@ export function scan(
         continue;
       }
 
-      const v = startValue(p.mode, s, i, meta.tickers[s.ticker[i]], sigmas?.[s.ticker[i]] ?? NAN);
+      const v = startValue(p.mode, s, i, meta.tickers[s.ticker[i]]);
       if (v !== v) {
         if (needsScale || hasStart || hasTo) continue;
       } else {
@@ -224,8 +201,14 @@ export function scan(
   return cappedOut;
 }
 
-export function devAllModes(meta: ReversalMeta, s: ReversalSlice, i: number): { pct: number; alpha: number } {
-  return { pct: s.entryDev[i], alpha: startValue("alpha", s, i, meta.tickers[s.ticker[i]], NAN) };
+export function devAllModes(meta: ReversalMeta, s: ReversalSlice, i: number): { pct: number; alpha: number; sigma: number; gamma: number } {
+  const tk = meta.tickers[s.ticker[i]];
+  return {
+    pct: s.entryDev[i],
+    alpha: startValue("alpha", s, i, tk),
+    sigma: startValue("sigma", s, i, tk),
+    gamma: startValue("gamma", s, i, tk),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -402,6 +385,8 @@ function buildTradeRows(
         pnlUsd: num(pnlUsd),
         devPct: dev.pct,
         devAlpha: dev.alpha,
+        devSigma: dev.sigma,
+        devGamma: dev.gamma,
       };
       w++;
     }
@@ -447,6 +432,7 @@ export function tickerTradeRows(meta: ReversalMeta, slices: ReversalSlice[], p: 
       status: STATUS_LABEL[s.status[i]] ?? "loss", signalMinuteIdx: s.signalMinuteIdx[i],
       entryMinuteIdx: s.entryMinuteIdx[i], exitMinuteIdx: s.exitMinuteIdx[i],
       pnlPct: pnl, pnlUsd: num(pnlUsd), devPct: dev.pct, devAlpha: dev.alpha,
+      devSigma: dev.sigma, devGamma: dev.gamma,
     });
   });
   return out;

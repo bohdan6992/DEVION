@@ -579,6 +579,34 @@ export type PaperArbAnalyticsResponse = {
   topTickers?: PaperArbTickerStatsDto[] | null;
 };
 
+// The SNAPSHOT card row, computed server-side by PaperReversalController.BuildAnalyticsSummary
+// (2026-09-23) and returned as `summary` alongside `items` on POST /episodes/search — see that
+// method's own doc comment for why this moved off the browser. Field-for-field the same shape
+// ReversalScanner.tsx's own analyticsSummary useMemo used to produce client-side.
+export type ReversalAnalyticsSummaryDto = {
+  situations: number;
+  trades: number;
+  streamflowUsd: number;
+  totalPnlUsd: number;
+  winRate: number;
+  profitFactor: number | null;
+  avgPnlUsd: number;
+  avgWinUsd: number;
+  avgLossUsd: number;
+  maxWinUsd: number;
+  maxLossUsd: number;
+  expectancyUsd: number;
+  maxDrawdownUsd: number;
+  equityCurve: PaperArbEquityPointDto[];
+  longs: number;
+  shorts: number;
+  medianTradeUsd: number;
+  medianDayUsd: number;
+  dayCount: number;
+  top2WinShare: number | null;
+  top2LossShare: number | null;
+};
+
 export type PaperArbOptimizerRangeBucketDto = {
   bucketId: string;
   label: string;

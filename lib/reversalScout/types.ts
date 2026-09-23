@@ -6,8 +6,8 @@
  *   - 5 classes (EXIT18/EXIT21/EXIT04/EXIT07/PRINT), not 4 — the exit time, not a birth window.
  *   - no beta/corr/delta per ticker — ALPHA (the modal |15:50 reading|, split alphaPos/alphaNeg by
  *     the sign of the deviation) and, per (class, sign), GAMMA (the ticker's own reversal-entry
- *     level). v2 also carries a static per-ticker SIGMA (dispersion), unrelated to alpha — parsed
- *     and available on ReversalTicker but not yet exposed as its own unit-bar mode (see compute.ts).
+ *     level). v2 also carries a static per-ticker SIGMA (dispersion, read straight off final.parquet's
+ *     own "sigma" column), unrelated to alpha — its own unit-bar mode and range box, same as α.
  *   - no hard/soft split — a trade is WIN or LOSS. RATING (published, all-history) and WIN (of the
  *     trades currently in scope) both exist, same as Arbitrage, they are just win rates, not
  *     hard+soft shares.
@@ -21,7 +21,8 @@ export type ReversalSign = "pos" | "neg";
 /** pos = the stack was HIGH at 15:50 → SHORT it; neg = LOW at 15:50 → LONG it. */
 export type ReversalSide = "short" | "long" | "both";
 
-/** What the START / TO thresholds are measured in — pct = raw pp of the 15:50 reading, alpha = a multiple of the ticker's own alpha. */
+/** What the START / TO thresholds are measured in — pct = raw pp of the 15:50 reading; sigma/alpha/gamma
+ * = that reading divided by the ticker's published static sigma / sign-matched alpha / (class,sign) gamma. */
 export type ReversalMode = "pct" | "sigma" | "alpha" | "gamma";
 
 export type ReversalWindow = 5 | 20 | 40 | 65;
@@ -135,9 +136,10 @@ export type ReversalMeta = {
 };
 
 export type ReversalBound = { min: number | null; max: number | null };
-/** The α range box. A constant of the TICKER (the modal |15:50 reading|); sign-matched against
- * alphaPos/alphaNeg the same way the α unit mode is, per the trade's own sign. */
-export type ReversalRanges = { alpha: ReversalBound };
+/** The α/σ range boxes. α is a constant of the TICKER's SIGN (the modal |15:50 reading|),
+ * sign-matched against alphaPos/alphaNeg the same way the α unit mode is; σ is the ticker's
+ * published static dispersion figure (unrelated to sign). */
+export type ReversalRanges = { alpha: ReversalBound; sigma: ReversalBound };
 
 export type ReversalParams = {
   window: ReversalWindow;
@@ -189,6 +191,8 @@ export type ReversalTradeRow = {
   pnlUsd: number;
   devPct: number;
   devAlpha: number;
+  devSigma: number;
+  devGamma: number;
 };
 
 /** Ported from ArbitrageScanner's analyticsSummary / lib/scout's ScoutAnalyticsSummary. */

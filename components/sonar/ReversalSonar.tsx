@@ -3489,6 +3489,17 @@ export default function ReversalSonar() {
     return (items ?? []).find((x) => normalizeTicker(x?.ticker || "") === tk) ?? null;
   }, [activeTicker, items]);
 
+  // The REAL Reversal row for the selected ticker (ReversalSonarRowDto, from reversalSonarRows —
+  // the bridge's own ReversalGate.Check output), distinct from activeItem/activeData above which
+  // is sourced from the Arbitrage strategy's own signal pool (see reversalSonarRows' own comment) —
+  // reading Arbitrage's Best/ratings for a Reversal ticker's rating card would show Arbitrage's
+  // numbers mislabeled as Reversal's, or blank dashes when the ticker isn't Arbitrage-rated at all.
+  const activeReversalRow = useMemo(() => {
+    const tk = normalizeTicker(activeTicker || "");
+    if (!tk) return null;
+    return reversalSonarRows.find((r) => normalizeTicker(r.ticker) === tk) ?? null;
+  }, [activeTicker, reversalSonarRows]);
+
   useEffect(() => {
     setActiveLoading(false);
     setActiveErr(null);
@@ -4095,6 +4106,7 @@ export default function ReversalSonar() {
           navStreamHref={SONAR_NAV.stream}
           navScannerHref={SONAR_NAV.scanner}
           navSonarHref={SONAR_NAV.sonar}
+          navScoutHref={SONAR_NAV.scout}
           primaryPanel="sonar"
           listMode={listMode}
           ignCount={ignoreSet.size}
@@ -4932,22 +4944,27 @@ export default function ReversalSonar() {
                 {activePanelMode === "expanded" && (
                   <div className="space-y-4 pt-4 border-t border-white/10 animate-in fade-in slide-in-from-top-4 duration-300">
 
-                    {/* встав свій expanded-блок сюди */}
+                    {/* Reversal's OWN ratings — sourced from activeReversalRow (the real
+                        ReversalSonarRowDto for the selected ticker, off reversalSonarRows/
+                        ReversalGate.Check), NOT bestObj/activeData below, which resolve against the
+                        Arbitrage strategy's own signal pool (see reversalSonarRows' own comment on
+                        why items/activeData are Arbitrage-sourced) — reading Arbitrage's rate/hard/
+                        soft/beta for a Reversal ticker showed either dashes or a different strategy's
+                        numbers mislabeled as Reversal's. Empty (dashes) only when the ticker currently
+                        fails the gate or ignoreRatings is on (no row published at all then). */}
                     <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
                       <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
                         <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Ratings</span>
-                        <span className="text-[10px] font-mono text-zinc-600">best object</span>
+                        <span className="text-[10px] font-mono text-zinc-600">reversal · {activeReversalRow?.exitClass ?? "-"}</span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-white/10">
                         {[
-                          { k: "Rate", v: bestRating == null ? "-" : `${Math.round(bestRating * 100)}%`, c: accentTextClass },
-                          { k: "Total Any", v: fmtMaybeInt(bestTotalAny) },
-                          { k: "Total Hard", v: fmtMaybeInt(bestTotalHard) },
-                          { k: "Total Soft", v: fmtMaybeInt(bestTotalSoft) },
-                          { k: "Beta", v: activeBeta == null ? "-" : fmtNum(activeBeta, 2) },
-                          { k: "Sigma", v: activeSigma == null ? "-" : fmtNum(activeSigma, 2) },
-                          { k: "MD Print Pos", v: activeMdPrintPos == null ? "-" : fmtNum(activeMdPrintPos, 2) },
-                          { k: "MD Print Neg", v: activeMdPrintNeg == null ? "-" : fmtNum(activeMdPrintNeg, 2) },
+                          { k: "Win Rate", v: activeReversalRow?.winRate == null ? "-" : `${Math.round(activeReversalRow.winRate * 100)}%`, c: accentTextClass },
+                          { k: "Total", v: fmtMaybeInt(activeReversalRow?.total ?? null) },
+                          { k: "Gamma", v: activeReversalRow?.gamma == null ? "-" : fmtNum(activeReversalRow.gamma, 2) },
+                          { k: "Gamma N", v: fmtMaybeInt(activeReversalRow?.gammaN ?? null) },
+                          { k: "Alpha", v: activeReversalRow?.alpha == null ? "-" : fmtNum(activeReversalRow.alpha, 2) },
+                          { k: "Sigma", v: activeReversalRow?.sigma == null ? "-" : fmtNum(activeReversalRow.sigma, 2) },
                         ].map((item) => (
                                   <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
                             <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
@@ -5155,7 +5172,11 @@ export default function ReversalSonar() {
                       return (
                         <div
                           key={r.ticker}
-                          className="flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2"
+                          onClick={() => onTickerClick(r.ticker)}
+                          className={clsx(
+                            "flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors",
+                            normalizeTicker(activeTicker || "") === normalizeTicker(r.ticker) && "border-white/20 bg-white/[0.06]"
+                          )}
                         >
                           <div className="flex items-baseline gap-2">
                             <span className="font-mono text-sm font-bold text-zinc-100">{r.ticker}</span>
@@ -5169,6 +5190,8 @@ export default function ReversalSonar() {
                           <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
                             {r.signalDev != null && <span>Dev {r.signalDev.toFixed(2)}</span>}
                             {r.gamma != null && <span className={col.accent}>γ {r.gamma.toFixed(2)}×{r.gammaN}</span>}
+                            {r.winRate != null && <span className={col.accent}>{Math.round(r.winRate * 100)}%×{r.total}</span>}
+                            {r.alpha != null && <span>α {r.alpha.toFixed(2)}</span>}
                           </div>
                         </div>
                       );

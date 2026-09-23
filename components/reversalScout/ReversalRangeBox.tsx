@@ -2,26 +2,28 @@
 
 import React from "react";
 import { FilterRangeBoxes, type FilterRangeField } from "../shared/filters/FilterRatingRow";
-import type { RangeText } from "../../lib/reversalScout/ranges";
+import type { RangeKey, RangeText } from "../../lib/reversalScout/ranges";
 
-/** The α min-max box — the one range Reversal actually has (it has no ρ/β/σ). */
+/** The α + σ min-max boxes — the two ranges Reversal actually has (it has no ρ/β). */
 export default function ReversalRangeBox({
   value,
   onChange,
-  title,
+  titles,
 }: {
   value: RangeText;
   onChange: (next: RangeText) => void;
-  title: string;
+  /** Tooltip per box: what the number IS on this page. */
+  titles: Record<RangeKey, string>;
 }) {
-  const field: FilterRangeField = {
-    label: "α",
-    title,
-    minValue: value.alpha.min,
-    maxValue: value.alpha.max,
-    setMin: (v) => onChange({ alpha: { ...value.alpha, min: v } }),
-    setMax: (v) => onChange({ alpha: { ...value.alpha, max: v } }),
+  const set = (k: RangeKey, end: "min" | "max", v: string) => onChange({ ...value, [k]: { ...value[k], [end]: v } });
+  const field = (k: RangeKey, label: string): FilterRangeField => ({
+    label,
+    title: titles[k],
+    minValue: value[k].min,
+    maxValue: value[k].max,
+    setMin: (v) => set(k, "min", v),
+    setMax: (v) => set(k, "max", v),
     step: 0.1,
-  };
-  return <FilterRangeBoxes ranges={[field]} />;
+  });
+  return <FilterRangeBoxes ranges={[field("alpha", "α"), field("sigma", "σ")]} />;
 }

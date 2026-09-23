@@ -36,6 +36,13 @@ export type ReversalSonarRow = {
   signalDev: number | null;
   gamma: number | null;
   gammaN: number;
+  /** The same (exitClass, sign) cell's published win_rate/total — see ReversalGate.Decision. */
+  winRate: number | null;
+  total: number;
+  /** The ticker's own published alpha, sign-matched to `side`. */
+  alpha: number | null;
+  /** The ticker's published static Stack% dispersion — ticker-level, unrelated to side. */
+  sigma: number | null;
   exitClass: string;
   bid: number | null;
   ask: number | null;
