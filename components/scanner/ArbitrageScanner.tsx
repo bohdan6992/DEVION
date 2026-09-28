@@ -52,11 +52,13 @@ import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
-import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS, STREAM_SORT_KEY_OPTIONS } from "../../lib/scanner/scopeParameters";
+import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
 import type { DateMode, EpisodeScanResult, EpisodeSortKey, GlassSelectOption, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScannerLogContext, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
 import { ScannerAnalyticsLog } from "./shared/AnalyticsLog";
 import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, PeakReversionTwoThirdsChart, PeakStrengthByTimeChart, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
+import AutoOptimizer from "./AutoOptimizer";
+import type { AutoOptRow } from "../../lib/scanner/autoOptimizer";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SideBadge, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
@@ -272,8 +274,6 @@ export default function ArbitrageScanner({
     setQTicker,
     qSide,
     setQSide,
-    streamSortKey,
-    setStreamSortKey,
     activeRows,
     setActiveRows,
     episodesRows,
@@ -659,6 +659,12 @@ export default function ArbitrageScanner({
     setStreamWindowCaptureBusy,
   } = scannerFilters;
 
+  // IGNORE RATINGS — the operator's own instruction (2026-09-27): the ALL/TOP + SESSION/BIN/BINS
+  // toggle row is always SESSION+ALL now, no UI can flip it away (see the removed toggle's own
+  // comment below); in its place, a single RATE/UNIVERSE button, styled and named 1-to-1 off
+  // ReversalScanner's own reversalIgnoreRatings — drops the ratings/eligibility gate entirely when
+  // on, same escape hatch shape as Reversal/OpenFade/OpenRide/DayTwo/OpenDoor/PairFlux already have.
+  const [arbitrageIgnoreRatings, setArbitrageIgnoreRatings] = useState(false);
 
 
 
@@ -1018,6 +1024,9 @@ export default function ArbitrageScanner({
   const filtersRestoringRef = useRef(false);
   // Keyed on count AND split mode: both change what the bridge returns, so both must re-fetch.
   const optimizerBucketReloadRef = useRef<string | null>(null);
+  // Bumped when an AUTO OPTIMIZER result is selected: the effect below re-runs the scanner once the
+  // values it just wrote have landed, so the statistics and charts follow the selection.
+  const [autoRunTick, setAutoRunTick] = useState(0);
 
 
 
@@ -1182,8 +1191,8 @@ export default function ArbitrageScanner({
 
   // ========= Tab/date mode behavior rules
   useEffect(() => {
-    // active => day always
-    if (tab === "active") {
+    // active => day always. On the Scanner page that tab is the OPTIMIZER: it shows a range, like SNAPSHOT.
+    if (tab === "active" && isStreamOnlyShell) {
       if (dateMode !== "day") {
         setDateMode("day");
         setDateNy(dateFrom || dateNy);
@@ -1196,14 +1205,14 @@ export default function ArbitrageScanner({
     // to GET /episodes, which accepts none of the list/side/exchange/rating filters and hardcodes
     // addDelayMinutes/exitConfirmCandles to 0, so one day on its own simulated differently from the
     // same day inside a range.
-    if (tab === "episodes" || tab === "analytics") {
+    if (tab === "episodes" || tab === "analytics" || tab === "active") {
       if (dateMode === "day" && toYmd(dateNy)) {
         setDateFrom(dateNy);
         setDateTo(dateNy);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateMode, dateNy, dateFrom]);
+  }, [tab, dateMode, dateNy, dateFrom, isStreamOnlyShell]);
 
   // ========= Drop loaded rows as soon as the selected date changes
   //
@@ -1458,9 +1467,10 @@ export default function ArbitrageScanner({
         if (typeof s.showPin === "boolean") setShowPin(s.showPin);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
-        if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
-        // ALL/TOP switcher removed from the toolbar - a stale topMode:true from before would
-        // otherwise keep the extra ranges/bench filtering active with no visible control for it.
+        // ratingMode/topMode restore removed (2026-09-27, the operator's own instruction): the
+        // SESSION/BIN/BINS + ALL/TOP toggle row is gone, always SESSION+ALL now, so a stale non-
+        // default value from a session saved before this change must not silently come back with no
+        // visible control left to see or undo it.
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -2525,6 +2535,7 @@ export default function ArbitrageScanner({
         signalsType: ratingType,
         signalsMinRate: streamRatingRule.minRate,
         signalsMinTotal: streamRatingRule.minTotal,
+        ignoreRatings: arbitrageIgnoreRatings,
         autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged },
         source: "arbitrage-scanner",
       }));
@@ -2539,6 +2550,7 @@ export default function ArbitrageScanner({
     streamSignalClass,
     ratingType,
     streamRatingRule,
+    arbitrageIgnoreRatings,
     autoBalance,
     autoBalanceRatio,
     autoBalanceHedged,
@@ -2784,6 +2796,7 @@ export default function ArbitrageScanner({
       addDelayMinutes,
       exitConfirmCandles: normalizedMinHoldCandles + 1,
       ratingType: ratingType ?? "any",
+      ignoreRatings: arbitrageIgnoreRatings,
 
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -2966,6 +2979,7 @@ export default function ArbitrageScanner({
 
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
+      ignoreRatings: arbitrageIgnoreRatings,
 
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -3145,7 +3159,7 @@ export default function ArbitrageScanner({
       const from = dateMode === "day" ? dateNy : dateFrom;
       const to = dateMode === "day" ? dateNy : dateTo;
 
-      if (tab === "active") {
+      if (tab === "active" && isStreamOnlyShell) {
         setAnalytics(null);
         const params = buildGetParams(dateNy);
         const qs = buildPaperQuery(params);
@@ -4014,7 +4028,13 @@ export default function ArbitrageScanner({
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
-      if (ratingMode === "SESSION") {
+      // arbitrageIgnoreRatings (RATE/UNIVERSE) must skip this too — it is a SEPARATE, client-side
+      // re-application of the same MINRATE/MINTOTAL floor the server already gates on, and the
+      // server-side bypass (PaperStrategyRequest.IgnoreRatings) means nothing if this still
+      // silently re-narrows the rows it sent back. Found 2026-09-27: toggling UNIVERSE changed the
+      // server's response but the count on screen never moved, because this ran unconditionally
+      // whenever ratingMode was "SESSION" — which is now ALWAYS true (the toggle for it was removed).
+      if (ratingMode === "SESSION" && !arbitrageIgnoreRatings) {
         if (!passesStreamRatingFilter({
           ratingMode: "SESSION",
           signal: r,
@@ -4071,7 +4091,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4093,7 +4113,10 @@ export default function ArbitrageScanner({
         printMedianPos: r.printMedianPos,
         printMedianNeg: r.printMedianNeg,
       })) return false;
-      if (ratingMode === "SESSION") {
+      // See filteredActive's own comment on this exact same condition — arbitrageIgnoreRatings
+      // (RATE/UNIVERSE) must skip this client-side re-filter too, or the server's bypass is undone
+      // silently right back here.
+      if (ratingMode === "SESSION" && !arbitrageIgnoreRatings) {
         if (!passesStreamRatingFilter({
           ratingMode: "SESSION",
           signal: r,
@@ -4148,7 +4171,7 @@ export default function ArbitrageScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -5229,6 +5252,96 @@ export default function ArbitrageScanner({
     });
   };
 
+  /**
+   * Writes one AUTO OPTIMIZER result into the toolbar.
+   *
+   * The run was only allowed to change `searchedKeys`; each of those takes the result's value, or is
+   * CLEARED when the result leaves it unconstrained (a parameter the search looked at and found no use
+   * for must not keep an old bound that the result was scored without). Everything else is untouched.
+   */
+  const applyAutoOptimizerRow = (row: AutoOptRow, searchedKeys: string[], range?: { from: string; to: string }) => {
+    const byKey = new Map(row.constraints.map((c) => [c.key, c] as const));
+    const rangeFields = new Map<string, (typeof SHARED_FILTER_PRESET_FIELDS)[number]>(SHARED_FILTER_PRESET_FIELDS.map((f) => [f.key, f] as const));
+    const modePatch: Partial<Record<SharedRangeFilterKey, SharedRangeFilterMode>> = {};
+    const ratingPatch: Partial<PaperArbRatingRule> = {};
+    const text = (v: number | null | undefined) => (v == null ? "" : String(v));
+
+    for (const key of searchedKeys) {
+      const c = byKey.get(key);
+      const field = rangeFields.get(key);
+      if (field) {
+        scannerSharedFilterSetters[field.scannerMin](text(c?.min));
+        scannerSharedFilterSetters[field.scannerMax](text(c?.max));
+        // A box the result uses has to actually be ON, or the bound is typed in but not applied.
+        if (c) modePatch[key as SharedRangeFilterKey] = "on";
+        continue;
+      }
+      switch (key) {
+        case "excludePTP": setExcludePTP(!!c); break;
+        case "excludeSSR": setExcludeSSR(!!c); break;
+        case "excludeETF": setExcludeETF(!!c); break;
+        case "excludeCrap": setExcludeCrap(!!c); break;
+        case "excludeHasNews": setExcludeHasNews(!!c); break;
+        case "excludeHasReport": setExcludeHasReport(!!c); break;
+        case "requireHasReport": setRequireHasReport(!!c); break;
+        case "includeUSA": setIncludeUSA(!!c); break;
+        case "minrate": ratingPatch.minRate = c?.min ?? 0; break;
+        case "mintotal": ratingPatch.minTotal = Math.round(c?.min ?? 0); break;
+        case "country":
+        case "exchange":
+        case "sector": {
+          const denied = row.denied.find((d) => d.key === key);
+          // Country / exchange come from the tape in upper case; sector keeps its own spelling.
+          const values = new Set((denied?.values ?? []).map((v) => (key === "sector" ? v : v.toUpperCase())));
+          const setSel = key === "country" ? setSelCountries : key === "exchange" ? setSelExchanges : setSelSectors;
+          const setMode = key === "country" ? setCountryEnabled : key === "exchange" ? setExchangeEnabled : setSectorEnabled;
+          const mode = key === "country" ? countryEnabled : key === "exchange" ? exchangeEnabled : sectorEnabled;
+          if (denied) {
+            setSel(values);
+            setMode("exclude");
+          } else if (mode === "exclude") {
+            // The search cleared its deny-list; an INCLUDE list the operator set is not the search's to touch.
+            setSel(new Set());
+            setMode("off");
+          }
+          break;
+        }
+        default: break;
+      }
+    }
+
+    if (Object.keys(modePatch).length) setSharedRangeFilterModes((prev) => ({ ...prev, ...modePatch }));
+    if (ratingPatch.minRate !== undefined || ratingPatch.minTotal !== undefined) setActiveRulePatch(ratingPatch);
+
+    // The ZAP row: unit pill first (it also sets the metric), then the four boxes. The two optional
+    // ones are written as they are - "off" (null) clears the box, it does not leave an old value behind.
+    const th = row.thresholds;
+    if (th.unit) {
+      const unit = ZAP_UNITS.find((u) => u.mode === th.unit);
+      if (unit) { setZapMode(unit.mode); setMetric(unit.metric); }
+    }
+    if (th.startAbs != null) setStartAbs(th.startAbs);
+    setStartAbsNeg(th.startAbsNeg != null ? String(th.startAbsNeg) : "");
+    setStartAbsMax(th.startAbsMax != null ? String(th.startAbsMax) : "");
+    if (th.endAbs != null) setEndAbs(th.endAbs);
+    if (th.minHoldCandles != null) setMinHoldCandles(th.minHoldCandles);
+
+    // Show the days the search was over, then re-run once all of the above has landed in state.
+    if (range) {
+      setDateMode("range");
+      setDateFrom(range.from);
+      setDateTo(range.to);
+    }
+    setAutoRunTick((n) => n + 1);
+  };
+
+  useEffect(() => {
+    if (autoRunTick === 0) return;
+    void run();
+    // run() is a fresh closure each render; this effect fires in the render that saw the new values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunTick]);
+
   // Keeps the lit pill honest when the METRIC is changed by something other than a pill — a
   // restored snapshot, a preset. It used to read "ZapPct -> zap, everything else -> sigma", which
   // was true while there were two metrics and became a trap with four: clicking gamma or alpha set
@@ -5269,7 +5382,7 @@ export default function ArbitrageScanner({
   const headerMetaLabel = isStreamOnlyShell
     ? (headerMetaLabelOverride ?? `signals ${intn(streamStats.signals)} | ready ${intn(streamStats.ready)} | open ${intn(streamStats.open)}`)
     : `minRate ${num(minRateLabel, 2)} | minTotal ${intn(minTotalLabel)} | limit ${intn(limitLabel)}`;
-  const activeTabLabel = isStreamOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "ACTIVE";
+  const activeTabLabel = isStreamOnlyShell ? (activeTabLabelOverride ?? "CANDIDATES") : "OPTIMIZER";
   const episodesTabLabel = isStreamOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
   const analyticsTabLabel = isStreamOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "SNAPSHOT";
   const headerNavGroupClass = isLightTheme
@@ -5355,8 +5468,8 @@ export default function ArbitrageScanner({
     }
 
     switch (tabKey) {
-      case "active": // ACTIVE — lightning bolt
-        return svg(<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>);
+      case "active": // OPTIMIZER — sparkles
+        return svg(<><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/></>);
       case "episodes": // SCOPE — search/magnifier
         return svg(<><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></>);
       case "analytics": // SNAPSHOT — trending up (financial)
@@ -5481,35 +5594,28 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* ALL/TOP switcher removed from the toolbar - topMode stays at its useScannerFilters
-              default (false = ALL); nothing in the UI can flip it to TOP anymore. */}
+          {/* ALL/TOP + SESSION/BIN/BINS toggle row removed (2026-09-27, the operator's own
+              instruction: "Ми завжди в режимі session і в режимі All") - ratingMode/topMode stay at
+              their useScannerFilters defaults (SESSION/ALL) forever now, nothing in the UI can flip
+              them. RATE/UNIVERSE takes its place - drops the ratings/eligibility gate entirely when
+              on, styled and named 1-to-1 off ReversalScanner's own reversalIgnoreRatings button. */}
+          <button
+            type="button"
+            onClick={() => setArbitrageIgnoreRatings((v) => !v)}
+            title={arbitrageIgnoreRatings
+              ? "UNIVERSE — ratings dropped: every ticker is eligible, ignoring MINRATE/MINTOTAL and the published rating gate entirely. Click to apply ratings again."
+              : "RATE — ratings applied: MINRATE/MINTOTAL and the published rating gate are enforced. Click to drop ratings (UNIVERSE)."}
+            className={clsx(
+              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+              arbitrageIgnoreRatings
+                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+                : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
+            )}
+          >
+            {arbitrageIgnoreRatings ? "UNIVERSE" : "RATE"}
+          </button>
 
-          <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-            {(["SESSION", "BIN", "BINS"] as PaperArbRatingMode[]).map((modeKey) => {
-              const lockedOut = isStreamOnlyShell && modeKey !== "SESSION";
-              return (
-                <button
-                  key={modeKey}
-                  type="button"
-                  disabled={lockedOut}
-                  onClick={() => setRatingMode(modeKey)}
-                  title={lockedOut ? "BIN/BINS isn't applied by the live engine — locked to SESSION on the Stream tab" : undefined}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    lockedOut
-                      ? "cursor-not-allowed border-transparent text-zinc-700"
-                      : ratingMode === modeKey
-                      ? "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {modeKey}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+          <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", arbitrageIgnoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
@@ -5544,7 +5650,7 @@ export default function ArbitrageScanner({
             </div>
           </div>
 
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+          <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", arbitrageIgnoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
@@ -6156,16 +6262,6 @@ export default function ArbitrageScanner({
                 />
               </>
             }
-            sortSlot={
-              <div className="relative flex h-7 items-center rounded-full border border-sky-400/25 bg-[#0a1520]/85">
-                <GlassSelect
-                  value={streamSortKey}
-                  onChange={(e) => setStreamSortKey(e.target.value as "alpha" | "sigma" | "netEdge")}
-                  options={STREAM_SORT_KEY_OPTIONS}
-                  className="!h-7 !min-w-[74px] !w-[74px] !py-0 !px-2 !bg-transparent !border-0 !focus:border-0 text-right rounded-full"
-                />
-              </div>
-            }
             zapSlot={
               <>
 
@@ -6386,7 +6482,7 @@ export default function ArbitrageScanner({
                     type="button"
                     onClick={() => {
                       const wants = m.key as DateMode;
-                      const canRange = tab === "analytics" || tab === "episodes";
+                      const canRange = tab === "analytics" || tab === "episodes" || (tab === "active" && !isStreamOnlyShell);
                       if ((wants === "range" || wants === "last") && !canRange) return;
                       if (tab === "episodes" && wants === "day") {
                         const d = toYmd(dateNy) ? dateNy : (toYmd(dateTo) ? dateTo : todayNyYmd());
@@ -6619,7 +6715,7 @@ export default function ArbitrageScanner({
           />
         )}
 
-        {primaryPanel === "scanner" && tab === "active" && (
+        {primaryPanel === "scanner" && tab === "active" && isStreamOnlyShell && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
@@ -8598,7 +8694,41 @@ export default function ArbitrageScanner({
           </div>
         )}
 
-        {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
+        {primaryPanel === "scanner" && tab === "active" && !isStreamOnlyShell && (
+          <div className="mb-3">
+            <AutoOptimizer
+              inline
+              open
+              onClose={() => undefined}
+              apiBase={STRATEGY.api.base}
+              buildBase={(from, to) => {
+                const req = buildPostRequest(from, to);
+                // CORR is computed on the page (a set of tickers correlated with today's reporters), so the
+                // bridge only learns of it as extra excluded tickers - which is exactly what it is.
+                if (excludeCorr && sectorCorr.excluded.size > 0) {
+                  req.excludeTickers = Array.from(new Set([...(req.excludeTickers ?? []), ...Array.from(sectorCorr.excluded)]));
+                }
+                return req;
+              }}
+              fixedToggles={{ excludeItb, excludeHard }}
+              tradingDays={sortedDaysAsc}
+              initialFrom={dateFrom}
+              initialTo={dateTo}
+              current={{
+                startAbs,
+                startAbsNeg,
+                startAbsMax,
+                endAbs,
+                minHoldCandles: normalizedMinHoldCandles,
+                unit: ((zapMode !== "off" ? zapMode : ZAP_UNITS.find((u) => u.metric === metric && u.mode !== "delta")?.mode) ?? "sigma") as "zap" | "sigma" | "delta" | "gamma" | "alpha",
+              }}
+              binMode={scannerBinFilterEnabled({ ratingMode, metric })}
+              onApply={applyAutoOptimizerRow}
+            />
+          </div>
+        )}
+
+        {primaryPanel === "scanner" && (tab === "analytics" || (!isStreamOnlyShell && tab === "active") || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. They used to live in two grids of three and seven columns,

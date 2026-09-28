@@ -25,3 +25,15 @@ export const SOFT_LOSS_STROKE = "rgba(243,166,178,0.55)";
 export const SOFT_LOSS_LINE = "rgba(243,166,178,0.6)";
 
 export const SOFT_LOSS_CHIP = "border-[rgba(243,166,178,0.18)] bg-[rgba(243,166,178,0.08)] text-[#f3a6b2]/90";
+
+/**
+ * Hex forms of the scanner tones above, for callers that must TINT them (rgba fills, glows) and so
+ * cannot use a Tailwind class or a ready-made rgba string. Same colours, one source:
+ *   MINT  = STREAM_FIXED_ICON_GREEN     CORAL = the SOFT_LOSS_* family
+ * and the strategy-identity hues Caesar's charts already use (SERIES in CaesarCharts.tsx).
+ */
+export const SCANNER_MINT_HEX = "#63e6be";
+export const SCANNER_CORAL_HEX = "#f3a6b2";
+export const IDENTITY_LAVENDER_HEX = "#a78bfa";
+export const IDENTITY_ORANGE_HEX = "#fb923c";
+export const IDENTITY_YELLOW_HEX = "#facc15";

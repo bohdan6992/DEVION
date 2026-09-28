@@ -249,7 +249,6 @@ export type ScannerFilterState = {
   startCutoffTime: string;
   streamAutoStartLocked: boolean;
   streamAutomationTogglePending: null | "start" | "stop";
-  streamSortKey: "alpha" | "sigma" | "netEdge";
   streamWindowCaptureBusy: boolean;
   tickersText: string;
   topBenchOn: boolean;
@@ -486,7 +485,6 @@ export type ScannerFilterSetters = {
   setStartCutoffTime: React.Dispatch<React.SetStateAction<string>>;
   setStreamAutoStartLocked: React.Dispatch<React.SetStateAction<boolean>>;
   setStreamAutomationTogglePending: React.Dispatch<React.SetStateAction<null | "start" | "stop">>;
-  setStreamSortKey: React.Dispatch<React.SetStateAction<"alpha" | "sigma" | "netEdge">>;
   setStreamWindowCaptureBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setTickersText: React.Dispatch<React.SetStateAction<string>>;
   setTopBenchOn: React.Dispatch<React.SetStateAction<boolean>>;

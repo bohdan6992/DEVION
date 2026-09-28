@@ -25,6 +25,7 @@ import {
   MIN_PRIORITY,
   PRIORITY_STEP,
   SEGMENT_BY_KEY,
+  axisClip,
   axisPct,
   clampPriority,
   clockLabel,
@@ -82,8 +83,8 @@ const PANEL = CAESAR_PANEL_SURFACE;
 const GRAPH_SURFACE =
   "scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80";
 
-const HOUR_TICKS = Array.from({ length: 25 }, (_, i) => i * 60);
-const HALF_HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60 + 30);
+const HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60);
+const HALF_HOUR_TICKS = Array.from({ length: 23 }, (_, i) => i * 60 + 30);
 
 const FIT_COPY: Record<WindowFit, { label: string; tone: "ok" | "warn" | "bad" | "muted" }> = {
   full: { label: "COVERS SEGMENT", tone: "ok" },
@@ -364,7 +365,7 @@ export default function CaesarSchedule() {
   const selectedSegment = SEGMENT_BY_KEY[selected];
   const chartInstances = useMemo(() => {
     if (!plan) return [];
-    return (plan[selected] ?? []).flatMap((row) => {
+    const inSegment = (plan[selected] ?? []).flatMap((row) => {
       if (!row.enabled) return [];
       const strategy = LIVE_STRATEGIES[row.strategyKey];
       if (!strategy) return [];
@@ -374,8 +375,29 @@ export default function CaesarSchedule() {
       // streamEngine === "browser" only, on the theory that a bridge engine had no action log to
       // chart — true, but it meant the chart read NOTHING for any strategy that had migrated
       // server-side, which by now is all six: "0 total" forever, not because nothing happened.
-      return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority }];
+      // Overnight strategies are not scoped to a segment at all — they are added below, once,
+      // whichever segment their row sits in.
+      if (strategy.holdsOvernight) return [];
+      return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: false }];
     });
+
+    // OVERNIGHT CATEGORY. Day Two and Reversal enter at the 16:00 close and exit on a later day, so
+    // their book is held straight through the 21:00 roll into a Caesar day whose plan may not
+    // mention them at all in the segment being viewed. Scoping them like everyone else meant that
+    // on PRE/OPEN the positions they were still holding read UNCLAIMED in the donut, and their P&L
+    // dropped out of every line and out of the total. They are charted in EVERY segment, as long as
+    // the plan runs them anywhere, under one colour family of their own.
+    const overnight: { key: string; instanceId: string; priority: number; overnight: boolean }[] = [];
+    for (const seg of CAESAR_SEGMENTS) {
+      for (const row of plan[seg.key] ?? []) {
+        if (!row.enabled) continue;
+        const strategy = LIVE_STRATEGIES[row.strategyKey];
+        if (!strategy?.holdsOvernight) continue;
+        if (overnight.some((o) => o.instanceId === strategy.bridgeStrategyId)) continue;
+        overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
+      }
+    }
+    return [...inSegment, ...overnight];
   }, [plan, selected]);
 
   // Positions can close long after their segment has ended, so this stays every strategy the
@@ -408,31 +430,39 @@ export default function CaesarSchedule() {
         ) : (
           <>
             {/* ---------- TIMELINE ---------- */}
-            <section className={`mt-3 p-5 ${GRAPH_SURFACE}`}>
-              <div className="overflow-x-auto pb-1">
+            <section className={`mt-3 ${GRAPH_SURFACE}`}>
+              <div className="overflow-x-auto px-7 pt-7">
                 {/* px-6 keeps the 21:00 labels at both ends of the ruler — they are centred on a
                     tick at 0% / 100% — from being clipped by the scroll container. */}
                 <div className="min-w-[1128px] px-6">
                   <Ruler />
                   <SessionBar selected={selected} nowMin={nowMin} onSelect={setSelected} />
+                </div>
+              </div>
 
-                  {/* Collapsed by default — expand to see/edit the per-segment strategy cards. */}
-                  <div className="mt-1 flex justify-center">
-                    <button
-                      type="button"
-                      onClick={() => setCardsExpanded((v) => !v)}
-                      title={cardsExpanded ? "Hide segment windows" : "Show segment windows"}
-                      aria-expanded={cardsExpanded}
-                      className="flex items-center gap-1.5 rounded px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-white/35 transition-colors hover:bg-white/10 hover:text-white/70"
-                    >
-                      <span className={`inline-block transition-transform duration-200 ${cardsExpanded ? "rotate-180" : ""}`}>
-                        ▾
-                      </span>
-                      {cardsExpanded ? "Hide segments" : "Segments"}
-                    </button>
-                  </div>
+              {/* Collapsed by default. The whole strip under the bar, edge to edge, is the control —
+                  no caption, only a chevron; the segment cards open beneath it. */}
+              <button
+                type="button"
+                onClick={() => setCardsExpanded((v) => !v)}
+                title={cardsExpanded ? "Hide segment windows" : "Show segment windows"}
+                aria-label={cardsExpanded ? "Hide segment windows" : "Show segment windows"}
+                aria-expanded={cardsExpanded}
+                className="group flex h-9 w-full items-center justify-center text-white/30 transition-colors hover:bg-white/[0.04] hover:text-white/70 focus:outline-none focus-visible:bg-white/[0.06]"
+              >
+                <svg
+                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+                  strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+                  className={`transition-transform duration-200 ${cardsExpanded ? "rotate-180" : ""}`}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
 
-                  {cardsExpanded && (
+              {cardsExpanded && (
+              <div className="overflow-x-auto px-7 pb-7">
+                <div className="min-w-[1128px] px-6">
+                  {(
                     <>
                       <Connectors selected={selected} />
 
@@ -459,6 +489,7 @@ export default function CaesarSchedule() {
                   )}
                 </div>
               </div>
+              )}
             </section>
 
             {/*
@@ -615,7 +646,7 @@ function Header() {
 
 function Ruler() {
   return (
-    <div className="relative h-11">
+    <div className="relative h-12">
       {/* Half-hours: a bare dash, no label. */}
       {HALF_HOUR_TICKS.map((min) => (
         <div
@@ -629,7 +660,7 @@ function Ruler() {
       {HOUR_TICKS.map((min) => (
         <div key={`hour-${min}`} className="absolute bottom-0" style={{ left: `${axisPct(min)}%` }}>
           <div className="h-[11px] w-px bg-white/20" />
-          <div className="absolute bottom-[13px] -translate-x-1/2 whitespace-nowrap font-mono text-[10px] tabular-nums text-white/45">
+          <div className="absolute bottom-[14px] -translate-x-1/2 whitespace-nowrap font-mono text-[12px] tabular-nums text-white/60">
             {clockLabel(min)}
           </div>
         </div>
@@ -657,16 +688,16 @@ function SessionBar({
     <div className="relative">
       {/* Grouping bracket, only where a segment is split across several bands: BLUE and ARK are two
           bands but one PRE segment, and the cards below are per segment, not per band. */}
-      <div className="relative mb-1 h-4">
+      <div className="relative mb-1.5 h-5">
         {CAESAR_SEGMENTS.filter((seg) => seg.bands.length > 1).map((seg) => (
           <div
             key={`group-${seg.key}`}
             className="absolute inset-y-0 flex items-center gap-2"
-            style={{ left: `${axisPct(seg.fromMin)}%`, width: `${axisPct(seg.toMin - seg.fromMin)}%` }}
+            style={{ left: `${axisPct(seg.fromMin)}%`, width: `${axisPct(axisClip(seg.toMin) - seg.fromMin)}%` }}
           >
             <span className="h-px flex-1" style={{ backgroundColor: withAlpha(seg.color, 0.3) }} />
             <span
-              className="text-[9px] font-bold tracking-[0.25em]"
+              className="text-[11px] font-bold tracking-[0.25em]"
               style={{ color: seg.color, opacity: selected === seg.key ? 1 : 0.7 }}
             >
               {seg.label}
@@ -676,11 +707,11 @@ function SessionBar({
         ))}
       </div>
 
-      <div className="relative h-14 w-full overflow-hidden rounded-lg border border-white/10">
+      <div className="relative h-16 w-full overflow-hidden rounded-lg border border-white/10">
         {CAESAR_SEGMENTS.map((seg) =>
           seg.bands.map((band) => {
             const active = selected === seg.key;
-            const widthPct = axisPct(band.toMin - band.fromMin);
+            const widthPct = axisPct(axisClip(band.toMin) - band.fromMin);
             // OPEN is 60 of 1440 minutes — ~4.2% of the bar, about 45px wide. Every band keeps the
             // same type size; only the letter-spacing and padding are dropped on a narrow band,
             // since at 0.25em they alone would overflow "OPEN" past its own edges.
@@ -700,7 +731,7 @@ function SessionBar({
                 }}
               >
                 <span
-                  className={`pointer-events-none truncate text-[11px] font-bold ${
+                  className={`pointer-events-none truncate text-[13px] font-bold ${
                     narrow ? "px-0.5" : "px-2 tracking-[0.25em]"
                   }`}
                   style={{ color: "#ffffff", opacity: active ? 0.95 : 0.6 }}
@@ -721,7 +752,7 @@ function SessionBar({
           />
         ))}
 
-        {nowMin != null && (
+        {nowMin != null && nowMin <= axisClip(nowMin) && (
           <div
             className="pointer-events-none absolute inset-y-0 z-10 w-[2px] bg-white"
             style={{
@@ -747,7 +778,7 @@ function Connectors({ selected }: { selected: CaesarSegmentKey }) {
   return (
     <svg className="h-9 w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
       {CAESAR_SEGMENTS.map((seg, i) => {
-        const barX = axisPct((seg.fromMin + seg.toMin) / 2);
+        const barX = axisPct((seg.fromMin + axisClip(seg.toMin)) / 2);
         const cardX = ((i + 0.5) / CAESAR_SEGMENTS.length) * 100;
         const active = selected === seg.key;
         return (

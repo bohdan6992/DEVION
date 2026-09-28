@@ -114,7 +114,7 @@ const timeToIdx = (timeStr: string) => {
 const DEFAULT_COLS = [
   "Ticker", "MinuteNy", "MinuteIdx", "Band", "Bid", "Ask", "Mid", "Spread", "SpreadBps",
   "BidPct", "AskPct", "LstPrcLstClsPct", "LstPrcTOpenPct", "TOpen", "TCls", "VWAP",
-  "Hi", "Lo", "ATR14", "Vol", "PreMktVolNF", "Adv20", "Adv90", "BenchTicker",
+  "Hi", "Lo", "ATR14", "ATR14Pct", "Vol", "PreMktVolNF", "Adv20", "Adv90", "BenchTicker",
   "BenchBidPct", "BenchAskPct", "ZapPctS", "ZapPctL", "SigmaZapS", "SigmaZapL",
   "Beta", "Sigma", "MarketCapM", "Exchange", "SectorL3",
 ] as const;

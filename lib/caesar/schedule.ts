@@ -15,6 +15,13 @@
 
 import { STRATEGY_CATALOG, STRATEGY_BY_KEY } from "@/lib/strategyCatalog";
 import { LIVE_STRATEGY_LIST } from "@/lib/strategies/registry";
+import {
+  IDENTITY_LAVENDER_HEX,
+  IDENTITY_ORANGE_HEX,
+  IDENTITY_YELLOW_HEX,
+  SCANNER_CORAL_HEX,
+  SCANNER_MINT_HEX,
+} from "@/components/scanner/shared/styles";
 
 export const DAY_START_HOUR = 21;
 export const DAY_MINUTES = 24 * 60;
@@ -44,10 +51,23 @@ export function axisToMinuteIdx(axisMin: number): number {
 export function minuteIdxLabel(minuteIdx: number): string {
   return clockLabel(minuteIdx - AXIS_ORIGIN_MINUTE_IDX);
 }
-
 /** Axis minutes -> percentage across the 24h ruler. */
+/**
+ * The drawn ruler runs 21:00 -> 20:00 (23h), not the full 24h loop: the last hour is not drawn, so
+ * the right edge reads 20:00 instead of repeating the 21:00 the left edge already says. Data,
+ * segment windows and the bridge plan are untouched - POST still ends at 21:00 there; this only
+ * scales and clips the DRAWING.
+ */
+export const AXIS_DISPLAY_MINUTES = 23 * 60;
+
+/** Clip an axis minute to the drawn ruler. */
+export function axisClip(axisMin: number): number {
+  return Math.min(axisMin, AXIS_DISPLAY_MINUTES);
+}
+
+/** Axis minutes -> percentage across the drawn ruler (21:00 -> 20:00). */
 export function axisPct(axisMin: number): number {
-  return (axisMin / DAY_MINUTES) * 100;
+  return (axisMin / AXIS_DISPLAY_MINUTES) * 100;
 }
 
 // =========================
@@ -84,11 +104,14 @@ export type CaesarSegment = {
   hint: string;
 };
 
-const GREEN = "#34d399";
-const YELLOW = "#facc15";
-const RED = "#ef4444";
-const ORANGE = "#f97316";
-const VIOLET = "#a855f7";
+// Segment colours are the SCANNER palette, not their own: see components/scanner/shared/styles.ts and
+// the "Caesar Session Timeline Standard" in AGENTS.md. They used to be Tailwind literals
+// (#34d399 / #ef4444 / #f97316 / #a855f7) that appear nowhere else in the app.
+const GREEN = SCANNER_MINT_HEX;
+const YELLOW = IDENTITY_YELLOW_HEX;
+const RED = SCANNER_CORAL_HEX;
+const ORANGE = IDENTITY_ORANGE_HEX;
+const VIOLET = IDENTITY_LAVENDER_HEX;
 
 export const CAESAR_SEGMENTS: readonly CaesarSegment[] = [
   {

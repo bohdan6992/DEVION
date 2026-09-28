@@ -143,6 +143,11 @@ export type FilterRatingRowProps = {
   /** Strategy-specific mode controls, rendered between the strip and the steppers. */
   modeSlot?: React.ReactNode;
   steppers?: FilterNumField[];
+  /** Grays the steppers out (still editable, not disabled) while a strategy's own ignore-ratings
+   * toggle is on — the values typed in no longer mean anything once the bridge drops the gate
+   * entirely, same treatment ReversalScanner's own RATE/UNIVERSE button gives its MINRATE/MINTOTAL
+   * boxes. Optional and false by default so strategies without such a toggle are unaffected. */
+  steppersDimmed?: boolean;
   ranges?: FilterRangeField[];
 };
 
@@ -156,6 +161,7 @@ export default function FilterRatingRow({
   renderActiveIcon,
   modeSlot,
   steppers = [],
+  steppersDimmed = false,
   ranges = [],
 }: FilterRatingRowProps) {
   const strip: Array<{ mode: FilterActiveMode; label: string; kind: "active" | "inactive" | "all"; title: string }> = [
@@ -188,7 +194,10 @@ export default function FilterRatingRow({
         {modeSlot}
 
         {steppers.map((field) => (
-          <div key={field.label} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+          <div
+            key={field.label}
+            className={`flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity${steppersDimmed ? " opacity-40" : ""}`}
+          >
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
               {field.label}
             </span>

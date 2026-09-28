@@ -19,6 +19,10 @@ import type { OpenDoorLiveFilters } from "../opendoor/liveParamsClient";
  */
 export type ReversalExitClass = "exit18" | "exit21" | "exit04" | "exit07" | "print";
 
+/** Mirrors ReversalThresholdUnit's own doc comment (ReversalGate.cs) — what MinDevAbsShort/Long/Max
+ * are measured in. "atr" (τ), added 2026-09-25, divides by the ticker's CURRENT live ATR14%. */
+export type ReversalThresholdUnitName = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
+
 export type ReversalSonarLiveParams = {
   exitClass: ReversalExitClass;
   minDevAbsShort: number;
@@ -26,6 +30,7 @@ export type ReversalSonarLiveParams = {
   minDevAbsMax: number | null;
   minGammaTotal: number;
   ignoreRatings: boolean;
+  thresholdUnit: ReversalThresholdUnitName;
   filters: OpenDoorLiveFilters | null;
   source: string;
 };
@@ -43,6 +48,12 @@ export type ReversalSonarRow = {
   alpha: number | null;
   /** The ticker's published static Stack% dispersion — ticker-level, unrelated to side. */
   sigma: number | null;
+  /** The ticker's CURRENT live ATR14% reading — what the τ threshold unit divides by. Unlike
+   * alpha/sigma this is not a ratings-table constant. */
+  atr14Pct: number | null;
+  /** The ticker's own published lambda (Reversal.ipynb's compute_lambda) — ticker-level, not
+   * sign-matched, like sigma — what the λ threshold unit divides by. */
+  lambda: number | null;
   exitClass: string;
   bid: number | null;
   ask: number | null;
@@ -68,6 +79,7 @@ export function toReversalSonarLiveParams(args: {
   minDevAbsMax: number | null;
   minGammaTotal: number;
   ignoreRatings: boolean;
+  thresholdUnit: ReversalThresholdUnitName;
   filters: OpenDoorSonarFilterSource;
   source: string;
 }): ReversalSonarLiveParams {
@@ -78,6 +90,7 @@ export function toReversalSonarLiveParams(args: {
     minDevAbsMax: args.minDevAbsMax,
     minGammaTotal: args.minGammaTotal,
     ignoreRatings: args.ignoreRatings,
+    thresholdUnit: args.thresholdUnit,
     filters: toOpenDoorSonarFilters(args.filters),
     source: args.source,
   };

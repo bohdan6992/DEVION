@@ -1221,6 +1221,20 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
   box-shadow: 0 0 10px -3px rgba(var(--dash-accent-rgb), 0.18) !important;
 }
 
+/* Two-tone pair active states (ACTIVE/PASSIVE-style toggles) — fixed gold/silver regardless of
+   theme, and deliberately WITHOUT a `color` rule so the button's text colour is untouched by
+   which side of the pair is active. */
+.twotone-gold {
+  border-color: transparent !important;
+  background: rgba(212, 175, 55, 0.24) !important;
+  box-shadow: 0 0 10px -3px rgba(212, 175, 55, 0.38) !important;
+}
+.twotone-silver {
+  border-color: transparent !important;
+  background: rgba(196, 200, 209, 0.24) !important;
+  box-shadow: 0 0 10px -3px rgba(196, 200, 209, 0.38) !important;
+}
+
 /* Solid fill — strong active state (σ/MKT/TIME toggle buttons) */
 .accent-fill {
   background: rgba(var(--dash-accent-rgb), 0.72) !important;

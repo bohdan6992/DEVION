@@ -113,7 +113,6 @@ export function useScannerFilters(
   const [offset, setOffset] = useState<number>(0);
   const [qTicker, setQTicker] = useState<string>("");
   const [qSide, setQSide] = useState<"" | "Long" | "Short">("");
-  const [streamSortKey, setStreamSortKey] = useState<"alpha" | "sigma" | "netEdge">("alpha");
   const [activeRows, setActiveRows] = useState<PaperArbActiveRow[]>([]);
   const [episodesRows, setEpisodesRows] = useState<PaperArbClosedDto[]>([]);
   const [analytics, setAnalytics] = useState<PaperArbAnalyticsResponse | null>(null);
@@ -396,7 +395,6 @@ export function useScannerFilters(
     offset, setOffset,
     qTicker, setQTicker,
     qSide, setQSide,
-    streamSortKey, setStreamSortKey,
     activeRows, setActiveRows,
     episodesRows, setEpisodesRows,
     analytics, setAnalytics,

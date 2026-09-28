@@ -22,6 +22,7 @@ export const FULL_FIELDS = [
     "AskTClsΔ%",
     "AskYClsΔ%",
     "ATR14",
+    "ATR14%",
     "AvPostMhVol90NF",
     "AvPreMhv",
     "AvPreMhValue20NF",

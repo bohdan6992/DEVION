@@ -954,161 +954,6 @@ const ChevronIcon = ({ open }: { open: boolean }) => (
 );
 
 
-type SingleSelectFilterProps = {
-  hideArrow?: boolean;
-  onMainClick?: () => void;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-  color?: MsColor; // використовує MSF як у MultiSelectFilter
-};
-
-const SingleSelectFilter: React.FC<SingleSelectFilterProps> = ({
-  value,
-  options,
-  onChange,
-  color = "cyan",
-  hideArrow = false,
-  onMainClick,
-}) => {
-  const { theme } = useUi();
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-
-  const id = useMemo(() => `ssf-${Math.random().toString(36).slice(2)}`, []);
-  const C = MSF[resolveAccentMsColor(theme, color)];
-
-  const recomputePos = () => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      left: r.left,
-      top: r.bottom + 8,
-      width: Math.max(220, r.width),
-    });
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    recomputePos();
-
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const insideWrap = !!wrapRef.current?.contains(target);
-      const menuEl = document.getElementById(id);
-      const insideMenu = !!menuEl?.contains(target);
-      if (!insideWrap && !insideMenu) setOpen(false);
-    };
-
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", recomputePos, true);
-    window.addEventListener("resize", recomputePos);
-
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", recomputePos, true);
-      window.removeEventListener("resize", recomputePos);
-    };
-  }, [open]);
-
-  const currentLabel = options.find((o) => o.value === value)?.label ?? "-";
-
-  const menu =
-    open && pos
-      ? createPortal(
-          <div
-            id={id}
-            style={{
-              position: "fixed",
-              left: pos.left,
-              top: pos.top,
-              width: pos.width,
-              zIndex: 999999,
-            }}
-            className={[
-              // як на 2 скріні: темне вікно, border, rounded, blur
-              "z-[9999] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0a0a]/90 backdrop-blur-xl",
-              "shadow-[0_10px_40px_-10px_rgba(0,0,0,0.8)] transition-all duration-200 origin-top",
-            ].join(" ")}
-          >
-            <div className="max-h-[340px] overflow-y-auto py-1.5 no-scrollbar">
-              {options.map((opt) => {
-                const active = opt.value === value;
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => {
-                      onChange(opt.value);
-                      setOpen(false);
-                    }}
-                    className={[
-                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[10px] font-mono uppercase tracking-wider transition-all",
-                      active ? "accent-text-soft" : "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-200",
-                    ].join(" ")}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                    {active && <span className="h-1.5 w-1.5 rounded-full accent-dot" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>,
-          document.body
-        )
-      : null;
-
-  return (
-    <>
-      <div
-        ref={wrapRef}
-        className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5"
-      >
-        {/* main button */}
-        <button
-          type="button"
-          onClick={() => {
-            if (onMainClick) {
-              onMainClick();
-              return;
-            }
-            setOpen((v) => !v);
-          }}
-          className={[
-            hideArrow
-              ? "inline-flex h-full items-center justify-center rounded-full px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all"
-              : "inline-flex h-full items-center justify-center rounded-l-full px-3 text-[10px] font-mono font-bold uppercase leading-none transition-all",
-            C.chipInactive, // синій/бірюзовий акцент
-          ].join(" ")}
-        >
-          {currentLabel}
-        </button>
-
-        {!hideArrow && (
-          <>
-            <div className={`w-px h-4 ${C.divider}`} />
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              className={[
-                "inline-flex h-full min-w-[28px] items-center justify-center rounded-r-full px-2 transition-all",
-                C.arrow,
-              ].join(" ")}
-              aria-label="Open"
-            >
-              <ChevronIcon open={open} />
-            </button>
-          </>
-        )}
-      </div>
-
-      {menu}
-    </>
-  );
-};
-
 function GlassSelect({
   value,
   onChange,
@@ -1562,8 +1407,6 @@ export type SonarExactFilterSnapshot = {
   zapGoldAbs: number;
 };
 
-type SortKey = "alpha" | "sigma" | "zapAbs" | "sigZapAbs" | "rate" | "posBpAbs" | "beta" | "pin";
-type SortDir = "asc" | "desc";
 
 const PIN_DOT_CLASS: Record<PinColor, string> = {
   orange: "bg-orange-400",
@@ -2330,8 +2173,6 @@ export default function OpenDoorSonar() {
 
   const [filterReport, setFilterReport] = useState<"ALL" | "YES" | "NO">("ALL");
   const [accountNonEmptyFirst, setAccountNonEmptyFirst] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("alpha");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const [equityType, setEquityType] = useState("");
 
@@ -2661,8 +2502,6 @@ export default function OpenDoorSonar() {
         // control left to show or clear them, and a stale "sigma"/threshold would otherwise keep
         // gating this page invisibly.
         if (s?.activeMode === "off" || s?.activeMode === "onlyActive" || s?.activeMode === "onlyInactive") setActiveMode(s.activeMode);
-        if (typeof s?.sortKey === "string") setSortKey(s.sortKey);
-        if (typeof s?.sortDir === "string") setSortDir(s.sortDir);
 
         // query params
         if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
@@ -2852,7 +2691,7 @@ export default function OpenDoorSonar() {
           cls, type, mode, listMode, bpCls,
 
           // zap/sort
-          activeMode, sortKey, sortDir,
+          activeMode,
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
@@ -2914,7 +2753,7 @@ export default function OpenDoorSonar() {
     } catch {}
   }, [
     cls, type, mode, listMode, bpCls,
-    activeMode, sortKey, sortDir,
+    activeMode,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
@@ -3348,8 +3187,6 @@ export default function OpenDoorSonar() {
       ignoreSet,
       applySet,
       pinMap,
-      sortKey,
-      sortDir,
 
       bounds,
 
@@ -3402,7 +3239,7 @@ export default function OpenDoorSonar() {
     };
   }, [
     cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
-    listMode, ignoreSet, applySet,pinMap, sortKey, sortDir,
+    listMode, ignoreSet, applySet,pinMap,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, sectorCorr.excluded,
@@ -3562,68 +3399,9 @@ export default function OpenDoorSonar() {
     setActivePanelVisible(true);
   };
 
-  const getSortValue = (s: ArbitrageSignal, key: SortKey) => {
-    switch (key) {
-      case "sigma": return toNum(s.sig) ?? -Infinity;
-      case "zapAbs": {
-        const dir = s.direction;
-        const v = dir === "down" ? toNum(s.zapS) : dir === "up" ? toNum(s.zapL) : null;
-        return v == null ? -Infinity : Math.abs(v);
-      }
-      case "sigZapAbs": {
-        const dir = s.direction;
-        const v = dir === "down" ? toNum(s.zapSsigma) : dir === "up" ? toNum(s.zapLsigma) : null;
-        return v == null ? -Infinity : Math.abs(v);
-      }
-      case "rate": return getBestRating(s) ?? (s as any)._bestRating ?? -Infinity;
-      case "posBpAbs": {
-        const v = numPositionBp(s);
-        return v == null ? -Infinity : Math.abs(v);
-      }
-      case "beta": {
-        const b = getBetaValue(s);
-        return b == null ? -Infinity : b;
-      }
-      case "pin":
-      case "alpha":
-      default:
-        return null;
-    }
-  };
-
-  const cmpBySort = (a: ArbitrageSignal, b: ArbitrageSignal, f: typeof snapshot) => {
-    const ta = String(a?.ticker ?? "");
-    const tb = String(b?.ticker ?? "");
-
-    const pa = !!f.pinMap[ta];
-    const pb = !!f.pinMap[tb];
-
-    // when sorting by PIN: pinned always on top
-    if (f.sortKey === "pin" && pa !== pb) return pa ? -1 : 1;
-
-    // alpha: just ticker
-    if (f.sortKey === "alpha") return ta.localeCompare(tb);
-
-    const va = getSortValue(a, f.sortKey);
-    const vb = getSortValue(b, f.sortKey);
-
-    const na = typeof va === "number" ? va : -Infinity;
-    const nb = typeof vb === "number" ? vb : -Infinity;
-
-    if (na !== nb) {
-      const d = na < nb ? -1 : 1;
-      return f.sortDir === "asc" ? d : -d;
-    }
-
-    // tie-breakers:
-    // optionally account ordering first if you still want it:
-    // (leave it as your current switch)
-    return ta.localeCompare(tb);
-  };
-
 
   /* =========================
-    Grouping (+ account sorting toggle + turquoise sort + pins)
+    Grouping (+ account sorting toggle + pins)
   ========================= */
   const benchBlocks: BenchBlock[] = useMemo(() => {
     const bucketMap = new Map<
@@ -3635,55 +3413,12 @@ export default function OpenDoorSonar() {
 
     const cmpAccountThenTicker = makeCmpAccountThenTicker(accountNonEmptyFirst);
 
-    // Precompute expensive sort metrics once per item (instead of per comparator call in Array.sort).
-    const metricMap = new Map<string, number>(); // key: `${ticker}|${direction}`
-
-    const computeMetric = (s: ArbitrageSignal): number => {
-      switch (sortKey) {
-        case "sigma":
-          return Math.abs(toNum(s.sig) ?? 0);
-
-        case "zapAbs": {
-          const dir = s.direction;
-          const v = dir === "down" ? toNum(s.zapS) : dir === "up" ? toNum(s.zapL) : null;
-          return v == null ? -Infinity : Math.abs(v);
-        }
-
-        case "sigZapAbs": {
-          const dir = s.direction;
-          const v = dir === "down" ? toNum(s.zapSsigma) : dir === "up" ? toNum(s.zapLsigma) : null;
-          return v == null ? -Infinity : Math.abs(v);
-        }
-
-        case "rate":
-          return getBestRating(s) ?? -Infinity;
-
-        case "posBpAbs": {
-          const v = numPositionBp(s);
-          return v == null ? -Infinity : Math.abs(v);
-        }
-
-        case "beta": {
-          const b = getBetaValue(s);
-          return b == null ? -Infinity : b;
-        }
-
-        case "pin":
-        case "alpha":
-        default:
-          return 0;
-      }
-    };
-
     for (const s of items || []) {
       const dir = getRenderableDirection(s);
       if (dir !== "down" && dir !== "up") continue;
 
       const tk = String(s.ticker ?? "").toUpperCase();
       if (!tk) continue;
-
-      // compute metric once per (ticker,direction)
-      metricMap.set(`${tk}|${dir}`, computeMetric(s));
 
       const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
       const betaVal = getBetaValue(s);
@@ -3700,26 +3435,17 @@ export default function OpenDoorSonar() {
       else b.longs.push(s);
     }
 
+    // Pinned rows first, then account-then-ticker order — the ABC/SIG/|ZAP|/RATE/BETA sort-key
+    // dropdown that used to pick the metric here was removed (2026-09-25, the operator's own
+    // instruction), so this is just the "alpha"/"pin" branch's own fallback, unconditionally.
     const cmpSort = (a: ArbitrageSignal, b: ArbitrageSignal) => {
       const ta = String(a.ticker ?? "").toUpperCase();
       const tb = String(b.ticker ?? "").toUpperCase();
 
-      // 1) pinned first
       const pa = isPinned(ta) ? 1 : 0;
       const pb = isPinned(tb) ? 1 : 0;
       if (pa !== pb) return pb - pa;
 
-      // 2) special modes keep old behavior
-      if (sortKey === "pin" || sortKey === "alpha") {
-        return cmpAccountThenTicker(a, b);
-      }
-
-      const ma = metricMap.get(`${ta}|${a.direction}`) ?? -Infinity;
-      const mb = metricMap.get(`${tb}|${b.direction}`) ?? -Infinity;
-
-      if (ma !== mb) return sortDir === "asc" ? ma - mb : mb - ma;
-
-      // 3) tie-breaker
       return cmpAccountThenTicker(a, b);
     };
 
@@ -3752,7 +3478,7 @@ export default function OpenDoorSonar() {
         benchmark,
         buckets: groups.sort((a, b) => betaOrder.indexOf(a.betaKey) - betaOrder.indexOf(b.betaKey)),
       }));
-  }, [items, accountNonEmptyFirst, sortKey, sortDir, pinMap]);
+  }, [items, accountNonEmptyFirst, pinMap]);
 
   /**
    * The toolbar, to the bridge — same debounce/hydration-guard pattern the Arbitrage/PairFlux
@@ -4488,31 +4214,6 @@ export default function OpenDoorSonar() {
                 color="amber"
               />
             </>
-          }
-          sortSlot={
-            <SingleSelectFilter
-              value={sortKey}
-              onChange={(v) => {
-                const k = v as SortKey;
-                setSortKey(k);
-                if (k === "pin") setSortDir("desc");
-              }}
-              onMainClick={() => {
-                if (sortKey === "pin") return;
-                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-              }}
-              color="cyan"
-              options={[
-                { value: "alpha", label: "ABC" },
-                { value: "sigma", label: "SIG" },
-                { value: "zapAbs", label: "|ZAP|" },
-                { value: "sigZapAbs", label: "|SIGZAP|" },
-                { value: "rate", label: "RATE" },
-                { value: "posBpAbs", label: "BP" },
-                { value: "beta", label: "BETA" },
-                { value: "pin", label: "PIN" },
-              ]}
-            />
           }
         />
 

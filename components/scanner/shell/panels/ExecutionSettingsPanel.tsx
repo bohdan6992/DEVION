@@ -27,6 +27,48 @@ const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
   clsx("flex h-7 items-center rounded-lg bg-black/20", extra, isStreamOnlyShell && "opacity-50");
 
 /**
+ * A two-option toggle pair (ACTIVE/PASSIVE, HEDGED/RAWONLY, PRINT/BIDASK, USD/TIER,
+ * UNDILUTED/DILUTED): whichever side is active shows its full label and a fixed colour by
+ * POSITION, not by identity — first option active = gold, second = silver, regardless of theme.
+ * The inactive side collapses to its first two letters. Text colour is left alone (twotone-gold/
+ * twotone-silver only touch background/border/shadow) — only the fill changes on toggle.
+ */
+function TwoTonePairButtons<T extends string>({
+  options,
+  active,
+  onSelect,
+}: {
+  options: readonly [{ key: T; label: string }, { key: T; label: string }];
+  active: T;
+  onSelect: (key: T) => void;
+}) {
+  return (
+    <>
+      {options.map((m, i) => {
+        const isActive = active === m.key;
+        return (
+          <button
+            key={m.key}
+            type="button"
+            onClick={() => onSelect(m.key)}
+            className={clsx(
+              "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+              isActive
+                ? i === 0
+                  ? "twotone-gold"
+                  : "twotone-silver"
+                : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+            )}
+          >
+            {isActive ? m.label : m.label.slice(0, 2)}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * The execution-settings card (the `order-2` row): sizing, dilution, close mode,
  * P&L and price mode, min hold, the stream start/cutoff steppers and the two log
  * downloads. Identical for every strategy.
@@ -300,95 +342,55 @@ export default function ExecutionSettingsPanel({
 <GlassCard className="order-2 p-3">
   <div className="flex flex-wrap items-center gap-3">
     <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-      {[
-        { key: "Active", label: "ACTIVE" },
-        { key: "Passive", label: "PASSIVE" },
-      ].map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => setCloseMode(m.key as PaperArbCloseMode)}
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            closeMode === m.key
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          {m.label}
-        </button>
-      ))}
+      <TwoTonePairButtons
+        options={[
+          { key: "Active", label: "ACTIVE" },
+          { key: "Passive", label: "PASSIVE" },
+        ] as const}
+        active={closeMode}
+        onSelect={(key) => setCloseMode(key as PaperArbCloseMode)}
+      />
     </div>
 
     <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
-      {[
-        { key: "Hedged", label: "HEDGED" },
-        { key: "RawOnly", label: "RAWONLY" },
-      ].map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => setPnlMode(m.key as PaperArbPnlMode)}
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            pnlMode === m.key
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          {m.label}
-        </button>
-      ))}
+      <TwoTonePairButtons
+        options={[
+          { key: "Hedged", label: "HEDGED" },
+          { key: "RawOnly", label: "RAWONLY" },
+        ] as const}
+        active={pnlMode}
+        onSelect={(key) => setPnlMode(key as PaperArbPnlMode)}
+      />
     </div>
 
     <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
-      {[
-        { key: "LastPrint", label: "PRINT" },
-        { key: "BidAsk", label: "BIDASK" },
-      ].map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => setPriceMode(m.key as PaperArbPriceMode)}
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            priceMode === m.key
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          {m.label}
-        </button>
-      ))}
+      <TwoTonePairButtons
+        options={[
+          { key: "LastPrint", label: "PRINT" },
+          { key: "BidAsk", label: "BIDASK" },
+        ] as const}
+        active={priceMode}
+        onSelect={(key) => setPriceMode(key as PaperArbPriceMode)}
+      />
     </div>
 
     <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
-      {[
-        { key: "Notional", label: "USD" },
-        { key: "Tier", label: "TIER" },
-      ].map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => {
-            const nextMode = m.key as PaperArbSizingMode;
-            setSizingMode(nextMode);
-            setSizeValue((current) =>
-              nextMode === "Tier"
-                ? 1
-                : normalizeScannerSizeValue(nextMode, current)
-            );
-          }}
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            sizingMode === m.key
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          {m.label}
-        </button>
-      ))}
+      <TwoTonePairButtons
+        options={[
+          { key: "Notional", label: "USD" },
+          { key: "Tier", label: "TIER" },
+        ] as const}
+        active={sizingMode}
+        onSelect={(key) => {
+          const nextMode = key as PaperArbSizingMode;
+          setSizingMode(nextMode);
+          setSizeValue((current) =>
+            nextMode === "Tier"
+              ? 1
+              : normalizeScannerSizeValue(nextMode, current)
+          );
+        }}
+      />
     </div>
 
     <div className={backtestOnlyGroupClass(isStreamOnlyShell, "pl-3 pr-0")} title={BACKTEST_ONLY_TITLE}>
@@ -429,24 +431,14 @@ export default function ExecutionSettingsPanel({
     </div>
 
     <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-      {[
-        { key: "Undiluted", label: "UNDILUTED" },
-        { key: "Diluted", label: "DILUTED" },
-      ].map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => applyDilutionMode(m.key as PaperArbDilutionMode)}
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            dilutionMode === m.key
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          {m.label}
-        </button>
-      ))}
+      <TwoTonePairButtons
+        options={[
+          { key: "Undiluted", label: "UNDILUTED" },
+          { key: "Diluted", label: "DILUTED" },
+        ] as const}
+        active={dilutionMode}
+        onSelect={(key) => applyDilutionMode(key as PaperArbDilutionMode)}
+      />
     </div>
 
 

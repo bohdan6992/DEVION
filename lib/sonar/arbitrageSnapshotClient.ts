@@ -14,6 +14,9 @@ export type ArbitrageSonarLiveParams = {
   signalsMinRate: number;
   signalsMinTotal: number;
   ratingMode: "SESSION" | "BIN" | "BINS";
+  /** RATE/UNIVERSE — drops the eligibility gate entirely when true, ignoring signalsMinRate/
+   * signalsMinTotal. Added 2026-09-27, replacing the removed ALL/TOP + SESSION/BIN/BINS row. */
+  ignoreRatings: boolean;
   filters: ArbitrageServerSonarFilters | null;
   source: string;
 };
@@ -79,6 +82,7 @@ const num = (value: unknown): number => {
 export function toArbitrageSonarLiveParams(args: {
   snapshot: SonarExactFilterSnapshot & {
     cls?: unknown; type?: unknown; minRate?: unknown; minTotal?: unknown; ratingMode?: unknown;
+    ignoreRatings?: unknown;
   };
   source: string;
 }): ArbitrageSonarLiveParams {
@@ -92,6 +96,7 @@ export function toArbitrageSonarLiveParams(args: {
     signalsMinRate: num(s.minRate),
     signalsMinTotal: num(s.minTotal),
     ratingMode,
+    ignoreRatings: !!s.ignoreRatings,
     filters: toArbitrageServerSonarFilters(s),
     source: args.source,
   };
@@ -114,7 +119,17 @@ export async function pushArbitrageSonarLiveParams(params: ArbitrageSonarLivePar
 }
 
 export function fetchArbitrageSonarSnapshot(): Promise<ArbitrageSonarSnapshot> {
+  // fetchWithTimeout's ceiling ends when the headers arrive, so a body that stalls would leave the
+  // shared poll "in flight" forever and freeze the panel silently. The body read gets its own.
+  const bodyTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("sonar snapshot body timed out")), 15_000)
+  );
+  // If fetchWithTimeout itself rejects first (bridge down/aborted), the .then below never runs, so
+  // bodyTimeout's own rejection 15s later would otherwise have no handler attached anywhere and
+  // surface as an unhandled promise rejection (crashing the page in dev) — a SEPARATE, silent
+  // subscriber here prevents that without affecting the real race below.
+  bodyTimeout.catch(() => {});
   return fetchWithTimeout(bridgeUrl("/api/stream/sonar/arbitrage/snapshot"), { cache: "no-store" })
-    .then((res) => res.json())
-    .then((body) => body.snapshot as ArbitrageSonarSnapshot);
+    .then((res) => Promise.race([res.json(), bodyTimeout]))
+    .then((body: any) => body.snapshot as ArbitrageSonarSnapshot);
 }

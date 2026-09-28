@@ -263,12 +263,6 @@ export function createScannerScopeCatalog(options?: {
 // Static <GlassSelect> option lists. Hoisted out of JSX so GlassSelect's React.memo sees a stable
 // `options` reference — an inline array literal is a new reference on every parent render and would
 // re-render the dropdown (and rebuild its portal panel) on every keystroke elsewhere in the page.
-export const STREAM_SORT_KEY_OPTIONS: GlassSelectOption[] = [
-  { value: "alpha", label: "ABC" },
-  { value: "sigma", label: "SIG" },
-  { value: "netEdge", label: "EDGE" },
-];
-
 export const RANGE_PRESET_OPTIONS: GlassSelectOption[] = [
   { value: "3d", label: "3 DAYS" },
   { value: "5d", label: "5 DAYS" },

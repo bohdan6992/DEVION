@@ -82,6 +82,14 @@ export type LiveStrategy = {
    * nobody runs or one that runs twice.
    */
   streamEngine: "bridge" | "browser";
+  /**
+   * Enters at the 16:00 close and exits on a LATER trading day (Day Two, Reversal), so its book is
+   * still held when the Caesar day rolls at 21:00. Caesar gives these their own category on every
+   * chart in every segment: their positions, P&L and entries do not belong to whichever segment
+   * the clock happens to be in, and scoping them to the segment they were sent in hid them the
+   * morning they exit (the donut read them as UNCLAIMED, the P&L lines dropped them).
+   */
+  holdsOvernight?: boolean;
   api: {
     /** Paper endpoints, e.g. `/api/paper/arbitrage`. No trailing slash. */
     paperBase: string;
@@ -180,6 +188,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // surfaces are live across the afternoon rather than the OpenDoor hour they were copied from.
     tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
     priority: 25,
+    holdsOvernight: true,
     // Its own endpoints now: /api/paper/daytwo reads signals/daytwo and rates the five Day Two
     // exit classes. Pointing at OpenDoor's meant selecting tickers on bins measured for a 09:20
     // entry, which describe nothing about a position opened at 16:00.
@@ -220,6 +229,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
     tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
     priority: 24,
+    holdsOvernight: true,
     api: { paperBase: "/api/paper/reversal", signalsBase: "/api/arbitrage" },
     streamEngine: "bridge",
     storage: { scannerPrefix: "paper.reversal", sonarPrefix: "bridge.reversal", streamPrefix: "stream.reversal" },

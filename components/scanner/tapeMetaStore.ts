@@ -114,9 +114,29 @@ class TapeMetaStore {
     // engine's, to the same endpoint. The hub also merges diffs, which this store never did: it
     // only ever listened to "snapshot", so between snapshots its country/exchange/sector lists
     // went stale even though the feed was sending updates.
+    //
+    // One-shot: country/exchange/sector are static per ticker, but the feed is 5000 rows whose
+    // signatures change with every quote, so keeping it open cost a full parse + normalise + scan
+    // of the universe every second, all day, on every Scanner and Stream tab — growing as the
+    // session got busier. Once a non-empty snapshot has been read, the connection is dropped; the
+    // lists stay, and a remount (listeners 0 -> 1) reads a fresh one.
+    let satisfied = false;
+    const release = () => {
+      const unsubscribe = this.unsubscribe;
+      if (!unsubscribe) return;
+      this.unsubscribe = null;
+      unsubscribe();
+    };
     this.unsubscribe = subscribeToStreamSse(url, (state) => {
+      if (satisfied) return;
       this.applySignals(state.signals);
+      if (state.signals.length === 0) return;
+      satisfied = true;
+      // The hub replays current state synchronously on subscribe, before `this.unsubscribe` is
+      // assigned below; in that case release happens right after the assignment instead.
+      release();
     });
+    if (satisfied) release();
   }
 
   private disconnect() {

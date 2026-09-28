@@ -33,10 +33,17 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { SOFT_LOSS_MUTED, SOFT_LOSS_SOLID, SOFT_LOSS_STROKE } from "@/components/scanner/shared/styles";
+import {
+  IDENTITY_LAVENDER_HEX,
+  IDENTITY_ORANGE_HEX,
+  IDENTITY_YELLOW_HEX,
+  SOFT_LOSS_MUTED,
+  SOFT_LOSS_SOLID,
+  SOFT_LOSS_STROKE,
+} from "@/components/scanner/shared/styles";
 
 export type CaesarChartsProps = {
-  instances: readonly { key: string; instanceId: string; priority: number }[];
+  instances: readonly { key: string; instanceId: string; priority: number; overnight?: boolean }[];
   /** Segment bounds on the NY axis (0 = 21:00), for the time scale. */
   fromMin: number | null;
   toMin: number | null;
@@ -53,8 +60,15 @@ export type CaesarChartsProps = {
  * colour is there to say. Lavender / orange / cyan / yellow / blue, in that order; OTHER is the
  * fold-over past five strategies.
  */
-const SERIES = ["#a78bfa", "#fb923c", "#22d3ee", "#facc15", "#60a5fa"] as const;
+const SERIES = [IDENTITY_LAVENDER_HEX, IDENTITY_ORANGE_HEX, "#22d3ee", IDENTITY_YELLOW_HEX, "#60a5fa"] as const;
 const OTHER = "#818cf8";
+/**
+ * The OVERNIGHT category's own colour family (Day Two, Reversal — see LiveStrategy.holdsOvernight):
+ * strategies that enter at the close and are still held after the 21:00 roll. Fuchsia and a pale
+ * orchid — neither is in SERIES, and neither is the mint/coral pair reserved for positive/negative,
+ * so on every chart "magenta" reads as "carried overnight" whatever else is on screen.
+ */
+const OVERNIGHT_SERIES = ["#e879f9", "#f5d0fe"] as const;
 const SURFACE = "#0a0a0a";
 
 /**
@@ -71,7 +85,7 @@ const INK_MUTED = "rgba(255,255,255,0.35)";
 const TRACK = "rgba(255,255,255,0.055)";
 
 type Point = { min: number; count: number };
-type Series = { key: string; color: string; active: number; entered: number; points: Point[] };
+type Series = { key: string; color: string; active: number; entered: number; points: Point[]; overnight?: boolean };
 type AccountPosition = {
   ticker?: string | null;
   positionBp?: number | null;
@@ -643,7 +657,7 @@ function LongShortHistogram({
   title,
   meta,
 }: {
-  buckets: { min: number; long: number; short: number }[];
+  buckets: { min: number; long: number; short: number; overnight: number }[];
   fromMin: number | null;
   toMin: number | null;
   nowMin: number | null;
@@ -663,11 +677,15 @@ function LongShortHistogram({
   const from = fromMin ?? 0;
   const to = toMin ?? 1440;
   const span = Math.max(1, to - from);
-  const maxCount = Math.max(1, ...buckets.map((b) => Math.max(b.long, b.short)));
+  const maxCount = Math.max(1, ...buckets.map((b) => Math.max(b.long, b.short, b.overnight)));
+  // The overnight bar only takes space when the plan runs an overnight strategy at all, so a page
+  // without one keeps its two-bar groups exactly as they were.
+  const hasOvernight = buckets.some((b) => b.overnight > 0);
+  const barsPerGroup = hasOvernight ? 3 : 2;
 
   const barGap = 2;
   const groupW = Math.max(4, Math.floor(plotW / Math.max(1, buckets.length)) - barGap);
-  const barW = Math.max(2, Math.floor((groupW - 1) / 2));
+  const barW = Math.max(2, Math.floor((groupW - (barsPerGroup - 1)) / barsPerGroup));
   const x = useCallback((min: number) => PAD_L + ((min - from) / span) * plotW, [from, span, plotW]);
   const y = useCallback((count: number) => PAD_T + plotH - (count / maxCount) * plotH, [maxCount, plotH]);
   const yTicks = [0, Math.ceil(maxCount * 0.33), Math.ceil(maxCount * 0.66), maxCount];
@@ -682,9 +700,10 @@ function LongShortHistogram({
 
   const totalLong = buckets.reduce((s, b) => s + b.long, 0);
   const totalShort = buckets.reduce((s, b) => s + b.short, 0);
+  const totalOvernight = buckets.reduce((s, b) => s + b.overnight, 0);
   const total = totalLong + totalShort;
   const longShare = total > 0 ? totalLong / total : 0;
-  const bestBucket = buckets.reduce((best, cur) => (cur.long + cur.short > best.long + best.short ? cur : best), buckets[0] ?? { min: from, long: 0, short: 0 });
+  const bestBucket = buckets.reduce((best, cur) => (cur.long + cur.short > best.long + best.short ? cur : best), buckets[0] ?? { min: from, long: 0, short: 0, overnight: 0 });
 
   return (
     <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
@@ -740,6 +759,21 @@ function LongShortHistogram({
               <rect x={xBase + barW + 1} y={yShort} width={barW} height={hShort} rx="3" fill={`url(#${uid}-short)`} stroke={SOFT_LOSS_STROKE} strokeWidth="0.6">
                 <title>{`${clockLabel(b.min)} SHORT: ${b.short}`}</title>
               </rect>
+              {hasOvernight && b.overnight > 0 && (
+                <rect
+                  x={xBase + (barW + 1) * 2}
+                  y={PAD_T + plotH - plotH * (b.overnight / maxCount)}
+                  width={barW}
+                  height={plotH * (b.overnight / maxCount)}
+                  rx="3"
+                  fill={OVERNIGHT_SERIES[0]}
+                  fillOpacity={0.8}
+                  stroke={OVERNIGHT_SERIES[0]}
+                  strokeWidth="0.6"
+                >
+                  <title>{`${clockLabel(b.min)} OVERNIGHT: ${b.overnight}`}</title>
+                </rect>
+              )}
             </g>
           );
         })}
@@ -760,6 +794,7 @@ function LongShortHistogram({
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <span className="text-emerald-300/90">long {intnLike(totalLong)}</span>
           <span style={{ color: SOFT_LOSS_SOLID }}>short {intnLike(totalShort)}</span>
+          {hasOvernight && <span style={{ color: OVERNIGHT_SERIES[0] }}>overnight {intnLike(totalOvernight)}</span>}
           <span className="text-zinc-500">long share {(longShare * 100).toFixed(1)}%</span>
           <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
             busiest: <span className="text-zinc-200">{clockLabel(bestBucket.min)}</span> ({intnLike(bestBucket.long + bestBucket.short)})
@@ -851,7 +886,27 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     return () => { alive = false; unsubscribe(); };
   }, []);
 
-  const series = useMemo<Series[]>(() => instances.map((inst, index) => {
+  // One colour per strategy, assigned in order WITHIN its own category: the regular strategies walk
+  // SERIES, the overnight ones walk OVERNIGHT_SERIES, so adding or removing an overnight strategy
+  // never repaints a segment strategy (and vice versa) — the same never-cycled rule SERIES already
+  // documents, applied per category.
+  const colorByInstance = useMemo(() => {
+    const map = new Map<string, string>();
+    let regular = 0;
+    let overnight = 0;
+    for (const inst of instances) {
+      if (inst.overnight) {
+        map.set(inst.instanceId, overnight < OVERNIGHT_SERIES.length ? OVERNIGHT_SERIES[overnight] : OTHER);
+        overnight += 1;
+      } else {
+        map.set(inst.instanceId, regular < MAX_SERIES ? SERIES[regular] : OTHER);
+        regular += 1;
+      }
+    }
+    return map;
+  }, [instances]);
+
+  const series = useMemo<Series[]>(() => instances.map((inst) => {
     // One step per ENTRY, in time order, carried forward as a running total — of the entries that
     // fall INSIDE the selected segment only. The chart is titled "Entered during the segment"; it
     // used to count every entry since 21:00, so on INTRA the line started at zero, jumped to
@@ -880,12 +935,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
 
     return {
       key: inst.key,
-      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      color: colorByInstance.get(inst.instanceId) ?? OTHER,
       active,
       entered: running,
       points,
+      overnight: inst.overnight === true,
     };
-  }), [instances, bridgeEntries, bridgePositions, fromMin, toMin]);
+  }), [instances, colorByInstance, bridgeEntries, bridgePositions, fromMin, toMin]);
 
   const activeSeries = useMemo<Series[]>(() => {
     // Until the first account response, preserve the bridge-only display rather than pretending
@@ -943,9 +999,9 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   const longShortBuckets = useMemo(() => {
     const from = fromMin ?? 0;
     const to = toMin ?? 1440;
-    const buckets = new Map<number, { long: number; short: number }>();
+    const buckets = new Map<number, { long: number; short: number; overnight: number }>();
     for (let m = Math.floor(from / BUCKET_MINUTES) * BUCKET_MINUTES; m < to; m += BUCKET_MINUTES) {
-      buckets.set(m, { long: 0, short: 0 });
+      buckets.set(m, { long: 0, short: 0, overnight: 0 });
     }
     for (const inst of instances) {
       for (const e of bridgeEntries[inst.instanceId] ?? []) {
@@ -956,7 +1012,11 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
         const bucketStart = Math.floor(min / BUCKET_MINUTES) * BUCKET_MINUTES;
         const bucket = buckets.get(bucketStart);
         if (!bucket) continue;
-        if (e.side?.toUpperCase() === "SHORT") bucket.short += 1;
+        // Overnight strategies get their own bar (long + short together): they are a category of
+        // their own on every chart, and folding their 15:50 entries into the pooled long/short
+        // bars is what made them indistinguishable from the segment's strategies.
+        if (inst.overnight) bucket.overnight += 1;
+        else if (e.side?.toUpperCase() === "SHORT") bucket.short += 1;
         else bucket.long += 1;
       }
     }
@@ -970,9 +1030,9 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   // Total is POOLED (sum of every active strategy's own value at that sample), not an average of
   // averages — same convention the donut's own "total" already uses for situations.
   const pnlLineSeries = useMemo<ValueSeries[]>(() => {
-    const perStrategy: ValueSeries[] = instances.map((inst, index) => ({
+    const perStrategy: ValueSeries[] = instances.map((inst) => ({
       key: inst.key,
-      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      color: colorByInstance.get(inst.instanceId) ?? OTHER,
       dashed: true,
       points: pnlPoints
         .filter((p) => p.perStrategy[inst.instanceId] !== undefined)
@@ -983,12 +1043,12 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       value: instances.reduce((sum, inst) => sum + (p.perStrategy[inst.instanceId]?.total ?? 0), 0),
     }));
     return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
-  }, [instances, pnlPoints]);
+  }, [instances, colorByInstance, pnlPoints]);
 
   const avgTradeLineSeries = useMemo<ValueSeries[]>(() => {
-    const perStrategy: ValueSeries[] = instances.map((inst, index) => ({
+    const perStrategy: ValueSeries[] = instances.map((inst) => ({
       key: inst.key,
-      color: index < MAX_SERIES ? SERIES[index] : OTHER,
+      color: colorByInstance.get(inst.instanceId) ?? OTHER,
       dashed: true,
       points: pnlPoints.flatMap((p) => {
         const s = p.perStrategy[inst.instanceId];
@@ -1009,7 +1069,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: total / situations }];
     });
     return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
-  }, [instances, pnlPoints]);
+  }, [instances, colorByInstance, pnlPoints]);
 
   // ---- the time scale ------------------------------------------------------------------------
   const W = 920;
@@ -1195,6 +1255,36 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
         </table>
       ) : (
       <>
+      {/* ---------- CATEGORY KEY — only when an overnight strategy is on the chart ----------
+          The same two categories colour every chart below: the segment's own strategies, and the
+          overnight ones (entered at the close, still held after the 21:00 roll). */}
+      {series.some((s) => s.overnight) && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[10px] uppercase tracking-widest">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-zinc-600">segment</span>
+            {series.filter((s) => !s.overnight).map((s) => (
+              <span key={s.key} className="flex items-center gap-1.5 text-zinc-400">
+                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
+                {s.key}
+              </span>
+            ))}
+          </span>
+          <span
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-2 py-0.5"
+            style={{ borderColor: `${OVERNIGHT_SERIES[0]}40`, backgroundColor: `${OVERNIGHT_SERIES[0]}0f` }}
+            title="Enter at the 16:00 close, exit on a later trading day — charted in every segment"
+          >
+            <span style={{ color: OVERNIGHT_SERIES[0] }}>overnight</span>
+            {series.filter((s) => s.overnight).map((s) => (
+              <span key={s.key} className="flex items-center gap-1.5 text-zinc-300">
+                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
+                {s.key}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+
       {/* ---------- SITUATIONS / LONGS-SHORTS / AVG TRADE — three across, on top ---------- */}
       <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_2fr_2fr]">
         <figure className="scanner-glass-card relative m-0 flex h-[320px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">

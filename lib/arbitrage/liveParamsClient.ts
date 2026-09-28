@@ -36,6 +36,11 @@ export type ArbitrageLiveParams = {
   signalsMode: string;
   signalsMinRate: number;
   signalsMinTotal: number;
+  /** RATE/UNIVERSE — drops the eligibility gate entirely (every ticker best_params knows about
+   * becomes eligible) when true, ignoring signalsMinRate/signalsMinTotal. Same escape hatch shape
+   * as ReversalGate.Check's own ignoreRatings bool. Added 2026-09-27, replacing the removed ALL/TOP
+   * + SESSION/BIN/BINS toolbar row. */
+  ignoreRatings: boolean;
   filters: ArbitrageServerFilters | null;
   sonar: ArbitrageServerSonarFilters | null;
   /**
@@ -262,6 +267,7 @@ export function toArbitrageLiveParams(args: {
   signalsType: string;
   signalsMinRate: number;
   signalsMinTotal: number;
+  ignoreRatings?: boolean;
   autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean } | null;
   source: string;
 }): ArbitrageLiveParams {
@@ -289,6 +295,7 @@ export function toArbitrageLiveParams(args: {
     signalsMode: "all",
     signalsMinRate: num(args.signalsMinRate) ?? 0,
     signalsMinTotal: num(args.signalsMinTotal) ?? 0,
+    ignoreRatings: !!args.ignoreRatings,
     // The page runs EITHER Sonar or the toolbar set, never both — the bridge expects the same.
     filters: args.sonar ? null : toArbitrageServerFilters(args.filters),
     sonar: args.sonar ? toArbitrageServerSonarFilters(args.sonar) : null,

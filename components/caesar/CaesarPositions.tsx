@@ -29,7 +29,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
+import { getLiveStrategy, getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
 import type { StreamPosition } from "@/components/stream/streamEngine";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 
@@ -246,7 +246,9 @@ function isRelevant(p: BridgePosition): boolean {
 }
 
 export default function CaesarPositions({ instances }: CaesarPositionsProps) {
-  const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
+  const [rawSnapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
+  /** TradingApp's per-ticker ClosedPnL as it stood when today began (16:00) - see the day-baseline route. */
+  const [dayBaseline, setDayBaseline] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [closedOwners, setClosedOwners] = useState<ClosedOwners>({});
@@ -320,6 +322,46 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
     });
     return () => { alive.current = false; unsubscribe(); };
   }, []);
+
+  // ---- today's starting line ---------------------------------------------------------------------
+  //
+  // TradingApp's ClosedPnL is a running per-ticker total that knows nothing about Caesar's day, so
+  // at 16:05 it still holds the session that just ended. The bridge snapshots it when the day rolls
+  // (16:00 NY) and the page shows what was realised SINCE: live minus that baseline. Polled slowly —
+  // it changes once a day; the poll only exists so a page left open across the roll picks it up.
+  useEffect(() => {
+    let alive2 = true;
+    const fetchBaseline = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/day-baseline"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; closedPnlByTicker?: Record<string, number> }>)
+        .then((body) => body.closedPnlByTicker ?? {});
+    const unsubscribe = subscribeSharedPoll("bridge-day-baseline", fetchBaseline, 30_000, (value, err) => {
+      if (!alive2) return;
+      if (!err && value) setDayBaseline(value);
+    });
+    return () => { alive2 = false; unsubscribe(); };
+  }, []);
+
+  // The account as the page reads it: realised P&L net of the day's baseline. A ticker that was
+  // closed before the roll and did nothing since reads 0 realised, so `isRelevant` drops its row —
+  // yesterday's results stop being listed as today's.
+  const snapshot = useMemo<BridgeSnapshot | null>(() => {
+    if (!rawSnapshot) return rawSnapshot;
+    if (Object.keys(dayBaseline).length === 0) return rawSnapshot;
+    const base = new Map(Object.entries(dayBaseline).map(([t, v]) => [t.trim().toUpperCase(), v] as const));
+    return {
+      ...rawSnapshot,
+      positions: (rawSnapshot.positions ?? []).map((p) => {
+        const start = base.get((p.ticker ?? "").trim().toUpperCase());
+        if (start == null) return p;
+        return {
+          ...p,
+          closedPnL: p.closedPnL == null ? null : p.closedPnL - start,
+          netClosedPnL: p.netClosedPnL == null ? null : p.netClosedPnL - start,
+        };
+      }),
+    };
+  }, [rawSnapshot, dayBaseline]);
 
   // ---- which strategy holds what, straight from the bridge's own tracker ----------------------
   //
@@ -710,6 +752,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
                 <div className="flex items-baseline justify-between gap-2 font-mono">
                   <div className="flex items-baseline gap-2.5 overflow-hidden">
                     <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{key}</span>
+                    {getLiveStrategy(key)?.holdsOvernight && (
+                      <span
+                        className="shrink-0 rounded border border-fuchsia-400/30 bg-fuchsia-400/[0.08] px-1.5 py-px text-[9px] font-bold uppercase tracking-widest text-fuchsia-300"
+                        title="Enters at the close, exits on a later trading day — its book is carried across the 21:00 roll"
+                      >
+                        overnight
+                      </span>
+                    )}
                     <span className="shrink-0 text-[10px] text-zinc-500">
                       {strategy.open} open <span className="ml-1 text-emerald-300/80">{strategy.long}L</span><span className="ml-1 text-rose-300/80">{strategy.short}S</span>
                       {strategy.untracked > 0 && (

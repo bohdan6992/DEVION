@@ -1010,7 +1010,7 @@ function SectionLabel({ children, sub, accent }: { children: React.ReactNode; su
 ───────────────────────────────────────────────────────── */
 const STRATEGY_COLORS: Record<string, { hex: string; bg: string; border: string }> = {
   arbitrage:   { hex: "#818cf8", bg: "rgba(99,102,241,0.08)",  border: "rgba(99,102,241,0.2)"  },
-  pumpAndDump: { hex: "#fb7185", bg: "rgba(251,113,133,0.08)", border: "rgba(251,113,133,0.2)" },
+  vwapBounce:  { hex: "#fb7185", bg: "rgba(251,113,133,0.08)", border: "rgba(251,113,133,0.2)" },
   breakout:    { hex: "#34d399", bg: "rgba(52,211,153,0.08)",  border: "rgba(52,211,153,0.2)"  },
   opendoor:    { hex: "#fb923c", bg: "rgba(251,146,60,0.08)",  border: "rgba(251,146,60,0.2)"  },
   openfade:    { hex: "#c084fc", bg: "rgba(192,132,252,0.08)", border: "rgba(192,132,252,0.2)" },
@@ -1032,7 +1032,7 @@ type StrategyTile = {
 };
 
 function buildTiles(): StrategyTile[] {
-  const SHOW_KEYS = ["arbitrage","pairflux","pumpAndDump","reversal","openride","openfade","opendoor","dayTwo"];
+  const SHOW_KEYS = ["arbitrage","pairflux","vwapBounce","reversal","openride","openfade","opendoor","dayTwo"];
   return STRATEGY_CATALOG.filter(s => SHOW_KEYS.includes(s.key))
     .sort((a, b) => SHOW_KEYS.indexOf(a.key) - SHOW_KEYS.indexOf(b.key))
     .map(s => ({
