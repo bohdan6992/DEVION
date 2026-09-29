@@ -116,6 +116,31 @@ function localDayKey(timestamp = Date.now()): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * Reversal's own log "day" — anchored to 15:50 NY, the signal window's own start, not calendar
+ * midnight (the default localDayKey) or any configurable session START. The operator's own
+ * instruction (2026-09-29): "логи очищаються завжди о 15:50" — every entry logged before today's
+ * own 15:50 NY still belongs to YESTERDAY's session, so only 15:50-onward activity is "today"'s.
+ * Wired up once, at store-construction time, in streamStoreRegistry.ts's createStreamStores — see
+ * that call site for why (guaranteed to run before any push/read, regardless of which panel of the
+ * page mounts first).
+ */
+export function reversalSignalDayKey(timestamp: number): string {
+  const d = new Date(timestamp);
+  const nyDate = d.toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // "YYYY-MM-DD"
+  const nyTime = d.toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour12: false }); // "HH:MM:SS"
+  const [hh = "0", mm = "0"] = nyTime.split(":");
+  const minuteOfDay = Number(hh) * 60 + Number(mm);
+  if (minuteOfDay >= 15 * 60 + 50) return nyDate; // today's own 15:50+ session
+
+  // Before 15:50 NY: still belongs to YESTERDAY's 15:50-anchored session. Calendar-date arithmetic
+  // done through Date.UTC on the NY date's own y/m/d components (not the real instant) — the
+  // standard way to step a calendar date by one day without a real timezone/DST edge biting it.
+  const [y, m, day] = nyDate.split("-").map(Number);
+  const prevUtc = new Date(Date.UTC(y!, (m ?? 1) - 1, (day ?? 1) - 1));
+  return prevUtc.toISOString().slice(0, 10);
+}
+
 function filterEntriesToDay(
   entries: StreamLogEntry[],
   resolver: StreamLogDayKeyResolver,

@@ -696,7 +696,6 @@ export { buildSignalsUrl, buildSignalsStreamUrl };
    Range-bound filter modes
 ========================= */
 const RANGE_BOUND_KEYS = [
-  "Corr", "Beta", "Sigma",
   "ADV20", "ADV20NF", "ADV90", "ADV90NF",
   "AvPreMhv", "RoundLot", "VWAP", "SpreadBidPct", "LstPrcL",
   "LstCls", "YCls", "TCls", "ClsToClsPct", "Lo", "LstClsNewsCnt",
@@ -1392,12 +1391,6 @@ export type SonarExactFilterSnapshot = {
   sectorEnabled: TriMode;
   filterReport: "ALL" | "YES" | "NO";
   equityType: string;
-  corrMin: string;
-  corrMax: string;
-  betaMin: string;
-  betaMax: string;
-  sigmaMin: string;
-  sigmaMax: string;
   zapMode: "zap" | "sigma" | "delta" | "gamma" | "off";
   zapShowAbs: number;
   zapSilverAbs: number;
@@ -1881,6 +1874,26 @@ export default function ReversalSonar() {
   // riding on it) and show every ticker whose |signal dev| clears the flat floor/cap alone — same
   // escape hatch OpenDoor/Day Two's IgnoreRatings gives their toolbars.
   const [reversalIgnoreRatings, setReversalIgnoreRatings] = useState(false);
+  // MINRATE/MINTOTAL — real bridge-side gate on the matched (class, sign) cell's own published
+  // win_rate/total (ReversalGate.cs), added 2026-09-29: the bridge (ReversalSonarLiveParamsService)
+  // and ReversalScanner.tsx's own toolbar already had these; this Sonar's toolbar never grew the
+  // matching fields, so MinRate/MinTotal defaulted to 0 (off) here no matter what the operator set
+  // on the Scanner. 0 = off, mirrors ReversalScanner.tsx's own defaults exactly.
+  const [reversalMinRate, setReversalMinRate] = useState(0);
+  const [reversalMinTotal, setReversalMinTotal] = useState(0);
+  // σ/α/γ min/max — the same static-value floor/ceiling ReversalScanner.tsx's own tab-row group
+  // has (its own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL — a floor/ceiling on a
+  // STATIC published value, not a threshold on the trade's own win_rate"). Reversal's own σ/α/γ,
+  // not the ρ/β/σ FilterRatingRow above (Arbitrage's corr/beta/sigma — a different, pre-existing
+  // group). No bridge-side gate for this exists (ReversalGate.Check has no Sigma/Alpha/Gamma bound),
+  // so — like the country/exchange/sector selects — this narrows reversalMatchedShort/Long client-
+  // side, over the fields ReversalSonarRow already carries per row (r.sigma/r.alpha/r.gamma).
+  const [minSigma, setMinSigma] = useState("");
+  const [maxSigma, setMaxSigma] = useState("");
+  const [minAlpha, setMinAlpha] = useState("");
+  const [maxAlpha, setMaxAlpha] = useState("");
+  const [minGamma, setMinGamma] = useState("");
+  const [maxGamma, setMaxGamma] = useState("");
   // Mirrors ReversalScanner.tsx's own bumpReversalMinDevAbsMax exactly: the max-cap field is a
   // string (so it can be empty = no cap), but its arrow buttons still need a numeric base to bump
   // from, falling back to the short-side floor when the field is empty.
@@ -1939,12 +1952,6 @@ export default function ReversalSonar() {
   // nothing to evaluate right now".
   const [reversalInWindow, setReversalInWindow] = useState(true);
 
-  const [corrMin, setCorrMin] = useState("");
-  const [corrMax, setCorrMax] = useState("");
-  const [betaMin, setBetaMin] = useState("");
-  const [betaMax, setBetaMax] = useState("");
-  const [sigmaMin, setSigmaMin] = useState("");
-  const [sigmaMax, setSigmaMax] = useState("");
 
 
   const [minRate, setMinRate] = useState<number>(0.3);
@@ -2552,12 +2559,6 @@ export default function ReversalSonar() {
 
         // The raw input, not the clamped number: corrThreshold is derived from it.
         if (typeof s?.corrThresholdInput === 'string') setCorrThresholdInput(s.corrThresholdInput);
-        if (typeof s?.corrMin === 'string') setCorrMin(s.corrMin);
-        if (typeof s?.corrMax === 'string') setCorrMax(s.corrMax);
-        if (typeof s?.betaMin === 'string') setBetaMin(s.betaMin);
-        if (typeof s?.betaMax === 'string') setBetaMax(s.betaMax);
-        if (typeof s?.sigmaMin === 'string') setSigmaMin(s.sigmaMin);
-        if (typeof s?.sigmaMax === 'string') setSigmaMax(s.sigmaMax);
 
         // multi-select
         const validTriMode = (v: unknown): v is TriMode => v === "off" || v === "include" || v === "exclude";
@@ -2707,8 +2708,6 @@ export default function ReversalSonar() {
           includeUSA, includeChina,
           filterReport, equityType,
 
-          corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
-
           // multi-select
           countryEnabled, selCountries: Array.from(selCountries),
           exchangeEnabled, selExchanges: Array.from(selExchanges),
@@ -2763,7 +2762,6 @@ export default function ReversalSonar() {
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
-    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     countryEnabled, selCountries,
     exchangeEnabled, selExchanges,
     sectorEnabled, selSectors,
@@ -2863,7 +2861,6 @@ export default function ReversalSonar() {
   const buildSonarSharedFilterPresetJson = () => {
     const current = {
       rangeModes,
-      corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
       adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax,
       avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax,
       lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax,
@@ -2896,12 +2893,6 @@ export default function ReversalSonar() {
   };
 
   const sonarSharedFilterSetters = {
-    corrMin: setCorrMin,
-    corrMax: setCorrMax,
-    betaMin: setBetaMin,
-    betaMax: setBetaMax,
-    sigmaMin: setSigmaMin,
-    sigmaMax: setSigmaMax,
     adv20Min: setAdv20Min,
     adv20Max: setAdv20Max,
     adv20NFMin: setAdv20NFMin,
@@ -3086,9 +3077,6 @@ export default function ReversalSonar() {
     const mm = (key: RangeBoundKey, minS: string, maxS: string) =>
       rangeModes[key] === "off" ? { min: null, max: null } : { min: toNum(minS), max: toNum(maxS) };
     return {
-      Corr: mm("Corr", corrMin, corrMax),
-      Beta: mm("Beta", betaMin, betaMax),
-      Sigma: mm("Sigma", sigmaMin, sigmaMax),
       ADV20: mm("ADV20", adv20Min, adv20Max),
       ADV20NF: mm("ADV20NF", adv20NFMin, adv20NFMax),
       ADV90: mm("ADV90", adv90Min, adv90Max),
@@ -3128,9 +3116,6 @@ export default function ReversalSonar() {
     };
   }, [
     rangeModes,
-    corrMin, corrMax,
-    betaMin, betaMax,
-    sigmaMin, sigmaMax,
     adv20Min, adv20Max,
     adv20NFMin, adv20NFMax,
     adv90Min, adv90Max,
@@ -3177,89 +3162,6 @@ export default function ReversalSonar() {
   );
   const sectorCorr = useSectorCorrExclusion(allItems, excludeCorr, corrThreshold);
 
-  const snapshot = useMemo(() => {
-    return {
-      cls,
-      type,
-      mode,
-      ratingMode,
-      minRate,
-      minTotal,
-      tickersFilterNorm,
-
-      listMode,
-      ignoreSet,
-      applySet,
-      pinMap,
-
-      bounds,
-
-      excludeDividend,
-      excludeNews,
-      excludePTP,
-      excludeSSR,
-      excludeReport,
-      excludeETF,
-      excludeCrap,
-      excludeItb,
-      excludeHard,
-      excludeCorr,
-      corrExcluded: sectorCorr.excluded,
-      activeMode,
-
-      includeUSA,
-      includeChina,
-
-      selCountries,
-      countryEnabled,
-      selExchanges,
-      exchangeEnabled,
-      selSectors,
-      sectorEnabled,
-
-      filterReport,
-      equityType,
-
-      corrMin,
-      corrMax,
-      betaMin,
-      betaMax,
-      sigmaMin,
-      sigmaMax,
-
-      // Inert. The shape is shared with Arbitrage, which does gate on these; OpenDoor's own
-      // applyExactSonarClientFilters already ignored them, and there is no control left to set
-      // them. "off" makes that explicit instead of leaving a live-looking threshold in the object.
-      zapMode: "off" as const,
-      zapShowAbs: 0,
-      zapSilverAbs: 0,
-      zapGoldAbs: 0,
-
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
-
-    };
-  }, [
-    cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
-    listMode, ignoreSet, applySet,pinMap,
-    bounds,
-    excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    excludeItb, excludeHard, excludeCorr, sectorCorr.excluded,
-    activeMode, // include in dependencies
-    includeUSA, includeChina,
-    selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
-    filterReport, equityType,
-    corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
-    topMode, topSigmaOn, topBenchOn, topTimeOn,
-
-  ]);
-
-  const filtersRef = useRef(snapshot);
-  useEffect(() => {
-    filtersRef.current = snapshot;
-  }, [snapshot]);
 
   /* =========================
      Filters (fast single-pass)
@@ -3511,6 +3413,8 @@ export default function ReversalSonar() {
         minDevAbsLong: optNumOrNull(reversalMinDevAbsLong) ?? reversalMinDevAbsShort,
         minDevAbsMax: optNumOrNull(reversalMinDevAbsMax),
         minGammaTotal: reversalMinGammaTotal,
+        minRate: reversalMinRate,
+        minTotal: reversalMinTotal,
         ignoreRatings: reversalIgnoreRatings,
         thresholdUnit: reversalUnitMode,
         filters: {
@@ -3525,7 +3429,7 @@ export default function ReversalSonar() {
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
-    reversalExitClass, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal, reversalIgnoreRatings,
+    reversalExitClass, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax, reversalMinGammaTotal, reversalMinRate, reversalMinTotal, reversalIgnoreRatings,
     reversalUnitMode,
     listMode, ignoreSet, applySet, pinMap, activeMode,
     includeUSA, includeChina, selCountries, countryEnabled,
@@ -3572,13 +3476,37 @@ export default function ReversalSonar() {
     for (const s of allItems) map.set(String(s.ticker ?? "").toUpperCase().trim(), s);
     return map;
   }, [allItems]);
+  // ITB/HARD/CORR audit (2026-09-29): these three toggles built a `snapshot`/`sectorCorr` object
+  // that reached a `filtersRef` NOBODY ever read (see the dead-but-still-computed comment above),
+  // and separately were simply missing from the real push effect's `filters` object below — so on
+  // Reversal they were pure decoration, unlike Arbitrage (which pushes its whole snapshot wholesale
+  // and so genuinely gates on them server-side). No ReversalSonarRow field carries borrow status or
+  // corr-peer membership for a server-side gate to read even if the push included them, so — same
+  // reasoning as σ/α/γ above — this narrows reversalMatchedShort/Long client-side instead, joining
+  // back to the full-fidelity ArbitrageSignal row (itemsByTicker) for the borrow-status check and
+  // reading sectorCorr's own already-fetched excluded-ticker set directly.
+  const reversalStaticBoundsOk = useCallback((r: ReversalSonarRow) => {
+    const nSigma = optNumOrNull(minSigma), xSigma = optNumOrNull(maxSigma);
+    if ((nSigma != null || xSigma != null) && !passMinMax(r.sigma, nSigma, xSigma)) return false;
+    const nAlpha = optNumOrNull(minAlpha), xAlpha = optNumOrNull(maxAlpha);
+    if ((nAlpha != null || xAlpha != null) && !passMinMax(r.alpha, nAlpha, xAlpha)) return false;
+    const nGamma = optNumOrNull(minGamma), xGamma = optNumOrNull(maxGamma);
+    if ((nGamma != null || xGamma != null) && !passMinMax(r.gamma, nGamma, xGamma)) return false;
+    const ticker = String(r.ticker ?? "").toUpperCase().trim();
+    if (excludeItb || excludeHard) {
+      const signal = itemsByTicker.get(ticker);
+      if (rowExcludedByBorrow(signal, excludeItb, excludeHard)) return false;
+    }
+    if (excludeCorr && sectorCorr.excluded.has(ticker)) return false;
+    return true;
+  }, [minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, excludeItb, excludeHard, itemsByTicker, excludeCorr, sectorCorr.excluded]);
   const reversalMatchedShort = useMemo(
-    () => reversalSonarRows.filter((r) => r.side === "Short"),
-    [reversalSonarRows]
+    () => reversalSonarRows.filter((r) => r.side === "Short" && reversalStaticBoundsOk(r)),
+    [reversalSonarRows, reversalStaticBoundsOk]
   );
   const reversalMatchedLong = useMemo(
-    () => reversalSonarRows.filter((r) => r.side === "Long"),
-    [reversalSonarRows]
+    () => reversalSonarRows.filter((r) => r.side === "Long" && reversalStaticBoundsOk(r)),
+    [reversalSonarRows, reversalStaticBoundsOk]
   );
 
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
@@ -3602,9 +3530,6 @@ export default function ReversalSonar() {
     pushRangeHint(`PreMhVolNF`, rangeModes.PreMhVolNF, preMhVolNFMin, preMhVolNFMax);
     pushRangeHint(`VolNFfromLstCls`, rangeModes.VolNFfromLstCls, volNFfromLstClsMin, volNFfromLstClsMax);
     if (tickersFilterNorm) hints.push(`tickers ${tickersFilterNorm}`);
-    if (corrMin || corrMax) hints.push(`ρ ${corrMin || "min"}..${corrMax || "max"}`);
-    if (betaMin || betaMax) hints.push(`β ${betaMin || "min"}..${betaMax || "max"}`);
-    if (sigmaMin || sigmaMax) hints.push(`σ ${sigmaMin || "min"}..${sigmaMax || "max"}`);
     if (listMode === "ignore" && ignoreSet.size > 0) hints.push(`ignore ${ignoreSet.size}`);
     if (listMode === "apply" && applySet.size > 0) hints.push(`apply ${applySet.size}`);
     if (listMode === "pin" && Object.keys(pinMap).length > 0) hints.push(`pin ${Object.keys(pinMap).length}`);
@@ -3617,6 +3542,9 @@ export default function ReversalSonar() {
     if (excludeReport) hints.push("ex REPORT");
     if (excludeETF) hints.push("ex ETF");
     if (excludeCrap) hints.push("ex < $5");
+    if (excludeItb) hints.push("ex ITB");
+    if (excludeHard) hints.push("ex HARD-to-borrow");
+    if (excludeCorr) hints.push(`ex CORR peers ${sectorCorr.excluded.size}`);
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
     if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
@@ -3627,11 +3555,7 @@ export default function ReversalSonar() {
   }, [
     activeMode,
     applySet.size,
-    betaMax,
-    betaMin,
     countryEnabled,
-    corrMax,
-    corrMin,
     equityType,
     exchangeEnabled,
     excludeCrap,
@@ -3641,6 +3565,10 @@ export default function ReversalSonar() {
     excludePTP,
     excludeReport,
     excludeSSR,
+    excludeItb,
+    excludeHard,
+    excludeCorr,
+    sectorCorr.excluded,
     ignoreSet.size,
     includeChina,
     includeUSA,
@@ -3653,8 +3581,6 @@ export default function ReversalSonar() {
     selCountries,
     selExchanges,
     selSectors,
-    sigmaMax,
-    sigmaMin,
     tickersFilterNorm,
     volNFfromLstClsMax,
     volNFfromLstClsMin,
@@ -3921,11 +3847,201 @@ export default function ReversalSonar() {
           stripButtonActiveClass={sonarActiveFilterButtonActiveClass}
           stripButtonInactiveClass={sonarActiveFilterButtonInactiveClass}
           renderActiveIcon={renderSonarActiveFilterIcon}
-          ranges={[
-            { label: "ρ", title: "Correlation", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
-            { label: "β", title: "Beta", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
-            { label: "σ", title: "Sigma", minValue: sigmaMin, maxValue: sigmaMax, setMin: setSigmaMin, setMax: setSigmaMax, step: 0.1 },
-          ]}
+          modeSlot={
+            <>
+              {/* Reversal's whole gate: ReversalGate.Check requires |15:50 dev| to clear BOTH a flat
+                  floor (side-specific — coral for a POSITIVE/Short reading, mint for a NEGATIVE/Long
+                  one) AND the ticker's own published gamma for (class, sign) — see ReversalGate.cs.
+                  RATE/UNIVERSE + MINRATE/MINTOTAL + σ/α/γ ported 1-to-1 from ReversalScanner.tsx
+                  (2026-09-29). This modeSlot is FilterRatingRow's own "between the strip and the
+                  steppers" extension point, and FilterRatingRow is the ACTIVE/INACTIVE/ALL row right
+                  under the header — matching where Scanner's own tab-row group sits, confirmed
+                  against the user's own screenshot (it went through strategySlot, then
+                  FilterFlagsRow's zapSlot, before landing here). MINRATE/MINTOTAL and σ/α/γ are new
+                  here — this Sonar never had them (see ReversalSonarLiveParams.MinRate's own doc
+                  comment on the bridge for MINRATE/MINTOTAL; σ/α/γ narrows reversalMatchedShort/Long
+                  client-side, see reversalStaticBoundsOk).
+                  The violet %/σ/α/γ/τ/λ strip does NOT live in this modeSlot: on Scanner it sits in
+                  a genuinely different row (FilterFlagsRow's own zapSlot, the FILTER row's right
+                  edge, past ABC sort) from RATE/MINRATE/MINTOTAL/σ/α/γ (the tab-row's right side) —
+                  the two groups were bundled together here at first, then the operator's own
+                  correction split them back apart to match. See FilterFlagsRow's zapSlot prop below
+                  for the strip itself. The old Γ/Ø pill pair that used to live inside that strip was
+                  Scanner's own pre-2026-09-25 mechanism for the same reversalIgnoreRatings boolean;
+                  Scanner replaced it with the RATE/UNIVERSE button that day — this file's copy had
+                  gone stale and still carried the old pills. */}
+              <button
+                type="button"
+                onClick={() => setReversalIgnoreRatings((v) => !v)}
+                title={reversalIgnoreRatings
+                  ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL. Click to apply ratings again."
+                  : "RATE — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL enforced. Click to drop ratings (UNIVERSE)."}
+                className={clsx(
+                  "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+                  reversalIgnoreRatings
+                    ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+                    : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
+                )}
+              >
+                {reversalIgnoreRatings ? "UNIVERSE" : "RATE"}
+              </button>
+
+              <div className={clsx(
+                "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
+                reversalIgnoreRatings && "opacity-40"
+              )} title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={0.05}
+                    min={0}
+                    max={1}
+                    value={reversalMinRate}
+                    onChange={(e) => setReversalMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                    className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setReversalMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase min rate"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setReversalMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease min rate"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className={clsx(
+                "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
+                reversalIgnoreRatings && "opacity-40"
+              )} title="Floor on the matched cell's own published total trade count (not GammaN — see ReversalGate.cs). 0 = off.">
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    step={1}
+                    min={0}
+                    value={reversalMinTotal}
+                    onChange={(e) => setReversalMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                    className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setReversalMinTotal((v) => Math.max(0, v + 1))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase min total"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setReversalMinTotal((v) => Math.max(0, v - 1))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease min total"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* σ/α/γ — the black min/max boxes, mirrors ReversalScanner.tsx's own tab-row group
+                  1-to-1 (that file's own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL
+                  above: a floor/ceiling on a STATIC published value, not a threshold on the trade's
+                  own win_rate"). σ = published static sigma, α = published alpha sign-matched to the
+                  row's side, γ = the (class, sign) gamma level the row actually cleared — all three
+                  already ride ReversalSonarRow (r.sigma/r.alpha/r.gamma), so this narrows
+                  reversalMatchedShort/Long client-side (reversalStaticBoundsOk above) rather than
+                  going through the bridge, same as the country/exchange/sector selects. */}
+              {([
+                { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
+                { label: "α", title: "Alpha — the ticker's own modal |15:50 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
+                { label: "γ", title: "Gamma — the (class, sign) reversal-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
+              ] as const).map((field) => (
+                <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
+                  <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
+                    {field.label}
+                  </span>
+                  <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step={field.step}
+                      value={field.minValue}
+                      onChange={(e) => field.setMin(e.target.value)}
+                      className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                      placeholder="min"
+                    />
+                    <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) + field.step).toFixed(4))))}
+                        className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => field.setMin(String(+(((Number(field.minValue) || 0) - field.step).toFixed(4))))}
+                        className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </div>
+                  <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step={field.step}
+                      value={field.maxValue}
+                      onChange={(e) => field.setMax(e.target.value)}
+                      className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                      placeholder="max"
+                    />
+                    <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) + field.step).toFixed(4))))}
+                        className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => field.setMax(String(+(((Number(field.maxValue) || 0) - field.step).toFixed(4))))}
+                        className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          }
         />
 
         {/* ========================= CONTROLS ========================= */}
@@ -4192,49 +4308,14 @@ export default function ReversalSonar() {
               />
             </>
           }
-          strategySlot={
+          zapSlot={
             <>
-              {/* Reversal's whole gate: ReversalGate.Check requires |15:50 dev| to clear BOTH a flat
-                  floor (side-specific — coral for a POSITIVE/Short reading, mint for a NEGATIVE/Long
-                  one) AND the ticker's own published gamma for (class, sign) — see ReversalGate.cs.
-                  Ported 1-to-1 from ReversalScanner.tsx's own strategySlot (this file's Scanner
-                  counterpart, the reference for this pattern — see AGENTS.md's spinner-input
-                  standard): the violet GAMMA/RAW pills use the same FILTER_GROUP_BASE/
-                  FILTER_GROUP_TONES.zap/FILTER_PILL mechanics, and the four color-coded spinner
-                  boxes follow the same coral/mint/silver/amber roles. GAMMA/RAW is the same
-                  reversalIgnoreRatings boolean the old GATE ON/OFF button drove; RAW still bypasses
-                  the per-ticker gamma lookup (and the MinGammaTotal floor riding on it), gating on
-                  the flat floors/cap alone.
-                  %/σ/α/γ/τ ADDED 2026-09-25 (the operator's own instruction, superseding the earlier
-                  "out of scope for this pass" note that used to sit here): unlike the Scanner's
-                  table this Sonar has no Signal Dev COLUMN to retint, so formatReversalDev instead
-                  retints the single "Dev n.nn" span per card and the ratings detail panel's own
-                  Gamma/Alpha/Sigma/ATR rows — same helper name/shape as the Scanner's own, just two
-                  display surfaces instead of one. Same strip as GAMMA/RAW, no divider between the
-                  two pill families, per the Unit/ZAP Toggle Standard (a gate-mode radio and a
-                  display-unit radio sharing one strip is the documented pattern, not an exception). */}
+              {/* %/σ/α/γ/τ/λ strip — mirrors ReversalScanner.tsx's own strip 1-to-1, per the Unit/ZAP
+                  Toggle Standard. Unlike the Scanner's table this Sonar has no Signal Dev COLUMN to
+                  retint, so formatReversalDev instead retints the single "Dev n.nn" span per card and
+                  the ratings detail panel's own Gamma/Alpha/Sigma/ATR/Lambda rows — same helper name/
+                  shape as the Scanner's own, just two display surfaces instead of one. */}
               <div className={`${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
-                {/* Symbols, not spelled-out words — mirrors ReversalScanner.tsx's own pills 1-to-1
-                    (2026-09-22, the user's own correction there). Γ (capital gamma) = gate applies
-                    the ticker's own gamma; Ø = raw, that gate dropped. Full meaning in each title. */}
-                {([
-                  { off: false, key: "gate-gamma", label: "Γ", title: "GAMMA — gate on the flat floors/cap AND the ticker's own published gamma for (class, sign)" },
-                  { off: true, key: "gate-raw", label: "Ø", title: "RAW — ignore ratings: drop the per-ticker gamma lookup (and MinGammaTotal), gate on the flat floors/cap alone" },
-                ] as const).map((m) => {
-                  const on = reversalIgnoreRatings === m.off;
-                  return (
-                    <button
-                      key={m.key}
-                      type="button"
-                      onClick={() => setReversalIgnoreRatings(m.off)}
-                      title={m.title}
-                      className={clsx(FILTER_PILL, on ? FILTER_GROUP_TONES.zap.on : FILTER_GROUP_TONES.zap.off)}
-                    >
-                      <span className="leading-none" style={{ textTransform: "none" }}>{m.label}</span>
-                    </button>
-                  );
-                })}
-
                 {/* %/σ/α/γ/τ — what the "Dev n.nn" span and the ratings detail panel are shown IN,
                     and (via thresholdUnit on the push effect above) what the server-side gate itself
                     scales SHORT/LONG/MAX by — mirrors ReversalScanner.tsx's own strip 1-to-1. */}

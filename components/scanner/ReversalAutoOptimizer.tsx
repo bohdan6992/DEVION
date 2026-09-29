@@ -6,62 +6,61 @@ import clsx from "clsx";
 import { TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
 import SpinnerInput from "../scout/SpinnerInput";
 import {
-  cancelAutoOptimizer,
-  loadAutoOptParameters,
-  pollAutoOptimizer,
-  startAutoOptimizer,
+  cancelReversalAutoOptimizer,
+  loadReversalAutoOptParameters,
+  pollReversalAutoOptimizer,
+  startReversalAutoOptimizer,
   sweepValues,
-  type AutoOptConstraint,
-  type AutoOptMetrics,
-  type AutoOptObjective,
-  type AutoOptParameter,
-  type AutoOptResult,
-  type AutoOptRow,
-  type AutoOptStartRequest,
-  type AutoOptUnit,
-} from "../../lib/scanner/autoOptimizer";
-import type { PaperArbAnalyticsRequest } from "../../lib/scanner/types";
+  type PaperReversalRequestLike,
+  type ReversalAutoOptConstraint,
+  type ReversalAutoOptMetrics,
+  type ReversalAutoOptObjective,
+  type ReversalAutoOptParameter,
+  type ReversalAutoOptResult,
+  type ReversalAutoOptRow,
+  type ReversalAutoOptStartRequest,
+  type ReversalAutoOptUnit,
+} from "../../lib/scanner/reversalAutoOptimizer";
 
 /**
- * AUTO OPTIMIZER — the Arbitrage Scanner's counterpart to the Scouts' BEST SETTINGS.
+ * AUTO OPTIMIZER — the Reversal Scanner's counterpart to Arbitrage's own AutoOptimizer.tsx (see that
+ * file's own header for the shared design this mirrors 1-to-1). The differences all come from
+ * Reversal's own model, not from taste:
  *
- * It takes the scanner exactly as it is on screen and asks the bridge for the filter configuration
- * that maximises a chosen metric over a date range: every range box, the rating gate, the red toggles
- * and (optionally) country / exchange / sector deny-lists, and (optionally) the entry / exit
- * thresholds themselves. The search runs on the bridge over the SAME simulated trades the scanner
- * lists, so selecting a result reproduces the numbers shown here.
+ *   * No numeric END/EndAbs at all — the exit is the fixed, categorical ExitClass, which per an
+ *     explicit user decision is NEVER swept or exposed here, so there is no END row and no
+ *     CloseMode-inert logic anywhere in this file (Reversal's CloseMode is a confirmed no-op
+ *     regardless of ExitClass).
+ *   * Three MIN DEV rows (short / long / max) instead of Arbitrage's four (start short / start long /
+ *     start max / end).
+ *   * Six ThresholdUnit pills (%, σ, α, γ, τ, λ = pct/sigma/alpha/gamma/atr/lambda) instead of
+ *     Arbitrage's five ZAP units.
  *
- * Only the parameters ticked here are varied. Everything else keeps the toolbar's current value and
- * stays applied as a fixed constraint — that is what makes "find the best MINRATE with everything
- * else as it is" the same tool as "find the best of everything".
- *
- * Kept mounted while closed so a search keeps running (and can be re-opened to) — its state lives here.
+ * Ticking a unit pill auto-freezes RATING GATES / TAPE FILTERS (held exactly as the scanner has them)
+ * and MIN DEV MAX (held), but MIN DEV (short) and MIN DEV (long) keep sweeping independently — shorts
+ * and longs are different trades — each on its own FROM/TO, STEP forced to 0.1. This mirrors the
+ * SHAPE of Arbitrage's own unitOnly rule, not its exact key names.
  */
 
-/**
- * The three groups of the toolbar the optimizer tunes. Everything else (the red toggles, the
- * country / exchange / sector lists, sizing, session, price mode…) belongs to the operator and is
- * never touched. Inside a group every parameter is tried both unconstrained ("off") and bounded
- * ("on"), so switching a group on lets the search decide which of its boxes deserve to be used.
- */
 const RATING_GROUP = "RATING GATES";
 const TAPE_GROUP = "TAPE FILTERS";
 const GROUP_ORDER = [RATING_GROUP, TAPE_GROUP] as const;
 const GROUP_TITLE: Record<string, string> = { [RATING_GROUP]: "ρ β σ", [TAPE_GROUP]: "TAPE FILTERS" };
 const GROUP_HINT: Record<string, string> = {
-  [RATING_GROUP]: "ρ · β · σ  (MINRATE / MINTOTAL are yours and stay as set)",
-  [TAPE_GROUP]: "the 36 min / max boxes: ADV, VWAP, spread, volumes, gaps, imbalances…",
+  [RATING_GROUP]: "ρ · β · σ (MINRATE / MINTOTAL / MinGammaTotal are yours and stay as set)",
+  [TAPE_GROUP]: "the same ~34 min / max boxes as the toolbar: ADV, VWAP, spread, volumes, gaps, imbalances…",
 };
 
-const UNITS: Array<{ key: AutoOptUnit; label: string; title: string }> = [
-  { key: "zap", label: "%", title: "ZapPct: the deviation in percent" },
-  { key: "sigma", label: "σ", title: "SigmaZap: the deviation in sigmas" },
-  { key: "delta", label: "Δ", title: "SigmaZap with the print-median gate" },
-  { key: "gamma", label: "γ", title: "GammaZap: the deviation in gammas" },
-  { key: "alpha", label: "α", title: "AlphaZap: the deviation in alphas" },
+const UNITS: Array<{ key: ReversalAutoOptUnit; label: string; title: string }> = [
+  { key: "pct", label: "%", title: "Raw Stack% points — MIN DEV entered as flat percentage points" },
+  { key: "sigma", label: "σ", title: "MIN DEV entered as a multiple of each ticker's own published sigma" },
+  { key: "alpha", label: "α", title: "MIN DEV entered as a multiple of each ticker's own published alpha, sign-matched" },
+  { key: "gamma", label: "γ", title: "MIN DEV entered as a multiple of each ticker's own matched gamma for this (class, sign)" },
+  { key: "atr", label: "τ", title: "MIN DEV entered as a multiple of each ticker's own CURRENT live ATR14% reading" },
+  { key: "lambda", label: "λ", title: "MIN DEV entered as a multiple of each ticker's own published lambda" },
 ];
 
-const OBJECTIVES: Array<{ key: AutoOptObjective; label: string; title: string }> = [
+const OBJECTIVES: Array<{ key: ReversalAutoOptObjective; label: string; title: string }> = [
   { key: "total", label: "TOTAL P&L", title: "Sum of P&L. Rewards trade count - MIN TRADES keeps it honest" },
   { key: "avg", label: "AVG / TRADE", title: "Average P&L per trade" },
   { key: "pf", label: "PROFIT FACTOR", title: "Gross profit / gross loss" },
@@ -71,70 +70,62 @@ const OBJECTIVES: Array<{ key: AutoOptObjective; label: string; title: string }>
 
 const RANGE_PRESETS = [5, 10, 20, 40, 65] as const;
 
-type SweepKey = "startAbs" | "startAbsNeg" | "startAbsMax" | "endAbs";
-/** Rows that keep sweeping on their own even while a ZAP unit is ticked - shorts and longs are
+type SweepKey = "minDevAbsShort" | "minDevAbsLong" | "minDevAbsMax";
+/** Rows that keep sweeping on their own even while a ThresholdUnit is ticked - shorts and longs are
  * different trades, so both keep tuning independently instead of collapsing to one. */
-const UNIT_SWEPT_KEYS: SweepKey[] = ["startAbs", "startAbsNeg"];
+const UNIT_SWEPT_KEYS: SweepKey[] = ["minDevAbsShort", "minDevAbsLong"];
 type SweepRow = {
   key: SweepKey; label: string; title: string; on: boolean; from: number; to: number; step: number; decimals: number;
-  /** also try the field switched OFF (long: same as short; max: no cap) */
+  /** also try the field switched OFF (max only: no cap) */
   offOption: boolean;
   includeOff: boolean;
 };
 
-export type AutoOptimizerCurrent = {
-  startAbs: number;
-  startAbsNeg: string;
-  startAbsMax: string;
-  endAbs: number;
-  minHoldCandles: number;
-  /** the ZAP unit pill the scanner is in */
-  unit: AutoOptUnit;
-  /** Passive never reads EndAbs (TapeArbitrageEngine closes on the class's own window-end / gap-exit) */
-  closeMode: "Active" | "Passive";
+export type ReversalAutoOptimizerCurrent = {
+  minDevAbsShort: number;
+  minDevAbsLong: string;
+  minDevAbsMax: string;
+  /** the ThresholdUnit pill the scanner is in */
+  unit: ReversalAutoOptUnit;
 };
 
-export type AutoOptimizerProps = {
+export type ReversalAutoOptimizerProps = {
   open: boolean;
   onClose: () => void;
-  /** e.g. `/api/paper/arbitrage` */
+  /** e.g. `/api/paper/reversal` */
   apiBase: string;
   /** The scanner's own request for a date range - every current setting included. */
-  buildBase: (from: string, to: string) => PaperArbAnalyticsRequest;
+  buildBase: (from: string, to: string) => PaperReversalRequestLike;
   /** Trading days, ascending. */
   tradingDays: string[];
   initialFrom: string;
   initialTo: string;
-  current: AutoOptimizerCurrent;
+  current: ReversalAutoOptimizerCurrent;
   /** Page-side toggles the bridge cannot see: fixed for the search (ITB / HARD). */
   fixedToggles: { excludeItb: boolean; excludeHard: boolean };
-  /** BIN / BINS rating mode: the session rating rule does not exist, so MINRATE / MINTOTAL are not searched. */
-  binMode: boolean;
   /**
    * Write a result into the toolbar. `searchedKeys` are the parameters this run was allowed to change;
    * `range` is the date range the run was over, so the page can show the same days.
    */
-  onApply: (row: AutoOptRow, searchedKeys: string[], range: { from: string; to: string }) => void;
+  onApply: (row: ReversalAutoOptRow, searchedKeys: string[], range: { from: string; to: string }) => void;
   /**
-   * Rendered in the page (the OPTIMIZER tab) instead of as a window over it: no overlay, no close
-   * button, always visible. Selecting a result then applies it and the page below re-draws.
+   * Rendered in the page instead of as a window over it: no overlay, no close button, always visible.
+   * Selecting a result then applies it and the page below re-draws.
    */
   inline?: boolean;
 };
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
-function defaultSweep(cur: AutoOptimizerCurrent): SweepRow[] {
-  const start = cur.startAbs > 0 ? cur.startAbs : 0.4;
-  const startNeg = Number(cur.startAbsNeg) > 0 ? Number(cur.startAbsNeg) : start;
-  const startMax = Number(cur.startAbsMax) > 0 ? Number(cur.startAbsMax) : start * 3;
-  const end = cur.endAbs > 0 ? cur.endAbs : 0.1;
+function defaultSweep(cur: ReversalAutoOptimizerCurrent): SweepRow[] {
+  const short = cur.minDevAbsShort > 0 ? cur.minDevAbsShort : 0.5;
+  const long = Number(cur.minDevAbsLong) > 0 ? Number(cur.minDevAbsLong) : short;
+  const max = Number(cur.minDevAbsMax) > 0 ? Number(cur.minDevAbsMax) : short * 3;
   const stepOf = (v: number) => (v < 0.3 ? 0.05 : 0.1);
   return [
-    { key: "startAbs", label: "START (short)", title: "Entry threshold for a positive deviation (a short) - the coral box. Tuned on its own, separately from the long one", on: true, offOption: false, includeOff: false, from: r2(Math.max(0.05, start * 0.6)), to: r2(start * 1.6), step: stepOf(start), decimals: 2 },
-    { key: "startAbsNeg", label: "START (long)", title: "Entry threshold for a negative deviation (a long) - the mint box. Tuned on its own, separately from the short one. + OFF also tries the long side sharing the short threshold", on: true, offOption: true, includeOff: false, from: r2(Math.max(0.05, startNeg * 0.6)), to: r2(startNeg * 1.6), step: stepOf(startNeg), decimals: 2 },
-    { key: "startAbsMax", label: "START MAX", title: "Upper cap on the start deviation - the silver box. OFF = no cap", on: false, offOption: true, includeOff: true, from: r2(startMax * 0.7), to: r2(startMax * 1.6), step: r2(Math.max(0.1, startMax * 0.3)), decimals: 2 },
-    { key: "endAbs", label: "END", title: cur.closeMode === "Passive" ? "Exit threshold - inert while CLOSE is Passive: the position always closes on the class's own window-end / gap-exit instead" : "Exit threshold - the gold box: the position closes once the deviation falls to it", on: cur.closeMode !== "Passive", offOption: false, includeOff: false, from: r2(Math.max(0, end * 0.5)), to: r2(end * 1.6), step: stepOf(end), decimals: 2 },
+    { key: "minDevAbsShort", label: "MIN DEV (short)", title: "Floor on |15:50 deviation| for a POSITIVE reading (a SHORT entry) - the coral box. Tuned on its own, separately from the long one", on: true, offOption: false, includeOff: false, from: r2(Math.max(0.05, short * 0.6)), to: r2(short * 1.6), step: stepOf(short), decimals: 2 },
+    { key: "minDevAbsLong", label: "MIN DEV (long)", title: "Floor on |15:50 deviation| for a NEGATIVE reading (a LONG entry) - the mint box. Tuned on its own, separately from the short one", on: true, offOption: false, includeOff: false, from: r2(Math.max(0.05, long * 0.6)), to: r2(long * 1.6), step: stepOf(long), decimals: 2 },
+    { key: "minDevAbsMax", label: "MIN DEV MAX", title: "Upper cap on |15:50 deviation|, either side - the silver box. OFF = no cap", on: false, offOption: true, includeOff: true, from: r2(max * 0.7), to: r2(max * 1.6), step: r2(Math.max(0.1, max * 0.3)), decimals: 2 },
   ];
 }
 
@@ -167,12 +158,7 @@ function objectiveText(objective: string, v: number): string {
   }
 }
 
-function constraintText(c: AutoOptConstraint): string {
-  if (c.group === "FLAGS") {
-    if (c.key.startsWith("exclude")) return `✕ ${c.label}`;
-    if (c.key.startsWith("require")) return `only ${c.label}`;
-    return `${c.label} only`;
-  }
+function constraintText(c: ReversalAutoOptConstraint): string {
   if (c.min != null && c.max != null) return `${c.label} ${numText(c.min)} … ${numText(c.max)}`;
   if (c.min != null) return `${c.label} ≥ ${numText(c.min)}`;
   if (c.max != null) return `${c.label} ≤ ${numText(c.max)}`;
@@ -180,7 +166,7 @@ function constraintText(c: AutoOptConstraint): string {
 }
 
 /** test average per trade / train average per trade - the share of the edge that carried over. */
-function hold(row: AutoOptRow): number | null {
+function hold(row: ReversalAutoOptRow): number | null {
   if (!row.test || row.test.trades === 0 || row.train.trades === 0) return null;
   if (row.train.avgPnlUsd <= 0) return null;
   return row.test.avgPnlUsd / row.train.avgPnlUsd;
@@ -200,7 +186,7 @@ function Metric({ label, value, className, title }: { label: string; value: Reac
   );
 }
 
-function MetricsBlock({ m, prefix }: { m: AutoOptMetrics; prefix: string }) {
+function MetricsBlock({ m, prefix }: { m: ReversalAutoOptMetrics; prefix: string }) {
   return (
     <>
       <Metric label={`${prefix} trades`} value={m.trades.toLocaleString("en-US")} />
@@ -214,26 +200,25 @@ function MetricsBlock({ m, prefix }: { m: AutoOptMetrics; prefix: string }) {
 
 // =================================================================================================
 
-export default function AutoOptimizer(props: AutoOptimizerProps) {
-  const { open, onClose, apiBase, buildBase, tradingDays, initialFrom, initialTo, current, binMode, onApply, inline = false, fixedToggles } = props;
+export default function ReversalAutoOptimizer(props: ReversalAutoOptimizerProps) {
+  const { open, onClose, apiBase, buildBase, tradingDays, initialFrom, initialTo, current, onApply, inline = false, fixedToggles } = props;
 
-  const [objective, setObjective] = useState<AutoOptObjective>("total");
+  const [objective, setObjective] = useState<ReversalAutoOptObjective>("total");
   const [preset, setPreset] = useState<number | "custom">(20);
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
   const [minTrades, setMinTrades] = useState(50);
   const [validate, setValidate] = useState(true);
   const [topResults, setTopResults] = useState(5);
-  const [ratingFromZero, setRatingFromZero] = useState(false);
 
-  const [catalog, setCatalog] = useState<AutoOptParameter[]>([]);
+  const [catalog, setCatalog] = useState<ReversalAutoOptParameter[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   /** Group switches: a switched-off group is left exactly as it is on the scanner. */
   const [groupOn, setGroupOn] = useState<Record<string, boolean>>({ [RATING_GROUP]: true, [TAPE_GROUP]: true });
-  /** ZAP row: the unit pills to try (none ticked = keep the scanner's own unit). */
-  const [units, setUnits] = useState<Set<AutoOptUnit>>(new Set());
+  /** UNIT row: the ThresholdUnit pills to try (none ticked = keep the scanner's own unit). */
+  const [units, setUnits] = useState<Set<ReversalAutoOptUnit>>(new Set());
 
   const [sweepOn, setSweepOn] = useState(false);
   const [sweep, setSweep] = useState<SweepRow[]>(() => defaultSweep(current));
@@ -245,7 +230,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AutoOptResult | null>(null);
+  const [result, setResult] = useState<ReversalAutoOptResult | null>(null);
   const [searchedKeys, setSearchedKeys] = useState<string[]>([]);
   const [appliedIndex, setAppliedIndex] = useState<number | null>(null);
   /** The days the current result was searched over - what selecting it shows. */
@@ -259,7 +244,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
   useEffect(() => {
     if (!open || catalog.length > 0) return;
     let alive = true;
-    loadAutoOptParameters(apiBase)
+    loadReversalAutoOptParameters(apiBase)
       .then((list) => {
         if (!alive) return;
         setCatalog(list);
@@ -279,20 +264,16 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
     setTo(end);
   }, [preset, tradingDays]);
 
-  // Fresh defaults for the threshold grid when the scanner's own thresholds change. END also follows
-  // CLOSE live: Passive never reads EndAbs, so it is forced off (never forced back on for Active - that
-  // stays the operator's own choice).
+  // Fresh defaults for the threshold grid when the scanner's own thresholds change.
   useEffect(() => {
     setSweep((prev) => {
       const fresh = defaultSweep(current);
       return prev.map((row) => {
         const freshRow = fresh.find((f) => f.key === row.key);
-        if (row.key === "endAbs")
-          return { ...row, on: current.closeMode === "Passive" ? false : row.on, title: freshRow?.title ?? row.title };
         return row.on ? row : freshRow ?? row;
       });
     });
-  }, [current.startAbs, current.startAbsNeg, current.startAbsMax, current.endAbs, current.closeMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [current.minDevAbsShort, current.minDevAbsLong, current.minDevAbsMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) window.clearInterval(pollRef.current);
@@ -301,7 +282,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
   useEffect(() => stopPolling, [stopPolling]);
 
   const grouped = useMemo(() => {
-    const map = new Map<string, AutoOptParameter[]>();
+    const map = new Map<string, ReversalAutoOptParameter[]>();
     for (const p of catalog) {
       const list = map.get(p.group) ?? [];
       list.push(p);
@@ -317,7 +298,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
       return next;
     });
 
-  const toggleGroupParams = (params: AutoOptParameter[]) =>
+  const toggleGroupParams = (params: ReversalAutoOptParameter[]) =>
     setSelected((prev) => {
       const next = new Set(prev);
       const allOn = params.every((p) => next.has(p.key));
@@ -326,19 +307,16 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
     });
 
   /**
-   * Ticking a ZAP unit narrows the whole search to that unit and the START thresholds: RATING GATES /
-   * TAPE FILTERS are held exactly as they are on the scanner (never touched), and of START (short) /
-   * START (long) / START MAX / END only START (short) and START (long) stay swept - shorts and longs
-   * are different trades, so both keep tuning independently, each on its own FROM/TO/STEP. START MAX and
-   * END are held at their current scanner value too. Every swept row always starts from the scanner's
-   * own value (defaultSweep already centres FROM/TO on it) and is always checked in steps of 0.1, not
-   * whatever step it had.
+   * Ticking a ThresholdUnit pill narrows the whole search to that unit and MIN DEV (short)/(long):
+   * RATING GATES / TAPE FILTERS are held exactly as they are on the scanner (never touched), and of
+   * MIN DEV short / long / max only short and long stay swept - shorts and longs are different
+   * trades, so both keep tuning independently, each on its own FROM/TO/STEP. MIN DEV MAX is held at
+   * its current scanner value too. Every swept row always starts from the scanner's own value
+   * (defaultSweep already centres FROM/TO on it) and is always checked in steps of 0.1.
    */
   const unitOnly = units.size > 0;
   const sweepRowsAll = sweep.filter((r) => r.on);
   const sweepRows = unitOnly ? sweepRowsAll.filter((r) => UNIT_SWEPT_KEYS.includes(r.key)) : sweepRowsAll;
-  // Each dimension is swept on its own with the others held at the best so far, so the cost is the SUM
-  // of the list lengths (twice at most), not their product.
   const comboCount = (sweepRows.length || units.size ? 1 : 0)
     + sweepRows.reduce((acc, r) => acc + sweepValues(r.from, r.to, unitOnly ? 0.1 : r.step).length + (r.offOption && r.includeOff ? 1 : 0), 0)
     + (units.size > 1 ? units.size : 0);
@@ -366,8 +344,6 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
     const valuesFor = (key: SweepKey): Array<number | null> | undefined => {
       const row = sweep.find((r) => r.key === key);
       if (!row || !row.on) return undefined;
-      // A ZAP unit is ticked: only START (short) / START (long) stay varied, from the scanner's own
-      // value, in steps of 0.1 - START MAX / END (still "on" underneath) are held as-is.
       if (unitOnly && !UNIT_SWEPT_KEYS.includes(row.key)) return undefined;
       const values: Array<number | null> = sweepValues(row.from, row.to, unitOnly ? 0.1 : row.step);
       if (row.offOption && row.includeOff) values.unshift(null);
@@ -376,17 +352,16 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
     const numbers = (key: SweepKey): number[] | undefined => valuesFor(key)?.filter((v): v is number => v != null);
     const thresholds = sweepOn && (sweepRows.length || units.size)
       ? {
-          startAbs: numbers("startAbs"),
-          startAbsNeg: valuesFor("startAbsNeg"),
-          startAbsMax: valuesFor("startAbsMax"),
-          endAbs: numbers("endAbs"),
+          minDevAbsShort: numbers("minDevAbsShort"),
+          minDevAbsLong: numbers("minDevAbsLong"),
+          minDevAbsMax: valuesFor("minDevAbsMax"),
           units: units.size ? Array.from(units) : undefined,
           maxVariants: maxCombos,
           topVariants: refineTop,
         }
       : null;
 
-    const body: AutoOptStartRequest = {
+    const body: ReversalAutoOptStartRequest = {
       base: buildBase(from, to),
       objective,
       minTrades,
@@ -394,18 +369,17 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
       topResults,
       parameterKeys: keys,
       thresholds,
-      ratingFromZero,
       excludeItb: fixedToggles.excludeItb,
       excludeHard: fixedToggles.excludeHard,
     };
 
     try {
-      const id = await startAutoOptimizer(apiBase, body);
+      const id = await startReversalAutoOptimizer(apiBase, body);
       setJobId(id);
       stopPolling();
       const tick = async () => {
         try {
-          const s = await pollAutoOptimizer(apiBase, id);
+          const s = await pollReversalAutoOptimizer(apiBase, id);
           setProgress(s.progress);
           setMessage(s.message);
           if (s.status === "running") return;
@@ -414,7 +388,6 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
           if (s.status === "done") setResult(s.result);
           if (s.status === "error") setError(s.error ?? "search failed");
         } catch (e: any) {
-          // A dropped poll is not a failed search: keep asking. A bridge that forgot the job is.
           if (/404/.test(String(e?.message))) {
             stopPolling();
             setStatus("error");
@@ -428,22 +401,21 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
       setStatus("error");
       setError(String(e?.message ?? e));
     }
-  }, [canRun, activeKeys, sweepOn, sweepRows, sweep, units, maxCombos, refineTop, buildBase, from, to, objective, minTrades, validate, topResults, ratingFromZero, fixedToggles.excludeItb, fixedToggles.excludeHard, apiBase, stopPolling]);
+  }, [canRun, activeKeys, sweepOn, sweepRows, sweep, units, maxCombos, refineTop, buildBase, from, to, objective, minTrades, validate, topResults, fixedToggles.excludeItb, fixedToggles.excludeHard, apiBase, stopPolling]);
 
   const cancel = useCallback(async () => {
-    if (jobId) await cancelAutoOptimizer(apiBase, jobId);
+    if (jobId) await cancelReversalAutoOptimizer(apiBase, jobId);
   }, [apiBase, jobId]);
 
   if (!inline && (!mounted || !open)) return null;
 
   const cell = "whitespace-nowrap";
-  const rows: Array<{ tag: string; row: AutoOptRow; isCurrent: boolean; index: number }> = [];
+  const rows: Array<{ tag: string; row: ReversalAutoOptRow; isCurrent: boolean; index: number }> = [];
   if (result) {
     rows.push({ tag: "CURRENT", row: result.current, isCurrent: true, index: -1 });
     result.results.forEach((row, i) => rows.push({ tag: `#${i + 1}`, row, isCurrent: false, index: i }));
   }
   const hasTest = !!result && result.validate && result.testDays > 0;
-  const staleParams = binMode;
 
   const card = (
       <div className={inline
@@ -514,21 +486,18 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
             </div>
           </section>
 
-          {/* ---- what may be changed: three groups ---- */}
+          {/* ---- what may be changed: two groups ---- */}
           <section className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
-                what the search may change <span className="text-zinc-700">- three groups; everything else on the scanner is left alone</span>
+                what the search may change <span className="text-zinc-700">- two groups; everything else on the scanner is left alone</span>
               </span>
             </div>
             <div className="rounded-lg border border-white/[0.05] bg-black/20 px-3 py-2 font-mono text-[10px] leading-relaxed text-zinc-500">
-              <span className="uppercase tracking-widest text-zinc-400">never touched:</span> MINRATE · MINTOTAL, the red toggles (ITB · HARD · DIV · NEWS · PTP · SSR · ETF · CRAP), REP / CORR, USA / CHINA and the COUNTRY / EXCHANGE / SECTOR lists.
-              MINRATE and MINTOTAL are untouched too. They all stay exactly as set on the scanner, and the search only looks at trades of tickers that pass them.
+              <span className="uppercase tracking-widest text-zinc-400">never touched:</span> MINRATE · MINTOTAL · MinGammaTotal, EXIT CLASS, the red toggles (ITB · HARD · NEWS · PTP · SSR · ETF · CRAP), REP, USA / CHINA and the COUNTRY / EXCHANGE / SECTOR lists.
+              The gate is baked into the day build itself, so every result implicitly keeps it: only trades that already cleared it were ever simulated.
             </div>
             {catalogError && <div className="font-mono text-[11px] text-rose-300">Could not load the parameter list: {catalogError}</div>}
-            {binMode && (
-              <div className="font-mono text-[10px] text-amber-200/90">BIN mode is on: MINRATE / MINTOTAL are replaced by the bin filters and are not searched.</div>
-            )}
 
             {grouped.map(({ group, params }) => {
               const enabled = !unitOnly && groupOn[group] !== false;
@@ -539,11 +508,11 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                   <div className="flex flex-wrap items-center gap-3 px-3 py-2">
                     <button type="button" disabled={busy || unitOnly} onClick={() => setGroupOn((g) => ({ ...g, [group]: !enabled }))}
                       className={clsx(TOOLBAR_BUTTON_BASE, "w-[120px]", enabled ? TOOLBAR_BUTTON_ACTIVE : TOOLBAR_BUTTON_INACTIVE)}
-                      title={unitOnly ? "Held as it is on the scanner while a ZAP unit is ticked - untick every unit to tune this group again" : enabled ? "Switch the whole group off: the search leaves it exactly as it is on the scanner" : "Switch the group on: the search may tune it"}>
+                      title={unitOnly ? "Held as it is on the scanner while a ThresholdUnit is ticked - untick every unit to tune this group again" : enabled ? "Switch the whole group off: the search leaves it exactly as it is on the scanner" : "Switch the group on: the search may tune it"}>
                       {GROUP_TITLE[group] ?? group}
                     </button>
                     <span className="font-mono text-[10px] text-zinc-500">{enabled ? onCount : 0}/{params.length} boxes</span>
-                    <span className="hidden font-mono text-[10px] text-zinc-600 md:inline">{unitOnly ? "held at its scanner value - a ZAP unit is ticked" : GROUP_HINT[group]}</span>
+                    <span className="hidden font-mono text-[10px] text-zinc-600 md:inline">{unitOnly ? "held at its scanner value - a ThresholdUnit is ticked" : GROUP_HINT[group]}</span>
                     <button type="button" onClick={() => setExpanded((p) => ({ ...p, [group]: !isOpen }))}
                       className="ml-auto font-mono text-[10px] uppercase tracking-widest text-zinc-500 hover:text-zinc-200">
                       {isOpen ? "hide boxes ▴" : "pick boxes ▾"}
@@ -572,13 +541,13 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
               );
             })}
 
-            {/* ---- ZAP: unit + thresholds ---- */}
+            {/* ---- UNIT: ThresholdUnit pills + MIN DEV thresholds ---- */}
             <div className={clsx("rounded-xl border bg-black/20", sweepOn ? "border-white/[0.08]" : "border-white/[0.04] opacity-60")}>
               <div className="flex flex-wrap items-center gap-3 px-3 py-2">
                 <button type="button" disabled={busy} onClick={() => setSweepOn((v) => !v)}
                   className={clsx(TOOLBAR_BUTTON_BASE, "w-[120px]", sweepOn ? TOOLBAR_BUTTON_ACTIVE : TOOLBAR_BUTTON_INACTIVE)}
-                  title="Also tune the ZAP row: the unit and the START / END thresholds. Each combination rebuilds every day from the tape, so this is slow - keep the grid small">
-                  ZAP
+                  title="Also tune the ThresholdUnit and the MIN DEV thresholds. Each combination rebuilds every day from the tape, so this is slow - keep the grid small">
+                  UNIT
                 </button>
                 <span className="font-mono text-[10px] text-zinc-500">
                   {sweepOn
@@ -601,19 +570,18 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                     </div>
                     <span className="font-mono text-[10px] text-zinc-600">
                       {unitOnly
-                        ? `only the unit and START (short / long) are tuned, each on its own, from the scanner's own values in steps of 0.1 - RATING GATES, TAPE FILTERS, START MAX and END stay exactly as they are`
-                        : `none ticked - keeps the scanner's own unit (${UNITS.find((u) => u.key === current.unit)?.label ?? "σ"})`}
+                        ? `only the unit and MIN DEV (short / long) are tuned, each on its own, from the scanner's own values in steps of 0.1 - RATING GATES, TAPE FILTERS and MIN DEV MAX stay exactly as they are`
+                        : `none ticked - keeps the scanner's own unit (${UNITS.find((u) => u.key === current.unit)?.label ?? "%"})`}
                     </span>
                   </div>
                   {sweep.map((row) => {
-                    const endInert = row.key === "endAbs" && current.closeMode === "Passive";
-                    const isSwept = !endInert && row.on && (!unitOnly || UNIT_SWEPT_KEYS.includes(row.key));
-                    const heldByUnit = !endInert && unitOnly && row.on && !UNIT_SWEPT_KEYS.includes(row.key);
+                    const isSwept = row.on && (!unitOnly || UNIT_SWEPT_KEYS.includes(row.key));
+                    const heldByUnit = unitOnly && row.on && !UNIT_SWEPT_KEYS.includes(row.key);
                     return (
                     <div key={row.key} className="flex flex-wrap items-center gap-3">
-                      <button type="button" disabled={busy || endInert} title={row.title}
+                      <button type="button" disabled={busy} title={row.title}
                         onClick={() => setSweep((prev) => prev.map((r) => (r.key === row.key ? { ...r, on: !r.on } : r)))}
-                        className={clsx(TOOLBAR_BUTTON_BASE, "w-[112px]", row.on && !endInert ? TOOLBAR_BUTTON_ACTIVE : TOOLBAR_BUTTON_INACTIVE)}>
+                        className={clsx(TOOLBAR_BUTTON_BASE, "w-[128px]", row.on ? TOOLBAR_BUTTON_ACTIVE : TOOLBAR_BUTTON_INACTIVE)}>
                         {row.label}
                       </button>
                       {isSwept ? (
@@ -623,7 +591,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                           <SpinnerInput label="TO" ariaLabel={`${row.label} to`} widthClass="w-14" value={row.to} step={unitOnly ? 0.1 : row.step} min={0} decimals={row.decimals}
                             onChange={(v) => setSweep((prev) => prev.map((r) => (r.key === row.key ? { ...r, to: v } : r)))} />
                           {unitOnly ? (
-                            <span className="flex h-7 items-center gap-2 pl-3 pr-3 rounded-lg bg-black/45 font-mono text-[10px] text-zinc-500" title="Fixed at 0.1 while a ZAP unit is ticked">
+                            <span className="flex h-7 items-center gap-2 pl-3 pr-3 rounded-lg bg-black/45 font-mono text-[10px] text-zinc-500" title="Fixed at 0.1 while a ThresholdUnit is ticked">
                               STEP <span className="text-zinc-300">0.1</span>
                             </span>
                           ) : (
@@ -644,11 +612,9 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                         </>
                       ) : (
                         <span className="font-mono text-[10px] text-zinc-700">
-                          {endInert
-                            ? "inert - CLOSE is Passive: exit is always the class's own window-end / gap-exit"
-                            : heldByUnit
-                            ? "held - only START (short / long) are swept while a ZAP unit is ticked"
-                            : row.key === "startAbs" ? `now ${current.startAbs}` : row.key === "startAbsNeg" ? (current.startAbsNeg ? `now ${current.startAbsNeg}` : "now off (same as short)") : row.key === "startAbsMax" ? (current.startAbsMax ? `now ${current.startAbsMax}` : "now off") : `now ${current.endAbs}`}
+                          {heldByUnit
+                            ? "held - only MIN DEV (short / long) are swept while a ThresholdUnit is ticked"
+                            : row.key === "minDevAbsShort" ? `now ${current.minDevAbsShort}` : row.key === "minDevAbsLong" ? (current.minDevAbsLong ? `now ${current.minDevAbsLong}` : "now off (same as short)") : (current.minDevAbsMax ? `now ${current.minDevAbsMax}` : "now off")}
                         </span>
                       )}
                     </div>
@@ -716,8 +682,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                   const dObj = row.objective - result.current.objective;
                   const th = row.thresholds;
                   const cur = result.current.thresholds;
-                  const thresholdChanged = th.startAbs !== cur.startAbs || th.startAbsNeg !== cur.startAbsNeg || th.startAbsMax !== cur.startAbsMax || th.endAbs !== cur.endAbs
-                    || th.minHoldCandles !== cur.minHoldCandles || th.unit !== cur.unit;
+                  const thresholdChanged = th.minDevAbsShort !== cur.minDevAbsShort || th.minDevAbsLong !== cur.minDevAbsLong || th.minDevAbsMax !== cur.minDevAbsMax || th.unit !== cur.unit;
                   return (
                     <div key={tag}
                       onClick={isCurrent ? undefined : () => { onApply(row, searchedKeys, resultRange); setAppliedIndex(index); }}
@@ -765,12 +730,10 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                       {(thresholdChanged || isCurrent) && (
                         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-400">
                           <span className="uppercase tracking-widest text-zinc-600">thresholds</span>
-                          <span>UNIT {UNITS.find((u) => u.key === th.unit)?.label ?? "σ"}</span>
-                          <span>START {th.startAbs ?? "—"}</span>
-                          <span>START(long) {th.startAbsNeg ?? "off"}</span>
-                          <span>START MAX {th.startAbsMax ?? "off"}</span>
-                          <span>END {th.endAbs ?? "—"}</span>
-                          <span>MINHOLD {th.minHoldCandles ?? 0}</span>
+                          <span>UNIT {UNITS.find((u) => u.key === th.unit)?.label ?? "%"}</span>
+                          <span>MIN DEV(short) {th.minDevAbsShort ?? "—"}</span>
+                          <span>MIN DEV(long) {th.minDevAbsLong ?? "—"}</span>
+                          <span>MIN DEV MAX {th.minDevAbsMax ?? "off"}</span>
                         </div>
                       )}
 
@@ -804,7 +767,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                     <table className="w-full border-collapse font-mono text-[11px]">
                       <thead>
                         <tr className="text-[9px] tracking-[0.12em] text-zinc-600">
-                          {["", "UNIT", "START", "START (long)", "START MAX", "END", "TRADES", "P&L", "AVG", "WIN", "PF"].map((h, i) => (
+                          {["", "UNIT", "MIN DEV (short)", "MIN DEV (long)", "MIN DEV MAX", "TRADES", "P&L", "AVG", "WIN", "PF"].map((h, i) => (
                             <th key={i} className={clsx("px-2 py-1.5 font-semibold", i === 0 ? "text-left" : "text-right")}>{h}</th>
                           ))}
                         </tr>
@@ -813,11 +776,10 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
                         {result.variants.map((v, i) => (
                           <tr key={i} className="border-t border-white/[0.04] text-zinc-300">
                             <td className={clsx(cell, "px-2 py-1 text-left", v.refined ? "accent-text" : "text-zinc-700")}>{v.refined ? "✓" : ""}</td>
-                            <td className={clsx(cell, "px-2 py-1 text-right")}>{UNITS.find((u) => u.key === v.thresholds.unit)?.label ?? "σ"}</td>
-                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.startAbs ?? "—"}</td>
-                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.startAbsNeg ?? "off"}</td>
-                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.startAbsMax ?? "off"}</td>
-                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.endAbs ?? "—"}</td>
+                            <td className={clsx(cell, "px-2 py-1 text-right")}>{UNITS.find((u) => u.key === v.thresholds.unit)?.label ?? "%"}</td>
+                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.minDevAbsShort ?? "—"}</td>
+                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.minDevAbsLong ?? "—"}</td>
+                            <td className={clsx(cell, "px-2 py-1 text-right")}>{v.thresholds.minDevAbsMax ?? "off"}</td>
                             <td className={clsx(cell, "px-2 py-1 text-right")}>{v.train.trades.toLocaleString("en-US")}</td>
                             <td className={clsx(cell, "px-2 py-1 text-right font-bold", tone(v.train.totalPnlUsd))}>{money(v.train.totalPnlUsd)}</td>
                             <td className={clsx(cell, "px-2 py-1 text-right", tone(v.train.avgPnlUsd))}>{money2(v.train.avgPnlUsd)}</td>

@@ -3,7 +3,7 @@
 import { StreamActionLogStore } from "./streamActionLogStore";
 import { StreamDecisionStore } from "./streamDecisionStore";
 import { StreamFilterPassLogStore } from "./streamFilterPassLogStore";
-import { StreamLogStore } from "./streamLogStore";
+import { StreamLogStore, reversalSignalDayKey } from "./streamLogStore";
 import { StreamOrderIntentStore } from "./streamOrderIntentStore";
 import { StreamPositionStore } from "./streamPositionStore";
 import { StreamSignalStore } from "./streamSignalStore";
@@ -36,6 +36,13 @@ const registry = new Map<string, StreamStores>();
 
 function createStreamStores(instanceId: string): StreamStores {
   const decision = new StreamDecisionStore();
+  const log = new StreamLogStore(instanceId);
+  // Reversal's log "day" resets at 15:50 NY (its own signal-window start), not calendar midnight —
+  // set here, before this instance's first push/read, so it applies regardless of which panel of
+  // the page mounts first. Every other strategy keeps the default calendar-midnight boundary.
+  if (instanceId === "stream.reversal") {
+    log.setDayKeyResolver(reversalSignalDayKey);
+  }
   return {
     decision,
     // Position rows are derived from this instance's own decisions — hence the injection.
@@ -44,7 +51,7 @@ function createStreamStores(instanceId: string): StreamStores {
     orderIntent: new StreamOrderIntentStore(),
     actionLog: new StreamActionLogStore(),
     updatedAt: new StreamUpdatedAtStore(),
-    log: new StreamLogStore(instanceId),
+    log,
     filterPassLog: new StreamFilterPassLogStore(),
   };
 }

@@ -56,6 +56,8 @@ import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, Sco
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
+import ReversalAutoOptimizer from "./ReversalAutoOptimizer";
+import type { ReversalAutoOptRow } from "../../lib/scanner/reversalAutoOptimizer";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
@@ -701,6 +703,9 @@ export default function ReversalScanner({
   // separate violet-strip toggle the operator said was not needed there ("не потрібні"), now brought
   // back here in its own place and style, not restoring the old Γ/Ø pills.
   const [reversalIgnoreRatings, setReversalIgnoreRatings] = useState(false);
+  // Bumped by applyReversalAutoOptimizerRow once a result has landed in state, so the run that
+  // follows always sees the FRESH values — mirrors ArbitrageScanner's own autoRunTick exactly.
+  const [autoRunTick, setAutoRunTick] = useState(0);
   // GAMMA's own black ρ/β/σ-style min/max box — the (class, sign) gamma level a row actually
   // cleared (rides on Rating/RatingTotal, same as the table's own γ column — see PaperReversalMapper).
   // Local state, not the shared useScannerFilters hook: no other strategy has a per-row gamma to
@@ -2208,6 +2213,70 @@ export default function ReversalScanner({
     maxImbExch1555: setMaxImbExch1555,
   } as const;
 
+  /**
+   * Writes one Reversal AUTO OPTIMIZER result into the toolbar — mirrors ArbitrageScanner's own
+   * applyAutoOptimizerRow (see that function's own doc comment). The RATING GATES / TAPE FILTERS
+   * constraints share the SAME keys as Arbitrage's (both catalogs read the identical
+   * PaperStrategyRequest fields — see ReversalFilterSearchSpecs.cs), so they land in the exact same
+   * scannerSharedFilterSetters/SHARED_FILTER_PRESET_FIELDS boxes this file already has. There is no
+   * minrate/mintotal/country/exchange/sector case: the search never touches those (see
+   * ReversalFilterSearchSpecs.cs's own doc comment) so they never appear in `searchedKeys`.
+   */
+  const applyReversalAutoOptimizerRow = (row: ReversalAutoOptRow, searchedKeys: string[], range?: { from: string; to: string }) => {
+    const byKey = new Map(row.constraints.map((c) => [c.key, c] as const));
+    const rangeFields = new Map<string, (typeof SHARED_FILTER_PRESET_FIELDS)[number]>(SHARED_FILTER_PRESET_FIELDS.map((f) => [f.key, f] as const));
+    const modePatch: Partial<Record<SharedRangeFilterKey, SharedRangeFilterMode>> = {};
+    const text = (v: number | null | undefined) => (v == null ? "" : String(v));
+
+    for (const key of searchedKeys) {
+      const c = byKey.get(key);
+      const field = rangeFields.get(key);
+      if (field) {
+        scannerSharedFilterSetters[field.scannerMin](text(c?.min));
+        scannerSharedFilterSetters[field.scannerMax](text(c?.max));
+        // A box the result uses has to actually be ON, or the bound is typed in but not applied.
+        if (c) modePatch[key as SharedRangeFilterKey] = "on";
+        continue;
+      }
+      switch (key) {
+        case "excludePTP": setExcludePTP(!!c); break;
+        case "excludeSSR": setExcludeSSR(!!c); break;
+        case "excludeETF": setExcludeETF(!!c); break;
+        case "excludeCrap": setExcludeCrap(!!c); break;
+        case "excludeHasNews": setExcludeHasNews(!!c); break;
+        case "excludeHasReport": setExcludeHasReport(!!c); break;
+        case "requireHasReport": setRequireHasReport(!!c); break;
+        case "includeUSA": setIncludeUSA(!!c); break;
+        default: break;
+      }
+    }
+
+    if (Object.keys(modePatch).length) setSharedRangeFilterModes((prev) => ({ ...prev, ...modePatch }));
+
+    // The UNIT row: the pill first, then the three MIN DEV boxes. The two optional ones are written
+    // as they are - "off" (empty) clears the box, it does not leave an old value behind.
+    const th = row.thresholds;
+    if (th.unit) setReversalUnitMode(th.unit);
+    if (th.minDevAbsShort != null) setReversalMinDevAbsShort(th.minDevAbsShort);
+    setReversalMinDevAbsLong(th.minDevAbsLong != null ? String(th.minDevAbsLong) : "");
+    setReversalMinDevAbsMax(th.minDevAbsMax != null ? String(th.minDevAbsMax) : "");
+
+    // Show the days the search was over, then re-run once all of the above has landed in state.
+    if (range) {
+      setDateMode("range");
+      setDateFrom(range.from);
+      setDateTo(range.to);
+    }
+    setAutoRunTick((n) => n + 1);
+  };
+
+  useEffect(() => {
+    if (autoRunTick === 0) return;
+    void run();
+    // run() is a fresh closure each render; this effect fires in the render that saw the new values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunTick]);
+
   const clearScannerSharedFilters = () => {
     setScannerPresetId("");
     setScannerPresetStatus("");
@@ -2428,8 +2497,20 @@ export default function ReversalScanner({
         minDevAbsLong: optNumOrNull(reversalMinDevAbsLong) ?? reversalMinDevAbsShort,
         minDevAbsMax: optNumOrNull(reversalMinDevAbsMax),
         minGammaTotal: reversalMinGammaTotal,
+        // Found missing while checking Scanner-vs-Stream parity (2026-09-29): the backtest already
+        // sends minRate/minTotal to PaperReversalController (see buildReversalParams), but this push
+        // never carried them, so the live engine always ran with MinRate=0/MinTotal=0 regardless of
+        // what the toolbar's own MINRATE/MINTOTAL boxes showed.
+        minRate: reversalMinRate,
+        minTotal: reversalMinTotal,
         ignoreRatings: reversalIgnoreRatings,
         thresholdUnit: reversalUnitMode,
+        // Found missing while checking Stream-vs-Scanner parity on the 15:50-15:55 signal window
+        // (2026-09-29, "стрім повинен набирати ситуації по білу і аску"): the Scanner's own PriceMode
+        // toggle already changed which reading ITS backtest gated on (TapeReversalEngine.SignalDev),
+        // but this push never carried it at all, so the live engine always judged the plain print
+        // regardless of what the toolbar showed — see ReversalLiveParams.PriceMode's own doc comment.
+        priceMode,
         filters: streamFilterConfig,
         multiModes: { countries: countryEnabled, exchanges: exchangeEnabled, sectors: sectorEnabled },
         source: "reversal-scanner",
@@ -2438,8 +2519,8 @@ export default function ReversalScanner({
     return () => window.clearTimeout(timer);
   }, [
     reversalExitClass, reversalMinDevAbsShort, reversalMinDevAbsLong, reversalMinDevAbsMax,
-    reversalMinGammaTotal, reversalUnitMode, reversalIgnoreRatings, streamFilterConfig,
-    countryEnabled, exchangeEnabled, sectorEnabled,
+    reversalMinGammaTotal, reversalMinRate, reversalMinTotal, reversalUnitMode, reversalIgnoreRatings,
+    priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled,
   ]);
 
   // Which session a row's report marker is judged against. The marker carries only day/month, so
@@ -4907,12 +4988,12 @@ export default function ReversalScanner({
                   return arbitrageTickerMetaByTicker[ticker]?.sectorL3 ?? null;
                 }
               );
-            } else if (definition.key === "bench") {
-              catParam = buildCategoricalOptimizerParameter(
-                filteredEpisodes, "bench", "BENCH", definition.group,
-                (row) => row.benchTicker?.trim().toUpperCase() ?? null
-              );
             }
+            // "bench" deliberately NOT built here (found 2026-09-29 auditing every SCOPE parameter
+            // for Reversal): row.benchTicker is always "" — PaperReversalMapper.ToClosedDto hardcodes
+            // BenchTicker to "" since Reversal has no hedge leg (the same reason benchPnlUsd/
+            // hedgedPnlUsd are already excluded from scope RESULTS below) — the axis could only ever
+            // render one empty-string bucket, which looks exactly like a broken parameter.
             if (catParam) catResults.push(catParam);
             return null;
           }
@@ -4966,12 +5047,9 @@ export default function ReversalScanner({
             filteredEpisodes, "sectorL5", "SECTOR L5", definition.group,
             (row) => row.sectorL5?.trim() || null
           );
-        } else if (definition.key === "bench") {
-          catParam = buildCategoricalOptimizerParameter(
-            filteredEpisodes, "bench", "BENCH", definition.group,
-            (row) => row.benchTicker?.trim().toUpperCase() ?? null
-          );
         }
+        // "bench" deliberately NOT built here — see the same skip's own comment above, in this
+        // function's useBinRatingFilter branch.
         if (catParam) parameterMap.set(definition.key, catParam);
         continue;
       }
@@ -5536,7 +5614,7 @@ export default function ReversalScanner({
   const headerMetaLabel = isStreamOnlyShell
     ? (headerMetaLabelOverride ?? `signals ${intn(streamStats.signals)} | ready ${intn(streamStats.ready)} | open ${intn(streamStats.open)}`)
     : `minRate ${num(minRateLabel, 2)} | minTotal ${intn(minTotalLabel)} | limit ${intn(limitLabel)}`;
-  const activeTabLabel = isStreamOnlyShell ? (activeTabLabelOverride ?? "ACTIVE") : "ACTIVE";
+  const activeTabLabel = isStreamOnlyShell ? (activeTabLabelOverride ?? "ACTIVE") : "OPTIMIZER";
   const episodesTabLabel = isStreamOnlyShell ? (episodesTabLabelOverride ?? "POSITIONS") : "SCOPE";
   const analyticsTabLabel = isStreamOnlyShell ? (analyticsTabLabelOverride ?? "ANALYTICS") : "SNAPSHOT";
   const headerNavGroupClass = isLightTheme
@@ -8479,6 +8557,29 @@ export default function ReversalScanner({
               </div>
             </div>
 
+          </div>
+        )}
+
+        {primaryPanel === "scanner" && tab === "active" && !isStreamOnlyShell && (
+          <div className="mb-3">
+            <ReversalAutoOptimizer
+              inline
+              open
+              onClose={() => undefined}
+              apiBase={STRATEGY.api.base}
+              buildBase={(from, to) => buildReversalPostRequest(from, to)}
+              fixedToggles={{ excludeItb, excludeHard }}
+              tradingDays={sortedDaysAsc}
+              initialFrom={dateFrom}
+              initialTo={dateTo}
+              current={{
+                minDevAbsShort: reversalMinDevAbsShort,
+                minDevAbsLong: reversalMinDevAbsLong,
+                minDevAbsMax: reversalMinDevAbsMax,
+                unit: reversalUnitMode,
+              }}
+              onApply={applyReversalAutoOptimizerRow}
+            />
           </div>
         )}
 

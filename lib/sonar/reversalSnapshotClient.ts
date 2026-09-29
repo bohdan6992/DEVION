@@ -29,6 +29,10 @@ export type ReversalSonarLiveParams = {
   minDevAbsLong: number;
   minDevAbsMax: number | null;
   minGammaTotal: number;
+  /** Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off. */
+  minRate: number;
+  /** Floor on that same cell's own published total trade count. 0 = off. */
+  minTotal: number;
   ignoreRatings: boolean;
   thresholdUnit: ReversalThresholdUnitName;
   filters: OpenDoorLiveFilters | null;
@@ -78,6 +82,8 @@ export function toReversalSonarLiveParams(args: {
   minDevAbsLong: number;
   minDevAbsMax: number | null;
   minGammaTotal: number;
+  minRate: number;
+  minTotal: number;
   ignoreRatings: boolean;
   thresholdUnit: ReversalThresholdUnitName;
   filters: OpenDoorSonarFilterSource;
@@ -89,6 +95,8 @@ export function toReversalSonarLiveParams(args: {
     minDevAbsLong: args.minDevAbsLong,
     minDevAbsMax: args.minDevAbsMax,
     minGammaTotal: args.minGammaTotal,
+    minRate: args.minRate,
+    minTotal: args.minTotal,
     ignoreRatings: args.ignoreRatings,
     thresholdUnit: args.thresholdUnit,
     filters: toOpenDoorSonarFilters(args.filters),

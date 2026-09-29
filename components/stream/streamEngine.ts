@@ -626,6 +626,40 @@ function localDayKey(timestamp = Date.now()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * Resolves "Y-M-D HH:MM NY wall time" to the UTC instant it corresponds to. Guess-and-correct: format
+ * the guess back through the NY timezone, read it AS IF that string were UTC, and fold the difference
+ * into the guess. Converges in one pass outside a DST transition, which 15:50 NY never sits in.
+ */
+function nyWallTimeToUtcMs(y: number, m: number, d: number, hh: number, mm: number): number {
+  const targetIfUtc = Date.UTC(y, m - 1, d, hh, mm, 0);
+  let guessMs = targetIfUtc;
+  for (let i = 0; i < 2; i++) {
+    const nyString = new Date(guessMs).toLocaleString("sv-SE", { timeZone: "America/New_York", hour12: false });
+    const asIfUtcMs = Date.parse(`${nyString.replace(" ", "T")}Z`);
+    guessMs += targetIfUtc - asIfUtcMs;
+  }
+  return guessMs;
+}
+
+/**
+ * Reversal's action log resets at 15:50 NY (its own signal-window start), not a rolling window from
+ * "now" — the operator's own instruction (2026-09-29): dispatched-order rows from before today's own
+ * 15:50 NY must not still show once that boundary has passed. Returns the most recent 15:50 NY
+ * instant at or before `nowMs`, as a UTC epoch ms to compare directly against intent timestamps.
+ */
+function reversalActionLogCutoffUtcMs(nowMs: number): number {
+  const nyDateStr = new Date(nowMs).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const nyTimeStr = new Date(nowMs).toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour12: false });
+  const [hh = "0", mm = "0"] = nyTimeStr.split(":");
+  const minuteOfDay = Number(hh) * 60 + Number(mm);
+  const [y, m, d] = nyDateStr.split("-").map(Number);
+  if (minuteOfDay >= 15 * 60 + 50) return nyWallTimeToUtcMs(y!, m!, d!, 15, 50);
+  // Before 15:50 NY today: the cutoff is still yesterday's 15:50 NY session start.
+  const prevUtc = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1) - 1));
+  return nyWallTimeToUtcMs(prevUtc.getUTCFullYear(), prevUtc.getUTCMonth() + 1, prevUtc.getUTCDate(), 15, 50);
+}
+
 function sideOf(value: string | null | undefined): "Long" | "Short" {
   return String(value ?? "").trim().toLowerCase().startsWith("s") ? "Short" : "Long";
 }
@@ -891,6 +925,8 @@ export function useStreamEngine({
     const log: StreamActionLogEntry[] = [];
     const intents: StreamOrderIntent[] = [];
     let sent = 0;
+    // Reversal only: dispatched rows reset at 15:50 NY instead of the shared 20h rolling window.
+    const reversalCutoffUtcMs = strategyId.toLowerCase() === "stream.reversal" ? reversalActionLogCutoffUtcMs(now) : null;
     for (const r of state.intents) {
       if (!mine(r)) continue;
       const at = Date.parse(r.atUtc);
@@ -904,6 +940,7 @@ export function useStreamEngine({
       const id = `${strategyId}|${r.atUtc}|${ticker}|${action}`;
       if (r.dispatched) {
         if (now - at > ACTION_LOG_WINDOW_MS) continue;
+        if (reversalCutoffUtcMs != null && at < reversalCutoffUtcMs) continue;
         if (sessionStartedAtRef.current != null && at >= sessionStartedAtRef.current) sent += 1;
         log.push({
           id,

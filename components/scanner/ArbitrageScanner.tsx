@@ -8721,6 +8721,7 @@ export default function ArbitrageScanner({
                 endAbs,
                 minHoldCandles: normalizedMinHoldCandles,
                 unit: ((zapMode !== "off" ? zapMode : ZAP_UNITS.find((u) => u.metric === metric && u.mode !== "delta")?.mode) ?? "sigma") as "zap" | "sigma" | "delta" | "gamma" | "alpha",
+                closeMode: closeMode === "Passive" ? "Passive" : "Active",
               }}
               binMode={scannerBinFilterEnabled({ ratingMode, metric })}
               onApply={applyAutoOptimizerRow}

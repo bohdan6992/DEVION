@@ -15,14 +15,31 @@ import type { ReversalExitClass } from "../sonar/reversalSnapshotClient";
  */
 export type ReversalThresholdUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 
+/** Mirrors ReversalPriceMode (TapeReversalModels.cs) — what the GATE's own signal reading is
+ * computed from, not just entry/exit pricing. See ReversalLiveParams.PriceMode's own doc comment. */
+export type ReversalPriceMode = "LastPrint" | "BidAsk";
+
 export type ReversalStreamLiveParams = {
   exitClass: ReversalExitClass;
   minDevAbsShort: number;
   minDevAbsLong: number;
   minDevAbsMax: number | null;
   minGammaTotal: number;
+  /** Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off. Added
+   * 2026-09-29 — a genuine Scanner-vs-Stream parity gap: the Scanner already sent this to
+   * PaperReversalController, but nothing ever pushed it here, so the live engine always ran with
+   * MinRate=0 regardless of what the Scanner's own MINRATE box showed. */
+  minRate: number;
+  /** Floor on the same cell's own published total trade count. 0 = off. Same parity gap as minRate. */
+  minTotal: number;
   ignoreRatings: boolean;
   thresholdUnit: ReversalThresholdUnit;
+  /** "LastPrint" (default) | "BidAsk" — added 2026-09-29 (the operator's own instruction: "стрім
+   * повинен набирати ситуації по білу і аску"). Another genuine Scanner-vs-Stream parity gap: the
+   * Scanner's own PriceMode toggle changed which reading its backtest gated on
+   * (TapeReversalEngine.SignalDev), but the live engine had no such field at all and always judged
+   * the plain print — see ReversalLiveParams.PriceMode's own doc comment. */
+  priceMode: ReversalPriceMode;
   filters: OpenDoorLiveFilters | null;
   source: string;
 };
@@ -33,8 +50,11 @@ export function toReversalStreamLiveParams(args: {
   minDevAbsLong: number;
   minDevAbsMax: number | null;
   minGammaTotal: number;
+  minRate: number;
+  minTotal: number;
   ignoreRatings: boolean;
   thresholdUnit: ReversalThresholdUnit;
+  priceMode: ReversalPriceMode;
   filters: ArbitrageFilterConfigV1;
   multiModes: MultiTriModes;
   source: string;
@@ -45,8 +65,11 @@ export function toReversalStreamLiveParams(args: {
     minDevAbsLong: args.minDevAbsLong,
     minDevAbsMax: args.minDevAbsMax,
     minGammaTotal: args.minGammaTotal,
+    minRate: args.minRate,
+    minTotal: args.minTotal,
     ignoreRatings: args.ignoreRatings,
     thresholdUnit: args.thresholdUnit,
+    priceMode: args.priceMode,
     filters: toOpenDoorLiveFilters(args.filters, args.multiModes),
     source: args.source,
   };
