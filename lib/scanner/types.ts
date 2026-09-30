@@ -607,6 +607,11 @@ export type ReversalAnalyticsSummaryDto = {
   top2LossShare: number | null;
 };
 
+// Continuum's own copy of ReversalAnalyticsSummaryDto — identical shape, since
+// PaperContinuumController.BuildAnalyticsSummary is the same ported-unchanged computation (no
+// direction-specific field; see that controller's own doc comment).
+export type ContinuumAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
 export type PaperArbOptimizerRangeBucketDto = {
   bucketId: string;
   label: string;

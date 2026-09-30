@@ -243,6 +243,41 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // Continuum: the mirror-image bet to Reversal on the SAME 15:50 signal / 16:00 entry / five
+  // clock-time exits (18:00 / 21:00 / 04:00+1 / 07:00+1 / PRINT 09:30+1) — see ContinuumTiming.Default
+  // and ContinuumGate.cs. Reversal fades the extreme (isLong = d < 0); Continuum bets the extreme
+  // keeps moving (isLong = d > 0). Added 2026-09-30 (the operator's own instruction: "CONRINUUM повна
+  // протилежність... очікує продовження зміни"); its own ratings file is a deliberate placeholder
+  // (ContinuumRatingsService.LoadAsync always returns an empty table) until the operator's own
+  // notebook publishes continuum_rolling_perf.json.gz — see that service's own doc comment. Only the
+  // Scanner half is wired so far: no ContinuumServerStrategy, no ContinuumLiveParamsService, no
+  // TradingApp hotkey — this entry exists so the Scanner page has routes/storage/window to read, the
+  // same staged rollout Reversal itself went through. priority 23 — one below Reversal's 24, for the
+  // same reason Reversal sits below Day Two: it has not traded for real even once yet.
+  continuum: {
+    key: "continuum",
+    bridgeStrategyId: "stream.continuum",
+    nav: {
+      stream: "/continuum/stream",
+      scanner: "/continuum/scanner",
+      sonar: "/continuum/sonar",
+      scout: "/continuum/scout",
+    },
+    tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
+    priority: 23,
+    holdsOvernight: true,
+    api: { paperBase: "/api/paper/continuum", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.continuum", sonarPrefix: "bridge.continuum", streamPrefix: "stream.continuum" },
+    // Continuum's own rating classes: same five clock-time exits as Reversal's ExitTargetMinByClass,
+    // read from /api/paper/continuum's own (currently empty) gamma table.
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit18", "exit21", "exit04", "exit07", "print"],
+      labels: { exit18: "18:00", exit21: "21:00", exit04: "04:00+1", exit07: "07:00+1", print: "PRINT" },
+    },
+  },
+
   openfade: {
     key: "openfade",
     bridgeStrategyId: "stream.openfade",

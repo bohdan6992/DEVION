@@ -12,6 +12,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "pumpAndDump", name: "Pump & Dump", icon: "🚀", description: "Імпульсний зліт і різкий злив." },
   { key: "breakout", name: "Breakout", icon: "📈", description: "Пробій рівня та продовження руху." },
   { key: "reversal", name: "Reversal", icon: "🧭", description: "Розворот після екстремуму." },
+  { key: "continuum", name: "Continuum", icon: "🌊", description: "Продовження руху після екстремуму." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
   { key: "pullback", name: "Pullback", icon: "🪝", description: "Відкат у тренді для заходу." },
