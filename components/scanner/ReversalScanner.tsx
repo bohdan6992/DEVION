@@ -5602,12 +5602,12 @@ export default function ReversalScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "REVERSAL STREAM")
+    ? (headerTitleOverride ?? "CLO•REVERSAL STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "REVERSAL STREAM"
-        : "REVERSAL SCANNER";
+        ? "CLO•REVERSAL STREAM"
+        : "CLO•REVERSAL SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -8587,7 +8587,7 @@ export default function ReversalScanner({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                REVERSAL SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {reversalExitClass} exit
+                CLO•REVERSAL SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {reversalExitClass} exit
               </div>
               {reversalSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
               {reversalSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{reversalSnapshotError}</span>}

@@ -338,7 +338,10 @@ export default function CaesarSchedule() {
         for (const seg of CAESAR_SEGMENTS) {
           for (const row of plan[seg.key] ?? []) {
             if (!row.enabled) continue;
-            const strategy = LIVE_STRATEGIES[row.strategyKey];
+            // row.strategyKey is always STRATEGY_CATALOG's own spelling (camelCase for "opgReversal"/
+            // "opgContinuum"/"dayTwo"), but this LIVE_STRATEGIES is the real registry, always
+            // lowercase-keyed — same mismatch CAESAR_STRATEGIES' own lookup had, fixed the same way.
+            const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
             if (strategy?.streamEngine === "browser" && strategy.bridgeStrategyId) {
               ids.add(strategy.bridgeStrategyId);
             }
@@ -367,7 +370,7 @@ export default function CaesarSchedule() {
     if (!plan) return [];
     const inSegment = (plan[selected] ?? []).flatMap((row) => {
       if (!row.enabled) return [];
-      const strategy = LIVE_STRATEGIES[row.strategyKey];
+      const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
       if (!strategy) return [];
       // Every strategy today runs on the bridge, not in a browser tab — CaesarCharts reads its
       // entries and open positions from the bridge itself (GET api/stream/caesar/entries and
@@ -391,7 +394,7 @@ export default function CaesarSchedule() {
     for (const seg of CAESAR_SEGMENTS) {
       for (const row of plan[seg.key] ?? []) {
         if (!row.enabled) continue;
-        const strategy = LIVE_STRATEGIES[row.strategyKey];
+        const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
         if (!strategy?.holdsOvernight) continue;
         if (overnight.some((o) => o.instanceId === strategy.bridgeStrategyId)) continue;
         overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });

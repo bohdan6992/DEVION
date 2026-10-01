@@ -17,7 +17,7 @@ import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFil
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { pushContinuumStreamLiveParams, toContinuumStreamLiveParams } from "../../lib/continuum/liveParamsClient";
+import { pushOPGReversalStreamLiveParams, toOPGReversalStreamLiveParams } from "../../lib/opgReversal/liveParamsClient";
 import OpenDoorStreamView from "../stream/OpenDoorStream";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
@@ -51,13 +51,13 @@ import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeD
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ContinuumAnalyticsSummaryDto, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, OPGReversalAnalyticsSummaryDto, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
 import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
-import ContinuumAutoOptimizer from "./ContinuumAutoOptimizer";
-import type { ContinuumAutoOptRow } from "../../lib/scanner/continuumAutoOptimizer";
+import OPGReversalAutoOptimizer from "./OPGReversalAutoOptimizer";
+import type { OPGReversalAutoOptRow } from "../../lib/scanner/opgReversalAutoOptimizer";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
@@ -67,12 +67,12 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
-// Continuum tracks no sigma metric and no peak (the mapper leaves those slots null and
+// OPGReversal tracks no sigma metric and no peak (the mapper leaves those slots null and
 // MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
 // metrics are excluded rather than rendering empty charts that look like a bug. Same exclusion set
 // OpenDoor/Day Two use, for the same reason: a fixed-clock entry/exit has no peak to research.
 const STRATEGY = defineScannerStrategy({
-  key: "continuum",
+  key: "opgreversal",
   excludeScopeParameters: [
     "startMetricAbs", "peakMetricAbs", "endMetricAbs",
     "reversionAbs", "reversionPct",
@@ -81,7 +81,7 @@ const STRATEGY = defineScannerStrategy({
   ],
   excludeScopeResults: ["benchPnlUsd", "hedgedPnlUsd", "peakMetricAbs", "endMetricAbs"],
   defaultScopeAxes: { left: "rating", right: "spread" },
-  // Continuum has no |sigma| to look a bin up by, so the RATING GATES axes read the gamma/gammaN the
+  // OPGReversal has no |sigma| to look a bin up by, so the RATING GATES axes read the gamma/gammaN the
   // gate already resolved onto the episode — which is the traded side's, so long and short share
   // one field. With the default "sigma-bin" source those two axes were silently empty.
   ratingBinSource: "episode",
@@ -127,22 +127,20 @@ type ArbitrageScannerProps = {
   navScoutHref?: string;
 };
 
-const ACTIVE_TICKER_STRATEGY = "continuum" as const;
+const ACTIVE_TICKER_STRATEGY = "opgreversal" as const;
 
 /**
- * Continuum's exit classes — ContinuumTiming.Default.ExitTargetMinByClass: five clock-time exits
- * spanning the evening into the next morning's open print. Lowercase keys exactly as the bridge
- * (PaperContinuumRequest.ExitClass) expects them.
+ * OPGReversal's exit classes — OPGReversalTiming.Default.ExitTargetMinByClass: three same-day
+ * clock-time exits (09:45/10:00/10:30), not Reversal's own five spanning into the next morning.
+ * Lowercase keys exactly as the bridge (PaperOPGReversalRequest.ExitClass) expects them.
  */
-const CONTINUUM_EXIT_CLASSES = [
-  { key: "exit18", label: "18:00" },
-  { key: "exit21", label: "21:00" },
-  { key: "exit04", label: "04:00+1" },
-  { key: "exit07", label: "07:00+1" },
-  { key: "print", label: "PRINT (09:30+1)" },
+const OPGREVERSAL_EXIT_CLASSES = [
+  { key: "exit0945", label: "09:45" },
+  { key: "exit1000", label: "10:00" },
+  { key: "exit1030", label: "10:30" },
 ] as const;
 
-export default function ContinuumScanner({
+export default function OPGReversalScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
   controlledTab,
@@ -659,55 +657,55 @@ export default function ContinuumScanner({
   // fix already shipped in ArbitrageScanner.tsx/PairFluxScanner.tsx; this fork never got it.
   const deferredQTicker = React.useDeferredValue(qTicker);
 
-  // Continuum exit class — replaces the inherited Arbitrage session-band selector with the five
-  // clock-time exits ContinuumTiming.Default actually computes (18:00 / 21:00 / 04:00+1 / 07:00+1 /
+  // OPGReversal exit class — replaces the inherited Arbitrage session-band selector with the five
+  // clock-time exits OPGReversalTiming.Default actually computes (18:00 / 21:00 / 04:00+1 / 07:00+1 /
   // PRINT 09:30+1). Deliberately independent from ruleBand/session, which stay wired to the old
   // Arbitrage-inherited plumbing elsewhere in this file untouched.
-  // Range analysis runs entirely client-side for Continuum, same as OpenDoor/Day Two:
+  // Range analysis runs entirely client-side for OPGReversal, same as OpenDoor/Day Two:
   // optimizerRangeParameters buckets the episodes already on screen, so no /optimizer/ranges call
   // is needed (the Arbitrage endpoint buckets Arbitrage episodes by Arbitrage-only axes and is
   // deliberately not used).
-  const CONTINUUM_OPTIMIZER_ENABLED = true;
+  const OPGREVERSAL_OPTIMIZER_ENABLED = true;
 
   // Scenario runs are on too — see runEpisodesOptimizer, which evaluates them off the range
   // buckets client-side rather than calling /scope/evaluate.
-  const CONTINUUM_SCENARIO_RUNNER_ENABLED = true;
+  const OPGREVERSAL_SCENARIO_RUNNER_ENABLED = true;
 
-  const [continuumExitClass, setContinuumExitClass] = useState<"exit18" | "exit21" | "exit04" | "exit07" | "print">("print");
-  // ContinuumGate.Check's whole rule: |15:50 deviation| must clear BOTH a flat floor (now split by
-  // side — see below) AND the ticker's own published gamma for (class, sign) — see ContinuumGate.cs.
-  // MinDevAbsShort gates a NEGATIVE (Short) reading, defaulting to the published file's own min_dev
+  const [opgReversalExitClass, setOPGReversalExitClass] = useState<"exit0945" | "exit1000" | "exit1030">("exit0945");
+  // OPGReversalGate.Check's whole rule: |9:20-9:25 deviation| must clear BOTH a flat floor (now split by
+  // side — see below) AND the ticker's own published gamma for (class, sign) — see OPGReversalGate.cs.
+  // MinDevAbsShort gates a POSITIVE (Short) reading, defaulting to the published file's own min_dev
   // (0.5) — same convention as ArbitrageScanner's startAbs (a plain number, never empty).
-  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(0.5);
-  // MinDevAbsLong gates a POSITIVE (Long) reading. String, like ArbitrageScanner's startAbsNeg, so it
+  const [opgReversalMinDevAbsShort, setOPGReversalMinDevAbsShort] = useState(0.5);
+  // MinDevAbsLong gates a NEGATIVE (Long) reading. String, like ArbitrageScanner's startAbsNeg, so it
   // can be left empty — empty means "the same threshold as the short one" (optNumOrNull(...) ??
-  // continuumMinDevAbsShort), mirroring startAbsNeg's own fallback UX exactly.
-  const [continuumMinDevAbsLong, setContinuumMinDevAbsLong] = useState("");
-  // Upper cap on |15:50 deviation|, either side — a reading beyond it is an anomalous outlier and is
+  // opgReversalMinDevAbsShort), mirroring startAbsNeg's own fallback UX exactly.
+  const [opgReversalMinDevAbsLong, setOPGReversalMinDevAbsLong] = useState("");
+  // Upper cap on |9:20-9:25 deviation|, either side — a reading beyond it is an anomalous outlier and is
   // NOT taken. String, like ArbitrageScanner's startAbsMax; empty = no cap.
-  const [continuumMinDevAbsMax, setContinuumMinDevAbsMax] = useState("");
-  // Sample-size floor on the ticker's own published gamma (ContinuumGammaEntry.GammaN) — same spirit
+  const [opgReversalMinDevAbsMax, setOPGReversalMinDevAbsMax] = useState("");
+  // Sample-size floor on the ticker's own published gamma (OPGReversalGammaEntry.GammaN) — same spirit
   // as OpenDoorGate.TryGetRatedBin's minTotalGate. 0 (or below) turns this off.
-  const [continuumMinGammaTotal, setContinuumMinGammaTotal] = useState(0);
+  const [opgReversalMinGammaTotal, setOPGReversalMinGammaTotal] = useState(0);
   // Floor on the matched (class, sign) cell's own published win_rate/total — Arbitrage's MINRATE/
-  // MINTOTAL, mirrored onto Continuum's own rating cell (continuum_rolling_perf's win_rate/total, NOT
-  // GammaN — see ContinuumGate.cs). Own separate pills (see below), not the black ρ/β/σ-style range
+  // MINTOTAL, mirrored onto OPGReversal's own rating cell (opgReversal_rolling_perf's win_rate/total, NOT
+  // GammaN — see OPGReversalGate.cs). Own separate pills (see below), not the black ρ/β/σ-style range
   // boxes — those are a different kind of gate (a STATIC ticker value, filtered min/max), while
   // MINRATE/MINTOTAL are a threshold ON the trade's own rating. 0 (or below) turns each off.
-  const [continuumMinRate, setContinuumMinRate] = useState(0);
-  const [continuumMinTotal, setContinuumMinTotal] = useState(0);
+  const [opgReversalMinRate, setOPGReversalMinRate] = useState(0);
+  const [opgReversalMinTotal, setOPGReversalMinTotal] = useState(0);
   // RATE/UNIVERSE — the operator's own instruction (2026-09-25): a single button next to MINRATE/
   // MINTOTAL that drops the per-ticker gamma lookup (and MINRATE/MINTOTAL/MinGammaTotal riding on
   // it) entirely, gating on the flat floor/cap alone. This is the SAME ignoreRatings escape hatch
-  // Sonar's own Γ/Ø pills already drive (ContinuumGate.cs) — removed from THIS file 2026-09-23 as a
+  // Sonar's own Γ/Ø pills already drive (OPGReversalGate.cs) — removed from THIS file 2026-09-23 as a
   // separate violet-strip toggle the operator said was not needed there ("не потрібні"), now brought
   // back here in its own place and style, not restoring the old Γ/Ø pills.
-  const [continuumIgnoreRatings, setContinuumIgnoreRatings] = useState(false);
-  // Bumped by applyContinuumAutoOptimizerRow once a result has landed in state, so the run that
+  const [opgReversalIgnoreRatings, setOPGReversalIgnoreRatings] = useState(false);
+  // Bumped by applyOPGReversalAutoOptimizerRow once a result has landed in state, so the run that
   // follows always sees the FRESH values — mirrors ArbitrageScanner's own autoRunTick exactly.
   const [autoRunTick, setAutoRunTick] = useState(0);
   // GAMMA's own black ρ/β/σ-style min/max box — the (class, sign) gamma level a row actually
-  // cleared (rides on Rating/RatingTotal, same as the table's own γ column — see PaperContinuumMapper).
+  // cleared (rides on Rating/RatingTotal, same as the table's own γ column — see PaperOPGReversalMapper).
   // Local state, not the shared useScannerFilters hook: no other strategy has a per-row gamma to
   // range-filter on, so there is no shared minGamma/maxGamma slot to reuse (unlike minAlpha/minSigma,
   // which PairFlux/every strategy's tape row already carry).
@@ -716,11 +714,11 @@ export default function ContinuumScanner({
   // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
   // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
   // the short-side floor when the field is empty.
-  const bumpContinuumMinDevAbsMax = (delta: number) => {
-    setContinuumMinDevAbsMax((prev) => {
+  const bumpOPGReversalMinDevAbsMax = (delta: number) => {
+    setOPGReversalMinDevAbsMax((prev) => {
       const raw = String(prev ?? "").trim();
       const parsed = Number(raw.replace(",", "."));
-      const cur = Number.isFinite(parsed) ? parsed : continuumMinDevAbsShort;
+      const cur = Number.isFinite(parsed) ? parsed : opgReversalMinDevAbsShort;
       const next = Math.max(0, +(cur + delta).toFixed(4));
       return String(next);
     });
@@ -728,29 +726,29 @@ export default function ContinuumScanner({
 
   // The %/σ/α/γ strip: what MinDevAbsShort/Long/Max (the coral/mint/silver boxes below) are
   // ENTERED and ENFORCED in, sent to the bridge as `thresholdUnit` and resolved PER TICKER inside
-  // ContinuumGate.Check (see that file's own doc comment) — "2" under σ means "reject unless |dev|
+  // OPGReversalGate.Check (see that file's own doc comment) — "2" under σ means "reject unless |dev|
   // clears 2x THIS ticker's own published sigma", not a flat 2pp for everyone. Also drives the
-  // Signal Dev column's display (formatContinuumDev below), same unit, so the number typed into the
+  // Signal Dev column's display (formatOPGReversalDev below), same unit, so the number typed into the
   // threshold box and the number shown in the table are always directly comparable.
   // %     — raw Stack% points, the original, only-ever behavior.
   // σ     — divided by the ticker's own published static sigma (r.sigma — real on every row, same
   //         TapeStaticMeta.Sigma the black σ range box already reads).
   // α     — divided by the ticker's own published alpha, sign-matched (r.alpha — real on every row
-  //         as of this pass; previously unwired, see ContinuumClosed.Alpha/PaperContinuumMapper.cs).
+  //         as of this pass; previously unwired, see OPGReversalClosed.Alpha/PaperOPGReversalMapper.cs).
   // γ     — divided by the ticker's own MATCHED gamma for this (class, sign) (r.gamma, via Rating).
   // τ     — divided by the ticker's own CURRENT live ATR14% reading (r.atr14Pct) — added 2026-09-25.
   //         Unlike σ/α/γ this is NOT a published ratings constant, it is a moment-to-moment tape/
   //         live value (TradingApp's own "ATR14%" field), so it can genuinely differ signal-to-
-  //         signal for the same ticker — see ContinuumThresholdUnit.Atr's own doc comment.
+  //         signal for the same ticker — see OPGReversalThresholdUnit.Atr's own doc comment.
   // λ     — divided by the ticker's own published lambda (r.lambda) — added 2026-09-27. Like σ, a
-  //         published per-ticker CONSTANT (Continuum.ipynb's compute_lambda: sample std of the raw
+  //         published per-ticker CONSTANT (OPGReversal.ipynb's compute_lambda: sample std of the raw
   //         ENTRY-checkpoint Stack% reading), not sign-matched the way α is.
-  const [continuumUnitMode, setContinuumUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
+  const [opgReversalUnitMode, setOPGReversalUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
 
   /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
-   * are now enforced in server-side (see continuumUnitMode's own comment), so what's typed into the
+   * are now enforced in server-side (see opgReversalUnitMode's own comment), so what's typed into the
    * threshold boxes and what's shown here always mean the same thing. */
-  function formatContinuumDev(
+  function formatOPGReversalDev(
     raw: number | null | undefined,
     gamma: number | null | undefined,
     sigma?: number | null,
@@ -759,20 +757,20 @@ export default function ContinuumScanner({
     lambda?: number | null,
   ): string {
     if (raw == null || !Number.isFinite(raw)) return "—";
-    if (continuumUnitMode === "pct") return num(raw, 3);
-    if (continuumUnitMode === "gamma") {
+    if (opgReversalUnitMode === "pct") return num(raw, 3);
+    if (opgReversalUnitMode === "gamma") {
       if (gamma == null || !Number.isFinite(gamma) || gamma === 0) return "—";
       return `${num(raw / gamma, 2)}γ`;
     }
-    if (continuumUnitMode === "sigma") {
+    if (opgReversalUnitMode === "sigma") {
       if (sigma == null || !Number.isFinite(sigma) || sigma === 0) return "—";
       return `${num(raw / sigma, 2)}σ`;
     }
-    if (continuumUnitMode === "atr") {
+    if (opgReversalUnitMode === "atr") {
       if (atr14Pct == null || !Number.isFinite(atr14Pct) || atr14Pct === 0) return "—";
       return `${num(raw / atr14Pct, 2)}τ`;
     }
-    if (continuumUnitMode === "lambda") {
+    if (opgReversalUnitMode === "lambda") {
       if (lambda == null || !Number.isFinite(lambda) || lambda === 0) return "—";
       return `${num(raw / lambda, 2)}λ`;
     }
@@ -781,13 +779,13 @@ export default function ContinuumScanner({
   }
 
   /** What SHORT/LONG/MAX are currently entered in, for their own tooltips — mirrors
-   * ContinuumThresholdUnit's own labels 1-to-1. */
-  const continuumThresholdUnitLabel =
-    continuumUnitMode === "pct" ? "raw percentage points" :
-    continuumUnitMode === "sigma" ? "× this ticker's own published sigma" :
-    continuumUnitMode === "alpha" ? "× this ticker's own published alpha (sign-matched)" :
-    continuumUnitMode === "atr" ? "× this ticker's own CURRENT live ATR14% reading" :
-    continuumUnitMode === "lambda" ? "× this ticker's own published lambda" :
+   * OPGReversalThresholdUnit's own labels 1-to-1. */
+  const opgReversalThresholdUnitLabel =
+    opgReversalUnitMode === "pct" ? "raw percentage points" :
+    opgReversalUnitMode === "sigma" ? "× this ticker's own published sigma" :
+    opgReversalUnitMode === "alpha" ? "× this ticker's own published alpha (sign-matched)" :
+    opgReversalUnitMode === "atr" ? "× this ticker's own CURRENT live ATR14% reading" :
+    opgReversalUnitMode === "lambda" ? "× this ticker's own published lambda" :
     "× this ticker's own matched gamma for this (class, sign)";
 
 
@@ -1182,13 +1180,13 @@ export default function ContinuumScanner({
 
   const episodesSearchCache = useEpisodesSearchCache<PaperArbClosedDto>();
 
-  // The SNAPSHOT cards' own aggregate, now computed server-side (PaperContinuumController.
+  // The SNAPSHOT cards' own aggregate, now computed server-side (PaperOPGReversalController.
   // BuildAnalyticsSummary, 2026-09-23) instead of re-derived from filteredEpisodes on every
   // render — see that method's own doc comment for the tradeoff this was chosen over. Keyed by
   // the same request-body string episodesSearchCache itself keys on, so a TTL cache HIT (no
   // fetcher call) still has a summary to hand back — see fetchEpisodesSearchRows below.
-  const continuumSummaryByKeyRef = useRef<Map<string, ContinuumAnalyticsSummaryDto | null>>(new Map());
-  const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: ContinuumAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
+  const opgReversalSummaryByKeyRef = useRef<Map<string, OPGReversalAnalyticsSummaryDto | null>>(new Map());
+  const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: OPGReversalAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
 
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
@@ -1320,12 +1318,12 @@ export default function ContinuumScanner({
   // BUG FIXED (self-caught, found while investigating a "RUN silently does nothing" report): this
   // used to validate startAbs/endAbs/zapMode/minHoldCandles — ArbitrageScanner's own continuous-
   // threshold/hold-candle fields, inherited from the shared useScannerFilters hook but with NO
-  // visible control anywhere in Continuum's own toolbar (confirmed dead in the same-session filter
+  // visible control anywhere in OPGReversal's own toolbar (confirmed dead in the same-session filter
   // audit) and no error text ever rendered from validationErrors on this screen either. A stale or
   // preset-restored startAbs/endAbs combination could silently fail `endAbs must be <= startAbs`
   // and permanently disable RUN for a reason that has no corresponding control on screen at all —
-  // the operator would see a greyed-out RUN button and nothing else. Continuum has its own real
-  // preflight surface (MinDevAbsShort/Long/Max — see buildContinuumParams), which is what this now
+  // the operator would see a greyed-out RUN button and nothing else. OPGReversal has its own real
+  // preflight surface (MinDevAbsShort/Long/Max — see buildOPGReversalParams), which is what this now
   // actually checks.
   const validationErrors = useMemo(() => {
     const e: string[] = [];
@@ -1340,14 +1338,14 @@ export default function ContinuumScanner({
       if (toYmd(dateFrom) && toYmd(dateTo) && dateFrom > dateTo) e.push("dateFrom must be <= dateTo");
     }
 
-    if (!(continuumMinDevAbsShort >= 0)) e.push("SHORT floor must be >= 0");
-    const longNum = optNumOrNull(continuumMinDevAbsLong);
+    if (!(opgReversalMinDevAbsShort >= 0)) e.push("SHORT floor must be >= 0");
+    const longNum = optNumOrNull(opgReversalMinDevAbsLong);
     if (longNum != null && longNum < 0) e.push("LONG floor must be >= 0");
-    const maxNum = optNumOrNull(continuumMinDevAbsMax);
+    const maxNum = optNumOrNull(opgReversalMinDevAbsMax);
     if (maxNum != null && maxNum < 0) e.push("MAX cap must be >= 0");
 
     return e;
-  }, [dateMode, dateNy, dateFrom, dateTo, continuumMinDevAbsShort, continuumMinDevAbsLong, continuumMinDevAbsMax]);
+  }, [dateMode, dateNy, dateFrom, dateTo, opgReversalMinDevAbsShort, opgReversalMinDevAbsLong, opgReversalMinDevAbsMax]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -1400,10 +1398,10 @@ export default function ContinuumScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, dateMode, episodesUseSearch, forceEpisodesSearch, dateNy, dateFrom]);
 
-  // ========= CONTINUUM SNAPSHOT: live per-day tape replay (architecturally mirrors Arbitrage's
+  // ========= OPGREVERSAL SNAPSHOT: live per-day tape replay (architecturally mirrors Arbitrage's
   // SNAPSHOT tab — POST .../episodes/search, per-day cache, day-range build — but hits
-  // /api/paper/continuum/episodes/search, gated by ContinuumGate's flat-floor + per-ticker gamma and
-  // using TapeContinuumEngine's fixed 15:50-signal/16:00-entry, clock-time-exit rule instead of
+  // /api/paper/opgReversal/episodes/search, gated by OPGReversalGate's flat-floor + per-ticker gamma and
+  // using TapeOPGReversalEngine's fixed 9:20-9:25-signal/9:30-entry, clock-time-exit rule instead of
   // Arbitrage's hedge engine. Real per-day accuracy: each row is an ACTUALLY realized trade, not a
   // bin average.
   //
@@ -1411,7 +1409,7 @@ export default function ContinuumScanner({
   // spec, entry and exit are the SAME raw Stack% reading (LstPrcLstClsPct / EndLstPrcLstClsPct),
   // direction-corrected by the signal's sign — so entryStack/exitStack read the raw field directly
   // rather than a side-dependent bid/ask fill, and there is no bench column at all.
-  type ContinuumPaperClosed = {
+  type OPGReversalPaperClosed = {
     ticker: string;
     side: "Long" | "Short";
     entryMinuteIdx: number;
@@ -1425,20 +1423,20 @@ export default function ContinuumScanner({
     gammaN?: number | null;
     // σ/α/τ — found missing from this curated shape while wiring the τ (Atr) unit (2026-09-25):
     // the σ/α threshold-unit modes were rendering "—" for every row in these two tables (SNAPSHOT
-    // and ACTIVE), silently, since formatContinuumDev's own (r as any).sigma/.alpha read a field this
+    // and ACTIVE), silently, since formatOPGReversalDev's own (r as any).sigma/.alpha read a field this
     // type never carried. Fixed alongside adding atr14Pct, not a pre-existing intentional gap.
     sigma?: number | null;
     alpha?: number | null;
     atr14Pct?: number | null;
-    // λ — the ticker's own published Continuum.ipynb compute_lambda: sample std(ddof=1) of the raw
+    // λ — the ticker's own published OPGReversal.ipynb compute_lambda: sample std(ddof=1) of the raw
     // ENTRY-checkpoint Stack% reading, gate-free, same population as alpha/sigma (2026-09-27).
     lambda?: number | null;
   };
-  const [continuumSnapshotLoading, setContinuumSnapshotLoading] = useState(false);
-  const [continuumSnapshotError, setContinuumSnapshotError] = useState<string | null>(null);
+  const [opgReversalSnapshotLoading, setOPGReversalSnapshotLoading] = useState(false);
+  const [opgReversalSnapshotError, setOPGReversalSnapshotError] = useState<string | null>(null);
 
   // Entering the tab loads the day; the SNAPSHOT numbers are then derived from those very rows
-  // (continuumSnapshotRows, defined after filteredEpisodes further down). This used to be a second,
+  // (opgReversalSnapshotRows, defined after filteredEpisodes further down). This used to be a second,
   // independent fetch whose body carried only the exit class, the three source toggles, the six
   // gates and sizeValue - so the whole filter toolbar (the shared min/max ranges, IGN/APP/PIN, the
   // flag row, the country/exchange/sector selects) changed nothing in the P&L, trade count and win
@@ -1596,17 +1594,17 @@ export default function ContinuumScanner({
         if (s.sizingMode === "Tier" || s.sizingMode === "Notional") setSizingMode(s.sizingMode);
         if (typeof s.sizeValue === "number") setSizeValue(normalizeScannerSizeValue(s.sizingMode === "Tier" ? "Tier" : "Notional", s.sizeValue));
 
-        // Continuum gate settings. Restored here rather than left at their defaults so the toolbar
+        // OPGReversal gate settings. Restored here rather than left at their defaults so the toolbar
         // shows what is actually being traded after a reload.
-        if (CONTINUUM_EXIT_CLASSES.some((c) => c.key === s.continuumExitClass)) setContinuumExitClass(s.continuumExitClass);
-        if (typeof s.continuumMinDevAbsShort === "number") setContinuumMinDevAbsShort(s.continuumMinDevAbsShort);
-        if (typeof s.continuumMinDevAbsLong === "string") setContinuumMinDevAbsLong(s.continuumMinDevAbsLong);
-        if (typeof s.continuumMinDevAbsMax === "string") setContinuumMinDevAbsMax(s.continuumMinDevAbsMax);
-        if (typeof s.continuumMinGammaTotal === "number") setContinuumMinGammaTotal(s.continuumMinGammaTotal);
-        if (typeof s.continuumMinRate === "number") setContinuumMinRate(s.continuumMinRate);
-        if (typeof s.continuumMinTotal === "number") setContinuumMinTotal(s.continuumMinTotal);
-        if (s.continuumUnitMode === "pct" || s.continuumUnitMode === "sigma" || s.continuumUnitMode === "alpha" || s.continuumUnitMode === "gamma" || s.continuumUnitMode === "atr" || s.continuumUnitMode === "lambda") setContinuumUnitMode(s.continuumUnitMode);
-        if (typeof s.continuumIgnoreRatings === "boolean") setContinuumIgnoreRatings(s.continuumIgnoreRatings);
+        if (OPGREVERSAL_EXIT_CLASSES.some((c) => c.key === s.opgReversalExitClass)) setOPGReversalExitClass(s.opgReversalExitClass);
+        if (typeof s.opgReversalMinDevAbsShort === "number") setOPGReversalMinDevAbsShort(s.opgReversalMinDevAbsShort);
+        if (typeof s.opgReversalMinDevAbsLong === "string") setOPGReversalMinDevAbsLong(s.opgReversalMinDevAbsLong);
+        if (typeof s.opgReversalMinDevAbsMax === "string") setOPGReversalMinDevAbsMax(s.opgReversalMinDevAbsMax);
+        if (typeof s.opgReversalMinGammaTotal === "number") setOPGReversalMinGammaTotal(s.opgReversalMinGammaTotal);
+        if (typeof s.opgReversalMinRate === "number") setOPGReversalMinRate(s.opgReversalMinRate);
+        if (typeof s.opgReversalMinTotal === "number") setOPGReversalMinTotal(s.opgReversalMinTotal);
+        if (s.opgReversalUnitMode === "pct" || s.opgReversalUnitMode === "sigma" || s.opgReversalUnitMode === "alpha" || s.opgReversalUnitMode === "gamma" || s.opgReversalUnitMode === "atr" || s.opgReversalUnitMode === "lambda") setOPGReversalUnitMode(s.opgReversalUnitMode);
+        if (typeof s.opgReversalIgnoreRatings === "boolean") setOPGReversalIgnoreRatings(s.opgReversalIgnoreRatings);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -1841,17 +1839,17 @@ export default function ContinuumScanner({
       priceMode,
       sizingMode,
       sizeValue,
-      // Continuum's own gate settings. These used to be plain component state that reset on every
+      // OPGReversal's own gate settings. These used to be plain component state that reset on every
       // reload, so "the filters I trade with" existed only until the tab was refreshed.
-      continuumExitClass,
-      continuumMinDevAbsShort,
-      continuumMinDevAbsLong,
-      continuumMinDevAbsMax,
-      continuumMinGammaTotal,
-      continuumMinRate,
-      continuumMinTotal,
-      continuumUnitMode,
-      continuumIgnoreRatings,
+      opgReversalExitClass,
+      opgReversalMinDevAbsShort,
+      opgReversalMinDevAbsLong,
+      opgReversalMinDevAbsMax,
+      opgReversalMinGammaTotal,
+      opgReversalMinRate,
+      opgReversalMinTotal,
+      opgReversalUnitMode,
+      opgReversalIgnoreRatings,
       dilutionMode,
       dilutionStep,
       maxAdds,
@@ -2057,8 +2055,8 @@ export default function ContinuumScanner({
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
-      continuumExitClass, continuumMinDevAbsShort, continuumMinDevAbsLong, continuumMinDevAbsMax, continuumMinGammaTotal,
-      continuumMinRate, continuumMinTotal, continuumUnitMode, continuumIgnoreRatings,
+      opgReversalExitClass, opgReversalMinDevAbsShort, opgReversalMinDevAbsLong, opgReversalMinDevAbsMax, opgReversalMinGammaTotal,
+      opgReversalMinRate, opgReversalMinTotal, opgReversalUnitMode, opgReversalIgnoreRatings,
     ]
   );
 
@@ -2214,15 +2212,15 @@ export default function ContinuumScanner({
   } as const;
 
   /**
-   * Writes one Continuum AUTO OPTIMIZER result into the toolbar — mirrors ArbitrageScanner's own
+   * Writes one OPGReversal AUTO OPTIMIZER result into the toolbar — mirrors ArbitrageScanner's own
    * applyAutoOptimizerRow (see that function's own doc comment). The RATING GATES / TAPE FILTERS
    * constraints share the SAME keys as Arbitrage's (both catalogs read the identical
-   * PaperStrategyRequest fields — see ContinuumFilterSearchSpecs.cs), so they land in the exact same
+   * PaperStrategyRequest fields — see OPGReversalFilterSearchSpecs.cs), so they land in the exact same
    * scannerSharedFilterSetters/SHARED_FILTER_PRESET_FIELDS boxes this file already has. There is no
    * minrate/mintotal/country/exchange/sector case: the search never touches those (see
-   * ContinuumFilterSearchSpecs.cs's own doc comment) so they never appear in `searchedKeys`.
+   * OPGReversalFilterSearchSpecs.cs's own doc comment) so they never appear in `searchedKeys`.
    */
-  const applyContinuumAutoOptimizerRow = (row: ContinuumAutoOptRow, searchedKeys: string[], range?: { from: string; to: string }) => {
+  const applyOPGReversalAutoOptimizerRow = (row: OPGReversalAutoOptRow, searchedKeys: string[], range?: { from: string; to: string }) => {
     const byKey = new Map(row.constraints.map((c) => [c.key, c] as const));
     const rangeFields = new Map<string, (typeof SHARED_FILTER_PRESET_FIELDS)[number]>(SHARED_FILTER_PRESET_FIELDS.map((f) => [f.key, f] as const));
     const modePatch: Partial<Record<SharedRangeFilterKey, SharedRangeFilterMode>> = {};
@@ -2256,10 +2254,10 @@ export default function ContinuumScanner({
     // The UNIT row: the pill first, then the three MIN DEV boxes. The two optional ones are written
     // as they are - "off" (empty) clears the box, it does not leave an old value behind.
     const th = row.thresholds;
-    if (th.unit) setContinuumUnitMode(th.unit);
-    if (th.minDevAbsShort != null) setContinuumMinDevAbsShort(th.minDevAbsShort);
-    setContinuumMinDevAbsLong(th.minDevAbsLong != null ? String(th.minDevAbsLong) : "");
-    setContinuumMinDevAbsMax(th.minDevAbsMax != null ? String(th.minDevAbsMax) : "");
+    if (th.unit) setOPGReversalUnitMode(th.unit);
+    if (th.minDevAbsShort != null) setOPGReversalMinDevAbsShort(th.minDevAbsShort);
+    setOPGReversalMinDevAbsLong(th.minDevAbsLong != null ? String(th.minDevAbsLong) : "");
+    setOPGReversalMinDevAbsMax(th.minDevAbsMax != null ? String(th.minDevAbsMax) : "");
 
     // Show the days the search was over, then re-run once all of the above has landed in state.
     if (range) {
@@ -2483,46 +2481,43 @@ export default function ContinuumScanner({
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
-  // Continuum's Stream toolbar, pushed to the bridge — mirrors Reversal's own push effect 1-to-1
-  // (see lib/reversal/liveParamsClient.ts's own doc comment for the shape rationale). Ported ahead of
-  // its receiving end on purpose (2026-09-30): there is no ContinuumServerStrategy and no
-  // ContinuumLiveParamsService yet, only the Scanner half of Continuum is wired (see
-  // lib/strategies/registry.ts's own "continuum" entry) — so this PUTs into a 404 today and
-  // pushContinuumStreamLiveParams's own try/catch swallows it, same as a bridge restart would. Left
-  // in rather than deleted so the toolbar needs no further changes once the live engine lands. Same
-  // debounce/hydration-guard shape as ArbitrageScanner's own push effect.
+  // OPGReversal's Stream toolbar, pushed to the bridge — mirrors Reversal/Continuum's own push effect
+  // 1-to-1. OPGReversalServerStrategy and OPGReversalLiveParamsService now exist (wired 2026-10-01),
+  // so this PUT reaches a real endpoint — but AutoEnabled still defaults false and
+  // Hotkeys.OPGReversalBuy/Sell are still unbound, so saving this toolbar alone cannot send a real
+  // order. Same debounce/hydration-guard shape as ArbitrageScanner's own push effect.
   useEffect(() => {
     if (!filtersHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      void pushContinuumStreamLiveParams(toContinuumStreamLiveParams({
-        exitClass: continuumExitClass,
-        minDevAbsShort: continuumMinDevAbsShort,
-        minDevAbsLong: optNumOrNull(continuumMinDevAbsLong) ?? continuumMinDevAbsShort,
-        minDevAbsMax: optNumOrNull(continuumMinDevAbsMax),
-        minGammaTotal: continuumMinGammaTotal,
+      void pushOPGReversalStreamLiveParams(toOPGReversalStreamLiveParams({
+        exitClass: opgReversalExitClass,
+        minDevAbsShort: opgReversalMinDevAbsShort,
+        minDevAbsLong: optNumOrNull(opgReversalMinDevAbsLong) ?? opgReversalMinDevAbsShort,
+        minDevAbsMax: optNumOrNull(opgReversalMinDevAbsMax),
+        minGammaTotal: opgReversalMinGammaTotal,
         // Found missing while checking Scanner-vs-Stream parity (2026-09-29): the backtest already
-        // sends minRate/minTotal to PaperContinuumController (see buildContinuumParams), but this push
+        // sends minRate/minTotal to PaperOPGReversalController (see buildOPGReversalParams), but this push
         // never carried them, so the live engine always ran with MinRate=0/MinTotal=0 regardless of
         // what the toolbar's own MINRATE/MINTOTAL boxes showed.
-        minRate: continuumMinRate,
-        minTotal: continuumMinTotal,
-        ignoreRatings: continuumIgnoreRatings,
-        thresholdUnit: continuumUnitMode,
-        // Found missing while checking Stream-vs-Scanner parity on the 15:50-15:55 signal window
+        minRate: opgReversalMinRate,
+        minTotal: opgReversalMinTotal,
+        ignoreRatings: opgReversalIgnoreRatings,
+        thresholdUnit: opgReversalUnitMode,
+        // Found missing while checking Stream-vs-Scanner parity on the 9:20-9:25 signal window
         // (2026-09-29, "стрім повинен набирати ситуації по білу і аску"): the Scanner's own PriceMode
-        // toggle already changed which reading ITS backtest gated on (TapeContinuumEngine.SignalDev),
+        // toggle already changed which reading ITS backtest gated on (TapeOPGReversalEngine.SignalDev),
         // but this push never carried it at all, so the live engine always judged the plain print
-        // regardless of what the toolbar showed — see ContinuumLiveParams.PriceMode's own doc comment.
+        // regardless of what the toolbar showed — see OPGReversalLiveParams.PriceMode's own doc comment.
         priceMode,
         filters: streamFilterConfig,
         multiModes: { countries: countryEnabled, exchanges: exchangeEnabled, sectors: sectorEnabled },
-        source: "continuum-scanner",
+        source: "opgReversal-scanner",
       }));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
-    continuumExitClass, continuumMinDevAbsShort, continuumMinDevAbsLong, continuumMinDevAbsMax,
-    continuumMinGammaTotal, continuumMinRate, continuumMinTotal, continuumUnitMode, continuumIgnoreRatings,
+    opgReversalExitClass, opgReversalMinDevAbsShort, opgReversalMinDevAbsLong, opgReversalMinDevAbsMax,
+    opgReversalMinGammaTotal, opgReversalMinRate, opgReversalMinTotal, opgReversalUnitMode, opgReversalIgnoreRatings,
     priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled,
   ]);
 
@@ -2639,10 +2634,13 @@ export default function ContinuumScanner({
   } = useStreamEngine({
     // This page only DRAWS: the bridge screens the candidates and makes every decision, so
     // nothing about filters, gates or signal metrics is passed to the engine any more.
-    // "ContinuumEnterLong"/"ContinuumEnterShort" have a real TradingAppOrderIntentType entry, a
-    // registered ContinuumServerStrategy, and are bound to Ctrl+F5/Ctrl+F6 (2026-09-30, the operator's
-    // own instruction) — the same physical chord as Day Two/Reversal's own pair.
-    entryIntentTypes: { long: "ContinuumEnterLong", short: "ContinuumEnterShort" },
+    // NOTE: "OPGReversalEnterLong"/"OPGReversalEnterShort" have no TradingAppOrderIntentType entry yet
+    // (no OPGReversalServerStrategy exists — see DayTwoServerStrategy.cs for the pattern to follow).
+    // Deliberately NOT reusing "DayTwoEnterLong"/"DayTwoEnterShort" here: that would fire Day
+    // Two's own live hotkey mapping (Hotkeys.DayTwoBuy/DayTwoSell) for a OPGReversal order if manual
+    // stream dispatch is ever triggered from this page before the real intent type is wired up —
+    // sending an unrecognized intent type fails loudly instead, which is the safer failure mode.
+    entryIntentTypes: { long: "OPGReversalEnterLong", short: "OPGReversalEnterShort" },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),
     initialAutoEnabled: streamAutoStartEnabledOverride ?? (streamViewModeOverride === "auto"),
@@ -2810,49 +2808,49 @@ export default function ContinuumScanner({
   };
 
   // ========= Build query params for GET /active & /episodes
-  // ---- Continuum request shape (PaperContinuumRequest) ----
+  // ---- OPGReversal request shape (PaperOPGReversalRequest) ----
   // The inherited buildGetParams/buildPostRequest below describe an Arbitrage episode search
-  // (deviation thresholds, hold windows, close modes). Continuum's engine takes none of that: the
-  // signal/entry/exit minutes are fixed by the clock (ContinuumTiming.Default), so the only inputs
-  // of its own are the exit class, the flat |15:50 deviation| floor and whether to skip the
+  // (deviation thresholds, hold windows, close modes). OPGReversal's engine takes none of that: the
+  // signal/entry/exit minutes are fixed by the clock (OPGReversalTiming.Default), so the only inputs
+  // of its own are the exit class, the flat |9:20-9:25 deviation| floor and whether to skip the
   // per-ticker gamma lookup entirely.
-  function buildContinuumParams() {
+  function buildOPGReversalParams() {
     const reqTickers = requestScopedTickers;
     return {
-      exitClass: continuumExitClass,
+      exitClass: opgReversalExitClass,
       // Was missing entirely: the PRINT/BIDASK toggle (ExecutionSettingsPanel) updated local state
       // but this request never carried it, so the bridge always computed LastPrint regardless of
       // what the toolbar showed pressed. Now paired with the bridge actually reading it (see
-      // ContinuumPaperScanner.ToParams/TapeContinuumEngine.EntryPricedPct|ExitPricedPct).
+      // OPGReversalPaperScanner.ToParams/TapeOPGReversalEngine.EntryPricedPct|ExitPricedPct).
       priceMode,
-      // Same bug, same fix: the ACTIVE/PASSIVE toggle (same panel) was never sent either. PASSIVE
-      // only changes anything for the "print" exit class — see ContinuumCloseMode's own doc comment
-      // (exit by settled Gap% instead of the nearest print/bid-ask to 09:30). Entry stays exactly
-      // where it always was: whatever the 15:50 stack reading qualified.
+      // Carried for toolbar shape parity, but CloseMode is INERT for OPGReversal — the settled
+      // opening Gap% anchors ENTRY unconditionally for every exit class, not a PASSIVE-only special
+      // case the way Reversal's own print-class exit rule works — see OPGReversalCloseMode's own doc
+      // comment.
       closeMode,
       // A THIRD instance of the same bug, and the worst one: the USD/TIER toggle (same panel) was
-      // also never sent, so pressing TIER silently sized every Continuum position off the raw
+      // also never sent, so pressing TIER silently sized every OPGReversal position off the raw
       // per-unit multiplier as if it were a flat $ notional (~1000x too small) instead of scaling by
-      // the ticker's own TierBp — wrong P&L on screen, no error. See ContinuumSizingMode's own doc
-      // comment and TapeContinuumEngine.ResolvePositionNotionalUsd.
+      // the ticker's own TierBp — wrong P&L on screen, no error. See OPGReversalSizingMode's own doc
+      // comment and TapeOPGReversalEngine.ResolvePositionNotionalUsd.
       sizingMode,
-      minDevAbsShort: continuumMinDevAbsShort,
-      minDevAbsLong: optNumOrNull(continuumMinDevAbsLong) ?? continuumMinDevAbsShort,
-      minDevAbsMax: optNumOrNull(continuumMinDevAbsMax),
-      minGammaTotal: continuumMinGammaTotal,
+      minDevAbsShort: opgReversalMinDevAbsShort,
+      minDevAbsLong: optNumOrNull(opgReversalMinDevAbsLong) ?? opgReversalMinDevAbsShort,
+      minDevAbsMax: optNumOrNull(opgReversalMinDevAbsMax),
+      minGammaTotal: opgReversalMinGammaTotal,
       // Real bridge-side gate on the published (class, sign) cell's own win_rate/total — added
-      // alongside ContinuumGate.cs's own minRate/minTotal floor. 0 = off, same convention as the rest
+      // alongside OPGReversalGate.cs's own minRate/minTotal floor. 0 = off, same convention as the rest
       // of this toolbar.
-      minRate: continuumMinRate,
-      minTotal: continuumMinTotal,
+      minRate: opgReversalMinRate,
+      minTotal: opgReversalMinTotal,
       // What minDevAbsShort/Long/Max above are MEASURED in — the %/σ/α/γ strip; resolved per
-      // ticker inside ContinuumGate.Check (see that file's own doc comment on ContinuumThresholdUnit).
-      thresholdUnit: continuumUnitMode,
+      // ticker inside OPGReversalGate.Check (see that file's own doc comment on OPGReversalThresholdUnit).
+      thresholdUnit: opgReversalUnitMode,
       // RATE/UNIVERSE button, next to MINRATE/MINTOTAL — drops the per-ticker gamma lookup (and
       // MINRATE/MINTOTAL/MinGammaTotal riding on it) entirely when on UNIVERSE, gating on the flat
       // floor/cap alone. Re-added 2026-09-25 (the operator's own instruction) — the earlier Γ/Ø
       // violet-strip toggle this used to be stayed removed; this is a new control in a new place.
-      ignoreRatings: continuumIgnoreRatings,
+      ignoreRatings: opgReversalIgnoreRatings,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
@@ -2884,19 +2882,19 @@ export default function ContinuumScanner({
       excludeSectorsL3: sectorEnabled === "exclude" && selSectors.size ? Array.from(selSectors) : null,
 
       // The SNAPSHOT equity curve's own Daily/Trade toggle — read by
-      // PaperContinuumController.BuildAnalyticsSummary so the server-computed curve matches whichever
+      // PaperOPGReversalController.BuildAnalyticsSummary so the server-computed curve matches whichever
       // mode the toolbar is actually showing, same as ArbitrageController's own /analytics action
       // already reads it.
       equityCurveMode,
     };
   }
 
-  function buildContinuumGetParams(d: string) {
-    return { dateNy: d, ...buildContinuumParams() };
+  function buildOPGReversalGetParams(d: string) {
+    return { dateNy: d, ...buildOPGReversalParams() };
   }
 
-  function buildContinuumPostRequest(from: string, to: string) {
-    return { dateFrom: from, dateTo: to, ...buildContinuumParams() };
+  function buildOPGReversalPostRequest(from: string, to: string) {
+    return { dateFrom: from, dateTo: to, ...buildOPGReversalParams() };
   }
 
   function buildGetParams(d: string) {
@@ -3256,24 +3254,24 @@ export default function ContinuumScanner({
     // Callers still hand over the inherited Arbitrage request object (it also drives the analytics
     // endpoint), but the OpenDoor search takes an entirely different body - only the date range is
     // shared. Translating here keeps every call site untouched.
-    const body = buildContinuumPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
+    const body = buildOPGReversalPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom);
     const key = JSON.stringify(body);
     const rows = await episodesSearchCache.get(key, () =>
       // See the same call in ArbitrageScanner: ask for best_params once per ticker rather than on
       // every row, and reattach it as a shared reference. The response's own `summary` (the
       // SNAPSHOT aggregate, computed server-side — see BuildAnalyticsSummary) is stashed in
-      // continuumSummaryByKeyRef, keyed the SAME way episodesSearchCache itself keys `rows`, so a
+      // opgReversalSummaryByKeyRef, keyed the SAME way episodesSearchCache itself keys `rows`, so a
       // later TTL cache HIT on this exact request (fetcher not re-run) still has a summary to
       // hand back below.
       apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
         .then((j) => {
-          continuumSummaryByKeyRef.current.set(key, (j?.summary as ContinuumAnalyticsSummaryDto | undefined) ?? null);
+          opgReversalSummaryByKeyRef.current.set(key, (j?.summary as OPGReversalAnalyticsSummaryDto | undefined) ?? null);
           return normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [];
         })
     );
     // Every caller of this function wants the SNAPSHOT cards to reflect whatever rows it just
     // fetched (or reused from cache) — one call site to keep in sync instead of three.
-    const fetchedSummary = continuumSummaryByKeyRef.current.get(key) ?? null;
+    const fetchedSummary = opgReversalSummaryByKeyRef.current.get(key) ?? null;
     setServerAnalyticsSummary(fetchedSummary ? { summary: fetchedSummary, equityCurveMode: String(body.equityCurveMode ?? "Daily") } : null);
     return rows;
   }
@@ -3292,14 +3290,14 @@ export default function ContinuumScanner({
       }
       if (tab === "active") {
         setAnalytics(null);
-        const qs = buildPaperQuery(buildContinuumGetParams(dateNy));
+        const qs = buildPaperQuery(buildOPGReversalGetParams(dateNy));
         const j = await apiGet<any>(`${STRATEGY.api.base}/active${qs}`);
         const rows = normalizeRows<PaperArbActiveRow>(j);
         setActiveRows(rows ?? []);
       } else if (tab === "episodes") {
         setAnalytics(null);
         if (!(episodesUseSearch || forceEpisodesSearch || isStreamOnlyShell)) {
-          const qs = buildPaperQuery(buildContinuumGetParams(dateNy));
+          const qs = buildPaperQuery(buildOPGReversalGetParams(dateNy));
           const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
           setEpisodesRows(rows ?? []);
@@ -3364,7 +3362,7 @@ export default function ContinuumScanner({
           `${STRATEGY.api.base}/episodes/search`,
           // includeBestParams:false — this sweep only reduces totalPnlUsd across combos, it never
           // reads best_params, so there's no reason to pay for it dozens of times over.
-          { ...buildContinuumPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom), includeBestParams: false }
+          { ...buildOPGReversalPostRequest(req.dateFrom, req.dateTo ?? req.dateFrom), includeBestParams: false }
         );
         const rows = normalizeRows<PaperArbClosedDto>(j) ?? [];
         const total = rows.reduce((acc, r) => acc + (r.totalPnlUsd ?? 0), 0);
@@ -4211,10 +4209,10 @@ export default function ContinuumScanner({
       }
     }
     if (_minSigmaV != null || _maxSigmaV != null) {
-      // Continuum's own published static sigma — getOptimizerFallbackValue already prefers the ROW's
+      // OPGReversal's own published static sigma — getOptimizerFallbackValue already prefers the ROW's
       // own value (row.sigma/Sigma, populated by TapeStaticMeta.EnrichFrom off the tape's own "sigma"
       // column — the SAME per-ticker figure the notebook publishes) before falling back to
-      // tickerMeta (Arbitrage's own corr/beta/sigma), so this needs no Continuum-specific plumbing.
+      // tickerMeta (Arbitrage's own corr/beta/sigma), so this needs no OPGReversal-specific plumbing.
       const value = getOptimizerFallbackValue(row, "sigma", tickerMeta);
       if (value == null) {
         // No value is unknown, so the row is rejected - also while the meta is still loading
@@ -4226,8 +4224,8 @@ export default function ContinuumScanner({
       }
     }
     if (_minAlphaV != null || _maxAlphaV != null) {
-      // Continuum's own published ALPHA, sign-matched to the row's own side — rides the PairFlux-
-      // shaped Alpha slot (see ContinuumClosed.Alpha/PaperContinuumMapper). No tape column, so read
+      // OPGReversal's own published ALPHA, sign-matched to the row's own side — rides the PairFlux-
+      // shaped Alpha slot (see OPGReversalClosed.Alpha/PaperOPGReversalMapper). No tape column, so read
       // directly off the row rather than through getOptimizerFallbackValue (which has no "alpha" key).
       const raw = (row as any)?.alpha ?? (row as any)?.Alpha;
       const n = typeof raw === "number" ? raw : Number(raw);
@@ -4238,7 +4236,7 @@ export default function ContinuumScanner({
     }
     if (_minGammaV != null || _maxGammaV != null) {
       // The (class, sign) GAMMA level this row actually cleared — rides Rating (same slot the
-      // table's own γ column already reads as `r?.rating`, see PaperContinuumMapper: Rating = a.Gamma).
+      // table's own γ column already reads as `r?.rating`, see PaperOPGReversalMapper: Rating = a.Gamma).
       const raw = (row as any)?.rating ?? (row as any)?.Rating;
       const n = typeof raw === "number" ? raw : Number(raw);
       const value = Number.isFinite(n) ? n : null;
@@ -4420,11 +4418,11 @@ export default function ContinuumScanner({
     });
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
-  // The SNAPSHOT table predates the shared row shape and reads Continuum's own field names, so
+  // The SNAPSHOT table predates the shared row shape and reads OPGReversal's own field names, so
   // translate once here rather than in every cell. No bid/ask crossing and no bench leg: entry and
   // exit are both the SAME raw Stack% reading (LstPrcLstClsPct / EndLstPrcLstClsPct) per
-  // TapeContinuumEngine, not a side-dependent fill.
-  const continuumSnapshotRows = useMemo<ContinuumPaperClosed[]>(
+  // TapeOPGReversalEngine, not a side-dependent fill.
+  const opgReversalSnapshotRows = useMemo<OPGReversalPaperClosed[]>(
     () =>
       filteredEpisodes.map((r: any) => {
         const isLong = String(r?.side ?? "") === "Long";
@@ -4437,11 +4435,11 @@ export default function ContinuumScanner({
           exitStack: r?.endLstPrcLstClsPct ?? null,
           move: r?.move ?? null,
           pnl: r?.totalPnlUsd ?? null,
-          // The SIGNAL's own 15:50 deviation — not the same value as entryStack, which is the
-          // 16:00 reading the trade is actually priced from. See ContinuumClosed.SignalDev.
+          // The SIGNAL's own 9:20-9:25 deviation — not the same value as entryStack, which is the
+          // settled Gap% the trade is actually priced from. See OPGReversalClosed.SignalDev.
           signalDev: r?.entryDevSig ?? null,
           // Gamma/GammaN — the ticker's own published gate level for this (class, sign), riding
-          // the shared DTO's Rating/RatingTotal slots (see PaperContinuumMapper.ToClosedDto).
+          // the shared DTO's Rating/RatingTotal slots (see PaperOPGReversalMapper.ToClosedDto).
           gamma: r?.rating ?? null,
           gammaN: r?.ratingTotal ?? null,
           sigma: r?.sigma ?? null,
@@ -4453,8 +4451,8 @@ export default function ContinuumScanner({
     [filteredEpisodes]
   );
 
-  const continuumSnapshotStats = useMemo(() => {
-    const rows = continuumSnapshotRows.filter((r) => r.pnl != null);
+  const opgReversalSnapshotStats = useMemo(() => {
+    const rows = opgReversalSnapshotRows.filter((r) => r.pnl != null);
     const wins = rows.filter((r) => (r.pnl ?? 0) > 0);
     const losses = rows.filter((r) => (r.pnl ?? 0) < 0);
 
@@ -4471,19 +4469,19 @@ export default function ContinuumScanner({
     const profitFactor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
     const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
 
-    const sorted = [...continuumSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
+    const sorted = [...opgReversalSnapshotRows].sort((a, b) => (b.pnl ?? -Infinity) - (a.pnl ?? -Infinity));
 
     return { rows: sorted, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
-  }, [continuumSnapshotRows]);
+  }, [opgReversalSnapshotRows]);
 
-  // ACTIVE tab: genuinely open Continuum positions (signalled ~15:50, entered ~16:00, whose exit
+  // ACTIVE tab: genuinely open OPGReversal positions (signalled ~9:20-9:25, entered ~9:30, whose exit
   // clock time has not arrived yet) — GET /active, already fetched into activeRows/filteredActive
   // above by the shared shell. This REPLACES DayTwo/OpenDoor's "candidates" panel, which was a
-  // client-side per-bin rate/total/avg_move research view (/api/opendoor/summary) with no Continuum
-  // equivalent: Continuum publishes a single gamma per (ticker, class, sign), not an up/down bin
+  // client-side per-bin rate/total/avg_move research view (/api/opendoor/summary) with no OPGReversal
+  // equivalent: OPGReversal publishes a single gamma per (ticker, class, sign), not an up/down bin
   // table, so there is nothing to reproduce that panel from. Showing real open positions here is
-  // both accurate to the data Continuum actually has and more useful than an empty/fabricated tab.
-  const continuumActiveRows = useMemo(
+  // both accurate to the data OPGReversal actually has and more useful than an empty/fabricated tab.
+  const opgReversalActiveRows = useMemo(
     () =>
       filteredActive.map((r: any) => ({
         ticker: String(r?.ticker ?? ""),
@@ -4505,8 +4503,8 @@ export default function ContinuumScanner({
     [filteredActive]
   );
 
-  const continuumActiveStats = useMemo(() => {
-    const rows = continuumActiveRows;
+  const opgReversalActiveStats = useMemo(() => {
+    const rows = opgReversalActiveRows;
     const withPnl = rows.filter((r) => r.pnl != null);
     const wins = withPnl.filter((r) => (r.pnl ?? 0) > 0);
     const losses = withPnl.filter((r) => (r.pnl ?? 0) < 0);
@@ -4525,7 +4523,7 @@ export default function ContinuumScanner({
     const expectancy = winRate * avgWin + (1 - winRate) * avgLoss;
 
     return { rows, trades, totalPnl, winRate, avgTrade, maxWin, maxLoss, avgWin, avgLoss, profitFactor, expectancy };
-  }, [continuumActiveRows]);
+  }, [opgReversalActiveRows]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -4990,8 +4988,8 @@ export default function ContinuumScanner({
               );
             }
             // "bench" deliberately NOT built here (found 2026-09-29 auditing every SCOPE parameter
-            // for Continuum): row.benchTicker is always "" — PaperContinuumMapper.ToClosedDto hardcodes
-            // BenchTicker to "" since Continuum has no hedge leg (the same reason benchPnlUsd/
+            // for OPGReversal): row.benchTicker is always "" — PaperOPGReversalMapper.ToClosedDto hardcodes
+            // BenchTicker to "" since OPGReversal has no hedge leg (the same reason benchPnlUsd/
             // hedgedPnlUsd are already excluded from scope RESULTS below) — the axis could only ever
             // render one empty-string bucket, which looks exactly like a broken parameter.
             if (catParam) catResults.push(catParam);
@@ -5274,7 +5272,7 @@ export default function ContinuumScanner({
     return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
-    // Server-computed, 2026-09-23 (PaperContinuumController.BuildAnalyticsSummary) — the operator's
+    // Server-computed, 2026-09-23 (PaperOPGReversalController.BuildAnalyticsSummary) — the operator's
     // own instruction to move this off the browser. When present, this short-circuits BEFORE any of
     // the reduce/sort work below runs, so a filter/session/rating/date tweak that only changes
     // filteredEpisodes (not the request that produced serverAnalyticsSummary) costs nothing here.
@@ -5602,12 +5600,12 @@ export default function ContinuumScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "CLO•CONTINUUM STREAM")
+    ? (headerTitleOverride ?? "OPG•REVERSAL STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "CLO•CONTINUUM STREAM"
-        : "CLO•CONTINUUM SCANNER";
+        ? "OPG•REVERSAL STREAM"
+        : "OPG•REVERSAL SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -5827,49 +5825,49 @@ export default function ContinuumScanner({
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
-              win_rate/total (ContinuumGate.cs), reaching ContinuumGate.Check via buildContinuumParams.
+              win_rate/total (OPGReversalGate.cs), reaching OPGReversalGate.Check via buildOPGReversalParams.
               Own separate pills, copied 1-to-1 off ArbitrageScanner's own MINRATE/MINTOTAL boxes —
               NOT folded into the violet ZAP strip below (that strip is reserved for the Spinner Input
               Standard's colored per-role boxes, per the user's own correction). This used to be an
               ALL/TOP toggle + ρ/β/σ range boxes reading arbitrageTickerMetaByTicker — Arbitrage's OWN
-              corr/beta/sigma, wrong data entirely for a Continuum ticker (Continuum has no corr/beta
+              corr/beta/sigma, wrong data entirely for a OPGReversal ticker (OPGReversal has no corr/beta
               concept at all) — removed. */}
           {/* RATE/UNIVERSE — the operator's own instruction (2026-09-25, moved before MINRATE/
               MINTOTAL on a follow-up correction): drops the per-ticker gamma lookup (and MINRATE/
               MINTOTAL/MinGammaTotal riding on it) entirely when off, gating on the flat floor/cap
-              alone — same ignoreRatings escape hatch Sonar's own Γ/Ø pills drive (ContinuumGate.cs),
+              alone — same ignoreRatings escape hatch Sonar's own Γ/Ø pills drive (OPGReversalGate.cs),
               just a single solid-colored button here instead of a pill pair: gold "RATE" while
               ratings are applied, red "UNIVERSE" once they are dropped. Sits immediately before the
               two pills it visibly governs (grayed out below when UNIVERSE is active), not after. */}
           <button
             type="button"
-            onClick={() => setContinuumIgnoreRatings((v) => !v)}
-            title={continuumIgnoreRatings
+            onClick={() => setOPGReversalIgnoreRatings((v) => !v)}
+            title={opgReversalIgnoreRatings
               ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL/MinGammaTotal. Click to apply ratings again."
               : "RATE — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL/MinGammaTotal enforced. Click to drop ratings (UNIVERSE)."}
             className={clsx(
               "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
-              continuumIgnoreRatings
+              opgReversalIgnoreRatings
                 ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
                 : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
             )}
           >
-            {continuumIgnoreRatings ? "UNIVERSE" : "RATE"}
+            {opgReversalIgnoreRatings ? "UNIVERSE" : "RATE"}
           </button>
 
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
-              win_rate/total (ContinuumGate.cs), reaching ContinuumGate.Check via buildContinuumParams.
+              win_rate/total (OPGReversalGate.cs), reaching OPGReversalGate.Check via buildOPGReversalParams.
               Own separate pills, copied 1-to-1 off ArbitrageScanner's own MINRATE/MINTOTAL boxes —
               NOT folded into the violet ZAP strip below (that strip is reserved for the Spinner Input
               Standard's colored per-role boxes, per the user's own correction). This used to be an
               ALL/TOP toggle + ρ/β/σ range boxes reading arbitrageTickerMetaByTicker — Arbitrage's OWN
-              corr/beta/sigma, wrong data entirely for a Continuum ticker (Continuum has no corr/beta
+              corr/beta/sigma, wrong data entirely for a OPGReversal ticker (OPGReversal has no corr/beta
               concept at all) — removed. Grayed out (not disabled — still editable, since RATE can be
               flipped back on at any time) while RATE/UNIVERSE reads UNIVERSE, since the bridge drops
               both floors under ignoreRatings regardless of what is typed into them. */}
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-            continuumIgnoreRatings && "opacity-40"
+            opgReversalIgnoreRatings && "opacity-40"
           )} title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -5879,15 +5877,15 @@ export default function ContinuumScanner({
                 step={0.05}
                 min={0}
                 max={1}
-                value={continuumMinRate}
-                onChange={(e) => setContinuumMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                value={opgReversalMinRate}
+                onChange={(e) => setOPGReversalMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
                 className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setContinuumMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                  onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Increase min rate"
                 >
@@ -5896,7 +5894,7 @@ export default function ContinuumScanner({
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setContinuumMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                  onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                   className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Decrease min rate"
                 >
@@ -5908,8 +5906,8 @@ export default function ContinuumScanner({
 
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-            continuumIgnoreRatings && "opacity-40"
-          )} title="Floor on the matched cell's own published total trade count (not GammaN — see ContinuumGate.cs). 0 = off.">
+            opgReversalIgnoreRatings && "opacity-40"
+          )} title="Floor on the matched cell's own published total trade count (not GammaN — see OPGReversalGate.cs). 0 = off.">
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
@@ -5917,15 +5915,15 @@ export default function ContinuumScanner({
                 inputMode="numeric"
                 step={1}
                 min={0}
-                value={continuumMinTotal}
-                onChange={(e) => setContinuumMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                value={opgReversalMinTotal}
+                onChange={(e) => setOPGReversalMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
                 className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setContinuumMinTotal((v) => Math.max(0, v + 1))}
+                  onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v + 1))}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Increase min total"
                 >
@@ -5934,7 +5932,7 @@ export default function ContinuumScanner({
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setContinuumMinTotal((v) => Math.max(0, v - 1))}
+                  onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v - 1))}
                   className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Decrease min total"
                 >
@@ -5944,7 +5942,7 @@ export default function ContinuumScanner({
             </div>
           </div>
 
-          {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with Continuum's OWN static
+          {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with OPGReversal's OWN static
               values (not Arbitrage's arbitrageTickerMetaByTicker corr/beta/sigma the old ρ/β/σ read).
               σ = published static sigma (row.Sigma, already real — see getOptimizerFallbackValue's
               own row-first lookup). α = published alpha, sign-matched to the row's side (rides the
@@ -5954,8 +5952,8 @@ export default function ContinuumScanner({
               threshold on the trade's own win_rate. */}
           {[
             { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
-            { label: "α", title: "Alpha — the ticker's own modal |15:50 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
-            { label: "γ", title: "Gamma — the (class, sign) continuum-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
+            { label: "α", title: "Alpha — the ticker's own modal |9:20-9:25 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
+            { label: "γ", title: "Gamma — the (class, sign) opgReversal-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
           ].map((field) => (
             <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
               <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
@@ -6028,15 +6026,15 @@ export default function ContinuumScanner({
           
             <div className="flex h-7 items-center gap-2">
               {[
-                ...CONTINUUM_EXIT_CLASSES,
+                ...OPGREVERSAL_EXIT_CLASSES,
               ].map((b) => (
                 <button
                   key={b.key}
                   type="button"
-                  onClick={() => setContinuumExitClass(b.key as "exit18" | "exit21" | "exit04" | "exit07" | "print")}
+                  onClick={() => setOPGReversalExitClass(b.key as "exit0945" | "exit1000" | "exit1030")}
                   className={clsx(
                     TOOLBAR_BUTTON_BASE,
-                    continuumExitClass === b.key
+                    opgReversalExitClass === b.key
                       ? TOOLBAR_BUTTON_ACTIVE
                       : TOOLBAR_BUTTON_INACTIVE
                   )}
@@ -6299,17 +6297,17 @@ export default function ContinuumScanner({
                   ZAP row position 1-to-1 (FilterFlagsRow renders strategySlot BEFORE sortSlot and
                   zapSlot AFTER it; the user's own reference screenshot confirmed this belongs after
                   ABC, not before it). */}
-              {/* One continuous pill group, styled 1-to-1 off ContinuumScout's own ScoutUnitBar (the
+              {/* One continuous pill group, styled 1-to-1 off OPGReversalScout's own ScoutUnitBar (the
                   user's own reference — "зроби як на скауті"): a single rounded-xl violet-bordered
                   strip (not FILTER_GROUP_TONES.zap's separate boxed groups), pills with a solid
                   violet fill + glow when active (`bg-violet-500 ... shadow-[0_0_16px_rgba(139,92,246,
                   0.36)]`) rather than just a tinted border. Just the %/σ/α/γ threshold-unit toggle
-                  now (see continuumUnitMode's own comment — NOT display-only: sent to the bridge as
-                  `thresholdUnit` and resolved PER TICKER inside ContinuumGate.Check, so the coral/
+                  now (see opgReversalUnitMode's own comment — NOT display-only: sent to the bridge as
+                  `thresholdUnit` and resolved PER TICKER inside OPGReversalGate.Check, so the coral/
                   mint/silver boxes right after this strip are ENTERED in whichever unit is active
                   here). The old GAMMA/RAW (Γ/Ø) gate-mode toggle that used to sit after it was
                   removed (the user's own call, 2026-09-23 — "не потрібні"): the gate always reads
-                  the ticker's own published gamma now, see buildContinuumParams's own `ignoreRatings:
+                  the ticker's own published gamma now, see buildOPGReversalParams's own `ignoreRatings:
                   false`. The four color-coded spinner boxes after this strip are unchanged in
                   POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
                   startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
@@ -6323,13 +6321,13 @@ export default function ContinuumScanner({
                   { key: "atr", label: "τ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own CURRENT live ATR14% reading — resolved per ticker server-side, not a published constant", disabled: false },
                   { key: "lambda", label: "λ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published lambda (sample std of the raw ENTRY-checkpoint reading) — resolved per ticker server-side", disabled: false },
                 ] as const).map((u) => {
-                  const on = continuumUnitMode === u.key;
+                  const on = opgReversalUnitMode === u.key;
                   return (
                     <button
                       key={u.key}
                       type="button"
                       disabled={u.disabled}
-                      onClick={() => !u.disabled && setContinuumUnitMode(u.key)}
+                      onClick={() => !u.disabled && setOPGReversalUnitMode(u.key)}
                       title={u.title}
                       className={clsx(
                         "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all gap-1",
@@ -6345,21 +6343,21 @@ export default function ContinuumScanner({
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |15:50 deviation| for a NEGATIVE reading (a SHORT entry), entered in ${continuumThresholdUnitLabel}. Coral = short.`}>
+                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry), entered in ${opgReversalThresholdUnitLabel}. Coral = short.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsShort}
-                    onChange={(e) => setContinuumMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
+                    value={opgReversalMinDevAbsShort}
+                    onChange={(e) => setOPGReversalMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase short-side floor"
                     >
@@ -6368,7 +6366,7 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease short-side floor"
                     >
@@ -6376,14 +6374,14 @@ export default function ContinuumScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |15:50 deviation| for a POSITIVE reading (a LONG entry), entered in ${continuumThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
+                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry), entered in ${opgReversalThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsLong}
-                    onChange={(e) => setContinuumMinDevAbsLong(e.target.value)}
+                    value={opgReversalMinDevAbsLong}
+                    onChange={(e) => setOPGReversalMinDevAbsLong(e.target.value)}
                     placeholder="as short"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
@@ -6391,8 +6389,8 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? continuumMinDevAbsShort;
+                      onClick={() => setOPGReversalMinDevAbsLong((prev) => {
+                        const cur = optNumOrNull(prev) ?? opgReversalMinDevAbsShort;
                         return String(Math.max(0, +(cur + 0.1).toFixed(4)));
                       })}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -6403,8 +6401,8 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? continuumMinDevAbsShort;
+                      onClick={() => setOPGReversalMinDevAbsLong((prev) => {
+                        const cur = optNumOrNull(prev) ?? opgReversalMinDevAbsShort;
                         return String(Math.max(0, +(cur - 0.1).toFixed(4)));
                       })}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
@@ -6414,14 +6412,14 @@ export default function ContinuumScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |15:50 deviation|, either side (empty = none), entered in ${continuumThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
+                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |9:20-9:25 deviation|, either side (empty = none), entered in ${opgReversalThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsMax}
-                    onChange={(e) => setContinuumMinDevAbsMax(e.target.value)}
+                    value={opgReversalMinDevAbsMax}
+                    onChange={(e) => setOPGReversalMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
@@ -6429,7 +6427,7 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpContinuumMinDevAbsMax(0.1)}
+                      onClick={() => bumpOPGReversalMinDevAbsMax(0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase max cap"
                     >
@@ -6438,7 +6436,7 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpContinuumMinDevAbsMax(-0.1)}
+                      onClick={() => bumpOPGReversalMinDevAbsMax(-0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease max cap"
                     >
@@ -6452,15 +6450,15 @@ export default function ContinuumScanner({
                     inputMode="numeric"
                     step={1}
                     min={0}
-                    value={continuumMinGammaTotal}
-                    onChange={(e) => setContinuumMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                    value={opgReversalMinGammaTotal}
+                    onChange={(e) => setOPGReversalMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinGammaTotal((v) => Math.max(0, v + 1))}
+                      onClick={() => setOPGReversalMinGammaTotal((v) => Math.max(0, v + 1))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase min gamma total"
                     >
@@ -6469,7 +6467,7 @@ export default function ContinuumScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinGammaTotal((v) => Math.max(0, v - 1))}
+                      onClick={() => setOPGReversalMinGammaTotal((v) => Math.max(0, v - 1))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease min gamma total"
                     >
@@ -6774,62 +6772,62 @@ export default function ContinuumScanner({
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               <SummaryMetricCard
                 label="TOTAL PNL ($)"
-                value={num(continuumActiveStats.totalPnl, 2)}
+                value={num(opgReversalActiveStats.totalPnl, 2)}
                 className="xl:row-span-2 xl:min-h-[124px]"
                 valueClassName={
                   clsx(
                     "text-4xl md:text-6xl font-bold",
-                    continuumActiveStats.totalPnl > 0
+                    opgReversalActiveStats.totalPnl > 0
                       ? "text-[#6ee7b7]"
-                      : continuumActiveStats.totalPnl < 0
+                      : opgReversalActiveStats.totalPnl < 0
                         ? SOFT_LOSS_TEXT_CLASS
                         : "text-zinc-200"
                   )
                 }
               />
-              <SummaryMetricCard label="OPEN POSITIONS" value={intn(continuumActiveStats.trades)} inline />
-              <SummaryMetricCard label="WIN RATE" value={`${num(continuumActiveStats.winRate * 100, 1)}%`} inline />
+              <SummaryMetricCard label="OPEN POSITIONS" value={intn(opgReversalActiveStats.trades)} inline />
+              <SummaryMetricCard label="WIN RATE" value={`${num(opgReversalActiveStats.winRate * 100, 1)}%`} inline />
               <SummaryMetricCard
                 label="AVG ($)"
-                value={num(continuumActiveStats.avgTrade, 2)}
+                value={num(opgReversalActiveStats.avgTrade, 2)}
                 inline
-                valueClassName={continuumActiveStats.avgTrade > 0 ? "text-emerald-300" : continuumActiveStats.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                valueClassName={opgReversalActiveStats.avgTrade > 0 ? "text-emerald-300" : opgReversalActiveStats.avgTrade < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="MAX WIN ($)"
-                value={num(continuumActiveStats.maxWin, 2)}
+                value={num(opgReversalActiveStats.maxWin, 2)}
                 inline
-                valueClassName={continuumActiveStats.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+                valueClassName={opgReversalActiveStats.maxWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG WIN ($)"
-                value={num(continuumActiveStats.avgWin, 2)}
+                value={num(opgReversalActiveStats.avgWin, 2)}
                 inline
-                valueClassName={continuumActiveStats.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
+                valueClassName={opgReversalActiveStats.avgWin > 0 ? "text-[#6ee7b7]" : "text-zinc-200"}
               />
-              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(continuumActiveStats.profitFactor) ? num(continuumActiveStats.profitFactor, 2) : "∞"} inline />
-              <SummaryMetricCard label="EXPECTANCY ($)" value={num(continuumActiveStats.expectancy, 2)} inline />
+              <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(opgReversalActiveStats.profitFactor) ? num(opgReversalActiveStats.profitFactor, 2) : "∞"} inline />
+              <SummaryMetricCard label="EXPECTANCY ($)" value={num(opgReversalActiveStats.expectancy, 2)} inline />
               <SummaryMetricCard
                 label="MAX LOSS ($)"
-                value={num(continuumActiveStats.maxLoss, 2)}
+                value={num(opgReversalActiveStats.maxLoss, 2)}
                 inline
-                valueClassName={continuumActiveStats.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                valueClassName={opgReversalActiveStats.maxLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
               <SummaryMetricCard
                 label="AVG LOSS ($)"
-                value={num(continuumActiveStats.avgLoss, 2)}
+                value={num(opgReversalActiveStats.avgLoss, 2)}
                 inline
-                valueClassName={continuumActiveStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
+                valueClassName={opgReversalActiveStats.avgLoss < 0 ? SOFT_LOSS_TEXT_CLASS : "text-zinc-200"}
               />
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  OPEN POSITIONS | rows {continuumActiveStats.rows.length}
+                  OPEN POSITIONS | rows {opgReversalActiveStats.rows.length}
                 </div>
                 <div className="text-[10px] font-mono text-zinc-600">
-                  signalled ~15:50 · entered ~16:00 · {continuumExitClass} exit not yet reached
+                  signalled ~9:20-9:25 · entered ~9:30 · {opgReversalExitClass} exit not yet reached
                 </div>
               </div>
 
@@ -6849,7 +6847,7 @@ export default function ContinuumScanner({
                     </tr>
                   </thead>
                   <tbody>
-                    {continuumActiveStats.rows.map((r, i) => (
+                    {opgReversalActiveStats.rows.map((r, i) => (
                       <tr
                         key={`${r.ticker}|${r.side}|${i}`}
                         className={clsx(
@@ -6860,13 +6858,13 @@ export default function ContinuumScanner({
                       >
                         <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23); the
-                            actual internal search-target minute stays 16:01, this is display-only. */}
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">16:00</td>
+                        {/* Entry always shown as 09:30 (the open) — operator's own instruction (2026-09-23); the
+                            actual order is OPGReversal's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">09:30</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.minutesToExit ?? "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.lastStack ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{formatContinuumDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{formatOPGReversalDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
                         <td
                           className={clsx(
                             "p-2.5 text-right tabular-nums font-bold",
@@ -6880,7 +6878,7 @@ export default function ContinuumScanner({
                         </td>
                       </tr>
                     ))}
-                    {!continuumActiveStats.rows.length && (
+                    {!opgReversalActiveStats.rows.length && (
                       <tr>
                         <td colSpan={9} className="p-8 text-center text-zinc-500">
                           No open positions for this ticker scope/gates.
@@ -7049,14 +7047,14 @@ export default function ContinuumScanner({
                   CSV ({filteredEpisodes.length})
                 </button>
               ) : <div />}
-              {CONTINUUM_OPTIMIZER_ENABLED && (
+              {OPGREVERSAL_OPTIMIZER_ENABLED && (
                 <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
                   Scope Engine
                 </div>
               )}
             </div>
 
-            {CONTINUUM_OPTIMIZER_ENABLED && (
+            {OPGREVERSAL_OPTIMIZER_ENABLED && (
             <GlassCard className="px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 shrink-0">
@@ -8562,23 +8560,23 @@ export default function ContinuumScanner({
 
         {primaryPanel === "scanner" && tab === "active" && !isStreamOnlyShell && (
           <div className="mb-3">
-            <ContinuumAutoOptimizer
+            <OPGReversalAutoOptimizer
               inline
               open
               onClose={() => undefined}
               apiBase={STRATEGY.api.base}
-              buildBase={(from, to) => buildContinuumPostRequest(from, to)}
+              buildBase={(from, to) => buildOPGReversalPostRequest(from, to)}
               fixedToggles={{ excludeItb, excludeHard }}
               tradingDays={sortedDaysAsc}
               initialFrom={dateFrom}
               initialTo={dateTo}
               current={{
-                minDevAbsShort: continuumMinDevAbsShort,
-                minDevAbsLong: continuumMinDevAbsLong,
-                minDevAbsMax: continuumMinDevAbsMax,
-                unit: continuumUnitMode,
+                minDevAbsShort: opgReversalMinDevAbsShort,
+                minDevAbsLong: opgReversalMinDevAbsLong,
+                minDevAbsMax: opgReversalMinDevAbsMax,
+                unit: opgReversalUnitMode,
               }}
-              onApply={applyContinuumAutoOptimizerRow}
+              onApply={applyOPGReversalAutoOptimizerRow}
             />
           </div>
         )}
@@ -8587,18 +8585,18 @@ export default function ContinuumScanner({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                CLO•CONTINUUM SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {continuumExitClass} exit
+                OPG•REVERSAL SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {opgReversalExitClass} exit
               </div>
-              {continuumSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
-              {continuumSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{continuumSnapshotError}</span>}
+              {opgReversalSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
+              {opgReversalSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{opgReversalSnapshotError}</span>}
             </div>
 
             {/* Full card row, ported 1-to-1 off ArbitrageScanner's own SNAPSHOT block (the user's own
                 reference, 2026-09-23 — "зроби точно так само"): analyticsSummary already computes
                 every one of these fields off filteredEpisodes in exactly Arbitrage's own shape
                 (situations/longs/shorts/streamflowUsd/maxDrawdownUsd/top2WinShare/top2LossShare/
-                medianTradeUsd/medianDayUsd all real for Continuum, same as trades/winRate/etc already
-                were) — this replaces the narrower continuumSnapshotStats-based card row, which only
+                medianTradeUsd/medianDayUsd all real for OPGReversal, same as trades/winRate/etc already
+                were) — this replaces the narrower opgReversalSnapshotStats-based card row, which only
                 ever showed a subset of what was already being computed one scroll down for the
                 equity curve. */}
             <div className="flex flex-col xl:flex-row gap-3">
@@ -8698,9 +8696,9 @@ export default function ContinuumScanner({
             {/* Equity curve + start/end time distribution — ported off ArbitrageScanner's own
                 SNAPSHOT block. PEAK STRENGTH BY TIME / PEAK REVERSION ≥ 2/3 are deliberately NOT
                 ported (the user's own call, 2026-09-23): both need a continuously-tracked PEAK
-                reading during the hold, which Continuum's signal→entry→exit thesis has no equivalent
+                reading during the hold, which OPGReversal's signal→entry→exit thesis has no equivalent
                 of — every row's PeakMinuteIdx already just mirrors EntryMinuteIdx and PeakMetricAbs
-                is always null (see PaperContinuumMapper.cs), so those two charts would render a flat
+                is always null (see PaperOPGReversalMapper.cs), so those two charts would render a flat
                 zero line rather than being genuinely absent, which is worse than omitting them. */}
             {(analyticsSummary.equityCurve?.length ?? 0) > 0 && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
@@ -8735,7 +8733,7 @@ export default function ContinuumScanner({
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                  REALIZED TRADES | rows {continuumSnapshotStats.rows.length} | size ${sizeValue}/trade
+                  REALIZED TRADES | rows {opgReversalSnapshotStats.rows.length} | size ${sizeValue}/trade
                 </div>
               </div>
 
@@ -8756,7 +8754,7 @@ export default function ContinuumScanner({
                     </tr>
                   </thead>
                   <tbody>
-                    {continuumSnapshotStats.rows.map((r, i) => (
+                    {opgReversalSnapshotStats.rows.map((r, i) => (
                       <tr
                         key={`${r.ticker}|${r.side}|${r.entryMinuteIdx}|${i}`}
                         className={clsx(
@@ -8767,9 +8765,9 @@ export default function ContinuumScanner({
                       >
                         <td className="p-2.5 text-zinc-100 font-semibold">{r.ticker}</td>
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
-                        {/* Entry always shown as 16:00 (the close) — operator's own instruction (2026-09-23); the
-                            actual internal search-target minute stays 16:01, this is display-only. */}
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">16:00</td>
+                        {/* Entry always shown as 09:30 (the open) — operator's own instruction (2026-09-23); the
+                            actual order is OPGReversal's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">09:30</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
@@ -8782,16 +8780,16 @@ export default function ContinuumScanner({
                         >
                           {num(r.pnl ?? null, 2)}
                         </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{formatContinuumDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{formatOPGReversalDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
                           {r.gamma != null ? num(r.gamma, 3) : "—"}×{r.gammaN ?? "—"}
                         </td>
                       </tr>
                     ))}
-                    {!continuumSnapshotStats.rows.length && (
+                    {!opgReversalSnapshotStats.rows.length && (
                       <tr>
                         <td colSpan={10} className="p-8 text-center text-zinc-500">
-                          {continuumSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
+                          {opgReversalSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>
                     )}

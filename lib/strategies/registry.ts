@@ -278,6 +278,73 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // OPG•Reversal: Reversal's own mean-reversion thesis (unchanged — see AXION-app's
+  // OPGReversalGate.cs), a different clock entirely. Signal 9:20-9:25, a special "enters at the
+  // open" order fills at 9:30 regardless of when inside that window it was sent, three same-day
+  // exits (9:45/10:00/10:30). PNL is gap-anchored at ENTRY (the settled opening Gap%), not at exit
+  // the way Reversal's own print class works — see TapeOPGReversalEngine.cs's own header comment.
+  // Added 2026-10-01 (the operator's own instruction). OPGReversalServerStrategy now exists
+  // (Sonar/Stream/Live backend wired 2026-10-01) but AutoEnabled still defaults false and
+  // Hotkeys.OPGReversalBuy/Sell are still unbound (empty string) — no real order can go out until
+  // the operator explicitly enables the strategy and assigns a chord, same staged rollout Continuum
+  // went through. holdsOvernight is false: every exit lands same calendar day, well before the close.
+  // priority 19 — one below openfade (20): OPG's own signal window (9:20-9:25) overlaps the
+  // OpenDoor family's own 9:20-10:00 window, and an unproven new strategy should not outrank one
+  // already live there, the same reasoning Reversal/Continuum's own priorities follow relative to
+  // Day Two.
+  opgreversal: {
+    key: "opgreversal",
+    bridgeStrategyId: "stream.opgreversal",
+    nav: {
+      stream: "/opg-reversal/stream",
+      scanner: "/opg-reversal/scanner",
+      sonar: "/opg-reversal/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
+    priority: 19,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/opgreversal", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.opgreversal", sonarPrefix: "bridge.opgreversal", streamPrefix: "stream.opgreversal" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0945", "exit1000", "exit1030"],
+      labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
+  // OPG•Continuum: OPG•Reversal's own mirror — Continuum's unchanged thesis (isLong = d > 0, see
+  // AXION-app's OPGContinuumGate.cs) on the SAME OPG clock as OPG•Reversal (signal 9:20-9:25,
+  // open-anchored entry at 9:30, three same-day exits 9:45/10:00/10:30) and the SAME gap-anchored-
+  // ENTRY pricing — see TapeOPGContinuumEngine.cs's own header comment. Added 2026-10-01 (the
+  // operator's own instruction, "Я скопіював файли CONTINUUM, тепер займатись і переробки їх під
+  // OPG•CONTINUUM"). Full Scanner/Sonar/Stream/Live backend wired the same session. AutoEnabled still
+  // defaults false and Hotkeys.OPGContinuumBuy/Sell are still unbound (empty string) — no real order
+  // can go out until the operator explicitly enables the strategy and assigns a chord. holdsOvernight
+  // is false: every exit lands same calendar day. priority 18 — one below opgreversal (19), the same
+  // "has not traded for real even once, and the two read the identical signal with opposite signs"
+  // reasoning Reversal/Continuum's own priorities follow relative to each other.
+  opgcontinuum: {
+    key: "opgcontinuum",
+    bridgeStrategyId: "stream.opgcontinuum",
+    nav: {
+      stream: "/opg-continuum/stream",
+      scanner: "/opg-continuum/scanner",
+      sonar: "/opg-continuum/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
+    priority: 18,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/opgcontinuum", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.opgcontinuum", sonarPrefix: "bridge.opgcontinuum", streamPrefix: "stream.opgcontinuum" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0945", "exit1000", "exit1030"],
+      labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
   openfade: {
     key: "openfade",
     bridgeStrategyId: "stream.openfade",

@@ -11,8 +11,14 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "arbitrage", name: "ArbitRage", icon: "🧮", description: "Арбітражні вікна та повернення до норми." },
   { key: "pumpAndDump", name: "Pump & Dump", icon: "🚀", description: "Імпульсний зліт і різкий злив." },
   { key: "breakout", name: "Breakout", icon: "📈", description: "Пробій рівня та продовження руху." },
-  { key: "reversal", name: "Reversal", icon: "🧭", description: "Розворот після екстремуму." },
-  { key: "continuum", name: "Continuum", icon: "🌊", description: "Продовження руху після екстремуму." },
+  // Display name only (2026-10-01, the operator's own instruction) — key/bridgeStrategyId/hotkeys/
+  // routes/storage are all UNCHANGED ("reversal"/"stream.reversal" etc throughout), only the label
+  // shown in the UI picked up the CLO• prefix (CLO = enters at the CLOSE, distinguishing this family
+  // from OPG•Reversal/OPG•Continuum, which enter at the OPEN).
+  { key: "reversal", name: "CLO•Reversal", icon: "🧭", description: "Розворот після екстремуму (вхід по клоузу)." },
+  { key: "continuum", name: "CLO•Continuum", icon: "🌊", description: "Продовження руху після екстремуму (вхід по клоузу)." },
+  { key: "opgReversal", name: "OPG•Reversal", icon: "🔔", description: "Розворот навколо відкриття ринку, вхід по ціні оупена." },
+  { key: "opgContinuum", name: "OPG•Continuum", icon: "🌊", description: "Продовження руху навколо відкриття ринку, вхід по ціні оупена." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
   { key: "pullback", name: "Pullback", icon: "🪝", description: "Відкат у тренді для заходу." },

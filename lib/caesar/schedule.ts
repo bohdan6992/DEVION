@@ -242,7 +242,13 @@ const LIVE_STRATEGIES: Record<
 );
 
 export const CAESAR_STRATEGIES: readonly CaesarStrategy[] = STRATEGY_CATALOG.map((meta) => {
-  const live = LIVE_STRATEGIES[meta.key];
+  // lib/strategies/registry.ts's own LIVE_STRATEGIES keys are always lowercase (getLiveStrategy's
+  // own lowercasing convention), but STRATEGY_CATALOG keys are free to be camelCase ("opgReversal",
+  // "opgContinuum", "dayTwo") — a raw LIVE_STRATEGIES[meta.key] lookup missed those three entirely,
+  // silently falling back to bridgeStrategyId=null/nav=null/window=null/defaultPriority=10, which is
+  // why their Caesar rows could be toggled ON but never actually dispatched anything (no instanceId
+  // to push to the bridge). Same fix class as getLiveStrategy's own lowercasing.
+  const live = LIVE_STRATEGIES[meta.key.toLowerCase()];
   return {
     key: meta.key,
     name: meta.name,

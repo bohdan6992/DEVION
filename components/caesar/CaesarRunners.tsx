@@ -138,7 +138,10 @@ export default function CaesarRunners() {
     const out: Runner[] = [];
     for (const row of plan[seg] ?? []) {
       if (!row.enabled) continue;
-      const strategy = LIVE_STRATEGIES[row.strategyKey];
+      // row.strategyKey is STRATEGY_CATALOG's own spelling (camelCase for "opgReversal"/
+      // "opgContinuum"/"dayTwo"); LIVE_STRATEGIES (the real registry) is always lowercase-keyed —
+      // same mismatch CaesarSchedule.tsx's own lookups had, fixed the same way.
+      const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
       if (!strategy) continue;
       out.push({
         strategy,
@@ -202,7 +205,7 @@ export default function CaesarRunners() {
     const out = [...segmentRunners];
     for (const [key, priority] of Object.entries(held)) {
       if (inSegment.has(key)) continue;
-      const strategy = LIVE_STRATEGIES[key];
+      const strategy = LIVE_STRATEGIES[key.toLowerCase()];
       if (!strategy || strategy.streamEngine !== "browser") continue;
       out.push({ strategy, priority, segment: null, holding: true, host: "browser" });
     }

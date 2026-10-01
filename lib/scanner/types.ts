@@ -612,6 +612,14 @@ export type ReversalAnalyticsSummaryDto = {
 // direction-specific field; see that controller's own doc comment).
 export type ContinuumAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
+// OPG•Reversal's own copy — identical shape, same ported-unchanged BuildAnalyticsSummary computation
+// (see PaperOPGReversalController.cs's own doc comment).
+export type OPGReversalAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
+// OPG•Continuum's own copy — identical shape, same ported-unchanged BuildAnalyticsSummary computation
+// (see PaperOPGContinuumController.cs's own doc comment).
+export type OPGContinuumAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
 export type PaperArbOptimizerRangeBucketDto = {
   bucketId: string;
   label: string;

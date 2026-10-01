@@ -8,11 +8,11 @@ import clsx from "clsx";
 
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import {
-  fetchContinuumSonarSnapshot,
-  pushContinuumSonarLiveParams,
-  toContinuumSonarLiveParams,
-  type ContinuumSonarRow,
-} from "@/lib/sonar/continuumSnapshotClient";
+  fetchOPGContinuumSonarSnapshot,
+  pushOPGContinuumSonarLiveParams,
+  toOPGContinuumSonarLiveParams,
+  type OPGContinuumSonarRow,
+} from "@/lib/sonar/opgContinuumSnapshotClient";
 import { useUi } from "@/components/UiProvider";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import PresetPicker from "@/components/presets/PresetPicker";
@@ -101,7 +101,7 @@ import {
 import { getLiveStrategy } from "@/lib/strategies/registry";
 
 /** Routes for this strategy, from the one registry Caesar and the scanner also read. */
-const SONAR_NAV = getLiveStrategy("continuum")!.nav;
+const SONAR_NAV = getLiveStrategy("opgcontinuum")!.nav;
 export { normalizeSignal };
 export type { ArbitrageSignal };
 
@@ -153,11 +153,11 @@ const betaOrder: BetaKey[] = ["lt1", "b1_1_5", "b1_5_2", "gt2", "unknown"];
 
 const BRIDGE_BASE = process.env.NEXT_PUBLIC_TRADING_BRIDGE_URL ?? "http://localhost:5197";
 
-const IGNORE_LS_KEY = "bridge.continuum.ignoreTickers.v2";
-const APPLY_LS_KEY = "bridge.continuum.applyOnlyTickers.v1";
-const PIN_LS_KEY = "bridge.continuum.pinTickers.v1";
-const ACTIVE_PANEL_LS_KEY = "bridge.continuum.activePanel.v1";
-const UI_STATE_LS_KEY = "bridge.continuum.uiState.v1";
+const IGNORE_LS_KEY = "bridge.opgcontinuum.ignoreTickers.v2";
+const APPLY_LS_KEY = "bridge.opgcontinuum.applyOnlyTickers.v1";
+const PIN_LS_KEY = "bridge.opgcontinuum.pinTickers.v1";
+const ACTIVE_PANEL_LS_KEY = "bridge.opgcontinuum.activePanel.v1";
+const UI_STATE_LS_KEY = "bridge.opgcontinuum.uiState.v1";
 
 /* =========================
    SMALL UTILS (fast)
@@ -393,7 +393,7 @@ export function signalSide(s: ArbitrageSignal): "Long" | "Short" {
 // deviation gate is DEV against its own bins (matchOpenDoor); nothing here consumed these.
 // ArbitrageSonar keeps its own copies, untouched.
 
-const SONAR_ACTIVE_PRESET_ID_LS_KEY = "continuum.sonar.shared-preset.active-id";
+const SONAR_ACTIVE_PRESET_ID_LS_KEY = "opgcontinuum.sonar.shared-preset.active-id";
 
 const parseTodayReportFlag = (value: any): boolean | null => {
   const byDate = parseReportDateAffectsTodaySession(value);
@@ -1797,21 +1797,20 @@ function HedgeHeaderMinimal({
    COMPONENT
 ========================= */
 /**
- * Continuum's exit classes — ContinuumTiming.Default.ExitTargetMinByClass: five clock-time exits
- * spanning the evening into the next morning's open print. Lowercase keys exactly as the bridge
- * (ContinuumSonarLiveParams.ExitClass) expects them. Same array ContinuumScanner.tsx already
- * established (CONTINUUM_EXIT_CLASSES there) — kept as its own local copy here, same as DayTwo keeps
- * its own DAYTWO_EXIT_CLASSES in both the Scanner and the Sonar rather than sharing one module.
+ * OPG•Continuum's exit classes — OPGContinuumTiming.Default.ExitTargetMinByClass: three same-day
+ * clock-time exits (09:45 / 10:00 / 10:30), no overnight wrap at all. Lowercase keys exactly as the
+ * bridge (OPGContinuumSonarLiveParams.ExitClass) expects them. Same array OPGContinuumScanner.tsx
+ * already established (OPGCONTINUUM_EXIT_CLASSES there) — kept as its own local copy here, same as
+ * DayTwo keeps its own DAYTWO_EXIT_CLASSES in both the Scanner and the Sonar rather than sharing one
+ * module.
  */
-const CONTINUUM_EXIT_CLASSES = [
-  { key: "exit18", label: "18:00" },
-  { key: "exit21", label: "21:00" },
-  { key: "exit04", label: "04:00+1" },
-  { key: "exit07", label: "07:00+1" },
-  { key: "print", label: "PRINT (09:30+1)" },
+const OPGCONTINUUM_EXIT_CLASSES = [
+  { key: "exit0945", label: "09:45" },
+  { key: "exit1000", label: "10:00" },
+  { key: "exit1030", label: "10:30" },
 ] as const;
 
-export default function ContinuumSonar() {
+export default function OPGContinuumSonar() {
   const { theme } = useUi();
   const isLightTheme = theme === "light";
   const isDark = true;
@@ -1849,72 +1848,72 @@ export default function ContinuumSonar() {
   const [cls, setCls] = useState<ArbClass>("global");
   const [type, setType] = useState<ArbType>("any");
   const [mode, setMode] = useState<Mode>("all");
-  // Continuum exit class — replaces the inherited Arbitrage session-band selector with the five
-  // clock-time exits ContinuumTiming.Default actually computes (18:00 / 21:00 / 04:00+1 / 07:00+1 /
+  // OPGContinuum exit class — replaces the inherited Arbitrage session-band selector with the five
+  // clock-time exits OPGContinuumTiming.Default actually computes (18:00 / 21:00 / 04:00+1 / 07:00+1 /
   // PRINT 09:30+1). Deliberately independent from cls/mode/type, which stay wired to the old
   // Arbitrage-inherited plumbing elsewhere in this file untouched.
-  const [continuumExitClass, setContinuumExitClass] = useState<"exit18" | "exit21" | "exit04" | "exit07" | "print">("print");
-  // ContinuumGate.Check's whole rule: |15:50 deviation| must clear BOTH a flat floor (split by side
-  // — see below) AND the ticker's own published gamma for (class, sign) — see ContinuumGate.cs. No
-  // per-param STACK/BENCH/DEV toggles and no per-direction rate/total/move bins: Continuum has
+  const [opgContinuumExitClass, setOPGContinuumExitClass] = useState<"exit0945" | "exit1000" | "exit1030">("exit0945");
+  // OPGContinuumGate.Check's whole rule: |9:20-9:25 deviation| must clear BOTH a flat floor (split by side
+  // — see below) AND the ticker's own published gamma for (class, sign) — see OPGContinuumGate.cs. No
+  // per-param STACK/BENCH/DEV toggles and no per-direction rate/total/move bins: OPGContinuum has
   // neither, unlike the OpenDoor family this file was copied from — see the four-box GATE controls
-  // further down, ported 1-to-1 from ContinuumScanner.tsx's own pattern (AGENTS.md's spinner-input
-  // standard). Naming/defaults match ContinuumScanner.tsx's own continuumMinDevAbsShort/Long/Max/
-  // continuumMinGammaTotal exactly, so buildContinuumParams-equivalent below stays a byte-for-byte
+  // further down, ported 1-to-1 from OPGContinuumScanner.tsx's own pattern (AGENTS.md's spinner-input
+  // standard). Naming/defaults match OPGContinuumScanner.tsx's own opgContinuumMinDevAbsShort/Long/Max/
+  // opgContinuumMinGammaTotal exactly, so buildOPGContinuumParams-equivalent below stays a byte-for-byte
   // mirror of the Scanner's own request builder.
-  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(0.5);
-  // Empty means "the same threshold as the short one" (optNumOrNull(...) ?? continuumMinDevAbsShort).
-  const [continuumMinDevAbsLong, setContinuumMinDevAbsLong] = useState("");
-  // Upper cap on |15:50 deviation|, either side; empty = no cap.
-  const [continuumMinDevAbsMax, setContinuumMinDevAbsMax] = useState("");
-  // Sample-size floor on the ticker's own published gamma (ContinuumGammaEntry.GammaN). 0 (or below)
+  const [opgContinuumMinDevAbsShort, setOPGContinuumMinDevAbsShort] = useState(0.5);
+  // Empty means "the same threshold as the short one" (optNumOrNull(...) ?? opgContinuumMinDevAbsShort).
+  const [opgContinuumMinDevAbsLong, setOPGContinuumMinDevAbsLong] = useState("");
+  // Upper cap on |9:20-9:25 deviation|, either side; empty = no cap.
+  const [opgContinuumMinDevAbsMax, setOPGContinuumMinDevAbsMax] = useState("");
+  // Sample-size floor on the ticker's own published gamma (OPGContinuumGammaEntry.GammaN). 0 (or below)
   // turns this off.
-  const [continuumMinGammaTotal, setContinuumMinGammaTotal] = useState(0);
+  const [opgContinuumMinGammaTotal, setOPGContinuumMinGammaTotal] = useState(0);
   // Backtest/display escape hatch: drop the per-ticker gamma lookup (and the MinGammaTotal floor
   // riding on it) and show every ticker whose |signal dev| clears the flat floor/cap alone — same
   // escape hatch OpenDoor/Day Two's IgnoreRatings gives their toolbars.
-  const [continuumIgnoreRatings, setContinuumIgnoreRatings] = useState(false);
+  const [opgContinuumIgnoreRatings, setOPGContinuumIgnoreRatings] = useState(false);
   // MINRATE/MINTOTAL — real bridge-side gate on the matched (class, sign) cell's own published
-  // win_rate/total (ContinuumGate.cs), added 2026-09-29: the bridge (ContinuumSonarLiveParamsService)
-  // and ContinuumScanner.tsx's own toolbar already had these; this Sonar's toolbar never grew the
+  // win_rate/total (OPGContinuumGate.cs), added 2026-09-29: the bridge (OPGContinuumSonarLiveParamsService)
+  // and OPGContinuumScanner.tsx's own toolbar already had these; this Sonar's toolbar never grew the
   // matching fields, so MinRate/MinTotal defaulted to 0 (off) here no matter what the operator set
-  // on the Scanner. 0 = off, mirrors ContinuumScanner.tsx's own defaults exactly.
-  const [continuumMinRate, setContinuumMinRate] = useState(0);
-  const [continuumMinTotal, setContinuumMinTotal] = useState(0);
-  // σ/α/γ min/max — the same static-value floor/ceiling ContinuumScanner.tsx's own tab-row group
+  // on the Scanner. 0 = off, mirrors OPGContinuumScanner.tsx's own defaults exactly.
+  const [opgContinuumMinRate, setOPGContinuumMinRate] = useState(0);
+  const [opgContinuumMinTotal, setOPGContinuumMinTotal] = useState(0);
+  // σ/α/γ min/max — the same static-value floor/ceiling OPGContinuumScanner.tsx's own tab-row group
   // has (its own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL — a floor/ceiling on a
-  // STATIC published value, not a threshold on the trade's own win_rate"). Continuum's own σ/α/γ,
+  // STATIC published value, not a threshold on the trade's own win_rate"). OPGContinuum's own σ/α/γ,
   // not the ρ/β/σ FilterRatingRow above (Arbitrage's corr/beta/sigma — a different, pre-existing
-  // group). No bridge-side gate for this exists (ContinuumGate.Check has no Sigma/Alpha/Gamma bound),
-  // so — like the country/exchange/sector selects — this narrows continuumMatchedShort/Long client-
-  // side, over the fields ContinuumSonarRow already carries per row (r.sigma/r.alpha/r.gamma).
+  // group). No bridge-side gate for this exists (OPGContinuumGate.Check has no Sigma/Alpha/Gamma bound),
+  // so — like the country/exchange/sector selects — this narrows opgContinuumMatchedShort/Long client-
+  // side, over the fields OPGContinuumSonarRow already carries per row (r.sigma/r.alpha/r.gamma).
   const [minSigma, setMinSigma] = useState("");
   const [maxSigma, setMaxSigma] = useState("");
   const [minAlpha, setMinAlpha] = useState("");
   const [maxAlpha, setMaxAlpha] = useState("");
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
-  // Mirrors ContinuumScanner.tsx's own bumpContinuumMinDevAbsMax exactly: the max-cap field is a
+  // Mirrors OPGContinuumScanner.tsx's own bumpOPGContinuumMinDevAbsMax exactly: the max-cap field is a
   // string (so it can be empty = no cap), but its arrow buttons still need a numeric base to bump
   // from, falling back to the short-side floor when the field is empty.
-  const bumpContinuumMinDevAbsMax = (delta: number) => {
-    setContinuumMinDevAbsMax((prev) => {
+  const bumpOPGContinuumMinDevAbsMax = (delta: number) => {
+    setOPGContinuumMinDevAbsMax((prev) => {
       const raw = String(prev ?? "").trim();
       const parsed = Number(raw.replace(",", "."));
-      const cur = Number.isFinite(parsed) ? parsed : continuumMinDevAbsShort;
+      const cur = Number.isFinite(parsed) ? parsed : opgContinuumMinDevAbsShort;
       const next = Math.max(0, +(cur + delta).toFixed(4));
       return String(next);
     });
   };
 
-  // %/σ/α/γ/τ threshold-unit toggle — ported 1-to-1 from ContinuumScanner.tsx's own continuumUnitMode
+  // %/σ/α/γ/τ threshold-unit toggle — ported 1-to-1 from OPGContinuumScanner.tsx's own opgContinuumUnitMode
   // (2026-09-25, the operator's own instruction; the earlier pass here deliberately left this out —
   // see the strategySlot's own comment, superseded now). Unlike that file this Sonar has no Signal
   // Dev table column to retint, only the single "Dev n.nn" span per card and the ratings detail
-  // panel — both updated below via formatContinuumDev, the same helper name/shape as the Scanner's.
-  const [continuumUnitMode, setContinuumUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
+  // panel — both updated below via formatOPGContinuumDev, the same helper name/shape as the Scanner's.
+  const [opgContinuumUnitMode, setOPGContinuumUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
 
-  function formatContinuumDev(
+  function formatOPGContinuumDev(
     raw: number | null | undefined,
     gamma: number | null | undefined,
     sigma?: number | null,
@@ -1923,20 +1922,20 @@ export default function ContinuumSonar() {
     lambda?: number | null,
   ): string {
     if (raw == null || !Number.isFinite(raw)) return "—";
-    if (continuumUnitMode === "pct") return raw.toFixed(3);
-    if (continuumUnitMode === "gamma") {
+    if (opgContinuumUnitMode === "pct") return raw.toFixed(3);
+    if (opgContinuumUnitMode === "gamma") {
       if (gamma == null || !Number.isFinite(gamma) || gamma === 0) return "—";
       return `${(raw / gamma).toFixed(2)}γ`;
     }
-    if (continuumUnitMode === "sigma") {
+    if (opgContinuumUnitMode === "sigma") {
       if (sigma == null || !Number.isFinite(sigma) || sigma === 0) return "—";
       return `${(raw / sigma).toFixed(2)}σ`;
     }
-    if (continuumUnitMode === "atr") {
+    if (opgContinuumUnitMode === "atr") {
       if (atr14Pct == null || !Number.isFinite(atr14Pct) || atr14Pct === 0) return "—";
       return `${(raw / atr14Pct).toFixed(2)}τ`;
     }
-    if (continuumUnitMode === "lambda") {
+    if (opgContinuumUnitMode === "lambda") {
       if (lambda == null || !Number.isFinite(lambda) || lambda === 0) return "—";
       return `${(raw / lambda).toFixed(2)}λ`;
     }
@@ -1944,13 +1943,13 @@ export default function ContinuumSonar() {
     return `${(raw / alpha).toFixed(2)}α`;
   }
 
-  /** What ContinuumSonarSnapshotService's ContinuumLiveEngine call approved this poll — the push/fetch
+  /** What OPGContinuumSonarSnapshotService's OPGContinuumLiveEngine call approved this poll — the push/fetch
    * effects live further down, since they need filter toolbar state and setError declared below. */
-  const [continuumSonarRows, setContinuumSonarRows] = useState<ContinuumSonarRow[]>([]);
-  // False outside ContinuumTiming.Default's 15:45-15:55 NY signal window — see
-  // ContinuumLiveResult.InWindow. Distinct from `error`: this is not a fetch failure, just "there is
+  const [opgContinuumSonarRows, setOPGContinuumSonarRows] = useState<OPGContinuumSonarRow[]>([]);
+  // False outside OPGContinuumTiming.Default's 9:20-9:25 NY signal window — see
+  // OPGContinuumLiveResult.InWindow. Distinct from `error`: this is not a fetch failure, just "there is
   // nothing to evaluate right now".
-  const [continuumInWindow, setContinuumInWindow] = useState(true);
+  const [opgContinuumInWindow, setOPGContinuumInWindow] = useState(true);
 
 
 
@@ -3176,16 +3175,16 @@ export default function ContinuumSonar() {
   // Retry bumps this to re-subscribe the snapshot poll below.
   const [streamReconnectVersion, setStreamReconnectVersion] = useState(0);
 
-  // The bridge already decided which tickers are listed (continuumSonarRows) and sent their full rows; this
+  // The bridge already decided which tickers are listed (opgContinuumSonarRows) and sent their full rows; this
   // only narrows the detail pool to them. No filter runs in the browser.
   useEffect(() => {
     if (isEditingRef.current) return;
-    const listed = new Set(continuumSonarRows.map((r) => String(r.ticker ?? "").toUpperCase().trim()));
+    const listed = new Set(opgContinuumSonarRows.map((r) => String(r.ticker ?? "").toUpperCase().trim()));
     const narrowed = allItems.filter((s) => listed.has(String(s.ticker ?? "").toUpperCase().trim()));
     startTransition(() => {
       setItems(narrowed);
     });
-  }, [allItems, continuumSonarRows, isEditing]);
+  }, [allItems, opgContinuumSonarRows, isEditing]);
 
   /* =========================
     Flash Logic (stable, cleanup-safe)
@@ -3264,16 +3263,16 @@ export default function ContinuumSonar() {
     return (items ?? []).find((x) => normalizeTicker(x?.ticker || "") === tk) ?? null;
   }, [activeTicker, items]);
 
-  // The REAL Continuum row for the selected ticker (ContinuumSonarRowDto, from continuumSonarRows —
-  // the bridge's own ContinuumGate.Check output), distinct from activeItem/activeData above which
-  // is sourced from the Arbitrage strategy's own signal pool (see continuumSonarRows' own comment) —
-  // reading Arbitrage's Best/ratings for a Continuum ticker's rating card would show Arbitrage's
-  // numbers mislabeled as Continuum's, or blank dashes when the ticker isn't Arbitrage-rated at all.
-  const activeContinuumRow = useMemo(() => {
+  // The REAL OPGContinuum row for the selected ticker (OPGContinuumSonarRowDto, from opgContinuumSonarRows —
+  // the bridge's own OPGContinuumGate.Check output), distinct from activeItem/activeData above which
+  // is sourced from the Arbitrage strategy's own signal pool (see opgContinuumSonarRows' own comment) —
+  // reading Arbitrage's Best/ratings for a OPGContinuum ticker's rating card would show Arbitrage's
+  // numbers mislabeled as OPGContinuum's, or blank dashes when the ticker isn't Arbitrage-rated at all.
+  const activeOPGContinuumRow = useMemo(() => {
     const tk = normalizeTicker(activeTicker || "");
     if (!tk) return null;
-    return continuumSonarRows.find((r) => normalizeTicker(r.ticker) === tk) ?? null;
-  }, [activeTicker, continuumSonarRows]);
+    return opgContinuumSonarRows.find((r) => normalizeTicker(r.ticker) === tk) ?? null;
+  }, [activeTicker, opgContinuumSonarRows]);
 
   useEffect(() => {
     setActiveLoading(false);
@@ -3399,24 +3398,24 @@ export default function ContinuumSonar() {
 
   /**
    * The toolbar, to the bridge — same debounce/hydration-guard pattern the Arbitrage/PairFlux and
-   * OpenDoor-family Sonar panels already use. ContinuumSonarSnapshotService reuses the SAME
-   * ContinuumLiveEngine a future ContinuumServerStrategy would trade on, so this is the exact params
+   * OpenDoor-family Sonar panels already use. OPGContinuumSonarSnapshotService reuses the SAME
+   * OPGContinuumLiveEngine a future OPGContinuumServerStrategy would trade on, so this is the exact params
    * object that strategy would build, just from the Sonar's own toolbar instead of a Stream tab's
-   * (which does not exist yet for Continuum).
+   * (which does not exist yet for OPGContinuum).
    */
   useEffect(() => {
     if (!uiHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      void pushContinuumSonarLiveParams(toContinuumSonarLiveParams({
-        exitClass: continuumExitClass,
-        minDevAbsShort: continuumMinDevAbsShort,
-        minDevAbsLong: optNumOrNull(continuumMinDevAbsLong) ?? continuumMinDevAbsShort,
-        minDevAbsMax: optNumOrNull(continuumMinDevAbsMax),
-        minGammaTotal: continuumMinGammaTotal,
-        minRate: continuumMinRate,
-        minTotal: continuumMinTotal,
-        ignoreRatings: continuumIgnoreRatings,
-        thresholdUnit: continuumUnitMode,
+      void pushOPGContinuumSonarLiveParams(toOPGContinuumSonarLiveParams({
+        exitClass: opgContinuumExitClass,
+        minDevAbsShort: opgContinuumMinDevAbsShort,
+        minDevAbsLong: optNumOrNull(opgContinuumMinDevAbsLong) ?? opgContinuumMinDevAbsShort,
+        minDevAbsMax: optNumOrNull(opgContinuumMinDevAbsMax),
+        minGammaTotal: opgContinuumMinGammaTotal,
+        minRate: opgContinuumMinRate,
+        minTotal: opgContinuumMinTotal,
+        ignoreRatings: opgContinuumIgnoreRatings,
+        thresholdUnit: opgContinuumUnitMode,
         filters: {
           listMode, ignoreSet, applySet, pinMap, activeMode,
           includeUSA, includeChina, selCountries, countryEnabled,
@@ -3424,13 +3423,13 @@ export default function ContinuumSonar() {
           bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
           excludeReport, excludeETF, excludeCrap, filterReport, equityType,
         },
-        source: "continuum-sonar",
+        source: "opgContinuum-sonar",
       }));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
-    continuumExitClass, continuumMinDevAbsShort, continuumMinDevAbsLong, continuumMinDevAbsMax, continuumMinGammaTotal, continuumMinRate, continuumMinTotal, continuumIgnoreRatings,
-    continuumUnitMode,
+    opgContinuumExitClass, opgContinuumMinDevAbsShort, opgContinuumMinDevAbsLong, opgContinuumMinDevAbsMax, opgContinuumMinGammaTotal, opgContinuumMinRate, opgContinuumMinTotal, opgContinuumIgnoreRatings,
+    opgContinuumUnitMode,
     listMode, ignoreSet, applySet, pinMap, activeMode,
     includeUSA, includeChina, selCountries, countryEnabled,
     selExchanges, exchangeEnabled, selSectors, sectorEnabled,
@@ -3440,15 +3439,15 @@ export default function ContinuumSonar() {
 
   useEffect(() => {
     let alive = true;
-    const unsubscribe = subscribeSharedPoll("sonar-continuum-snapshot", fetchContinuumSonarSnapshot, 6_000, (value, err) => {
+    const unsubscribe = subscribeSharedPoll("sonar-opgcontinuum-snapshot", fetchOPGContinuumSonarSnapshot, 6_000, (value, err) => {
       if (!alive) return;
       if (err) return;
       if (value?.timedOut) {
         setError("Bridge fetch timed out — no live feed reachable. Values below are the last received snapshot.");
         return;
       }
-      setContinuumSonarRows(value?.rows ?? []);
-      setContinuumInWindow(value?.inWindow ?? true);
+      setOPGContinuumSonarRows(value?.rows ?? []);
+      setOPGContinuumInWindow(value?.inWindow ?? true);
       // The bridge also sends the full rows those tickers (and the few its widgets read) are drawn
       // from, so the page opens no live feed of its own.
       const detail = (((value as any)?.items ?? []) as any[]).map(normalizeSignal).filter(Boolean) as ArbitrageSignal[];
@@ -3463,11 +3462,11 @@ export default function ContinuumSonar() {
     return () => { alive = false; unsubscribe(); };
   }, [streamReconnectVersion]);
 
-  // Continuum: which tickers pass, decided server-side (ContinuumSonarSnapshotService, the SAME
-  // ContinuumLiveEngine a future ContinuumServerStrategy would trade on) — split into two columns,
+  // OPGContinuum: which tickers pass, decided server-side (OPGContinuumSonarSnapshotService, the SAME
+  // OPGContinuumLiveEngine a future OPGContinuumServerStrategy would trade on) — split into two columns,
   // SHORT on the left, LONG on the right. This replaces the generic benchmark/beta grid below
-  // (still present, just disabled) as Sonar's primary Continuum view.
-  // allItems, not items: the backend already decided which tickers pass (continuumSonarRows), so
+  // (still present, just disabled) as Sonar's primary OPGContinuum view.
+  // allItems, not items: the backend already decided which tickers pass (opgContinuumSonarRows), so
   // this is purely a display lookup for a ticker already known to qualify — reading the client's
   // own re-filtered `items` would silently blank the REP badge for any ticker the (now-dead, but
   // still-computed) client filter chain would itself have excluded.
@@ -3479,13 +3478,13 @@ export default function ContinuumSonar() {
   // ITB/HARD/CORR audit (2026-09-29): these three toggles built a `snapshot`/`sectorCorr` object
   // that reached a `filtersRef` NOBODY ever read (see the dead-but-still-computed comment above),
   // and separately were simply missing from the real push effect's `filters` object below — so on
-  // Continuum they were pure decoration, unlike Arbitrage (which pushes its whole snapshot wholesale
-  // and so genuinely gates on them server-side). No ContinuumSonarRow field carries borrow status or
+  // OPGContinuum they were pure decoration, unlike Arbitrage (which pushes its whole snapshot wholesale
+  // and so genuinely gates on them server-side). No OPGContinuumSonarRow field carries borrow status or
   // corr-peer membership for a server-side gate to read even if the push included them, so — same
-  // reasoning as σ/α/γ above — this narrows continuumMatchedShort/Long client-side instead, joining
+  // reasoning as σ/α/γ above — this narrows opgContinuumMatchedShort/Long client-side instead, joining
   // back to the full-fidelity ArbitrageSignal row (itemsByTicker) for the borrow-status check and
   // reading sectorCorr's own already-fetched excluded-ticker set directly.
-  const continuumStaticBoundsOk = useCallback((r: ContinuumSonarRow) => {
+  const opgContinuumStaticBoundsOk = useCallback((r: OPGContinuumSonarRow) => {
     const nSigma = optNumOrNull(minSigma), xSigma = optNumOrNull(maxSigma);
     if ((nSigma != null || xSigma != null) && !passMinMax(r.sigma, nSigma, xSigma)) return false;
     const nAlpha = optNumOrNull(minAlpha), xAlpha = optNumOrNull(maxAlpha);
@@ -3500,13 +3499,13 @@ export default function ContinuumSonar() {
     if (excludeCorr && sectorCorr.excluded.has(ticker)) return false;
     return true;
   }, [minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, excludeItb, excludeHard, itemsByTicker, excludeCorr, sectorCorr.excluded]);
-  const continuumMatchedShort = useMemo(
-    () => continuumSonarRows.filter((r) => r.side === "Short" && continuumStaticBoundsOk(r)),
-    [continuumSonarRows, continuumStaticBoundsOk]
+  const opgContinuumMatchedShort = useMemo(
+    () => opgContinuumSonarRows.filter((r) => r.side === "Short" && opgContinuumStaticBoundsOk(r)),
+    [opgContinuumSonarRows, opgContinuumStaticBoundsOk]
   );
-  const continuumMatchedLong = useMemo(
-    () => continuumSonarRows.filter((r) => r.side === "Long" && continuumStaticBoundsOk(r)),
-    [continuumSonarRows, continuumStaticBoundsOk]
+  const opgContinuumMatchedLong = useMemo(
+    () => opgContinuumSonarRows.filter((r) => r.side === "Long" && opgContinuumStaticBoundsOk(r)),
+    [opgContinuumSonarRows, opgContinuumStaticBoundsOk]
   );
 
   const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
@@ -3516,7 +3515,7 @@ export default function ContinuumSonar() {
   // from the client's own, now-vestigial filter chain, so relying on it alone could show the
   // "filtered out" empty-state banner ABOVE a real, populated matched list from the bridge.
   const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0))
-    || continuumMatchedLong.length > 0 || continuumMatchedShort.length > 0;
+    || opgContinuumMatchedLong.length > 0 || opgContinuumMatchedShort.length > 0;
   const rawSignalCount = sonarRawCount;
   const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
   const filteredOutByClientFilters = !loading && !error && !hasAny && rawSignalCount > 0;
@@ -3790,7 +3789,7 @@ export default function ContinuumSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="CLO•CONTINUUM SONAR"
+          scannerShellTitle="OPG•CONTINUUM SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}
@@ -3849,46 +3848,46 @@ export default function ContinuumSonar() {
           renderActiveIcon={renderSonarActiveFilterIcon}
           modeSlot={
             <>
-              {/* Continuum's whole gate: ContinuumGate.Check requires |15:50 dev| to clear BOTH a flat
+              {/* OPGContinuum's whole gate: OPGContinuumGate.Check requires |9:20-9:25 dev| to clear BOTH a flat
                   floor (side-specific — coral for a NEGATIVE/Short reading, mint for a POSITIVE/Long
-                  one) AND the ticker's own published gamma for (class, sign) — see ContinuumGate.cs.
-                  RATE/UNIVERSE + MINRATE/MINTOTAL + σ/α/γ ported 1-to-1 from ContinuumScanner.tsx
+                  one) AND the ticker's own published gamma for (class, sign) — see OPGContinuumGate.cs.
+                  RATE/UNIVERSE + MINRATE/MINTOTAL + σ/α/γ ported 1-to-1 from OPGContinuumScanner.tsx
                   (2026-09-29). This modeSlot is FilterRatingRow's own "between the strip and the
                   steppers" extension point, and FilterRatingRow is the ACTIVE/INACTIVE/ALL row right
                   under the header — matching where Scanner's own tab-row group sits, confirmed
                   against the user's own screenshot (it went through strategySlot, then
                   FilterFlagsRow's zapSlot, before landing here). MINRATE/MINTOTAL and σ/α/γ are new
-                  here — this Sonar never had them (see ContinuumSonarLiveParams.MinRate's own doc
-                  comment on the bridge for MINRATE/MINTOTAL; σ/α/γ narrows continuumMatchedShort/Long
-                  client-side, see continuumStaticBoundsOk).
+                  here — this Sonar never had them (see OPGContinuumSonarLiveParams.MinRate's own doc
+                  comment on the bridge for MINRATE/MINTOTAL; σ/α/γ narrows opgContinuumMatchedShort/Long
+                  client-side, see opgContinuumStaticBoundsOk).
                   The violet %/σ/α/γ/τ/λ strip does NOT live in this modeSlot: on Scanner it sits in
                   a genuinely different row (FilterFlagsRow's own zapSlot, the FILTER row's right
                   edge, past ABC sort) from RATE/MINRATE/MINTOTAL/σ/α/γ (the tab-row's right side) —
                   the two groups were bundled together here at first, then the operator's own
                   correction split them back apart to match. See FilterFlagsRow's zapSlot prop below
                   for the strip itself. The old Γ/Ø pill pair that used to live inside that strip was
-                  Scanner's own pre-2026-09-25 mechanism for the same continuumIgnoreRatings boolean;
+                  Scanner's own pre-2026-09-25 mechanism for the same opgContinuumIgnoreRatings boolean;
                   Scanner replaced it with the RATE/UNIVERSE button that day — this file's copy had
                   gone stale and still carried the old pills. */}
               <button
                 type="button"
-                onClick={() => setContinuumIgnoreRatings((v) => !v)}
-                title={continuumIgnoreRatings
+                onClick={() => setOPGContinuumIgnoreRatings((v) => !v)}
+                title={opgContinuumIgnoreRatings
                   ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL. Click to apply ratings again."
                   : "RATE — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL enforced. Click to drop ratings (UNIVERSE)."}
                 className={clsx(
                   "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
-                  continuumIgnoreRatings
+                  opgContinuumIgnoreRatings
                     ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
                     : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
                 )}
               >
-                {continuumIgnoreRatings ? "UNIVERSE" : "RATE"}
+                {opgContinuumIgnoreRatings ? "UNIVERSE" : "RATE"}
               </button>
 
               <div className={clsx(
                 "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-                continuumIgnoreRatings && "opacity-40"
+                opgContinuumIgnoreRatings && "opacity-40"
               )} title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
                 <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
                 <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -3898,15 +3897,15 @@ export default function ContinuumSonar() {
                     step={0.05}
                     min={0}
                     max={1}
-                    value={continuumMinRate}
-                    onChange={(e) => setContinuumMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                    value={opgContinuumMinRate}
+                    onChange={(e) => setOPGContinuumMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                      onClick={() => setOPGContinuumMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase min rate"
                     >
@@ -3915,7 +3914,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                      onClick={() => setOPGContinuumMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Decrease min rate"
                     >
@@ -3927,8 +3926,8 @@ export default function ContinuumSonar() {
 
               <div className={clsx(
                 "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-                continuumIgnoreRatings && "opacity-40"
-              )} title="Floor on the matched cell's own published total trade count (not GammaN — see ContinuumGate.cs). 0 = off.">
+                opgContinuumIgnoreRatings && "opacity-40"
+              )} title="Floor on the matched cell's own published total trade count (not GammaN — see OPGContinuumGate.cs). 0 = off.">
                 <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
                 <div className="group relative h-7 w-14 overflow-hidden rounded-md">
                   <input
@@ -3936,15 +3935,15 @@ export default function ContinuumSonar() {
                     inputMode="numeric"
                     step={1}
                     min={0}
-                    value={continuumMinTotal}
-                    onChange={(e) => setContinuumMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                    value={opgContinuumMinTotal}
+                    onChange={(e) => setOPGContinuumMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinTotal((v) => Math.max(0, v + 1))}
+                      onClick={() => setOPGContinuumMinTotal((v) => Math.max(0, v + 1))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase min total"
                     >
@@ -3953,7 +3952,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinTotal((v) => Math.max(0, v - 1))}
+                      onClick={() => setOPGContinuumMinTotal((v) => Math.max(0, v - 1))}
                       className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Decrease min total"
                     >
@@ -3963,18 +3962,18 @@ export default function ContinuumSonar() {
                 </div>
               </div>
 
-              {/* σ/α/γ — the black min/max boxes, mirrors ContinuumScanner.tsx's own tab-row group
+              {/* σ/α/γ — the black min/max boxes, mirrors OPGContinuumScanner.tsx's own tab-row group
                   1-to-1 (that file's own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL
                   above: a floor/ceiling on a STATIC published value, not a threshold on the trade's
                   own win_rate"). σ = published static sigma, α = published alpha sign-matched to the
                   row's side, γ = the (class, sign) gamma level the row actually cleared — all three
-                  already ride ContinuumSonarRow (r.sigma/r.alpha/r.gamma), so this narrows
-                  continuumMatchedShort/Long client-side (continuumStaticBoundsOk above) rather than
+                  already ride OPGContinuumSonarRow (r.sigma/r.alpha/r.gamma), so this narrows
+                  opgContinuumMatchedShort/Long client-side (opgContinuumStaticBoundsOk above) rather than
                   going through the bridge, same as the country/exchange/sector selects. */}
               {([
                 { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
-                { label: "α", title: "Alpha — the ticker's own modal |15:50 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
-                { label: "γ", title: "Gamma — the (class, sign) continuum-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
+                { label: "α", title: "Alpha — the ticker's own modal |9:20-9:25 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
+                { label: "γ", title: "Gamma — the (class, sign) opgContinuum-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
               ] as const).map((field) => (
                 <div key={field.title} className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45" title={field.title}>
                   <span className="flex h-7 min-w-4 items-center justify-center text-[12px] font-mono text-zinc-500 leading-none">
@@ -4047,12 +4046,12 @@ export default function ContinuumSonar() {
         {/* ========================= CONTROLS ========================= */}
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           <div className="flex h-7 items-center gap-2">
-            {CONTINUUM_EXIT_CLASSES.map(({ key: c, label: lbl }) => (
+            {OPGCONTINUUM_EXIT_CLASSES.map(({ key: c, label: lbl }) => (
               <FilterButton
                 key={c}
-                active={continuumExitClass === c}
+                active={opgContinuumExitClass === c}
                 label={lbl}
-                onClick={() => setContinuumExitClass(c)}
+                onClick={() => setOPGContinuumExitClass(c)}
               />
             ))}
           </div>
@@ -4253,9 +4252,9 @@ export default function ContinuumSonar() {
             No zapSlot here: the ZAP group is an Arbitrage statistic. OpenDoor's gate is DEV against
             its own bins and applyExactSonarClientFilters has always ignored the ZAP thresholds, so
             the group only ever dimmed and gold-tinted OpenDoor cards by a number that decided
-            nothing. ArbitrageSonar still has it. Continuum DOES use strategySlot, though (below) —
-            unlike OpenDoor's DEV gate, ContinuumGate.Check's floor/cap genuinely drives what this
-            Sonar shows, ported 1-to-1 from ContinuumScanner.tsx's own strategySlot placement. */}
+            nothing. ArbitrageSonar still has it. OPGContinuum DOES use strategySlot, though (below) —
+            unlike OpenDoor's DEV gate, OPGContinuumGate.Check's floor/cap genuinely drives what this
+            Sonar shows, ported 1-to-1 from OPGContinuumScanner.tsx's own strategySlot placement. */}
         <FilterFlagsRow
           exclusions={[
             { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
@@ -4310,15 +4309,15 @@ export default function ContinuumSonar() {
           }
           zapSlot={
             <>
-              {/* %/σ/α/γ/τ/λ strip — mirrors ContinuumScanner.tsx's own strip 1-to-1, per the Unit/ZAP
+              {/* %/σ/α/γ/τ/λ strip — mirrors OPGContinuumScanner.tsx's own strip 1-to-1, per the Unit/ZAP
                   Toggle Standard. Unlike the Scanner's table this Sonar has no Signal Dev COLUMN to
-                  retint, so formatContinuumDev instead retints the single "Dev n.nn" span per card and
+                  retint, so formatOPGContinuumDev instead retints the single "Dev n.nn" span per card and
                   the ratings detail panel's own Gamma/Alpha/Sigma/ATR/Lambda rows — same helper name/
                   shape as the Scanner's own, just two display surfaces instead of one. */}
               <div className={`${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
                 {/* %/σ/α/γ/τ — what the "Dev n.nn" span and the ratings detail panel are shown IN,
                     and (via thresholdUnit on the push effect above) what the server-side gate itself
-                    scales SHORT/LONG/MAX by — mirrors ContinuumScanner.tsx's own strip 1-to-1. */}
+                    scales SHORT/LONG/MAX by — mirrors OPGContinuumScanner.tsx's own strip 1-to-1. */}
                 {([
                   { key: "pct", label: "%", title: "Raw Stack% points (default)" },
                   { key: "sigma", label: "σ", title: "Divided by each ticker's own published static sigma" },
@@ -4327,12 +4326,12 @@ export default function ContinuumSonar() {
                   { key: "atr", label: "τ", title: "Divided by each ticker's own CURRENT live ATR14% reading — not a published constant" },
                   { key: "lambda", label: "λ", title: "Divided by each ticker's own published lambda (sample std of the raw ENTRY-checkpoint reading)" },
                 ] as const).map((u) => {
-                  const on = continuumUnitMode === u.key;
+                  const on = opgContinuumUnitMode === u.key;
                   return (
                     <button
                       key={u.key}
                       type="button"
-                      onClick={() => setContinuumUnitMode(u.key)}
+                      onClick={() => setOPGContinuumUnitMode(u.key)}
                       title={u.title}
                       className={clsx(FILTER_PILL, on ? FILTER_GROUP_TONES.zap.on : FILTER_GROUP_TONES.zap.off)}
                     >
@@ -4341,21 +4340,21 @@ export default function ContinuumSonar() {
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Flat floor on |15:50 deviation| for a NEGATIVE reading (a SHORT entry). Coral = short.">
+                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Flat floor on |9:20-9:25 deviation| for a NEGATIVE reading (a SHORT entry). Coral = short.">
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsShort}
-                    onChange={(e) => setContinuumMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
+                    value={opgContinuumMinDevAbsShort}
+                    onChange={(e) => setOPGContinuumMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setOPGContinuumMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase short-side floor"
                     >
@@ -4364,7 +4363,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setOPGContinuumMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease short-side floor"
                     >
@@ -4372,14 +4371,14 @@ export default function ContinuumSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Flat floor on |15:50 deviation| for a POSITIVE reading (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
+                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Flat floor on |9:20-9:25 deviation| for a POSITIVE reading (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsLong}
-                    onChange={(e) => setContinuumMinDevAbsLong(e.target.value)}
+                    value={opgContinuumMinDevAbsLong}
+                    onChange={(e) => setOPGContinuumMinDevAbsLong(e.target.value)}
                     placeholder="as short"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
@@ -4387,8 +4386,8 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? continuumMinDevAbsShort;
+                      onClick={() => setOPGContinuumMinDevAbsLong((prev) => {
+                        const cur = optNumOrNull(prev) ?? opgContinuumMinDevAbsShort;
                         return String(Math.max(0, +(cur + 0.1).toFixed(4)));
                       })}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -4399,8 +4398,8 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? continuumMinDevAbsShort;
+                      onClick={() => setOPGContinuumMinDevAbsLong((prev) => {
+                        const cur = optNumOrNull(prev) ?? opgContinuumMinDevAbsShort;
                         return String(Math.max(0, +(cur - 0.1).toFixed(4)));
                       })}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
@@ -4410,14 +4409,14 @@ export default function ContinuumSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on |15:50 deviation|, either side (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
+                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on |9:20-9:25 deviation|, either side (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={continuumMinDevAbsMax}
-                    onChange={(e) => setContinuumMinDevAbsMax(e.target.value)}
+                    value={opgContinuumMinDevAbsMax}
+                    onChange={(e) => setOPGContinuumMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
@@ -4425,7 +4424,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpContinuumMinDevAbsMax(0.1)}
+                      onClick={() => bumpOPGContinuumMinDevAbsMax(0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase max cap"
                     >
@@ -4434,7 +4433,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpContinuumMinDevAbsMax(-0.1)}
+                      onClick={() => bumpOPGContinuumMinDevAbsMax(-0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease max cap"
                     >
@@ -4448,15 +4447,15 @@ export default function ContinuumSonar() {
                     inputMode="numeric"
                     step={1}
                     min={0}
-                    value={continuumMinGammaTotal}
-                    onChange={(e) => setContinuumMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                    value={opgContinuumMinGammaTotal}
+                    onChange={(e) => setOPGContinuumMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinGammaTotal((v) => Math.max(0, v + 1))}
+                      onClick={() => setOPGContinuumMinGammaTotal((v) => Math.max(0, v + 1))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase min gamma total"
                     >
@@ -4465,7 +4464,7 @@ export default function ContinuumSonar() {
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setContinuumMinGammaTotal((v) => Math.max(0, v - 1))}
+                      onClick={() => setOPGContinuumMinGammaTotal((v) => Math.max(0, v - 1))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease min gamma total"
                     >
@@ -4794,29 +4793,29 @@ export default function ContinuumSonar() {
                 {activePanelMode === "expanded" && (
                   <div className="space-y-4 pt-4 border-t border-white/10 animate-in fade-in slide-in-from-top-4 duration-300">
 
-                    {/* Continuum's OWN ratings — sourced from activeContinuumRow (the real
-                        ContinuumSonarRowDto for the selected ticker, off continuumSonarRows/
-                        ContinuumGate.Check), NOT bestObj/activeData below, which resolve against the
-                        Arbitrage strategy's own signal pool (see continuumSonarRows' own comment on
+                    {/* OPGContinuum's OWN ratings — sourced from activeOPGContinuumRow (the real
+                        OPGContinuumSonarRowDto for the selected ticker, off opgContinuumSonarRows/
+                        OPGContinuumGate.Check), NOT bestObj/activeData below, which resolve against the
+                        Arbitrage strategy's own signal pool (see opgContinuumSonarRows' own comment on
                         why items/activeData are Arbitrage-sourced) — reading Arbitrage's rate/hard/
-                        soft/beta for a Continuum ticker showed either dashes or a different strategy's
-                        numbers mislabeled as Continuum's. Empty (dashes) only when the ticker currently
+                        soft/beta for a OPGContinuum ticker showed either dashes or a different strategy's
+                        numbers mislabeled as OPGContinuum's. Empty (dashes) only when the ticker currently
                         fails the gate or ignoreRatings is on (no row published at all then). */}
                     <div className="overflow-hidden border border-white/10 rounded-xl bg-transparent">
                       <div className="px-3 py-2 border-b border-white/10 flex justify-between items-center">
                         <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-[0.14em]">Ratings</span>
-                        <span className="text-[10px] font-mono text-zinc-600">continuum · {activeContinuumRow?.exitClass ?? "-"}</span>
+                        <span className="text-[10px] font-mono text-zinc-600">opgContinuum · {activeOPGContinuumRow?.exitClass ?? "-"}</span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-white/10">
                         {[
-                          { k: "Win Rate", v: activeContinuumRow?.winRate == null ? "-" : `${Math.round(activeContinuumRow.winRate * 100)}%`, c: accentTextClass },
-                          { k: "Total", v: fmtMaybeInt(activeContinuumRow?.total ?? null) },
-                          { k: "Gamma", v: activeContinuumRow?.gamma == null ? "-" : fmtNum(activeContinuumRow.gamma, 2) },
-                          { k: "Gamma N", v: fmtMaybeInt(activeContinuumRow?.gammaN ?? null) },
-                          { k: "Alpha", v: activeContinuumRow?.alpha == null ? "-" : fmtNum(activeContinuumRow.alpha, 2) },
-                          { k: "Sigma", v: activeContinuumRow?.sigma == null ? "-" : fmtNum(activeContinuumRow.sigma, 2) },
-                          { k: "ATR14%", v: activeContinuumRow?.atr14Pct == null ? "-" : fmtNum(activeContinuumRow.atr14Pct, 2) },
-                          { k: "Lambda", v: activeContinuumRow?.lambda == null ? "-" : fmtNum(activeContinuumRow.lambda, 2) },
+                          { k: "Win Rate", v: activeOPGContinuumRow?.winRate == null ? "-" : `${Math.round(activeOPGContinuumRow.winRate * 100)}%`, c: accentTextClass },
+                          { k: "Total", v: fmtMaybeInt(activeOPGContinuumRow?.total ?? null) },
+                          { k: "Gamma", v: activeOPGContinuumRow?.gamma == null ? "-" : fmtNum(activeOPGContinuumRow.gamma, 2) },
+                          { k: "Gamma N", v: fmtMaybeInt(activeOPGContinuumRow?.gammaN ?? null) },
+                          { k: "Alpha", v: activeOPGContinuumRow?.alpha == null ? "-" : fmtNum(activeOPGContinuumRow.alpha, 2) },
+                          { k: "Sigma", v: activeOPGContinuumRow?.sigma == null ? "-" : fmtNum(activeOPGContinuumRow.sigma, 2) },
+                          { k: "ATR14%", v: activeOPGContinuumRow?.atr14Pct == null ? "-" : fmtNum(activeOPGContinuumRow.atr14Pct, 2) },
+                          { k: "Lambda", v: activeOPGContinuumRow?.lambda == null ? "-" : fmtNum(activeOPGContinuumRow.lambda, 2) },
                         ].map((item) => (
                                   <div key={item.k} className="flex flex-col gap-1 bg-black/40 px-3 py-2">
                             <span className="text-[10px] text-zinc-600 font-mono uppercase tracking-[0.12em]">{item.k}</span>
@@ -4996,17 +4995,17 @@ export default function ContinuumSonar() {
           </div>
         )}
 
-        {!error && !loading && !continuumInWindow && (
+        {!error && !loading && !opgContinuumInWindow && (
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-center text-[10px] font-mono uppercase tracking-widest text-amber-400/80">
-            Outside Continuum's signal window (15:45–15:55 NY) — nothing to evaluate right now.
+            Outside OPG•Continuum's signal window (9:20–9:25 NY) — nothing to evaluate right now.
           </div>
         )}
 
         {!error && !loading && (
           <div className="grid grid-cols-2 gap-4">
             {[
-              { dir: "down" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", rows: continuumMatchedShort },
-              { dir: "up" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", rows: continuumMatchedLong },
+              { dir: "down" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", rows: opgContinuumMatchedShort },
+              { dir: "up" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", rows: opgContinuumMatchedLong },
             ].map((col) => (
               <div key={col.dir} className={clsx("rounded-2xl border bg-[#0a0a0a]/40 p-3", col.border)}>
                 <div className="mb-2 flex items-center justify-between">
@@ -5015,7 +5014,7 @@ export default function ContinuumSonar() {
                 </div>
                 {col.rows.length === 0 ? (
                   <div className="py-6 text-center text-[11px] font-mono uppercase tracking-widest text-zinc-600">
-                    {continuumInWindow ? "No tickers pass current Continuum gate" : "Outside signal window"}
+                    {opgContinuumInWindow ? "No tickers pass current OPGContinuum gate" : "Outside signal window"}
                   </div>
                 ) : (
                   <div className="space-y-1.5">
@@ -5040,7 +5039,7 @@ export default function ContinuumSonar() {
                             })()}
                           </div>
                           <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
-                            {r.signalDev != null && <span>Dev {formatContinuumDev(r.signalDev, r.gamma, r.sigma, r.alpha, r.atr14Pct, r.lambda)}</span>}
+                            {r.signalDev != null && <span>Dev {formatOPGContinuumDev(r.signalDev, r.gamma, r.sigma, r.alpha, r.atr14Pct, r.lambda)}</span>}
                             {r.gamma != null && <span className={col.accent}>γ {r.gamma.toFixed(2)}×{r.gammaN}</span>}
                             {r.winRate != null && <span className={col.accent}>{Math.round(r.winRate * 100)}%×{r.total}</span>}
                             {r.alpha != null && <span>α {r.alpha.toFixed(2)}</span>}
