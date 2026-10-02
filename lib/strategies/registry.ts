@@ -284,10 +284,10 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   // exits (9:45/10:00/10:30). PNL is gap-anchored at ENTRY (the settled opening Gap%), not at exit
   // the way Reversal's own print class works — see TapeOPGReversalEngine.cs's own header comment.
   // Added 2026-10-01 (the operator's own instruction). OPGReversalServerStrategy now exists
-  // (Sonar/Stream/Live backend wired 2026-10-01) but AutoEnabled still defaults false and
-  // Hotkeys.OPGReversalBuy/Sell are still unbound (empty string) — no real order can go out until
-  // the operator explicitly enables the strategy and assigns a chord, same staged rollout Continuum
-  // went through. holdsOvernight is false: every exit lands same calendar day, well before the close.
+  // (Sonar/Stream/Live backend wired 2026-10-01); Hotkeys.OPGReversalBuy/Sell default to Ctrl+F7/
+  // Ctrl+F8 (bound 2026-10-02, the same chord OpenFade/OpenRide already use). AutoEnabled still
+  // defaults false — no real order can go out until the operator explicitly enables the strategy.
+  // holdsOvernight is false: every exit lands same calendar day, well before the close.
   // priority 19 — one below openfade (20): OPG's own signal window (9:20-9:25) overlaps the
   // OpenDoor family's own 9:20-10:00 window, and an unproven new strategy should not outrank one
   // already live there, the same reasoning Reversal/Continuum's own priorities follow relative to
@@ -318,9 +318,10 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   // open-anchored entry at 9:30, three same-day exits 9:45/10:00/10:30) and the SAME gap-anchored-
   // ENTRY pricing — see TapeOPGContinuumEngine.cs's own header comment. Added 2026-10-01 (the
   // operator's own instruction, "Я скопіював файли CONTINUUM, тепер займатись і переробки їх під
-  // OPG•CONTINUUM"). Full Scanner/Sonar/Stream/Live backend wired the same session. AutoEnabled still
-  // defaults false and Hotkeys.OPGContinuumBuy/Sell are still unbound (empty string) — no real order
-  // can go out until the operator explicitly enables the strategy and assigns a chord. holdsOvernight
+  // OPG•CONTINUUM"). Full Scanner/Sonar/Stream/Live backend wired the same session.
+  // Hotkeys.OPGContinuumBuy/Sell default to the SAME Ctrl+F7/Ctrl+F8 chord as OPGReversal's own
+  // (bound 2026-10-02). AutoEnabled still defaults false — no real order can go out until the
+  // operator explicitly enables the strategy. holdsOvernight
   // is false: every exit lands same calendar day. priority 18 — one below opgreversal (19), the same
   // "has not traded for real even once, and the two read the identical signal with opposite signs"
   // reasoning Reversal/Continuum's own priorities follow relative to each other.

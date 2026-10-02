@@ -2483,10 +2483,11 @@ export default function OPGContinuumScanner({
 
   // OPGContinuum's Stream toolbar, pushed to the bridge — mirrors OPGReversal's own push effect 1-to-1
   // (see lib/opgReversal/liveParamsClient.ts's own doc comment for the shape rationale).
-  // OPGContinuumServerStrategy and OPGContinuumLiveParamsService exist (wired 2026-10-01), so this PUT
-  // reaches a real endpoint — but AutoEnabled still defaults false and Hotkeys.OPGContinuumBuy/Sell
-  // are still unbound, so saving this toolbar alone cannot send a real order. Same debounce/
-  // hydration-guard shape as ArbitrageScanner's own push effect.
+  // OPGContinuumServerStrategy and OPGContinuumLiveParamsService exist (wired 2026-10-01), and
+  // Hotkeys.OPGContinuumBuy/Sell default to the same Ctrl+F7/Ctrl+F8 as OPGReversal's own (bound
+  // 2026-10-02) — but AutoEnabled still defaults false, so saving this toolbar alone cannot send a
+  // real order until the strategy is explicitly enabled. Same debounce/hydration-guard shape as
+  // ArbitrageScanner's own push effect.
   useEffect(() => {
     if (!filtersHydratedRef.current) return;
     const timer = window.setTimeout(() => {

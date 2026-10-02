@@ -2483,9 +2483,9 @@ export default function OPGReversalScanner({
 
   // OPGReversal's Stream toolbar, pushed to the bridge — mirrors Reversal/Continuum's own push effect
   // 1-to-1. OPGReversalServerStrategy and OPGReversalLiveParamsService now exist (wired 2026-10-01),
-  // so this PUT reaches a real endpoint — but AutoEnabled still defaults false and
-  // Hotkeys.OPGReversalBuy/Sell are still unbound, so saving this toolbar alone cannot send a real
-  // order. Same debounce/hydration-guard shape as ArbitrageScanner's own push effect.
+  // and Hotkeys.OPGReversalBuy/Sell default to Ctrl+F7/Ctrl+F8 (bound 2026-10-02) — but AutoEnabled
+  // still defaults false, so saving this toolbar alone cannot send a real order until the strategy
+  // is explicitly enabled. Same debounce/hydration-guard shape as ArbitrageScanner's own push effect.
   useEffect(() => {
     if (!filtersHydratedRef.current) return;
     const timer = window.setTimeout(() => {

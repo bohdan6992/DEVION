@@ -6,9 +6,9 @@ import type { ArbitrageFilterConfigV1 } from "../filters/arbitrageFilterConfigV1
  * OPGReversal's STREAM-tab toolbar, pushed to the bridge — mirrors lib/reversal/liveParamsClient.ts
  * byte-for-byte (see that file's own doc comment for the shape rationale). Points at
  * `/api/stream/opgreversal/params`, backed by OPGReversalLiveParamsService/OPGReversalServerStrategy
- * (wired 2026-10-01 — see lib/strategies/registry.ts's own "opgreversal" entry). AutoEnabled still
- * defaults false and Hotkeys.OPGReversalBuy/Sell are still unbound, so saving this toolbar alone
- * cannot send a real order yet.
+ * (wired 2026-10-01 — see lib/strategies/registry.ts's own "opgreversal" entry). Hotkeys.
+ * OPGReversalBuy/Sell default to Ctrl+F7/Ctrl+F8 (bound 2026-10-02). AutoEnabled still defaults
+ * false, so saving this toolbar alone cannot send a real order yet.
  */
 export type OPGReversalThresholdUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 

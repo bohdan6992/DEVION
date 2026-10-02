@@ -7,9 +7,9 @@ import type { ArbitrageFilterConfigV1 } from "../filters/arbitrageFilterConfigV1
  * lib/opgReversal/liveParamsClient.ts's own shape (see that file's own doc comment for the shape
  * rationale). Points at `/api/stream/opgcontinuum/params`, backed by
  * OPGContinuumLiveParamsService/OPGContinuumServerStrategy (wired 2026-10-01 — see
- * lib/strategies/registry.ts's own "opgcontinuum" entry). AutoEnabled still defaults false and
- * Hotkeys.OPGContinuumBuy/Sell are still unbound, so saving this toolbar alone cannot send a real
- * order yet.
+ * lib/strategies/registry.ts's own "opgcontinuum" entry). Hotkeys.OPGContinuumBuy/Sell default to
+ * the same Ctrl+F7/Ctrl+F8 chord as OPGReversal's own (bound 2026-10-02). AutoEnabled still
+ * defaults false, so saving this toolbar alone cannot send a real order yet.
  */
 export type OPGContinuumThresholdUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 
