@@ -989,3 +989,6 @@ export type ProblemDetails = {
   type?: string;
   instance?: string;
 };
+
+// VWAP Bounce's own copy — identical shape, same ported-unchanged analytics summary computation.
+export type VWAPBounceAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;

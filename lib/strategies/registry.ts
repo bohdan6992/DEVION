@@ -346,6 +346,32 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // VWAP Bounce: intraday residual-reversal fade (spec: OriON-strategies/notebooks/VWAPBounce.ipynb).
+  // FRONTEND-ONLY for now (2026-10-05): scanner/sonar/stream pages are wired, but there is no bridge
+  // backend (no tape engine, gate, ratings or server strategy), so the paper/stream endpoints under
+  // these routes do not exist yet and the pages show no data. Exits are TARGET/STOP/EOD per trade
+  // (not clock classes). Window 10:00-15:55 decision points. holdsOvernight false (EOD flat).
+  vwapbounce: {
+    key: "vwapbounce",
+    bridgeStrategyId: "stream.vwapbounce",
+    nav: {
+      stream: "/vwap-bounce/stream",
+      scanner: "/vwap-bounce/scanner",
+      sonar: "/vwap-bounce/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 10 * 60, toMinuteIdx: 15 * 60 + 56 },
+    priority: 17,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/vwapbounce", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.vwapbounce", sonarPrefix: "bridge.vwapbounce", streamPrefix: "stream.vwapbounce" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["target", "stop", "eod"],
+      labels: { target: "TARGET", stop: "STOP", eod: "EOD" },
+    },
+  },
+
   openfade: {
     key: "openfade",
     bridgeStrategyId: "stream.openfade",
