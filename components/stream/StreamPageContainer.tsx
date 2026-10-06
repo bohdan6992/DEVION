@@ -101,6 +101,7 @@ function defaultAutomationConfig(overrides?: Partial<StreamAutomationConfig>): S
     queueDelayMinSeconds: 0,
     queueDelayMaxSeconds: 0,
     exitExecutionMode: "active",
+    priceMode: "BidAsk",
     hedgeMode: "unhedged",
     scaleMode: "scale_in",
     sizingMode: "USD",
@@ -134,6 +135,7 @@ function sameStreamAutomationConfig(
     left.queueDelayMinSeconds === right.queueDelayMinSeconds &&
     left.queueDelayMaxSeconds === right.queueDelayMaxSeconds &&
     left.exitExecutionMode === right.exitExecutionMode &&
+    left.priceMode === right.priceMode &&
     left.hedgeMode === right.hedgeMode &&
     left.scaleMode === right.scaleMode &&
     left.sizingMode === right.sizingMode &&
@@ -251,6 +253,7 @@ function readInitialAutomationConfig(
       addDelayMinutes: Math.max(0, Math.trunc(Number(parsed.addDelayMinutes) || 0)),
       minHoldMinutes: Math.max(0, Math.trunc(Number(parsed.minHoldMinutes) || defaultAutomationConfig(overrides).minHoldMinutes)),
       exitExecutionMode: parsed.exitExecutionMode === "passive" ? "passive" : "active",
+      priceMode: parsed.priceMode === "LastPrint" ? "LastPrint" : "BidAsk",
       hedgeMode: parsed.hedgeMode === "hedged" ? "hedged" : "unhedged",
       scaleMode: parsed.scaleMode === "single" ? "single" : "scale_in",
       sizingMode: parsed.sizingMode === "TIER" ? "TIER" : "USD",

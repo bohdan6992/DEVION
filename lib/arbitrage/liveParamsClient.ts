@@ -22,6 +22,8 @@ export type ArbitrageLiveParams = {
   addDelayMinutes: number;
   scaleMode: "single" | "scale_in";
   exitExecutionMode: "active" | "passive";
+  /** "LastPrint" (PR, plain F1/F2 entries) | "BidAsk" (Ctrl entries). */
+  priceMode: "LastPrint" | "BidAsk";
   noSpreadExit: boolean;
   maxSpread: number | null;
   minNetEdge: number;
@@ -280,6 +282,7 @@ export function toArbitrageLiveParams(args: {
     addDelayMinutes: num(a.addDelayMinutes) ?? 0,
     scaleMode: a.scaleMode === "scale_in" ? "scale_in" : "single",
     exitExecutionMode: a.exitExecutionMode === "passive" ? "passive" : "active",
+    priceMode: a.priceMode === "LastPrint" ? "LastPrint" : "BidAsk",
     noSpreadExit: a.noSpreadExit !== false,
     maxSpread: num(args.maxSpread),
     minNetEdge: num(a.minNetEdge) ?? 0,

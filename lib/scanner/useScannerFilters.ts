@@ -99,7 +99,7 @@ export function useScannerFilters(
   // this is blank, so an empty default here reproduces the original single-time behaviour exactly.
   const [entryStopTime, setEntryStopTime] = useState<string>(() => options.streamAutomationConfigOverride?.entryStopTime ?? "");
   const [pnlMode, setPnlMode] = useState<PaperArbPnlMode>("Hedged");
-  const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("LastPrint");
+  const [priceMode, setPriceMode] = useState<PaperArbPriceMode>("BidAsk");
   const [sizingMode, setSizingMode] = useState<PaperArbSizingMode>("Notional");
   const [sizeValue, setSizeValue] = useState<number>(1000);
   const [dilutionMode, setDilutionMode] = useState<PaperArbDilutionMode>(() => options.streamAutomationConfigOverride?.scaleMode === "single" ? "Undiluted" : "Diluted");

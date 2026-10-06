@@ -2,6 +2,7 @@ import { bridgeUrl, fetchWithTimeout } from "../bridgeBase";
 import { toArbitrageServerSonarFilters, type ArbitrageServerSonarFilters } from "../arbitrage/liveParamsClient";
 import type { SonarExactFilterSnapshot } from "../../components/sonar/ArbitrageSonar";
 import type { LivePair } from "../pairflux/livePairs";
+import type { ArbitrageSonarLiveParams, ArbitrageSonarSnapshot } from "./arbitrageSnapshotClient";
 
 /**
  * The PairFlux Sonar panel (bucket grid + PairFluxDivergence), computed server-side. Separate from
@@ -120,4 +121,36 @@ export function fetchPairFluxSonarSnapshot(): Promise<PairFluxSonarSnapshot> {
   return fetchWithTimeout(bridgeUrl("/api/stream/sonar/pairflux/snapshot"), { cache: "no-store" })
     .then((res) => res.json())
     .then((body) => body.snapshot as PairFluxSonarSnapshot);
+}
+
+/**
+ * The PairFlux bucket grid's own toolbar. Same body shape as the Arbitrage Sonar's params (the grid
+ * is Arbitrage-shaped), but a separate bridge route and file, so this page never writes into the
+ * Arbitrage Sonar's rating gate. See PairFluxGridSonarController on the bridge.
+ */
+export async function pushPairFluxGridSonarLiveParams(params: ArbitrageSonarLiveParams): Promise<boolean> {
+  try {
+    const response = await fetch(bridgeUrl("/api/stream/sonar/pairflux-grid/params"), {
+      method: "PUT",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) return false;
+    const json = await response.json().catch(() => ({}));
+    return json?.ok !== false;
+  } catch {
+    return false;
+  }
+}
+
+export function fetchPairFluxGridSonarSnapshot(): Promise<ArbitrageSonarSnapshot> {
+  // Same body-timeout guard as fetchArbitrageSonarSnapshot: the shared poll must never stay in flight.
+  const bodyTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("pairflux grid snapshot body timed out")), 15_000)
+  );
+  bodyTimeout.catch(() => {});
+  return fetchWithTimeout(bridgeUrl("/api/stream/sonar/pairflux-grid/snapshot"), { cache: "no-store" })
+    .then((res) => Promise.race([res.json(), bodyTimeout]))
+    .then((body: any) => body.snapshot as ArbitrageSonarSnapshot);
 }

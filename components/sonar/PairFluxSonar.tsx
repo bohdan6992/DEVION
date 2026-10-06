@@ -95,13 +95,13 @@ import PairFluxDivergence from "@/components/pairflux/PairFluxDivergence";
 import type { LivePair } from "@/lib/pairflux/livePairs";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import {
-  fetchArbitrageSonarSnapshot,
-  pushArbitrageSonarLiveParams,
   toArbitrageSonarLiveParams,
   type SonarSignalRow,
 } from "@/lib/sonar/arbitrageSnapshotClient";
 import {
+  fetchPairFluxGridSonarSnapshot,
   fetchPairFluxSonarSnapshot,
+  pushPairFluxGridSonarLiveParams,
   pushPairFluxSonarLiveParams,
   toPairFluxSonarLiveParams,
 } from "@/lib/sonar/pairfluxSnapshotClient";
@@ -114,7 +114,6 @@ export { normalizeSignal };
 export type { ArbitrageSignal };
 
 type Mode = "top" | "all";
-type RatingMode = "SESSION" | "BIN" | "BINS";
 type TriMode = "off" | "include" | "exclude";
 type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
 type TopWindowTime = { band: string; rate: number; total: number } | null;
@@ -584,43 +583,6 @@ function getSignalSigmaAbs(signal: ArbitrageSignal): number | null {
   return null;
 }
 
-function passesSonarBinRating(args: {
-  signal: ArbitrageSignal;
-  cls: ArbClass;
-  minRate: number;
-  minTotal: number;
-}) {
-  const { signal, cls, minRate, minTotal } = args;
-  const signKey = sonarBinSignKey(signal);
-  const sigmaAbs = getSignalSigmaAbs(signal);
-  if (!signKey || sigmaAbs == null || !Number.isFinite(sigmaAbs)) return false;
-
-  const root = safeRecord(getBestParams(signal));
-  const stitched =
-    safeRecord(safeRecord(root?.best_windows_any)?.stitched) ??
-    safeRecord(safeRecord(root?.BestWindowsAny)?.stitched) ??
-    safeRecord(safeRecord(root?.best_windows_any)?.Stitched) ??
-    safeRecord(safeRecord(root?.BestWindowsAny)?.Stitched) ??
-    null;
-  const sigmaPeakBins =
-    safeRecord(stitched?.sigma_peak_bins) ??
-    safeRecord(stitched?.SigmaPeakBins) ??
-    null;
-  const classBins = safeRecord(safeRecord(sigmaPeakBins)?.[sonarClassToBinClassKey(cls)]);
-  const intervals = parseSonarBinIntervals(classBins?.[signKey]);
-  if (!intervals.length) return false;
-
-  const effectiveMinRate = Math.max(0, Number(minRate) || 0);
-  const effectiveMinTotal = Math.max(0, Math.trunc(Number(minTotal) || 0));
-
-  return intervals.some((interval) =>
-    sigmaAbs >= interval.lo &&
-    sigmaAbs <= interval.hi &&
-    interval.rate >= effectiveMinRate &&
-    interval.total >= effectiveMinTotal
-  );
-}
-
 function getSigmaBinParams(signal: ArbitrageSignal): { min: number; max: number; step: number } {
   const root = safeRecord(getBestParams(signal));
   const bwAny = safeRecord(root?.best_windows_any ?? root?.BestWindowsAny);
@@ -696,36 +658,6 @@ function currentMarketTimeBand(bandMinutes: number): string | null {
   } catch {
     return null;
   }
-}
-
-function passesTopWindowFilter(
-  signal: ArbitrageSignal,
-  cls: ArbClass,
-  topSigmaOn: boolean,
-  topBenchOn: boolean,
-  topTimeOn: boolean
-): boolean {
-  const signKey = sonarBinSignKey(signal);
-  if (!signKey) return false;
-  const tw = getTopWindows(signal, cls);
-  const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
-  if (!entry) return false;
-
-  if (topSigmaOn && entry.sigma) {
-    const sa = getSignalSigmaAbs(signal);
-    if (sa == null) return false;
-    if (sa < entry.sigma.lo || sa > entry.sigma.hi) return false;
-  }
-  if (topBenchOn && entry.bench) {
-    const bp = getSignalBenchPct(signal);
-    if (bp == null) return false;
-    if (bp < entry.bench.lo || bp > entry.bench.hi) return false;
-  }
-  if (topTimeOn && entry.time) {
-    const band = currentMarketTimeBand(30);
-    if (!band || band !== entry.time.band) return false;
-  }
-  return true;
 }
 
 /* =========================
@@ -2083,7 +2015,8 @@ export default function PairFluxSonar() {
   // switcher can live in the shared filter toolbar with every other control.
   const [pfCls, setPfCls] = useState<PairFluxClass>("intra");
   const [type, setType] = useState<ArbType>("any");
-  const [mode, setMode] = useState<Mode>("all");
+  // ALL/TOP is gone from this page (2026-10-05): the list is always the whole universe, and saved state never restores TOP.
+  const mode: Mode = "all";
   const [corrMin, setCorrMin] = useState("");
   const [corrMax, setCorrMax] = useState("");
   const [betaMin, setBetaMin] = useState("");
@@ -2098,11 +2031,14 @@ export default function PairFluxSonar() {
 
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
-  const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
-  const [topMode, setTopMode] = useState(false);
-  const [topSigmaOn, setTopSigmaOn] = useState(true);
-  const [topBenchOn, setTopBenchOn] = useState(false);
-  const [topTimeOn, setTopTimeOn] = useState(false);
+  // RATE/UNIVERSE — the ratings on/off switch that replaced the ALL/TOP and SESSION/BIN/BINS row.
+  const [ignoreRatings, setIgnoreRatings] = useState(false);
+  // Fixed for this page: SESSION rating and ALL scope, no UI can change them and saved state never restores them.
+  const ratingMode = "SESSION" as const;
+  const topMode = false;
+  const topSigmaOn = false;
+  const topBenchOn = false;
+  const topTimeOn = false;
 
   type NumField = {
     label: string;
@@ -2674,7 +2610,6 @@ export default function PairFluxSonar() {
         // core
         if (typeof s?.cls === "string") setCls(s.cls);
         if (typeof s?.type === "string") setType(s.type);
-        if (typeof s?.mode === "string") setMode(s.mode);
         if (typeof s?.listMode === "string") setListMode(s.listMode);
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
@@ -2694,14 +2629,10 @@ export default function PairFluxSonar() {
         if (typeof s?.pfZapExit === "string") setPfZapExit(s.pfZapExit);
 
         // query params
-        if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
+        if (typeof s?.ignoreRatings === "boolean") setIgnoreRatings(s.ignoreRatings);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
-        if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
-        if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
         // Layouts saved before the rename stored the inverted `filtersCollapsed`.
@@ -2890,8 +2821,7 @@ export default function PairFluxSonar() {
           pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit,
 
           // query params
-          ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
-          topMode, topSigmaOn, topBenchOn, topTimeOn,
+          ignoreRatings, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -2951,7 +2881,7 @@ export default function PairFluxSonar() {
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, zapShowAbs, zapSilverAbs, zapGoldAbs,
     pfCls, pfZapMode, pfZapMin, pfZapMax, pfZapExit,
-    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
+    ignoreRatings, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
@@ -3398,6 +3328,7 @@ export default function PairFluxSonar() {
       type,
       mode,
       ratingMode,
+      ignoreRatings,
       minRate,
       minTotal,
       tickersFilterNorm,
@@ -3457,7 +3388,7 @@ export default function PairFluxSonar() {
 
     };
   }, [
-    cls, type, mode, ratingMode, minRate, minTotal, tickersFilterNorm,
+    cls, type, mode, ratingMode, ignoreRatings, minRate, minTotal, tickersFilterNorm,
     listMode, ignoreSet, applySet,pinMap,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -3485,7 +3416,7 @@ export default function PairFluxSonar() {
   useEffect(() => {
     if (!uiHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      void pushArbitrageSonarLiveParams(toArbitrageSonarLiveParams({
+      void pushPairFluxGridSonarLiveParams(toArbitrageSonarLiveParams({
         snapshot,
         source: "pairflux-sonar-grid",
       }));
@@ -3499,7 +3430,7 @@ export default function PairFluxSonar() {
   const [sonarApprovedKeys, setSonarApprovedKeys] = useState<Set<string> | null>(null);
   useEffect(() => {
     let alive = true;
-    const unsubscribe = subscribeSharedPoll("sonar-pairflux-grid-snapshot", fetchArbitrageSonarSnapshot, 6_000, (value, err) => {
+    const unsubscribe = subscribeSharedPoll("sonar-pairflux-grid-snapshot", fetchPairFluxGridSonarSnapshot, 6_000, (value, err) => {
       if (!alive) return;
       if (err) return;
       if (value?.timedOut) {
@@ -3845,10 +3776,7 @@ export default function PairFluxSonar() {
     if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
     if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
     if (zapMode !== "off") hints.push(`${zapMode.toUpperCase()} >= ${Number(zapShowAbs ?? 0).toFixed(2)}`);
-    // BIN/BINS are not ported server-side yet — the Sonar snapshot always rates SESSION-only, a
-    // known gap (see the handoff doc). Surfacing it here so "0 visible" is not mistaken for a bug
-    // when the real cause is a rating mode silently substituted underneath the operator's choice.
-    if (ratingMode !== "SESSION") hints.push(`${ratingMode} requested, served SESSION`);
+    if (ignoreRatings) hints.push("ratings dropped (UNIVERSE)");
     return hints.slice(0, 10);
   }, [
     activeMode,
@@ -3881,6 +3809,7 @@ export default function PairFluxSonar() {
     preMhVolNFMin,
     rangeModes,
     ratingMode,
+    ignoreRatings,
     sectorCorr.excluded,
     sectorEnabled,
     selCountries,
@@ -4183,72 +4112,29 @@ export default function PairFluxSonar() {
           modeSlot={
             <>
 
-              {/* TOP mode toggle */}
-              <div className="flex h-7 items-center gap-1.5">
-                <div className="flex h-7 items-center rounded-lg bg-black/20">
-                  {([false, true] as const).map((isTop) => (
-                    <button
-                      key={String(isTop)}
-                      type="button"
-                      onClick={() => setTopMode(isTop)}
-                      className={clsx(
-                        "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                        topMode === isTop
-                          ? isTop
-                            ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                            : secondaryButtonSoftActiveClass
-                          : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                      )}
-                    >
-                      {isTop ? "TOP" : "ALL"}
-                    </button>
-                  ))}
-                </div>
-                {topMode && (
-                  <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                    {([
-                      { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                      { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                      { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                    ] as const).map(({ key, label, on, set }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => set((v) => !v)}
-                        className={clsx(
-                          "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                          on
-                            ? "accent-fill"
-                            : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+              {/* ALL/TOP + σ/MKT/TIME, and SESSION/BIN/BINS, removed for this page (2026-10-05, the
+                  operator's own instruction). ratingMode and topMode are fixed now, so nothing in the UI can
+                  turn the TOP filter on. RATE/UNIVERSE takes their place, styled and named exactly like
+                  ArbitrageSonar's own button: drops the rating gate entirely when on. */}
+              <button
+                type="button"
+                onClick={() => setIgnoreRatings((v) => !v)}
+                title={ignoreRatings
+                  ? "UNIVERSE — ratings dropped: every pair is eligible, ignoring MINRATE/MINTOTAL and the published rating gate entirely. Click to apply ratings again."
+                  : "RATE — ratings applied: MINRATE/MINTOTAL and the published rating gate are enforced. Click to drop ratings (UNIVERSE)."}
+                className={clsx(
+                  "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+                  ignoreRatings
+                    ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+                    : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
                 )}
-              </div>
-
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {(["SESSION", "BIN", "BINS"] as RatingMode[]).map((modeKey) => (
-                  <button
-                    key={modeKey}
-                    type="button"
-                    onClick={() => setRatingMode(modeKey)}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      ratingMode === modeKey
-                        ? secondaryButtonSoftActiveClass
-                        : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                    )}
-                  >
-                    {modeKey}
-                  </button>
-                ))}
-              </div>
+              >
+                {ignoreRatings ? "UNIVERSE" : "RATE"}
+              </button>
             </>
           }
           steppers={fields}
+          steppersDimmed={ignoreRatings}
           ranges={[
             { label: "ρ", title: "Correlation — на 5-барних дохідностях, для цього класу", minValue: corrMin, maxValue: corrMax, setMin: setCorrMin, setMax: setCorrMax, step: 0.05 },
             { label: "β", title: "Beta — хедж-коефіцієнт пари для цього класу", minValue: betaMin, maxValue: betaMax, setMin: setBetaMin, setMax: setBetaMax, step: 0.1 },
@@ -4272,14 +4158,6 @@ export default function PairFluxSonar() {
                 label={c.toUpperCase()}
                 onClick={() => setPfCls(c)}
               />
-            ))}
-          </div>
-
-          <div className="h-7 w-px self-center bg-white/5" />
-
-          <div className="flex h-7 items-center gap-2">
-            {(["all", "top"] as const).map((m) => (
-              <FilterButton key={m} active={mode === m} label={m.toUpperCase()} onClick={() => setMode(m)} />
             ))}
           </div>
 

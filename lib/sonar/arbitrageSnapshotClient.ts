@@ -17,6 +17,8 @@ export type ArbitrageSonarLiveParams = {
   /** RATE/UNIVERSE — drops the eligibility gate entirely when true, ignoring signalsMinRate/
    * signalsMinTotal. Added 2026-09-27, replacing the removed ALL/TOP + SESSION/BIN/BINS row. */
   ignoreRatings: boolean;
+  /** PR ("LastPrint": deviation from the print) or BIDASK ("BidAsk": bid/ask per side). */
+  priceMode: "LastPrint" | "BidAsk";
   filters: ArbitrageServerSonarFilters | null;
   source: string;
 };
@@ -82,7 +84,7 @@ const num = (value: unknown): number => {
 export function toArbitrageSonarLiveParams(args: {
   snapshot: SonarExactFilterSnapshot & {
     cls?: unknown; type?: unknown; minRate?: unknown; minTotal?: unknown; ratingMode?: unknown;
-    ignoreRatings?: unknown;
+    ignoreRatings?: unknown; priceMode?: unknown;
   };
   source: string;
 }): ArbitrageSonarLiveParams {
@@ -97,6 +99,7 @@ export function toArbitrageSonarLiveParams(args: {
     signalsMinTotal: num(s.minTotal),
     ratingMode,
     ignoreRatings: !!s.ignoreRatings,
+    priceMode: s.priceMode === "LastPrint" ? "LastPrint" : "BidAsk",
     filters: toArbitrageServerSonarFilters(s),
     source: args.source,
   };

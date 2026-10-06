@@ -2634,12 +2634,9 @@ export default function OPGReversalScanner({
   } = useStreamEngine({
     // This page only DRAWS: the bridge screens the candidates and makes every decision, so
     // nothing about filters, gates or signal metrics is passed to the engine any more.
-    // NOTE: "OPGReversalEnterLong"/"OPGReversalEnterShort" have no TradingAppOrderIntentType entry yet
-    // (no OPGReversalServerStrategy exists — see DayTwoServerStrategy.cs for the pattern to follow).
-    // Deliberately NOT reusing "DayTwoEnterLong"/"DayTwoEnterShort" here: that would fire Day
-    // Two's own live hotkey mapping (Hotkeys.DayTwoBuy/DayTwoSell) for a OPGReversal order if manual
-    // stream dispatch is ever triggered from this page before the real intent type is wired up —
-    // sending an unrecognized intent type fails loudly instead, which is the safer failure mode.
+    // "OPGReversalEnterLong"/"OPGReversalEnterShort" have a real TradingAppOrderIntentType entry, a
+    // registered OPGReversalServerStrategy, and are bound to Ctrl+F7/Ctrl+F8. Never reuse Day Two's
+    // "DayTwoEnterLong"/"DayTwoEnterShort" here: that would fire Day Two's own hotkey mapping.
     entryIntentTypes: { long: "OPGReversalEnterLong", short: "OPGReversalEnterShort" },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),

@@ -27,6 +27,7 @@
 import dynamic from "next/dynamic";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { STRATEGY_CATALOG } from "@/lib/strategyCatalog";
 import { LIVE_STRATEGIES, type LiveStrategy } from "@/lib/strategies/registry";
 import {
   CAESAR_SEGMENTS,
@@ -65,6 +66,16 @@ const STREAMS: Record<string, React.ComponentType<any>> = {
   arbitrage: ArbitrageStream,
   pairflux: PairFluxStream,
 };
+
+/**
+ * The name a strategy is shown under everywhere else (CLO•Reversal, OPG•Continuum, Day Two…),
+ * looked up from the catalog. Registry keys are lowercase, catalog keys are camelCase, so the match
+ * is case-insensitive. Falls back to the raw key only for a strategy missing from the catalog.
+ */
+function catalogLabel(key: string): string {
+  const name = STRATEGY_CATALOG.find((s) => s.key.toLowerCase() === key.toLowerCase())?.name ?? key;
+  return name.toUpperCase();
+}
 
 type Runner = {
   strategy: LiveStrategy;
@@ -230,8 +241,8 @@ export default function CaesarRunners() {
               <Stream
                 instanceId={r.strategy.bridgeStrategyId}
                 lsKeyPrefix={r.strategy.storage.streamPrefix}
-                strategyLabel={r.strategy.key.toUpperCase()}
-                headerTitle={`${r.strategy.key.toUpperCase()} STREAM`}
+                strategyLabel={catalogLabel(r.strategy.key)}
+                headerTitle={`${catalogLabel(r.strategy.key)} STREAM`}
                 // From the PLAN, not the registry default: this is the number the two strategies
                 // resolve against each other by, and the schedule is where it is set.
                 strategyPriority={r.priority}

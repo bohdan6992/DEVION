@@ -161,6 +161,9 @@ export default function PairFluxScanner({
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
   const { theme } = useUi();
   const isLightTheme = theme === "light";
+  // UNIVERSE — ratings off for this page (same switch as the PairFlux Sonar). Declared up here so the
+  // layout save/restore effects below can see it.
+  const [ignoreRatings, setIgnoreRatings] = useState(false);
   const [primaryPanel, setPrimaryPanel] = useState<PrimaryPanelKey>(() => {
     if (initialPrimaryPanel === "stream" || initialPrimaryPanel === "scanner") return initialPrimaryPanel;
     if (typeof window === "undefined") return "scanner";
@@ -1439,7 +1442,8 @@ export default function PairFluxScanner({
           });
         }
         if (typeof s.topN === "number") setTopN(s.topN);
-        if (s.scopeMode === "ALL" || s.scopeMode === "TOP") setScopeMode(s.scopeMode);
+        // ALL/TOP is gone from this toolbar: scope is always ALL, so a saved TOP cannot narrow the list silently.
+        setScopeMode("ALL");
         if (typeof s.offset === "number") setOffset(s.offset);
 
         if (typeof s.qTicker === "string") setQTicker(s.qTicker);
@@ -1453,7 +1457,9 @@ export default function PairFluxScanner({
 
         // PairFlux has no BIN/BINS mode. A layout saved while one was selectable restores as SESSION.
         setRatingMode("SESSION");
-        if (typeof s.topMode === "boolean") setTopMode(s.topMode);
+        // ALL/TOP is gone from this toolbar: a saved TOP must not come back as a hidden filter.
+        setTopMode(false);
+        if (typeof s.ignoreRatings === "boolean") setIgnoreRatings(s.ignoreRatings);
         if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
         if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
         if (typeof s.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
@@ -1650,6 +1656,7 @@ export default function PairFluxScanner({
       showPin,
       showAdvanced,
       ratingMode,
+      ignoreRatings,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
       ratingType,
       ratingRules,
@@ -1805,7 +1812,7 @@ export default function PairFluxScanner({
       topMode, topSigmaOn, topBenchOn, topTimeOn,
       includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, showAdvanced,
-      ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
+      ratingMode, ignoreRatings, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
       minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
@@ -2085,9 +2092,16 @@ export default function PairFluxScanner({
   }, [ruleBand]);
   const streamSignalClass = streamExecutionDescriptorOverride?.signalClass ?? derivedStreamSignalClass;
 
+  // UNIVERSE is applied here: every reader below uses ratingRulesEff, so the scanner, the snapshot and
+  // the stream push all see the same zero floor.
+  const ratingRulesEff = useMemo(
+    () => (ignoreRatings ? ratingRules.map((r) => ({ ...r, minRate: 0, minTotal: 0 })) : ratingRules),
+    [ratingRules, ignoreRatings]
+  );
+
   const derivedStreamRatingRule = useMemo(() => {
-    return ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
-  }, [ratingRules, ruleBand]);
+    return ratingRulesEff.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+  }, [ratingRulesEff, ruleBand]);
   const streamRatingRule = streamExecutionDescriptorOverride?.ratingRule ?? derivedStreamRatingRule;
 
   // Which session a row's report marker is judged against. The marker carries only day/month, so
@@ -2900,7 +2914,7 @@ export default function PairFluxScanner({
     const reqTickers = requestScopedTickers;
 
     const sessionBand = ratingBandFromSession(session);
-    const sessionRule = ratingRules.find((r) => r.band === sessionBand) ?? { band: sessionBand, minRate: 0, minTotal: 0 };
+    const sessionRule = ratingRulesEff.find((r) => r.band === sessionBand) ?? { band: sessionBand, minRate: 0, minTotal: 0 };
     const rrForRequest = [{
       band: sessionRule.band,
       minRate: Math.max(0, Number(sessionRule.minRate) || 0),
@@ -3534,7 +3548,7 @@ export default function PairFluxScanner({
     if (scannerBinFilterEnabled({ ratingMode, metric })) {
       req.ratingRules = null;
     } else if (keepRatingGate) {
-      const rule = ratingRules.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
+      const rule = ratingRulesEff.find((r) => r.band === ruleBand) ?? { band: ruleBand, minRate: 0, minTotal: 0 };
       req.ratingRules = [{
         band: rule.band,
         minRate: Math.max(0, Number(rule.minRate) || 0),
@@ -4021,7 +4035,7 @@ export default function PairFluxScanner({
     const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
-    const activeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
+    const activeBinRule = ratingRulesEff.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return activeRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker, (r as any).benchTicker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
@@ -4087,13 +4101,13 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
-    const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
+    const episodeBinRule = ratingRulesEff.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return episodesRows.filter((r) => {
       if (!listModeAllowsTicker(r.ticker, (r as any).benchTicker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
@@ -4157,7 +4171,7 @@ export default function PairFluxScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
     if (arbitrageTickerMetaLoadedRef.current) return;
@@ -5520,58 +5534,31 @@ export default function PairFluxScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* TOP mode toggle */}
-          <div className="flex h-7 items-center gap-1.5">
-            <div className="flex h-7 items-center rounded-lg bg-black/20">
-              {([false, true] as const).map((isTop) => (
-                <button
-                  key={String(isTop)}
-                  type="button"
-                  onClick={() => setTopMode(isTop)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    topMode === isTop
-                      ? isTop
-                        ? "bg-yellow-400/90 text-black border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]"
-                        : "accent-soft"
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                  )}
-                >
-                  {isTop ? "TOP" : "ALL"}
-                </button>
-              ))}
-            </div>
-            {topMode && (
-              <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20 px-1">
-                {([
-                  { key: "sigma", label: "σ", on: topSigmaOn, set: setTopSigmaOn },
-                  { key: "bench", label: "MKT", on: topBenchOn, set: setTopBenchOn },
-                  { key: "time",  label: "TIME", on: topTimeOn,  set: setTopTimeOn },
-                ] as const).map(({ key, label, on, set }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => set((v) => !v)}
-                    className={clsx(
-                      "px-2 py-1 rounded-md text-[10px] font-mono font-bold uppercase transition-all",
-                      on
-                        ? "bg-emerald-500/80 text-white"
-                        : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+          {/* ALL/TOP + σ/MKT/TIME removed from this toolbar (2026-10-05, the operator's own instruction).
+              topMode stays false, so nothing here can narrow the list to the top windows. RATE/UNIVERSE
+              takes its place, styled and named exactly like the PairFlux Sonar's button. */}
+          <button
+            type="button"
+            onClick={() => setIgnoreRatings((v) => !v)}
+            title={ignoreRatings
+              ? "UNIVERSE — ratings dropped: every pair is eligible, MINRATE/MINTOTAL are not applied to the scanner or the stream. Click to apply ratings again."
+              : "RATE — ratings applied: MINRATE/MINTOTAL are enforced by the scanner and the stream. Click to drop ratings (UNIVERSE)."}
+            className={clsx(
+              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+              ignoreRatings
+                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+                : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
             )}
-          </div>
+          >
+            {ignoreRatings ? "UNIVERSE" : "RATE"}
+          </button>
 
           {/* No SESSION / BIN / BINS selector: PairFlux has ONE rating, the pair's per-class
               rate/total, and nothing binned by deviation. With BIN/BINS selected the replay was sent
               no rating rules at all while the stream still enforced MINRATE/MINTOTAL on every pair, so
               the two surfaces judged different universes. ratingMode now stays SESSION (the hook's
               default, and what the filter restore forces). */}
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+          <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", ignoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
@@ -5606,7 +5593,7 @@ export default function PairFluxScanner({
             </div>
           </div>
 
-          <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45">
+          <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", ignoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
@@ -5907,33 +5894,6 @@ export default function PairFluxScanner({
                   {b.label}
                 </button>
                 ))}
-            </div>
-
-            <div className="h-7 w-px self-center bg-white/5" />
-
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "ALL", label: "ALL" },
-                { key: "TOP", label: "TOP" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => {
-                    const next = m.key as "ALL" | "TOP";
-                    setScopeMode(next);
-                    if (next === "ALL") setTopN(1000);
-                  }}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    scopeMode === m.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
             </div>
 
             <div className="h-7 w-px self-center bg-white/5" />

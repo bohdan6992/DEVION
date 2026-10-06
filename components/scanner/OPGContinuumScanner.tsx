@@ -2637,8 +2637,8 @@ export default function OPGContinuumScanner({
     // This page only DRAWS: the bridge screens the candidates and makes every decision, so
     // nothing about filters, gates or signal metrics is passed to the engine any more.
     // "OPGContinuumEnterLong"/"OPGContinuumEnterShort" have a real TradingAppOrderIntentType entry, a
-    // registered OPGContinuumServerStrategy, and are bound to Ctrl+F5/Ctrl+F6 (2026-09-30, the operator's
-    // own instruction) — the same physical chord as Day Two/Reversal's own pair.
+    // registered OPGContinuumServerStrategy, and are bound to Ctrl+F7/Ctrl+F8 (the same chord as
+    // OPG•Reversal, its own open-anchored pair, see TradingAppExecutionOptions).
     entryIntentTypes: { long: "OPGContinuumEnterLong", short: "OPGContinuumEnterShort" },
     enabled: primaryPanel === "stream",
     ocrEnabled: streamViewModeOverride === "auto" || (streamViewModeOverride === "stream-auto-tab" && (tab === "analytics" || tab === "episodes")),

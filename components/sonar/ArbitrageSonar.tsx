@@ -2128,6 +2128,8 @@ export default function ArbitrageSonar() {
   // toggle row is always SESSION+ALL now, no UI can flip it away; in its place, a single RATE/
   // UNIVERSE button, styled and named 1-to-1 off ReversalSonar's own reversalIgnoreRatings.
   const [arbitrageIgnoreRatings, setArbitrageIgnoreRatings] = useState(false);
+  // PR (LastPrint): the deviation is the print vs its last close. BIDASK: bid/ask per side.
+  const [sonarPriceMode, setSonarPriceMode] = useState<"LastPrint" | "BidAsk">("BidAsk");
 
   type NumField = {
     label: string;
@@ -2707,6 +2709,7 @@ export default function ArbitrageSonar() {
         // default value from a session saved before this change must not silently come back with no
         // visible control left to see or undo it.
         if (typeof s?.arbitrageIgnoreRatings === "boolean") setArbitrageIgnoreRatings(s.arbitrageIgnoreRatings);
+        if (s?.sonarPriceMode === "LastPrint" || s?.sonarPriceMode === "BidAsk") setSonarPriceMode(s.sonarPriceMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
@@ -2896,7 +2899,7 @@ export default function ArbitrageSonar() {
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
-          topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings,
+          topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings, sonarPriceMode,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -2955,7 +2958,7 @@ export default function ArbitrageSonar() {
   }, [
     cls, type, mode, listMode, bpCls,
     zapMode, activeMode, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
-    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax, arbitrageIgnoreRatings,
+    ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax, arbitrageIgnoreRatings, sonarPriceMode,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
@@ -3401,6 +3404,7 @@ export default function ArbitrageSonar() {
       mode,
       ratingMode,
       ignoreRatings: arbitrageIgnoreRatings,
+      priceMode: sonarPriceMode,
       minRate,
       minTotal,
       tickersFilterNorm,
@@ -3458,7 +3462,7 @@ export default function ArbitrageSonar() {
 
     };
   }, [
-    cls, type, mode, ratingMode, arbitrageIgnoreRatings, minRate, minTotal, tickersFilterNorm,
+    cls, type, mode, ratingMode, arbitrageIgnoreRatings, sonarPriceMode, minRate, minTotal, tickersFilterNorm,
     listMode, ignoreSet, applySet,pinMap,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -4163,6 +4167,21 @@ export default function ArbitrageSonar() {
                 )}
               >
                 {arbitrageIgnoreRatings ? "UNIVERSE" : "RATE"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSonarPriceMode((m) => (m === "LastPrint" ? "BidAsk" : "LastPrint"))}
+                title={sonarPriceMode === "LastPrint"
+                  ? "PR — the deviation is the print against its last close (LstPrcLstCls). Click for BIDASK."
+                  : "BIDASK — the deviation is bid/ask per side. Click for PR."}
+                className={clsx(
+                  "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+                  sonarPriceMode === "LastPrint"
+                    ? "bg-violet-500 text-white shadow-[0_0_16px_rgba(139,92,246,0.36)]"
+                    : "bg-sky-500 text-black shadow-[0_0_16px_rgba(14,165,233,0.36)]"
+                )}
+              >
+                {sonarPriceMode === "LastPrint" ? "PR" : "BIDASK"}
               </button>
             </>
           }

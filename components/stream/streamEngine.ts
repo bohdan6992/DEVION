@@ -288,6 +288,8 @@ export type StreamAutomationConfig = {
   queueDelayMinSeconds: number;
   queueDelayMaxSeconds: number;
   exitExecutionMode: "active" | "passive";
+  /** PR = LastPrint (plain F1/F2 entry keys), BIDASK = Bid/Ask (Ctrl entry keys). */
+  priceMode?: "LastPrint" | "BidAsk";
   hedgeMode: "hedged" | "unhedged";
   scaleMode: "single" | "scale_in";
   sizingMode: "USD" | "TIER";
