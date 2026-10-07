@@ -70,7 +70,7 @@ import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTI
 import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
-import ExecutionSettingsPanel, { DirectionBalanceControls } from "./shell/panels/ExecutionSettingsPanel";
+import ExecutionSettingsPanel, { DirectionBalanceControls, SaveModeButton } from "./shell/panels/ExecutionSettingsPanel";
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -1118,6 +1118,16 @@ export default function ArbitrageScanner({
     [autoBalance, autoBalanceHedged, setDirectionBalanceMode],
   );
 
+  /**
+   * SAVE mode (2026-10-07): Arbitrage's own hourly maintenance cycle on the bridge — Ctrl+Q cancels
+   * whatever limit is still unfilled, then any position still awaiting its fill is forgotten so the
+   * ordinary entry path re-sends it if it is still signalling. Nothing to do with QQQ or with
+   * AutoBalance/BALANCE/HEDGED above — that switch is the only thing that ever sizes or sends a QQQ
+   * hedge order. SAVE and HEDGED are independent switches and may both be on at once.
+   */
+  const [saveMode, setSaveMode] = useState<boolean>(false);
+  const toggleSaveMode = useCallback(() => setSaveMode((prev) => !prev), []);
+
   // ========= Derived: variant (for display)
   const variantString = useMemo(() => {
     // EndAbs always participates in variant (even if Passive ignores for closing)
@@ -1381,6 +1391,7 @@ export default function ArbitrageScanner({
         if (typeof s.autoBalance === "boolean") setAutoBalance(s.autoBalance);
         if (typeof s.autoBalanceRatio === "number" && s.autoBalanceRatio >= 1.1) setAutoBalanceRatio(s.autoBalanceRatio);
         if (typeof s.autoBalanceHedged === "boolean") setAutoBalanceHedged(s.autoBalanceHedged);
+        if (typeof s.saveMode === "boolean") setSaveMode(s.saveMode);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
         if (typeof s.startCutoffMinuteIdx === "number" && s.startCutoffMinuteIdx >= 0) {
@@ -1636,6 +1647,7 @@ export default function ArbitrageScanner({
       autoBalance,
       autoBalanceRatio,
       autoBalanceHedged,
+      saveMode,
       endAbs,
       minHoldCandles,
       startCutoffMinuteIdx: parseTimeToMinuteIdx(startCutoffTime),
@@ -1810,7 +1822,7 @@ export default function ArbitrageScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, saveMode, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
       // changing any of them left persistedFilters identical and the debounced write never fired —
       // they reached localStorage only by accident, whenever some other field changed next. All of
@@ -2539,6 +2551,7 @@ export default function ArbitrageScanner({
         signalsMinTotal: streamRatingRule.minTotal,
         ignoreRatings: arbitrageIgnoreRatings,
         autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged },
+        saveMode,
         source: "arbitrage-scanner",
       }));
     }, 600);
@@ -2556,6 +2569,7 @@ export default function ArbitrageScanner({
     autoBalance,
     autoBalanceRatio,
     autoBalanceHedged,
+    saveMode,
   ]);
 
 
@@ -6198,6 +6212,7 @@ export default function ArbitrageScanner({
           filteredEpisodes={filteredEpisodes}
           downloadEpisodesLog={downloadEpisodesLog}
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
+          priceModeAffectsLive
         />
 
           {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
@@ -6677,6 +6692,12 @@ export default function ArbitrageScanner({
                 hedged: autoBalanceHedged,
                 onToggleHedged: toggleHedgedMode,
                 status: directionBalanceStatus,
+              }}
+            />
+            <SaveModeButton
+              saveMode={{
+                enabled: saveMode,
+                onToggle: toggleSaveMode,
               }}
             />
           </div>

@@ -23,6 +23,17 @@ const BACKTEST_ONLY_TITLE =
   "Backtest only — the stream sends a TradingApp hotkey, which carries no price and no size. " +
   "The traded quantity comes from that hotkey's own configuration in TradingApp.";
 
+/**
+ * Arbitrage only (2026-10): PRINT/BIDASK stopped being backtest-only decoration there. It now also
+ * picks which field the STREAM's own deviation is measured on (LstPrcLstCls vs bid/ask, both the
+ * scanner's and the live gate's threshold) and which physical keys an entry sends — PRINT fires
+ * plain F1/F2 (F3/F4 before 04:00 NY), no Ctrl; BIDASK keeps Ctrl+F1/F2. So on Arbitrage's own
+ * stream shell this group must NOT dim with the rest of the backtest-only ones.
+ */
+const PRICE_MODE_LIVE_TITLE =
+  "Live, not just backtest: PRINT measures the deviation off LstPrcLstCls and sends plain F1/F2 " +
+  "(F3/F4 before 04:00 NY), no Ctrl. BIDASK measures bid/ask per side and sends Ctrl+F1/F2.";
+
 const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
   clsx("flex h-7 items-center rounded-lg bg-black/20", extra, isStreamOnlyShell && "opacity-50");
 
@@ -94,6 +105,16 @@ export type DirectionBalanceControl = {
   status: DirectionBalanceState | null;
 };
 
+/**
+ * SAVE mode (Arbitrage only): the operator's own hourly maintenance switch on the bridge. See
+ * SaveModeButton's own doc comment for the mechanism. Independent of BALANCE/HEDGED above — SAVE
+ * never touches QQQ or a threshold, so there is nothing for the two switches to collide over.
+ */
+export type SaveModeControl = {
+  enabled: boolean;
+  onToggle: () => void;
+};
+
 export type ExecutionSettingsPanelProps = {
   /** What the bridge holds for this strategy's scheduled START; shown beside the START stepper. */
   scheduledStart?: ScheduledStartStatus | null;
@@ -110,6 +131,12 @@ export type ExecutionSettingsPanelProps = {
   filteredEpisodes: unknown[];
   downloadEpisodesLog: () => void;
   downloadStreamFilterPassLog: () => void;
+  /**
+   * Arbitrage only: PRINT/BIDASK also drives the live stream (deviation field + entry keys), not
+   * just the backtest, so its group must stay fully lit on the stream shell instead of dimming with
+   * the other three (still backtest-only) pairs. False for every other strategy.
+   */
+  priceModeAffectsLive?: boolean;
 };
 
 function BalanceRatioInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
@@ -294,6 +321,40 @@ export function DirectionBalanceControls({ directionBalance }: { directionBalanc
   );
 }
 
+/**
+ * SAVE, next to BALANCE/HEDGED/RATIO in the Arbitrage header row (ArbitrageScanner). Every hour on
+ * the bridge: Ctrl+Q cancels any limit still unfilled (real for PRINT mode's limit entries, a no-op
+ * the rest of the time — sent anyway since the switch does not know which mode is live), then any
+ * position still awaiting its fill is forgotten so the ordinary entry path re-sends it next tick if
+ * it is still signalling.
+ *
+ * Independent of BALANCE/HEDGED: SAVE never touches QQQ or a threshold, so the two switches may both
+ * be on at once. Caesar-aware on the bridge — Ctrl+Q is global, so the hourly cycle stands itself
+ * down for the hour whenever another strategy is also running, rather than cancel its orders too.
+ */
+const SAVE_MODE_TITLE =
+  "SAVE MODE. Every hour: Ctrl+Q cancels any limit order still unfilled, then any position still awaiting its fill is forgotten so it is re-sent if still signalling. Independent of BALANCE/HEDGED (neither touches QQQ or a threshold) — stands down for the hour if another strategy is also running, since Ctrl+Q is global.";
+
+export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
+  return (
+    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={SAVE_MODE_TITLE}>
+      <button
+        type="button"
+        aria-pressed={saveMode.enabled}
+        onClick={saveMode.onToggle}
+        className={clsx(
+          "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+          saveMode.enabled
+            ? "accent-soft"
+            : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+        )}
+      >
+        SAVE
+      </button>
+    </div>
+  );
+}
+
 export default function ExecutionSettingsPanel({
   scheduledStart,
   filters,
@@ -309,6 +370,7 @@ export default function ExecutionSettingsPanel({
   filteredEpisodes,
   downloadEpisodesLog,
   downloadStreamFilterPassLog,
+  priceModeAffectsLive = false,
 }: ExecutionSettingsPanelProps) {
   const {
     addDelayMinutes,
@@ -363,7 +425,10 @@ export default function ExecutionSettingsPanel({
       />
     </div>
 
-    <div className={backtestOnlyGroupClass(isStreamOnlyShell, "gap-0.5")} title={BACKTEST_ONLY_TITLE}>
+    <div
+      className={backtestOnlyGroupClass(isStreamOnlyShell && !priceModeAffectsLive, "gap-0.5")}
+      title={priceModeAffectsLive ? PRICE_MODE_LIVE_TITLE : BACKTEST_ONLY_TITLE}
+    >
       <TwoTonePairButtons
         options={[
           { key: "LastPrint", label: "PRINT" },

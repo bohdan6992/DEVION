@@ -52,6 +52,12 @@ export type ArbitrageLiveParams = {
    * Null/disabled = it never touches a threshold or sends a hedge order.
    */
   autoBalance: { enabled: boolean; ratio: number; hedged: boolean } | null;
+  /**
+   * SAVE mode: every hour, Ctrl+Q (cancels unfilled limits), then forgets whatever is still awaiting
+   * its fill so the ordinary entry path re-sends it if it is still signalling. Nothing to do with
+   * QQQ or autoBalance — independent of it, and the two may both be on at once.
+   */
+  saveMode: boolean;
   source: string;
 };
 
@@ -271,6 +277,7 @@ export function toArbitrageLiveParams(args: {
   signalsMinTotal: number;
   ignoreRatings?: boolean;
   autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean } | null;
+  saveMode?: boolean;
   source: string;
 }): ArbitrageLiveParams {
   const a = args.automation;
@@ -305,6 +312,7 @@ export function toArbitrageLiveParams(args: {
     autoBalance: args.autoBalance
       ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2, hedged: !!args.autoBalance.hedged }
       : null,
+    saveMode: !!args.saveMode,
     source: args.source,
   };
 }

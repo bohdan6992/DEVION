@@ -80,9 +80,20 @@ const GOLD_LINE = "#d4af37";
 const MAX_SERIES = SERIES.length;
 
 const AXIS = "rgba(255,255,255,0.10)";
-const INK_MUTED = "rgba(255,255,255,0.35)";
 /** The empty ring, and the unfilled remainder of a partial one. */
 const TRACK = "rgba(255,255,255,0.055)";
+
+/**
+ * Shared axis-tick typography for every hand-drawn chart below (LongShortHistogram, LinesChart,
+ * the arrivals step chart): same weight, colour, and — once adjusted for each chart's own viewBox
+ * width — rendered SIZE, so none of the five panels reads at a different scale than its neighbours.
+ * LongShortHistogram and LinesChart share a 1100-wide viewBox and use this value as-is. The
+ * arrivals chart draws in a 920-wide viewBox but sits in an equal-width column next to a LinesChart
+ * (PNL OVER TIME), so its own tick size is this value scaled by 920/1100 — see ARRIVALS_TICK_FONT_SIZE.
+ */
+const AXIS_TICK_FONT_SIZE = 13;
+const AXIS_TICK_FILL = "rgba(255,255,255,0.45)";
+const ARRIVALS_TICK_FONT_SIZE = AXIS_TICK_FONT_SIZE * (920 / 1100);
 
 type Point = { min: number; count: number };
 type Series = { key: string; color: string; active: number; entered: number; points: Point[]; overnight?: boolean };
@@ -195,8 +206,14 @@ function roundedPolyline(points: readonly [number, number][], radius: number): s
 // =========================================================================================
 
 const DONUT_BOX = 240;
-/** Rendered size in CSS pixels. See the note in `Donut` on why this is not a class. */
-const DONUT_PX = 344;
+/**
+ * Rendered size in CSS pixels. See the note in `Donut` on why this is not a class.
+ * 413 = 344 * 1.2 — the block grew 20% (operator's own instruction), and this scales the ring with
+ * it rather than leaving it floating in newly-blank space. Internal radii (R_OUT/R_IN/GAP_PX/
+ * R_HOVER) are in DONUT_BOX's own 240-unit viewBox, not CSS pixels, so they need no change: the SVG
+ * scales that viewBox to fill whatever this constant sets, same proportions either way.
+ */
+const DONUT_PX = 413;
 const DONUT_C = DONUT_BOX / 2;
 const R_OUT = 96;
 const R_IN = 59;
@@ -421,6 +438,8 @@ function LinesChart({
   valueFmt,
   title,
   meta,
+  heightPx = 320,
+  heightClass = "h-[320px]",
 }: {
   series: ValueSeries[];
   fromMin: number | null;
@@ -429,18 +448,27 @@ function LinesChart({
   valueFmt: (v: number) => string;
   title?: string;
   meta?: string;
+  /**
+   * Both describe the SAME height: `heightPx` drives the viewBox/padding math below, `heightClass`
+   * is the literal Tailwind class applied to the wrapper (a template string here would not be
+   * picked up by Tailwind's static scan — see AVERAGE TRADE's own call site, which passes
+   * `h-[384px]` as a literal for exactly this reason).
+   */
+  heightPx?: number;
+  heightClass?: string;
 }) {
   const uid = useId().replace(/:/g, "");
   const width = 1100;
-  const height = 320;
+  const height = heightPx;
   const PAD_L = 20;
   // Just the value-tick text (right-aligned, growing leftward) — names/values moved to the hover
   // tooltip only (2026-09-18, operator asked for a less cluttered chart), so this no longer has
   // to leave room for an end-of-line label growing rightward from the last point.
   const PAD_R = 60;
   const PAD_T = 40;
-  const footerH = 40;
-  const PAD_B = 56;
+  // No standing footer bar any more (2026-10-07, the operator's own instruction: every always-on
+  // label becomes a hover-only one) — PAD_B now only has to clear the axis tick labels themselves.
+  const PAD_B = 26;
   const plotW = width - PAD_L - PAD_R;
   const plotH = height - PAD_T - PAD_B;
   const from = fromMin ?? 0;
@@ -502,13 +530,12 @@ function LinesChart({
 
   const total = series.find((s) => !s.dashed) ?? null;
   const totalPts = total ? inRange(total) : [];
-  const lastTotal = totalPts.length > 0 ? totalPts[totalPts.length - 1] : null;
   const totalAreaD = totalPts.length > 0
     ? `${roundedPolyline(totalPts.map((p): [number, number] => [x(p.min), y(p.value)]), 4)} L ${x(totalPts[totalPts.length - 1].min)} ${y(0)} L ${x(totalPts[0].min)} ${y(0)} Z`
     : "";
 
   return (
-    <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -541,7 +568,7 @@ function LinesChart({
         {yTicks.map((t, i) => (
           <g key={`y-${i}`}>
             <line x1={PAD_L} x2={width - PAD_R} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-            <text x={width - 8} y={t.y - 5} fontSize="17" textAnchor="end" className="fill-zinc-300 font-mono">
+            <text x={width - 8} y={t.y - 5} fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} textAnchor="end" fontFamily="ui-monospace, monospace">
               {valueFmt(t.val)}
             </text>
           </g>
@@ -557,9 +584,9 @@ function LinesChart({
           <line x1={x(hoverMin)} y1={PAD_T} x2={x(hoverMin)} y2={height - PAD_B} stroke="rgba(255,255,255,0.30)" strokeWidth={1} />
         )}
 
-        {totalAreaD && <path d={totalAreaD} fill={`url(#${uid}-fill)`} />}
+        {totalAreaD && <path d={totalAreaD} fill={`url(#${uid}-fill)`} className="caesar-chart-fade-up" />}
 
-        {series.map((s) => {
+        {series.map((s, i) => {
           const pts = inRange(s);
           if (pts.length === 0) return null;
           const d = roundedPolyline(pts.map((p): [number, number] => [x(p.min), y(p.value)]), 4);
@@ -567,7 +594,11 @@ function LinesChart({
           const isTotal = !s.dashed;
           const color = isTotal ? GOLD_LINE : s.color;
           return (
-            <g key={s.key}>
+            // Fade-and-rise on mount, staggered per series (2026-10-07) — the same entrance style
+            // the arrivals chart's own lines already use (caesar-line-reveal), adapted for a line
+            // that needs its own dash pattern (8 4) intact, so it cannot also repurpose
+            // strokeDasharray for a stroke-draw reveal the way arrivals does.
+            <g key={s.key} className="caesar-chart-fade-up" style={{ animationDelay: `${i * 70}ms` }}>
               <path
                 d={d}
                 fill="none"
@@ -591,7 +622,7 @@ function LinesChart({
           return (
             <g key={m}>
               <line x1={px} x2={px} y1={PAD_T} y2={height - PAD_B} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
-              <text x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="17" className="fill-zinc-400 font-mono">
+              <text x={px} y={height - 8} textAnchor="middle" fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} fontFamily="ui-monospace, monospace">
                 {clockLabel(m)}
               </text>
             </g>
@@ -599,11 +630,12 @@ function LinesChart({
         })}
       </svg>
 
-      {/* Names and values live here ONLY (2026-09-18) — no more always-on end-of-line text
-          crowding the chart; hover the plot to read any series' value at that moment. */}
+      {/* Names and values live here ONLY — no always-on label anywhere on the chart; hover the
+          plot to read any series' value (including the gold total) at that moment, in one
+          animated tooltip that follows the cursor. */}
       {hoverValues && (
         <div
-          className="pointer-events-none absolute top-0 z-10 min-w-[150px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-3 py-2 shadow-lg backdrop-blur-xl"
+          className="caesar-chart-tooltip pointer-events-none absolute top-0 z-10 min-w-[150px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-3 py-2 shadow-lg backdrop-blur-xl"
           style={{ left: `${hoverPct}%`, transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)" }}
         >
           <div className="font-mono text-[12px] tabular-nums text-zinc-500">{clockLabel(hoverMin ?? 0)}</div>
@@ -616,32 +648,8 @@ function LinesChart({
           ))}
         </div>
       )}
-
-      {lastTotal && (
-        <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-          <div className="flex items-center gap-3 text-[12px] font-mono">
-            <span className="font-bold" style={{ color: GOLD_LINE }}>
-              total {valueFmt(lastTotal.value)}
-            </span>
-            {series.filter((s) => s.dashed).map((s) => {
-              const pts = inRange(s);
-              const last = pts.length > 0 ? pts[pts.length - 1] : null;
-              return (
-                <span key={s.key} className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-                  {s.key.toUpperCase()}: <span style={{ color: s.color }}>{last ? valueFmt(last.value) : "—"}</span>
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
-}
-
-/** Y coordinate for an x-axis tick label, matching the scanner charts' own footer-clearance math. */
-function h_text(height: number, footerH: number): number {
-  return height - footerH + 12;
 }
 
 // =========================================================================================
@@ -656,6 +664,8 @@ function LongShortHistogram({
   nowMin,
   title,
   meta,
+  heightPx = 320,
+  heightClass = "h-[320px]",
 }: {
   buckets: { min: number; long: number; short: number; overnight: number }[];
   fromMin: number | null;
@@ -663,15 +673,18 @@ function LongShortHistogram({
   nowMin: number | null;
   title?: string;
   meta?: string;
+  /** See LinesChart's own pair of the same name — same reason both are needed. */
+  heightPx?: number;
+  heightClass?: string;
 }) {
   const uid = useId().replace(/:/g, "");
   const width = 1100;
-  const height = 320;
+  const height = heightPx;
   const PAD_L = 22;
   const PAD_R = 40;
   const PAD_T = 40;
-  const footerH = 40;
-  const PAD_B = 56;
+  // No standing footer bar any more (2026-10-07) — PAD_B only has to clear the axis tick labels.
+  const PAD_B = 26;
   const plotW = width - PAD_L - PAD_R;
   const plotH = height - PAD_T - PAD_B;
   const from = fromMin ?? 0;
@@ -698,22 +711,49 @@ function LongShortHistogram({
     return out;
   }, [from, to, span]);
 
-  const totalLong = buckets.reduce((s, b) => s + b.long, 0);
-  const totalShort = buckets.reduce((s, b) => s + b.short, 0);
-  const totalOvernight = buckets.reduce((s, b) => s + b.overnight, 0);
-  const total = totalLong + totalShort;
-  const longShare = total > 0 ? totalLong / total : 0;
-  const bestBucket = buckets.reduce((best, cur) => (cur.long + cur.short > best.long + best.short ? cur : best), buckets[0] ?? { min: from, long: 0, short: 0, overnight: 0 });
+  // Every number below moved from an always-on footer bar into this hover-only readout
+  // (2026-10-07, the operator's own instruction): LONG/SHORT/OVERNIGHT at the nearest bucket,
+  // same crosshair-and-tooltip pattern LinesChart uses.
+  const [hoverMin, setHoverMin] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * width;
+    if (px < PAD_L || px > width - PAD_R) { setHoverMin(null); return; }
+    setHoverMin(from + ((px - PAD_L) / plotW) * span);
+  }, [from, span, plotW]);
+
+  const hoverBucket = useMemo(() => {
+    if (hoverMin == null || buckets.length === 0) return null;
+    let nearest = buckets[0];
+    let bestDiff = Infinity;
+    for (const b of buckets) {
+      const diff = Math.abs(b.min - hoverMin);
+      if (diff < bestDiff) { bestDiff = diff; nearest = b; }
+    }
+    return nearest;
+  }, [hoverMin, buckets]);
+  const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / width) * 100;
 
   return (
-    <div className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
           <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
         </div>
       )}
-      <svg viewBox={`0 0 ${width} ${height}`} className="block h-full w-full" role="img" aria-label="Longs and shorts sent per 10 minutes">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="block h-full w-full"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHoverMin(null)}
+        role="img"
+        aria-label="Longs and shorts sent per 10 minutes"
+      >
         <defs>
           <linearGradient id={`${uid}-long`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
@@ -733,7 +773,7 @@ function LongShortHistogram({
             <g key={`y-${i}`}>
               <line x1={PAD_L} x2={width - PAD_R} y1={ty} y2={ty} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
               {t > 0 && (
-                <text x={width - 8} y={ty - 3} textAnchor="end" fontSize="16" className="fill-zinc-300 font-mono">
+                <text x={width - 8} y={ty - 3} textAnchor="end" fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} fontFamily="ui-monospace, monospace">
                   {t}
                 </text>
               )}
@@ -744,21 +784,27 @@ function LongShortHistogram({
         {nowMin != null && nowMin >= from && nowMin <= to && (
           <line x1={x(nowMin)} y1={PAD_T} x2={x(nowMin)} y2={height - PAD_B} stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
         )}
+        {hoverBucket && (
+          <line x1={x(hoverBucket.min)} y1={PAD_T} x2={x(hoverBucket.min)} y2={height - PAD_B} stroke="rgba(255,255,255,0.30)" strokeWidth={1} />
+        )}
 
-        {buckets.map((b) => {
+        {buckets.map((b, i) => {
           const xBase = x(b.min);
           const hLong = plotH * (b.long / maxCount);
           const hShort = plotH * (b.short / maxCount);
           const yLong = PAD_T + plotH - hLong;
           const yShort = PAD_T + plotH - hShort;
+          const on = hoverBucket?.min === b.min;
+          // Grown from the baseline on mount, staggered left-to-right and capped so a long segment
+          // (many buckets) finishes its whole reveal in under half a second rather than visibly
+          // crawling across the chart (2026-10-07 — same entrance family as the lines/area above,
+          // adapted to a bar: it grows, a line fades, both on the one shared easing curve).
+          // transform, not the hover `opacity` already on the wrapping <g> above: the two never fight.
+          const delay = Math.min(i * 6, 400);
           return (
-            <g key={b.min}>
-              <rect x={xBase} y={yLong} width={barW} height={hLong} rx="3" fill={`url(#${uid}-long)`} stroke="rgba(110,231,183,0.55)" strokeWidth="0.6">
-                <title>{`${clockLabel(b.min)} LONG: ${b.long}`}</title>
-              </rect>
-              <rect x={xBase + barW + 1} y={yShort} width={barW} height={hShort} rx="3" fill={`url(#${uid}-short)`} stroke={SOFT_LOSS_STROKE} strokeWidth="0.6">
-                <title>{`${clockLabel(b.min)} SHORT: ${b.short}`}</title>
-              </rect>
+            <g key={b.min} opacity={hoverBucket && !on ? 0.55 : 1} style={{ transition: "opacity 140ms ease" }}>
+              <rect x={xBase} y={yLong} width={barW} height={hLong} rx="3" fill={`url(#${uid}-long)`} stroke="rgba(110,231,183,0.55)" strokeWidth="0.6" className="caesar-bar-grow" style={{ animationDelay: `${delay}ms` }} />
+              <rect x={xBase + barW + 1} y={yShort} width={barW} height={hShort} rx="3" fill={`url(#${uid}-short)`} stroke={SOFT_LOSS_STROKE} strokeWidth="0.6" className="caesar-bar-grow" style={{ animationDelay: `${delay}ms` }} />
               {hasOvernight && b.overnight > 0 && (
                 <rect
                   x={xBase + (barW + 1) * 2}
@@ -770,9 +816,9 @@ function LongShortHistogram({
                   fillOpacity={0.8}
                   stroke={OVERNIGHT_SERIES[0]}
                   strokeWidth="0.6"
-                >
-                  <title>{`${clockLabel(b.min)} OVERNIGHT: ${b.overnight}`}</title>
-                </rect>
+                  className="caesar-bar-grow"
+                  style={{ animationDelay: `${delay}ms` }}
+                />
               )}
             </g>
           );
@@ -783,24 +829,38 @@ function LongShortHistogram({
           const px = x(m);
           if (px < PAD_L + 8) return null;
           return (
-            <text key={m} x={px} y={h_text(height, footerH)} textAnchor="middle" fontSize="14" className="fill-zinc-200 font-mono">
+            <text key={m} x={px} y={height - 8} textAnchor="middle" fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} fontFamily="ui-monospace, monospace">
               {clockLabel(m)}
             </text>
           );
         })}
       </svg>
 
-      <div className="absolute bottom-0 inset-x-0 h-[40px] border-t border-white/[0.08] bg-[#0a0a0a]/55 px-3 py-1.5 backdrop-blur-xl">
-        <div className="flex items-center gap-3 text-[10px] font-mono">
-          <span className="text-emerald-300/90">long {intnLike(totalLong)}</span>
-          <span style={{ color: SOFT_LOSS_SOLID }}>short {intnLike(totalShort)}</span>
-          {hasOvernight && <span style={{ color: OVERNIGHT_SERIES[0] }}>overnight {intnLike(totalOvernight)}</span>}
-          <span className="text-zinc-500">long share {(longShare * 100).toFixed(1)}%</span>
-          <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/[0.03] text-zinc-400">
-            busiest: <span className="text-zinc-200">{clockLabel(bestBucket.min)}</span> ({intnLike(bestBucket.long + bestBucket.short)})
-          </span>
+      {hoverBucket && (
+        <div
+          className="caesar-chart-tooltip pointer-events-none absolute top-0 z-10 min-w-[130px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-3 py-2 shadow-lg backdrop-blur-xl"
+          style={{ left: `${hoverPct}%`, transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)" }}
+        >
+          <div className="font-mono text-[12px] tabular-nums text-zinc-500">{clockLabel(hoverBucket.min)}</div>
+          <div className="mt-1 flex items-center gap-2 font-mono text-[13px]">
+            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: "rgba(110,231,183,0.9)" }} />
+            <span className="text-zinc-400">LONG</span>
+            <span className="ml-auto font-bold tabular-nums text-zinc-100">{intnLike(hoverBucket.long)}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2 font-mono text-[13px]">
+            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: SOFT_LOSS_SOLID }} />
+            <span className="text-zinc-400">SHORT</span>
+            <span className="ml-auto font-bold tabular-nums text-zinc-100">{intnLike(hoverBucket.short)}</span>
+          </div>
+          {hasOvernight && (
+            <div className="mt-1 flex items-center gap-2 font-mono text-[13px]">
+              <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: OVERNIGHT_SERIES[0] }} />
+              <span className="text-zinc-400">OVERNIGHT</span>
+              <span className="ml-auto font-bold tabular-nums text-zinc-100">{intnLike(hoverBucket.overnight)}</span>
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1073,7 +1133,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
 
   // ---- the time scale ------------------------------------------------------------------------
   const W = 920;
-  const H = 270;
+  // 324 = 270 * 1.2 — the operator's own instruction that the bottom row match the top row's new
+  // 384px block height (320 * 1.2). The figure wrapper below moves to h-[384px] to match; this
+  // viewBox height grows by the same 1.2 so the plot fills the taller card instead of leaving the
+  // extra height as blank letterboxing (the svg's default preserveAspectRatio fits the WHOLE
+  // viewBox inside the container, so a viewBox that does not grow with its wrapper just centers
+  // inside more empty space rather than using it).
+  const H = 324;
   const PAD_L = 42;
   const PAD_R = 54;
   const PAD_T = 24;
@@ -1163,40 +1229,23 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
    *
    * Early in a segment every strategy sits at zero, so without this the markers stack on the axis
    * and the labels print "0" on top of "0" — unreadable exactly when the chart is first looked at.
-   * Markers stay on their true value (moving those would be a lie); only the LABELS are dodged,
-   * by the least amount that separates them.
+   * Markers stay on their true value (moving those would be a lie).
+   *
+   * The dodge logic that used to live here existed only to keep the always-on end-of-line NUMBER
+   * label from colliding with its neighbours. That label is gone (2026-10-07, the operator's own
+   * instruction — hover reads the exact count instead), so there is nothing left to dodge.
    */
   const endMarks = useMemo(() => {
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    const marks = series.map((s, i) => ({
+    return series.map((s, i) => ({
       key: s.key,
       color: s.color,
-      entered: s.entered,
       d: pathFor(s),
       areaD: areaPathFor(s),
       gradientId: `caesar-arrival-fill-${i}`,
       endX,
       y: y(s.entered),
-      labelY: y(s.entered),
     }));
-    const MIN_GAP = 11;
-    const TOP = PAD_T;
-    const BOTTOM = H - PAD_B;
-    const order = marks.slice().sort((a, b) => a.labelY - b.labelY); // top-most first
-
-    // Push DOWN off the top edge. A single upward pass is not enough: when every strategy is tied
-    // at the segment's maximum they all start at PAD_T, and separating them upwards walks the
-    // labels straight out of the plot (measured: y = -23 for the fourth of four).
-    for (let i = 0; i < order.length; i += 1) {
-      const floor = i === 0 ? TOP : order[i - 1].labelY + MIN_GAP;
-      if (order[i].labelY < floor) order[i].labelY = floor;
-    }
-    // Then push UP off the bottom edge, for the mirror case where everything sits on zero.
-    for (let i = order.length - 1; i >= 0; i -= 1) {
-      const ceiling = i === order.length - 1 ? BOTTOM : order[i + 1].labelY - MIN_GAP;
-      if (order[i].labelY > ceiling) order[i].labelY = ceiling;
-    }
-    return marks;
   }, [series, from, to, nowMin, x, y, pathFor, areaPathFor]);
 
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -1255,39 +1304,20 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
         </table>
       ) : (
       <>
-      {/* ---------- CATEGORY KEY — only when an overnight strategy is on the chart ----------
-          The same two categories colour every chart below: the segment's own strategies, and the
-          overnight ones (entered at the close, still held after the 21:00 roll). */}
-      {series.some((s) => s.overnight) && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[10px] uppercase tracking-widest">
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="text-zinc-600">segment</span>
-            {series.filter((s) => !s.overnight).map((s) => (
-              <span key={s.key} className="flex items-center gap-1.5 text-zinc-400">
-                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
-                {s.key}
-              </span>
-            ))}
-          </span>
-          <span
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-2 py-0.5"
-            style={{ borderColor: `${OVERNIGHT_SERIES[0]}40`, backgroundColor: `${OVERNIGHT_SERIES[0]}0f` }}
-            title="Enter at the 16:00 close, exit on a later trading day — charted in every segment"
-          >
-            <span style={{ color: OVERNIGHT_SERIES[0] }}>overnight</span>
-            {series.filter((s) => s.overnight).map((s) => (
-              <span key={s.key} className="flex items-center gap-1.5 text-zinc-300">
-                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
-                {s.key}
-              </span>
-            ))}
-          </span>
-        </div>
-      )}
+      {/* The segment/overnight colour key used to sit here, always on. Removed (2026-10-07, the
+          operator's own instruction): every chart below already names a series in its own hover
+          tooltip, so a standing legend repeated the same colour→name mapping for nothing. */}
 
-      {/* ---------- SITUATIONS / LONGS-SHORTS / AVG TRADE — three across, on top ---------- */}
-      <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_2fr_2fr]">
-        <figure className="scanner-glass-card relative m-0 flex h-[320px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+      {/* ---------- SITUATIONS / LONGS-SHORTS / AVG TRADE — three across, on top ----------
+          The donut's column is a FIXED 384px — the operator's own instruction that the block be a
+          perfect square, which an fr share can't guarantee since it stretches with viewport width.
+          384 is deliberately the same number as the row's height (320 * 1.2), so width == height.
+          The other two columns split whatever is left 1:1, same ratio as their original 2fr:2fr —
+          taking space from both neighbours equally, same as the donut's own +20% did before this.
+          All three blocks share the donut's new height via heightPx/heightClass, so the row stays
+          one even line. */}
+      <div className="mt-3 grid gap-4 lg:grid-cols-[384px_1fr_1fr]">
+        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
           <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
             <span>ACTIVE ACCOUNT BOOK</span>
             <span className="text-zinc-600">{totalActive} total</span>
@@ -1302,6 +1332,8 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
           nowMin={nowMin}
           title="LONGS / SHORTS SENT"
           meta="per 10m"
+          heightPx={384}
+          heightClass="h-[384px]"
         />
 
         <LinesChart
@@ -1312,13 +1344,15 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
           valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
           title="AVERAGE TRADE"
           meta="total ÷ situations"
+          heightPx={384}
+          heightClass="h-[384px]"
         />
       </div>
 
       {/* ---------- ARRIVALS + PNL OVER TIME — two across, underneath ---------- */}
       <div className="mt-3 grid gap-4 lg:grid-cols-2">
           {/* ---------- ARRIVALS ---------- */}
-          <figure className="scanner-glass-card relative m-0 h-[320px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <figure className="scanner-glass-card relative m-0 h-[384px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
             <div className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between">
               <figcaption className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 Entered during the segment
@@ -1375,16 +1409,16 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                         first one always does — would centre its label over the y-axis numbers. The
                         gridline stays; only the label is dropped. */}
                     {x(m) > PAD_L + 16 && (
-                      <text x={x(m)} y={H - 6} textAnchor="middle" fill={INK_MUTED} fontSize={8} fontFamily="ui-monospace, monospace">
+                      <text x={x(m)} y={H - 6} textAnchor="middle" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                         {clockLabel(m)}
                       </text>
                     )}
                   </g>
                 ))}
-                <text x={PAD_L - 6} y={y(maxCount) + 3} textAnchor="end" fill={INK_MUTED} fontSize={8} fontFamily="ui-monospace, monospace">
+                <text x={PAD_L - 6} y={y(maxCount) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                   {maxCount}
                 </text>
-                <text x={PAD_L - 6} y={y(0) + 3} textAnchor="end" fill={INK_MUTED} fontSize={8} fontFamily="ui-monospace, monospace">
+                <text x={PAD_L - 6} y={y(0) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                   0
                 </text>
 
@@ -1431,22 +1465,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                       onMouseLeave={() => setHoverKey(null)}
                     >
                       {/* The long, fading glow under the step — never above it, see the gradient's own note. */}
-                      <path d={m.areaD} fill={`url(#${m.gradientId})`} stroke="none" />
+                      <path d={m.areaD} fill={`url(#${m.gradientId})`} stroke="none" className="caesar-chart-fade-up" />
                       <path d={m.d} fill="none" stroke={m.color} strokeWidth={8} strokeOpacity={0.18} strokeLinejoin="round" strokeLinecap="round" style={{ filter: `drop-shadow(0 7px 7px ${m.color}66)` }} />
                       <path d={m.d} fill="none" stroke={m.color} strokeOpacity={0.94} strokeWidth={2.7} strokeLinejoin="round" strokeLinecap="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1} style={{ animation: "caesar-line-reveal 900ms cubic-bezier(0.16,1,0.3,1) forwards", filter: `drop-shadow(0 0 4px ${m.color}80)` }} />
                       {/* End marker: r 4 with a 2px ring in the surface colour, so series that sit on
-                          the same value stay countable instead of merging into one blob. */}
+                          the same value stay countable instead of merging into one blob. The count
+                          itself is hover-only now (2026-10-07) — see the tooltip below the svg. */}
                       <circle cx={m.endX} cy={m.y} r={4} fill={m.color} stroke={SURFACE} strokeWidth={2} />
-                      {/* Direct label at the end only — never a number on every point. */}
-                      <text
-                        x={m.endX + 8}
-                        y={m.labelY + 3}
-                        fill="rgba(255,255,255,0.75)"
-                        fontSize={9}
-                        fontFamily="ui-monospace, monospace"
-                      >
-                        {m.entered}
-                      </text>
                     </g>
                   );
                 })}
@@ -1456,7 +1481,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                   plot — so the eye reads the value where it is pointing. */}
               {hoverValues && (
                 <div
-                  className="pointer-events-none absolute top-0 z-10 min-w-[104px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-2 py-1.5 shadow-lg backdrop-blur-xl"
+                  className="caesar-chart-tooltip pointer-events-none absolute top-0 z-10 min-w-[104px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-2 py-1.5 shadow-lg backdrop-blur-xl"
                   style={{
                     left: `${hoverPct}%`,
                     transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
@@ -1486,6 +1511,8 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
             valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
             title="PNL OVER TIME"
             meta="open + closed, every 10m"
+            heightPx={384}
+            heightClass="h-[384px]"
           />
       </div>
       </>
@@ -1497,6 +1524,39 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
         }
         @keyframes caesar-line-reveal {
           to { stroke-dashoffset: 0; }
+        }
+        /* Every hover tooltip across these charts (LinesChart, LongShortHistogram, arrivals) pops
+           in the same way — a short rise-and-fade, never an instant snap — so a label appearing on
+           hover reads as deliberate, not as content popping into existence. Animates opacity and
+           margin-top only, never transform: each tooltip's own inline style already uses transform
+           to flip sides of the crosshair, and a CSS animation on the same property would win the
+           cascade over that inline value for its whole duration and freeze the tooltip mid-flip. */
+        @keyframes caesar-tooltip-in {
+          from { opacity: 0; margin-top: -4px; }
+          to { opacity: 1; margin-top: 0; }
+        }
+        .caesar-chart-tooltip {
+          animation: caesar-tooltip-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        /* The two remaining mark types' own entrance, same easing family as caesar-donut-enter/
+           caesar-line-reveal/caesar-tooltip-in above — a line fades and rises, a bar grows from its
+           own baseline, so every one of the five charts animates in rather than appearing instantly,
+           without forcing an identical motion onto shapes that do not share one. */
+        @keyframes caesar-chart-fade-up {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .caesar-chart-fade-up {
+          animation: caesar-chart-fade-up 550ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+        @keyframes caesar-bar-grow {
+          from { transform: scaleY(0); }
+          to { transform: scaleY(1); }
+        }
+        .caesar-bar-grow {
+          transform-box: fill-box;
+          transform-origin: bottom;
+          animation: caesar-bar-grow 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
         }
       `}</style>
     </>
