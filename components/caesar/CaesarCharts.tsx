@@ -114,7 +114,7 @@ type BridgePosition = {
 type BridgePositionsResponse = { ok: boolean; positions: BridgePosition[] };
 
 /** One entry moment — see ServerStrategyRunner's EntryLogRecord. */
-type EntryLogEntry = { atUtc: string; side: string };
+type EntryLogEntry = { atUtc: string; side: string; ticker: string };
 
 /** GET api/stream/caesar/entries: bridge strategy id -> that strategy's own entries today. */
 type EntryLogResponse = { ok: boolean; tradingDateNy: string; entries: Record<string, EntryLogEntry[]> };
@@ -1003,12 +1003,15 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     };
   }), [instances, colorByInstance, bridgeEntries, bridgePositions, fromMin, toMin]);
 
-  const activeSeries = useMemo<Series[]>(() => {
-    // Until the first account response, preserve the bridge-only display rather than pretending
-    // that a zero account count is confirmed.
-    if (accountActiveCount == null) return series;
-
-    const ownersByTicker = new Map<string, string[]>();
+  /**
+   * Ticker -> the strategy instance key(s) currently claiming it, from the bridge's own tracked
+   * (dispatched, not shadow) positions. Shared by activeSeries below (the donut) and
+   * activeArrivalsSeries further down (the arrivals chart's second line) — both need the exact same
+   * "whose ticker is this, right now" answer, and a ticker claimed by more than one strategy must
+   * read the same way — ambiguous, owned by neither's own line — in both places.
+   */
+  const ownersByTicker = useMemo(() => {
+    const map = new Map<string, string[]>();
     for (const position of bridgePositions) {
       // Shadow-only: nothing in the real account to own, so it must never claim a real holding.
       if (!position.entryDispatched) continue;
@@ -1016,10 +1019,17 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       if (!ticker) continue;
       const instance = instances.find((i) => i.instanceId === position.strategyId);
       if (!instance) continue;
-      const owners = ownersByTicker.get(ticker) ?? [];
+      const owners = map.get(ticker) ?? [];
       if (!owners.includes(instance.key)) owners.push(instance.key);
-      ownersByTicker.set(ticker, owners);
+      map.set(ticker, owners);
     }
+    return map;
+  }, [bridgePositions, instances]);
+
+  const activeSeries = useMemo<Series[]>(() => {
+    // Until the first account response, preserve the bridge-only display rather than pretending
+    // that a zero account count is confirmed.
+    if (accountActiveCount == null) return series;
 
     const counts = new Map<string, number>();
     for (const position of accountPositions) {
@@ -1042,11 +1052,74 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     if (shared > 0) result.push({ key: "shared", color: "#38bdf8", active: shared, entered: 0, points: [] });
     if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fbbf24", active: unclaimed, entered: 0, points: [] });
     return result;
-  }, [accountActiveCount, accountPositions, bridgePositions, instances, series]);
+  }, [accountActiveCount, accountPositions, ownersByTicker, series]);
   const totalActive = activeSeries.reduce((sum, s) => sum + s.active, 0);
   const unclaimedActive = activeSeries.find((s) => s.key === "unclaimed")?.active ?? 0;
   const totalEntered = series.reduce((sum, s) => sum + s.entered, 0);
   const maxCount = Math.max(1, ...series.map((s) => s.entered));
+
+  /**
+   * The arrivals chart's own second line per strategy (2026-10-08, the operator's own instruction).
+   * Not every dispatch becomes a real position — some get cancelled, some get retried several times
+   * for the same ticker — so `series` above (every dispatch, including every retry) can run well
+   * ahead of what is actually open. This counts each strategy's own currently-active (bpused /
+   * PositionBp != 0) tickers ONCE each, at the earliest entry this strategy logged for that ticker
+   * today — same `Series` shape as `series`, so it can share every render helper below
+   * (stepsFor/pathFor/areaPathFor) without a second copy of any of them.
+   */
+  const activeArrivalsSeries = useMemo<Series[]>(() => {
+    const segFrom = fromMin ?? 0;
+    const segTo = toMin ?? 1440;
+
+    const activeTickers = new Set<string>();
+    for (const position of accountPositions) {
+      if (!isAccountActive(position)) continue;
+      const ticker = (position.ticker ?? "").trim().toUpperCase();
+      if (ticker) activeTickers.add(ticker);
+    }
+
+    return instances.map((inst) => {
+      // Earliest entry PER TICKER this strategy logged today — a ticker retried three times counts
+      // once, at its first attempt, not three.
+      const firstSeenAtByTicker = new Map<string, number>();
+      for (const e of bridgeEntries[inst.instanceId] ?? []) {
+        const ticker = (e.ticker ?? "").trim().toUpperCase();
+        if (!ticker) continue;
+        const ts = new Date(e.atUtc).getTime();
+        if (!Number.isFinite(ts)) continue;
+        const existing = firstSeenAtByTicker.get(ticker);
+        if (existing == null || ts < existing) firstSeenAtByTicker.set(ticker, ts);
+      }
+
+      const ownedActiveAt = Array.from(firstSeenAtByTicker.entries())
+        // Solely owned by THIS strategy (never a shared ticker) and currently active — the same
+        // ownership rule ownersByTicker already enforces for the donut.
+        .filter(([ticker]) => {
+          const owners = ownersByTicker.get(ticker) ?? [];
+          return owners.length === 1 && owners[0] === inst.key && activeTickers.has(ticker);
+        })
+        .map(([, ts]) => ts)
+        .sort((a, b) => a - b);
+
+      const points: Point[] = [];
+      let running = 0;
+      for (const ts of ownedActiveAt) {
+        const min = axisMinuteOf(ts);
+        if (min < segFrom || min >= segTo) continue;
+        running += 1;
+        points.push({ min, count: running });
+      }
+
+      return {
+        key: inst.key,
+        color: colorByInstance.get(inst.instanceId) ?? OTHER,
+        active: 0, // unused here — the real "currently active" count lives on activeSeries
+        entered: running,
+        points,
+        overnight: inst.overnight === true,
+      };
+    });
+  }, [instances, colorByInstance, bridgeEntries, accountPositions, ownersByTicker, fromMin, toMin]);
 
   // ---- longs/shorts sent, bucketed into 10-minute bars ----------------------------------------
   //
@@ -1248,6 +1321,22 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     }));
   }, [series, from, to, nowMin, x, y, pathFor, areaPathFor]);
 
+  /**
+   * The active-tickers line's own marks — same shape as endMarks, minus the area fill: this one is
+   * a plain dashed stroke, drawn in its strategy's own colour so the two lines read as "this
+   * strategy, two readings of it" rather than as a whole second palette to learn.
+   */
+  const activeEndMarks = useMemo(() => {
+    const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
+    return activeArrivalsSeries.map((s) => ({
+      key: s.key,
+      color: s.color,
+      d: pathFor(s),
+      endX,
+      y: y(s.entered),
+    }));
+  }, [activeArrivalsSeries, from, to, nowMin, x, y, pathFor]);
+
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = plotRef.current;
     if (!svg) return;
@@ -1257,15 +1346,24 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
     setHoverMin(from + ((px - PAD_L) / (W - PAD_L - PAD_R)) * span);
   }, [from, span]);
 
-  /** Each series' running total at the hovered minute. */
+  /** Each series' running total at the hovered minute, entered alongside active-with-bpused. */
   const hoverValues = useMemo(() => {
     if (hoverMin == null) return null;
-    return series.map((s) => {
+    const countAt = (points: Point[], at: number) => {
       let count = 0;
-      for (const p of s.points) { if (p.min <= hoverMin) count = p.count; else break; }
-      return { key: s.key, color: s.color, count };
+      for (const p of points) { if (p.min <= at) count = p.count; else break; }
+      return count;
+    };
+    return series.map((s) => {
+      const activeSeriesForKey = activeArrivalsSeries.find((a) => a.key === s.key);
+      return {
+        key: s.key,
+        color: s.color,
+        count: countAt(s.points, hoverMin),
+        activeCount: activeSeriesForKey ? countAt(activeSeriesForKey.points, hoverMin) : null,
+      };
     });
-  }, [hoverMin, series]);
+  }, [hoverMin, series, activeArrivalsSeries]);
 
   /** Where to hang the tooltip. Past the middle it flips to the left of the crosshair. */
   const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / W) * 100;
@@ -1475,6 +1573,45 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                     </g>
                   );
                 })}
+
+                {/*
+                  ACTIVE, WITH BPUSED — the same strategy's own colour, dashed instead of solid
+                  (2026-10-08, the operator's own instruction): not every dispatch above becomes a
+                  real position, some get cancelled, some get retried several times for the same
+                  ticker, so this counts each strategy's own currently-active tickers once each
+                  instead. No area fill — a second glowing wedge per strategy would compete with the
+                  first one instead of reading as "one more line to compare it against". Dims with
+                  its own strategy's main line on hover, via the same hoverKey.
+                */}
+                {activeEndMarks.map((m) => {
+                  const dim = hoverKey != null && hoverKey !== m.key;
+                  return (
+                    <g
+                      key={`active-${m.key}`}
+                      className="caesar-chart-fade-up"
+                      opacity={dim ? 0.22 : 1}
+                      style={{ transition: "opacity 140ms ease" }}
+                    >
+                      {/*
+                        A REAL dash pattern (not the main line's pathLength=1 draw-in trick, which
+                        would turn "5 4" into one unreadable dash the length of the whole line) —
+                        this is the "different line type, same colour" the main line's own count
+                        gets compared against, so the fade-up entrance above is enough on its own.
+                      */}
+                      <path
+                        d={m.d}
+                        fill="none"
+                        stroke={m.color}
+                        strokeOpacity={0.8}
+                        strokeWidth={2}
+                        strokeDasharray="5 4"
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                      />
+                      <circle cx={m.endX} cy={m.y} r={3} fill={SURFACE} stroke={m.color} strokeWidth={2} />
+                    </g>
+                  );
+                })}
               </svg>
 
               {/* The crosshair's readout, hung off the rule itself rather than parked under the
@@ -1495,6 +1632,14 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                       <span className="h-1.5 w-1.5 shrink-0 rounded-sm" style={{ backgroundColor: v.color }} />
                       <span className="text-zinc-500">{v.key.toUpperCase()}</span>
                       <span className="ml-auto tabular-nums text-zinc-200">{v.count}</span>
+                      {/* The dashed line's own reading, right next to the solid line's — entered
+                          vs. actually active, read together instead of one on each of two charts. */}
+                      {v.activeCount != null && (
+                        <span className="tabular-nums text-zinc-500">
+                          <span className="mx-1 text-zinc-700">/</span>
+                          {v.activeCount} active
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

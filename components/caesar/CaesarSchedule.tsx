@@ -119,6 +119,14 @@ export default function CaesarSchedule() {
    */
   const [scheduleEnabled, setScheduleEnabled] = useState<boolean | null>(null);
   /**
+   * CaesarPositions' own detail table portals into this div (2026-10-08, the operator's own
+   * instruction: the table moves to after Bridge Decisions, nothing about its state or data does).
+   * A ref callback, not useRef — the DOM node has to be STATE so setting it re-renders this
+   * component and hands the real element down to CaesarPositions as a prop; a plain ref's own
+   * mutation is invisible to React and CaesarPositions would see null forever.
+   */
+  const [positionsTableSlot, setPositionsTableSlot] = useState<HTMLDivElement | null>(null);
+  /**
    * One level below Schedule: ServerEngineControlService's own master switch. Off, nothing ticks
    * anywhere — not even to compute a candidate for preview — and it ships off by default, persisted
    * per machine, so a fresh deploy silently starts every strategy at "never ticked" with no error
@@ -522,8 +530,11 @@ export default function CaesarSchedule() {
               nowMin={nowMin}
               instances={chartInstances}
             />
-            <CaesarPositions instances={positionInstances} />
+            <CaesarPositions instances={positionInstances} tableSlot={positionsTableSlot} />
             <CaesarBridgeDecisions />
+            {/* CaesarPositions' own detail table lands here, via the portal above — see
+                positionsTableSlot's own doc comment. */}
+            <div ref={setPositionsTableSlot} />
           </>
         )}
       </div>

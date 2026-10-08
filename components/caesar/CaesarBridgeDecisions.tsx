@@ -22,6 +22,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
+import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 
 type StreamCandidateRow = {
   ticker: string;
@@ -654,7 +655,18 @@ function strategyColor(key: string): string {
  * not a double-counted one. The header TOTAL does not have this problem — it sums each ticker's
  * own P&L once, straight from the account, never once per row it happens to appear in.
  */
-function AllSituationsSection() {
+export function AllSituationsSection({
+  activeStrategy = null,
+}: {
+  /**
+   * The registry key of the strategy card clicked in CaesarPositions' own cards row (its
+   * `cardFilter`, e.g. "arbitrage") — null when no card is active. Set, this strategy's own rows
+   * sort to the top (grouped, not hidden — the operator asked to SEE it sorted, not filtered down
+   * to just it, which CaesarPositions' own detail table already does). Registry keys are lowercase,
+   * strategyKeyOf's own result is upper, so the match below is case-insensitive.
+   */
+  activeStrategy?: string | null;
+} = {}) {
   const { positions } = useAllPositions();
   const accountPnlByTicker = useAccountPnlByTicker();
   const [strategySort, setStrategySort] = useState<0 | 1 | -1>(0);
@@ -756,26 +768,47 @@ function AllSituationsSection() {
   const strategyKeyOf = (r: SituationRow) => (getLiveStrategyByBridgeId(r.strategyId)?.key ?? r.strategyId).toUpperCase();
 
   const sortedRows = useMemo(() => {
-    if (strategySort === 0) return [...rows].sort((a, b) => b.totalPnl - a.totalPnl);
-    return [...rows].sort((a, b) =>
-      strategySort * strategyKeyOf(a).localeCompare(strategyKeyOf(b)) || b.totalPnl - a.totalPnl
-    );
-  }, [rows, strategySort]);
+    const base = strategySort === 0
+      ? [...rows].sort((a, b) => b.totalPnl - a.totalPnl)
+      : [...rows].sort((a, b) =>
+          strategySort * strategyKeyOf(a).localeCompare(strategyKeyOf(b)) || b.totalPnl - a.totalPnl
+        );
+    if (!activeStrategy) return base;
+    // Grouped to the top, never filtered out — CaesarPositions' own detail table already filters
+    // to one strategy on the same click; this one stays "all", just reordered. Array.prototype.sort
+    // is stable, so each group keeps the ordering `base` already gave it.
+    const active = activeStrategy.toUpperCase();
+    return [...base].sort((a, b) => {
+      const aActive = strategyKeyOf(a) === active ? 0 : 1;
+      const bActive = strategyKeyOf(b) === active ? 0 : 1;
+      return aActive - bActive;
+    });
+  }, [rows, strategySort, activeStrategy]);
 
   const pnlTone = (v: number) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-zinc-500");
 
   return (
-    <div className="scanner-glass-card mt-3 min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <span className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">All situations</span>
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-[11px] uppercase tracking-widest text-zinc-600">{rows.length} open</span>
-          <span className={`font-mono text-[14px] font-bold tabular-nums ${pnlTone(grandTotal)}`}>
+    // Same block shape as CaesarPositions' own header/cards/table split (2026-10-08, the operator's
+    // own instruction: this section moved here from Bridge Decisions and now matches it) — a
+    // CAESAR_PANEL_SURFACE card, a muted title bar, the grand total on the right.
+    <div className={CAESAR_PANEL_SURFACE}>
+      <div className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl">
+        <span className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
+          All situations
+          {activeStrategy && (
+            <span className="ml-2 font-normal tracking-normal text-zinc-600">
+              · {activeStrategy} sorted to the top
+            </span>
+          )}
+        </span>
+        <div className="flex items-baseline gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">{rows.length} open</span>
+          <span className={`font-mono text-[16px] font-bold tabular-nums ${pnlTone(grandTotal)}`}>
             {grandTotal >= 0 ? "+" : ""}{fmt(grandTotal)}
           </span>
         </div>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-white/[0.05]">
+      <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-sm">
           <thead>
             <tr className="border-b border-white/[0.06] bg-black/20 text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
@@ -866,7 +899,8 @@ export default function CaesarBridgeDecisions() {
         <StrategySection strategy="pairflux" label="PairFlux" />
       </div>
       <OpenDoorFamilySection />
-      <AllSituationsSection />
+      {/* All situations moved to CaesarPositions, directly under its strategy cards (2026-10-08,
+          the operator's own instruction) — exported above, rendered there now. */}
     </div>
   );
 }

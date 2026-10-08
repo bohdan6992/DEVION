@@ -26,12 +26,14 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getLiveStrategy, getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
 import type { StreamPosition } from "@/components/stream/streamEngine";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
+import { AllSituationsSection } from "./CaesarBridgeDecisions";
 
 type BridgePosition = {
   ticker: string;
@@ -63,6 +65,15 @@ type BridgeSnapshot = {
 export type CaesarPositionsProps = {
   /** The strategies Caesar is hosting: label -> the instanceId their stores are keyed by. */
   instances: readonly { key: string; instanceId: string; priority: number }[];
+  /**
+   * Where the detail table (error/warning banners + the Ticker/Strategy/... grid) actually renders,
+   * via a portal — the operator's own instruction (2026-10-08) to move it after Bridge Decisions
+   * without moving its state or data-fetching, which still lives entirely here. Null (including on
+   * the first render, before the target div has mounted) means the table does not render AT ALL
+   * yet; it mounts into the slot one render later, once CaesarSchedule's own `tableSlot` state
+   * picks up the ref. A sub-frame gap on first mount, never a flash of it somewhere wrong.
+   */
+  tableSlot?: HTMLElement | null;
 };
 
 /**
@@ -245,7 +256,7 @@ function isRelevant(p: BridgePosition): boolean {
   return isOpen(p) || (p.closedPnL ?? 0) !== 0;
 }
 
-export default function CaesarPositions({ instances }: CaesarPositionsProps) {
+export default function CaesarPositions({ instances, tableSlot = null }: CaesarPositionsProps) {
   const [rawSnapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   /** TradingApp's per-ticker ClosedPnL as it stood when today began (16:00) - see the day-baseline route. */
   const [dayBaseline, setDayBaseline] = useState<Record<string, number>>({});
@@ -644,55 +655,61 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
   }, [view.rows, strategySort]);
 
   return (
-    <div className={CAESAR_PANEL_SURFACE + " mt-3"}>
+    <div className="mt-3 space-y-3">
       {/*
         Segment switcher. LIVE (selectedSegment === null) leaves everything below completely
         untouched — this row only exists once the plan actually defines segments to switch between.
+        Its own block now (2026-10-08), same reasoning as the header split below.
       */}
       {segments.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-white/[0.06] bg-[#0a0a0a]/30 px-3 py-2">
-          <button
-            type="button"
-            onClick={() => setSelectedSegment(null)}
-            className={
-              "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
-              (selectedSegment === null ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300")
-            }
-          >
-            Live
-          </button>
-          {segments.map((s) => (
+        <div className={CAESAR_PANEL_SURFACE}>
+          <div className="flex flex-wrap items-center gap-1.5 bg-[#0a0a0a]/30 px-3 py-2">
             <button
-              key={s.segmentKey}
               type="button"
-              onClick={() => setSelectedSegment(s.segmentKey)}
-              title={s.hasData ? undefined : "This segment has not started yet today"}
+              onClick={() => setSelectedSegment(null)}
               className={
                 "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
-                (selectedSegment === s.segmentKey
-                  ? "bg-white/10 text-zinc-100"
-                  : s.hasData
-                    ? "text-zinc-500 hover:text-zinc-300"
-                    : "text-zinc-700")
+                (selectedSegment === null ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300")
               }
             >
-              {s.segmentKey}
+              Live
             </button>
-          ))}
+            {segments.map((s) => (
+              <button
+                key={s.segmentKey}
+                type="button"
+                onClick={() => setSelectedSegment(s.segmentKey)}
+                title={s.hasData ? undefined : "This segment has not started yet today"}
+                className={
+                  "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
+                  (selectedSegment === s.segmentKey
+                    ? "bg-white/10 text-zinc-100"
+                    : s.hasData
+                      ? "text-zinc-500 hover:text-zinc-300"
+                      : "text-zinc-700")
+                }
+              >
+                {s.segmentKey}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       {selectedSegment && segmentView ? (
-        <SegmentClosedPanel segmentKey={selectedSegment} view={segmentView} pnlTone={pnlTone} instances={instances} />
+        <div className={CAESAR_PANEL_SURFACE}>
+          <SegmentClosedPanel segmentKey={selectedSegment} view={segmentView} pnlTone={pnlTone} instances={instances} />
+        </div>
       ) : (
       <>
       {/*
-        ONE BLOCK. Used to be two — a "Strategy P&L" section and a separately-framed "Active"
-        panel right under it, each with its own idea of a header (one had per-strategy totals in
-        its OWN title bar's `right` slot, duplicating the cards a few pixels above it). Merged: one
-        header (click it to clear the filter below), one row of clickable cards (click one to see
-        only ITS rows in the table), one table.
+        HEADER — its own block (2026-10-08, the operator's own instruction). Used to share one
+        continuous panel surface with the strategy cards below (border-to-border, no gap — see the
+        2026-09 note this replaces); split apart so the header reads as one thing and the cards read
+        as another, the same thin-line-on-top-loose-boxes-under-it shape the filter-box rows
+        elsewhere on Caesar already use. Clicking it still clears the card filter below.
       */}
+      <div className={CAESAR_PANEL_SURFACE}>
       <div
         role="button"
         tabIndex={0}
@@ -721,8 +738,14 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           <HeaderMetric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
         </div>
       </div>
+      </div>
 
-      <div className="grid gap-2 border-t border-white/[0.06] p-3 sm:grid-cols-2 xl:grid-cols-3">
+      {/*
+        STRATEGY CARDS — loose on the page, no shared frame (2026-10-08): 4 per row, each card keeps
+        its own border exactly as it always did, the same "boxes directly on the background" shape
+        the filter-box rows elsewhere on Caesar already use.
+      */}
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {Array.from(view.perStrategy.entries())
           // Idle — nothing open, nothing realised today — is not worth its own card. instances
           // (and so perStrategy) still covers every registered strategy regardless of the
@@ -784,6 +807,20 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
           })}
       </div>
 
+      {/*
+        ALL SITUATIONS — moved here from Bridge Decisions (2026-10-08, the operator's own
+        instruction), directly under the strategy cards, same block style. Clicking a card above
+        sorts this strategy's own rows to the top here too — grouped, not filtered down to just it,
+        which the detail table below already does on the same click.
+      */}
+      <AllSituationsSection activeStrategy={cardFilter} />
+
+      {/*
+        TABLE — its own block too (2026-10-08), and now portaled out to AFTER Bridge Decisions
+        rather than rendered inline here — see tableSlot's own doc comment above.
+      */}
+      {tableSlot && createPortal(
+      <div className={CAESAR_PANEL_SURFACE}>
       {error && (
         <div className="mx-3 mt-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2 font-mono text-[11px] text-rose-200">
           bridge unreachable — {error}
@@ -988,6 +1025,9 @@ export default function CaesarPositions({ instances }: CaesarPositionsProps) {
         legitimate when both went the same way — and its size and P&amp;L describe the whole ticker,
         so they are counted once into SHARED rather than added to either strategy.
       </div>
+      </div>,
+      tableSlot
+      )}
       </>
       )}
     </div>
