@@ -85,15 +85,45 @@ const TRACK = "rgba(255,255,255,0.055)";
 
 /**
  * Shared axis-tick typography for every hand-drawn chart below (LongShortHistogram, LinesChart,
- * the arrivals step chart): same weight, colour, and — once adjusted for each chart's own viewBox
- * width — rendered SIZE, so none of the five panels reads at a different scale than its neighbours.
- * LongShortHistogram and LinesChart share a 1100-wide viewBox and use this value as-is. The
- * arrivals chart draws in a 920-wide viewBox but sits in an equal-width column next to a LinesChart
- * (PNL OVER TIME), so its own tick size is this value scaled by 920/1100 — see ARRIVALS_TICK_FONT_SIZE.
+ * the arrivals step chart): same weight, colour, and SIZE, so none of the panels reads at a
+ * different scale than its neighbours regardless of which grid row it sits in or how many columns
+ * that row splits into. This used to need a hand-picked per-chart correction factor (the arrivals
+ * chart scaled this value by a fixed 920/1100, assuming its column was exactly as wide as a
+ * LinesChart's) because every chart drew into a FIXED viewBox width (1100, or 920) while its real
+ * on-screen width was whatever the surrounding grid column computed — any mismatch between the
+ * two left the SVG's default `preserveAspectRatio="xMidYMid meet"` silently rescaling the whole
+ * plot, text included, to fit. Two charts in grid rows with a different number of columns (the top
+ * row's three vs. the bottom row's two) never had matching column widths, so the correction factor
+ * was only ever right for one specific case and visibly wrong for the rest (2026-10-08, reported by
+ * the operator from a screenshot). Fixed at the root instead: every chart now measures its own
+ * real rendered width via useMeasuredWidth and uses THAT as its viewBox width, so viewBox units
+ * equal real screen px on both axes, 1-to-1, for every chart, in every column — no rescaling, so
+ * this one constant now applies untouched everywhere.
  */
 const AXIS_TICK_FONT_SIZE = 13;
 const AXIS_TICK_FILL = "rgba(255,255,255,0.45)";
-const ARRIVALS_TICK_FONT_SIZE = AXIS_TICK_FONT_SIZE * (920 / 1100);
+
+/**
+ * A chart's real rendered width, read off its own <svg> via ResizeObserver instead of a hand-picked
+ * constant — see AXIS_TICK_FONT_SIZE's own doc comment for why a fixed viewBox width was the root
+ * cause of charts reading at different label scales. Returns `fallback` until the element has
+ * mounted and been measured once (a single reflow on first paint, not a visible flash — every chart
+ * here already animates its own contents in).
+ */
+function useMeasuredWidth(ref: React.RefObject<SVGSVGElement | null>, fallback: number): number {
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
+}
 
 type Point = { min: number; count: number };
 type Series = { key: string; color: string; active: number; entered: number; points: Point[]; overnight?: boolean };
@@ -458,7 +488,8 @@ function LinesChart({
   heightClass?: string;
 }) {
   const uid = useId().replace(/:/g, "");
-  const width = 1100;
+  const plotRef = useRef<SVGSVGElement | null>(null);
+  const width = useMeasuredWidth(plotRef, 1100);
   const height = heightPx;
   const PAD_L = 20;
   // Just the value-tick text (right-aligned, growing leftward) — names/values moved to the hover
@@ -501,7 +532,6 @@ function LinesChart({
   }, [from, to, span]);
 
   const [hoverMin, setHoverMin] = useState<number | null>(null);
-  const plotRef = useRef<SVGSVGElement | null>(null);
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = plotRef.current;
     if (!svg) return;
@@ -678,7 +708,8 @@ function LongShortHistogram({
   heightClass?: string;
 }) {
   const uid = useId().replace(/:/g, "");
-  const width = 1100;
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const width = useMeasuredWidth(svgRef, 1100);
   const height = heightPx;
   const PAD_L = 22;
   const PAD_R = 40;
@@ -715,7 +746,6 @@ function LongShortHistogram({
   // (2026-10-07, the operator's own instruction): LONG/SHORT/OVERNIGHT at the nearest bucket,
   // same crosshair-and-tooltip pattern LinesChart uses.
   const [hoverMin, setHoverMin] = useState<number | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -1037,7 +1067,19 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       const owners = ticker ? ownersByTicker.get(ticker) ?? [] : [];
       // Account reports one position per ticker. A ticker claimed by two strategies belongs in a
       // neutral shared slice, never twice in the ring.
-      const key = owners.length === 1 ? owners[0] : owners.length > 1 ? "shared" : "unclaimed";
+      //
+      // QQQ specifically (2026-10-08, the operator's own instruction): ReversalContinuumEntryHedgeService
+      // and ArbitrageServerStrategy's own HEDGED mode both hedge an imbalance with QQQ, and neither
+      // tracks that order as a position (DispatchHedgeBatchAsync's own doc comment: "never tracked as
+      // a position" — the whole point is it bypasses the normal per-strategy book). ownersByTicker can
+      // therefore never claim it, so without this it read as UNCLAIMED — "something is wrong, the
+      // bridge lost track of this" — when it is working exactly as designed. No strategy ever trades
+      // QQQ as an actual signal ticker, so this is a safe tell, not a guess from the ticker alone.
+      const key = owners.length === 1
+        ? owners[0]
+        : owners.length > 1
+          ? "shared"
+          : ticker === "QQQ" ? "hedge" : "unclaimed";
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
 
@@ -1045,11 +1087,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       .map((s) => ({ ...s, active: counts.get(s.key) ?? 0 }))
       .filter((s) => s.active > 0);
     const shared = counts.get("shared") ?? 0;
+    const hedge = counts.get("hedge") ?? 0;
     const unclaimed = counts.get("unclaimed") ?? 0;
-    // Neither a strategy identity nor a sign — reuses CaesarPositions.tsx's own sky/"shared" and
-    // amber/"unclaimed" badge colours rather than a SERIES entry, which by design is now reserved
-    // for actual strategies (see SERIES's own doc comment).
+    // None of the three is a strategy identity or a sign — reuses CaesarPositions.tsx's own
+    // sky/"shared" and amber/"unclaimed" badge colours, plus a new emerald/"hedge" one, rather than a
+    // SERIES entry, which by design is reserved for actual strategies (see SERIES's own doc comment).
     if (shared > 0) result.push({ key: "shared", color: "#38bdf8", active: shared, entered: 0, points: [] });
+    if (hedge > 0) result.push({ key: "hedge", color: "#34d399", active: hedge, entered: 0, points: [] });
     if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fbbf24", active: unclaimed, entered: 0, points: [] });
     return result;
   }, [accountActiveCount, accountPositions, ownersByTicker, series]);
@@ -1205,14 +1249,12 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   }, [instances, colorByInstance, pnlPoints]);
 
   // ---- the time scale ------------------------------------------------------------------------
-  const W = 920;
-  // 324 = 270 * 1.2 — the operator's own instruction that the bottom row match the top row's new
-  // 384px block height (320 * 1.2). The figure wrapper below moves to h-[384px] to match; this
-  // viewBox height grows by the same 1.2 so the plot fills the taller card instead of leaving the
-  // extra height as blank letterboxing (the svg's default preserveAspectRatio fits the WHOLE
-  // viewBox inside the container, so a viewBox that does not grow with its wrapper just centers
-  // inside more empty space rather than using it).
-  const H = 324;
+  // W measured off the svg itself (useMeasuredWidth — see its own doc comment); H is simply the
+  // figure's real height (384px, the same literal the wrapper below uses as h-[384px]). Measured
+  // width + exact height means viewBox units equal real screen px on both axes, so there is no
+  // preserveAspectRatio rescaling left to compensate for with a hand-picked number.
+  const W = useMeasuredWidth(plotRef, 1100);
+  const H = 384;
   const PAD_L = 42;
   const PAD_R = 54;
   const PAD_T = 24;
@@ -1459,13 +1501,6 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                 {totalEntered} total
               </span>
             </div>
-            {/*
-              CAPPED. The svg is `w-full` over a fixed viewBox, so its height follows its width: let
-              it fill a 900px column and the 150-unit plot renders 260px tall, which turns a two-line
-              chart into a wall. The cap holds the aspect near the ratio it was drawn for. It is
-              inline for the usual reason — a `max-w-` class is stripped app-wide — and it caps the
-              CONTAINER, not the svg, so the hover math (client x over container width) stays exact.
-            */}
             <div className="relative h-full pt-6">
               <svg
                 ref={plotRef}
@@ -1507,16 +1542,16 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                         first one always does — would centre its label over the y-axis numbers. The
                         gridline stays; only the label is dropped. */}
                     {x(m) > PAD_L + 16 && (
-                      <text x={x(m)} y={H - 6} textAnchor="middle" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
+                      <text x={x(m)} y={H - 6} textAnchor="middle" fill={AXIS_TICK_FILL} fontSize={AXIS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                         {clockLabel(m)}
                       </text>
                     )}
                   </g>
                 ))}
-                <text x={PAD_L - 6} y={y(maxCount) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
+                <text x={PAD_L - 6} y={y(maxCount) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={AXIS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                   {maxCount}
                 </text>
-                <text x={PAD_L - 6} y={y(0) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={ARRIVALS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
+                <text x={PAD_L - 6} y={y(0) + 3} textAnchor="end" fill={AXIS_TICK_FILL} fontSize={AXIS_TICK_FONT_SIZE} fontFamily="ui-monospace, monospace">
                   0
                 </text>
 

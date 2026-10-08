@@ -74,6 +74,14 @@ export type CaesarPositionsProps = {
    * picks up the ref. A sub-frame gap on first mount, never a flash of it somewhere wrong.
    */
   tableSlot?: HTMLElement | null;
+  /**
+   * Which Caesar segment's own closed-position data to show, driven by CaesarSchedule's timeline
+   * graph (clicking a band in SessionBar) rather than a button row owned by this component
+   * (2026-10-08, the operator's own instruction — replaces the old local LIVE/PRE/OPEN/INTRA/POST
+   * switcher). Null (including the default, and clicking empty space in the timeline) means LIVE —
+   * the panel exactly as it always was.
+   */
+  selectedSegment?: string | null;
 };
 
 /**
@@ -129,9 +137,6 @@ type BridgeTrackedPositionsResponse = {
   closedOwners?: ClosedOwners;
   prunes?: PruneEvent[];
 };
-
-/** One Caesar segment (pre/open/intra/post) — see CaesarPlanController's own segment-pnl routes. */
-type SegmentInfo = { segmentKey: string; fromMinuteIdx: number; toMinuteIdx: number; hasData: boolean };
 
 /**
  * A synthetic claim for a ticker the bridge no longer tracks (it closed) but remembers who
@@ -256,7 +261,7 @@ function isRelevant(p: BridgePosition): boolean {
   return isOpen(p) || (p.closedPnL ?? 0) !== 0;
 }
 
-export default function CaesarPositions({ instances, tableSlot = null }: CaesarPositionsProps) {
+export default function CaesarPositions({ instances, tableSlot = null, selectedSegment = null }: CaesarPositionsProps) {
   const [rawSnapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   /** TradingApp's per-ticker ClosedPnL as it stood when today began (16:00) - see the day-baseline route. */
   const [dayBaseline, setDayBaseline] = useState<Record<string, number>>({});
@@ -273,30 +278,16 @@ export default function CaesarPositions({ instances, tableSlot = null }: CaesarP
   /** Clicking a strategy card narrows the list below to just its own rows; clicking the header (or the same card again) clears it. */
   const [cardFilter, setCardFilter] = useState<string | null>(null);
 
-  // ---- segment switcher: which Caesar segment's own closed-position data is shown ------------
+  // ---- segment view: which Caesar segment's own closed-position data is shown ----------------
   //
-  // null = LIVE, the panel exactly as it always was. A segment key narrows the CLOSED column (and
-  // only that column — TradingApp's ClosedPnL is a running per-ticker total for the whole day, not
-  // per-trade events, so a segment's own share of it is a boundary-to-boundary delta computed on
-  // the bridge — see SegmentPnlLedgerService) to just what that segment itself contributed, reset
-  // to zero the instant the segment starts and frozen forever once the next one begins.
-  const [segments, setSegments] = useState<SegmentInfo[]>([]);
-  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  // selectedSegment is a prop now (2026-10-08) — the operator clicks a band in CaesarSchedule's
+  // own timeline graph instead of a button row this component used to own. Null = LIVE, the panel
+  // exactly as it always was. A segment key narrows the CLOSED column (and only that column —
+  // TradingApp's ClosedPnL is a running per-ticker total for the whole day, not per-trade events,
+  // so a segment's own share of it is a boundary-to-boundary delta computed on the bridge — see
+  // SegmentPnlLedgerService) to just what that segment itself contributed, reset to zero the
+  // instant the segment starts and frozen forever once the next one begins.
   const [segmentPnl, setSegmentPnl] = useState<Record<string, number>>({});
-
-  useEffect(() => {
-    let alive2 = true;
-    const load = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/segment-pnl/segments"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<{ ok: boolean; segments: SegmentInfo[] }>)
-        .then((body) => { if (alive2) setSegments(body.segments ?? []); })
-        .catch(() => {});
-    void load();
-    // Segments only change when the operator edits the Caesar schedule — this just needs to
-    // notice that eventually, not track it live.
-    const interval = window.setInterval(load, 30_000);
-    return () => { alive2 = false; window.clearInterval(interval); };
-  }, []);
 
   useEffect(() => {
     if (!selectedSegment) { setSegmentPnl({}); return; }
@@ -656,46 +647,6 @@ export default function CaesarPositions({ instances, tableSlot = null }: CaesarP
 
   return (
     <div className="mt-3 space-y-3">
-      {/*
-        Segment switcher. LIVE (selectedSegment === null) leaves everything below completely
-        untouched — this row only exists once the plan actually defines segments to switch between.
-        Its own block now (2026-10-08), same reasoning as the header split below.
-      */}
-      {segments.length > 0 && (
-        <div className={CAESAR_PANEL_SURFACE}>
-          <div className="flex flex-wrap items-center gap-1.5 bg-[#0a0a0a]/30 px-3 py-2">
-            <button
-              type="button"
-              onClick={() => setSelectedSegment(null)}
-              className={
-                "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
-                (selectedSegment === null ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300")
-              }
-            >
-              Live
-            </button>
-            {segments.map((s) => (
-              <button
-                key={s.segmentKey}
-                type="button"
-                onClick={() => setSelectedSegment(s.segmentKey)}
-                title={s.hasData ? undefined : "This segment has not started yet today"}
-                className={
-                  "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] transition-colors " +
-                  (selectedSegment === s.segmentKey
-                    ? "bg-white/10 text-zinc-100"
-                    : s.hasData
-                      ? "text-zinc-500 hover:text-zinc-300"
-                      : "text-zinc-700")
-                }
-              >
-                {s.segmentKey}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {selectedSegment && segmentView ? (
         <div className={CAESAR_PANEL_SURFACE}>
           <SegmentClosedPanel segmentKey={selectedSegment} view={segmentView} pnlTone={pnlTone} instances={instances} />
@@ -718,8 +669,8 @@ export default function CaesarPositions({ instances, tableSlot = null }: CaesarP
         title="Click to clear the strategy filter and show every situation"
         className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl transition-colors hover:bg-white/[0.02]"
       >
-        <div className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-          Active
+        <div className="font-mono text-[14px] font-bold uppercase tracking-[0.18em] text-zinc-400">
+          P&amp;L
           <span className="ml-2 font-normal tracking-normal text-zinc-600">
             {snapshot?.account ? `acct ${snapshot.account} · ` : ""}
             {view.openCount} open across the account
@@ -775,6 +726,7 @@ export default function CaesarPositions({ instances, tableSlot = null }: CaesarP
                 <div className="flex items-baseline justify-between gap-2 font-mono">
                   <div className="flex items-baseline gap-2.5 overflow-hidden">
                     <span className="text-[16px] font-bold uppercase tracking-[0.1em] text-zinc-100">{key}</span>
+                    <span className="shrink-0 text-[10px] text-zinc-600">#{strategy.priority}</span>
                     {getLiveStrategy(key)?.holdsOvernight && (
                       <span
                         className="shrink-0 rounded border border-fuchsia-400/30 bg-fuchsia-400/[0.08] px-1.5 py-px text-[9px] font-bold uppercase tracking-widest text-fuchsia-300"
@@ -783,19 +735,18 @@ export default function CaesarPositions({ instances, tableSlot = null }: CaesarP
                         overnight
                       </span>
                     )}
-                    <span className="shrink-0 text-[10px] text-zinc-500">
-                      {strategy.open} open <span className="ml-1 text-emerald-300/80">{strategy.long}L</span><span className="ml-1 text-rose-300/80">{strategy.short}S</span>
-                      {strategy.untracked > 0 && (
-                        <span
-                          className="ml-2 text-amber-300/90"
-                          title="Still held in the account, but the bridge no longer tracks them — nothing is managing their adds or exits."
-                        >
-                          · {strategy.untracked} untracked
-                        </span>
-                      )}
-                    </span>
                   </div>
-                  <span className="shrink-0 text-[10px] text-zinc-600">#{strategy.priority}</span>
+                  <span className="shrink-0 text-[13px] text-zinc-500">
+                    {strategy.open} open <span className="ml-1 text-emerald-300/80">{strategy.long}L</span><span className="ml-1 text-rose-300/80">{strategy.short}S</span>
+                    {strategy.untracked > 0 && (
+                      <span
+                        className="ml-2 text-amber-300/90"
+                        title="Still held in the account, but the bridge no longer tracks them — nothing is managing their adds or exits."
+                      >
+                        · {strategy.untracked} untracked
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-2.5 font-mono tabular-nums">
                   <Metric label="Total" value={total} tone={pnlTone(total)} />
@@ -1136,18 +1087,24 @@ function SegmentClosedPanel({
 function Metric({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
     <div>
-      <div className="text-[8px] uppercase tracking-widest text-zinc-600">{label}</div>
+      <div className="text-[10px] uppercase tracking-widest text-zinc-600">{label}</div>
       <div className={`mt-0.5 font-mono text-lg font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
     </div>
   );
 }
 
-/** Metric's larger twin, for the Grand Total figures sitting beside the section's own header. */
+/**
+ * Metric's larger twin, for the Grand Total figures sitting beside the section's own header — same
+ * label colour as Metric's own cards below (2026-10-08, the operator's own instruction: this used
+ * to read as its own, differently-themed violet badge instead of a continuation of the same cards),
+ * kept on one line (label beside value, not stacked above it — the operator's own correction,
+ * same day) since three of these side by side is the header's whole row, not a card's own column.
+ */
 function HeaderMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
-    <div className="text-right">
-      <div className="text-[9px] uppercase tracking-widest text-violet-200/50">{label}</div>
-      <div className={`mt-0.5 font-mono text-2xl font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</div>
+    <div className="flex items-baseline gap-1.5">
+      <span className="text-[13px] uppercase tracking-widest text-zinc-600">{label}</span>
+      <span className={`font-mono text-2xl font-bold tabular-nums ${tone}`}>{value >= 0 ? "+" : ""}{fmt(value)}</span>
     </div>
   );
 }

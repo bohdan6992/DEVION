@@ -21,6 +21,7 @@ import {
   CAESAR_SEGMENTS,
   CAESAR_STRATEGIES,
   CAESAR_STRATEGY_BY_KEY,
+  DAY_MINUTES,
   MAX_PRIORITY,
   MIN_PRIORITY,
   PRIORITY_STEP,
@@ -126,6 +127,24 @@ export default function CaesarSchedule() {
    * mutation is invisible to React and CaesarPositions would see null forever.
    */
   const [positionsTableSlot, setPositionsTableSlot] = useState<HTMLDivElement | null>(null);
+  /**
+   * Which segment CaesarPositions shows its own closed-position data for — driven by clicking a
+   * band in the timeline graph below, not by a button row CaesarPositions used to own itself
+   * (2026-10-08, the operator's own instruction). Deliberately its own state, separate from
+   * `selectedOverride`/`selected` above: those drive the charts' time-window scoping and the plan
+   * editor's segment cards and must keep following the clock by default; this one defaults to
+   * null (LIVE) and only ever changes when the operator clicks the bar or its surrounding empty
+   * space, never on its own from the clock ticking forward.
+   */
+  const [positionsSegmentKey, setPositionsSegmentKey] = useState<CaesarSegmentKey | null>(null);
+  /**
+   * Clicking empty space around the bar also puts the CHARTS above into "whole day, every
+   * strategy" mode (2026-10-08, the operator's own instruction) — `selected` stays whatever it was
+   * (the segment cards and plan editor still need a real segment, so it is left alone), but the
+   * fromMin/toMin/instances actually handed to CaesarCharts are overridden below while this is
+   * true. Clicking a band turns it back off, the same click that already sets `selected`.
+   */
+  const [allDay, setAllDay] = useState(false);
   /**
    * One level below Schedule: ServerEngineControlService's own master switch. Off, nothing ticks
    * anywhere — not even to compute a candidate for preview — and it ships off by default, persisted
@@ -373,6 +392,16 @@ export default function CaesarSchedule() {
   const setSelected = useCallback((key: CaesarSegmentKey) => {
     setSelectedOverride(key === nowSegment?.key ? null : key);
   }, [nowSegment?.key]);
+  // The timeline bar drives three things at once: the charts' own segment scoping, which
+  // segment's closed data CaesarPositions shows (positionsSegmentKey), and whether the charts are
+  // in whole-day mode (allDay) — a band click always means "one specific segment", so it turns
+  // allDay back off. Clicking the empty space around the bar (wired at its wrapper below) resets
+  // positionsSegmentKey to LIVE and flips allDay on.
+  const handleBarSelect = useCallback((key: CaesarSegmentKey) => {
+    setSelected(key);
+    setPositionsSegmentKey(key);
+    setAllDay(false);
+  }, [setSelected]);
   const selectedSegment = SEGMENT_BY_KEY[selected];
   const chartInstances = useMemo(() => {
     if (!plan) return [];
@@ -442,12 +471,30 @@ export default function CaesarSchedule() {
           <>
             {/* ---------- TIMELINE ---------- */}
             <section className={`mt-3 ${GRAPH_SURFACE}`}>
-              <div className="overflow-x-auto px-7 pt-7">
+              {/*
+                As wide as the card allows (2026-10-08, the operator's own instruction — was px-7
+                pt-7, a visibly wide margin on every side). p-2 is the floor, not zero: the bar below
+                has its own rounded-lg border (SessionBar's own h-16 div), and at p-0 that border
+                would sit flush against GRAPH_SURFACE's own rounded-2xl edge — two nested rounded
+                corners of different radii touching with nothing between them reads as a seam, not
+                as "edge to edge". p-2 is small enough to disappear, large enough to keep the two
+                corners from colliding.
+              */}
+              <div className="overflow-x-auto p-2">
                 {/* px-6 keeps the 21:00 labels at both ends of the ruler — they are centred on a
-                    tick at 0% / 100% — from being clipped by the scroll container. */}
-                <div className="min-w-[1128px] px-6">
+                    tick at 0% / 100% — from being clipped by the scroll container. Untouched: this
+                    is load-bearing, not decorative margin — see the comment just above for the
+                    padding that WAS decorative. */}
+                {/* Clicking empty space anywhere in this wrapper (the ruler, its margins, the
+                    group-bracket row) resets CaesarPositions back to LIVE and puts the charts above
+                    into whole-day mode — SessionBar's own bands stop this from firing when the
+                    click is actually a segment pick. */}
+                <div
+                  className="min-w-[1128px] px-6"
+                  onClick={() => { setPositionsSegmentKey(null); setAllDay(true); }}
+                >
                   <Ruler />
-                  <SessionBar selected={selected} nowMin={nowMin} onSelect={setSelected} />
+                  <SessionBar selected={selected} nowMin={nowMin} onSelect={handleBarSelect} />
                 </div>
               </div>
 
@@ -523,14 +570,15 @@ export default function CaesarSchedule() {
 
             {/* A separate operational readout, directly after the clock it describes. Scoped to
                 the SELECTED segment card (selectedSegment), not nowSegment — see chartInstances'
-                own doc comment. */}
+                own doc comment. allDay overrides all three props to the whole axis and every
+                strategy — see allDay's own doc comment above. */}
             <CaesarCharts
-              fromMin={selectedSegment.fromMin}
-              toMin={selectedSegment.toMin}
+              fromMin={allDay ? 0 : selectedSegment.fromMin}
+              toMin={allDay ? DAY_MINUTES : selectedSegment.toMin}
               nowMin={nowMin}
-              instances={chartInstances}
+              instances={allDay ? positionInstances : chartInstances}
             />
-            <CaesarPositions instances={positionInstances} tableSlot={positionsTableSlot} />
+            <CaesarPositions instances={positionInstances} tableSlot={positionsTableSlot} selectedSegment={positionsSegmentKey} />
             <CaesarBridgeDecisions />
             {/* CaesarPositions' own detail table lands here, via the portal above — see
                 positionsTableSlot's own doc comment. */}
@@ -734,7 +782,7 @@ function SessionBar({
               <button
                 key={`${seg.key}-${band.fromMin}`}
                 type="button"
-                onClick={() => onSelect(seg.key)}
+                onClick={(e) => { e.stopPropagation(); onSelect(seg.key); }}
                 title={`${seg.label} · ${band.label} · ${clockLabel(band.fromMin)} – ${clockLabel(band.toMin)}`}
                 className="absolute inset-y-0 flex items-center justify-center overflow-hidden transition-all duration-200 focus:outline-none"
                 style={{

@@ -808,10 +808,16 @@ export function AllSituationsSection({
           </span>
         </div>
       </div>
-      <div className="overflow-x-auto">
+      {/*
+        Capped at two chart rows' own height (384 + the 12px gap between them + 384 = 780,
+        CaesarCharts' own numbers — 2026-10-08, the operator's own instruction) so a long book
+        scrolls inside its own panel instead of pushing the page out; thead stays pinned (sticky +
+        an opaque fill, not the title bar's translucent one) so the column names never scroll away.
+      */}
+      <div className="max-h-[780px] overflow-x-auto overflow-y-auto">
         <table className="w-full min-w-[980px] text-sm">
-          <thead>
-            <tr className="border-b border-white/[0.06] bg-black/20 text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b border-white/[0.06] bg-[#0a0a0a]/95 backdrop-blur-sm text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
               <th className="px-2 py-2">Ticker / Pair</th>
               <th
                 className="cursor-pointer select-none px-2 py-2 text-sky-300/70 hover:text-sky-200"
