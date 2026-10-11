@@ -49,6 +49,7 @@ export type SharedMinMaxFilters = Pick<ScannerFilterBag,
   "maxVWAP" |
   "maxVolNFfromLstCls" |
   "maxVolRel" |
+  "maxPreMhVolAnomaly" |
   "maxVolatility20" |
   "maxVolatility90" |
   "maxYCls" |
@@ -85,6 +86,7 @@ export type SharedMinMaxFilters = Pick<ScannerFilterBag,
   "minVWAP" |
   "minVolNFfromLstCls" |
   "minVolRel" |
+  "minPreMhVolAnomaly" |
   "minVolatility20" |
   "minVolatility90" |
   "minYCls" |
@@ -121,6 +123,7 @@ export type SharedMinMaxFilters = Pick<ScannerFilterBag,
   "setMaxVWAP" |
   "setMaxVolNFfromLstCls" |
   "setMaxVolRel" |
+  "setMaxPreMhVolAnomaly" |
   "setMaxVolatility20" |
   "setMaxVolatility90" |
   "setMaxYCls" |
@@ -157,6 +160,7 @@ export type SharedMinMaxFilters = Pick<ScannerFilterBag,
   "setMinVWAP" |
   "setMinVolNFfromLstCls" |
   "setMinVolRel" |
+  "setMinPreMhVolAnomaly" |
   "setMinVolatility20" |
   "setMinVolatility90" |
   "setMinYCls" |
@@ -216,6 +220,7 @@ export default function SharedMinMaxPanel({
     maxVWAP,
     maxVolNFfromLstCls,
     maxVolRel,
+    maxPreMhVolAnomaly,
     maxVolatility20,
     maxVolatility90,
     maxYCls,
@@ -252,6 +257,7 @@ export default function SharedMinMaxPanel({
     minVWAP,
     minVolNFfromLstCls,
     minVolRel,
+    minPreMhVolAnomaly,
     minVolatility20,
     minVolatility90,
     minYCls,
@@ -288,6 +294,7 @@ export default function SharedMinMaxPanel({
     setMaxVWAP,
     setMaxVolNFfromLstCls,
     setMaxVolRel,
+    setMaxPreMhVolAnomaly,
     setMaxVolatility20,
     setMaxVolatility90,
     setMaxYCls,
@@ -324,6 +331,7 @@ export default function SharedMinMaxPanel({
     setMinVWAP,
     setMinVolNFfromLstCls,
     setMinVolRel,
+    setMinPreMhVolAnomaly,
     setMinVolatility20,
     setMinVolatility90,
     setMinYCls,
@@ -342,7 +350,6 @@ export default function SharedMinMaxPanel({
       <MinMaxRow label="SpreadBid%" filterKey="spread" mode={sharedRangeFilterModes.spread} onToggleMode={toggleSharedRangeFilterMode} minValue={minSpread} maxValue={maxSpread} setMin={setMinSpread} setMax={setMaxSpread} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
       <MinMaxRow label="LstPrcL" filterKey="lstprcl" mode={sharedRangeFilterModes.lstprcl} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstPrcL} maxValue={maxLstPrcL} setMin={setMinLstPrcL} setMax={setMaxLstPrcL} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
       <MinMaxRow label="LstCls" filterKey="lstcls" mode={sharedRangeFilterModes.lstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minLstCls} maxValue={maxLstCls} setMin={setMinLstCls} setMax={setMaxLstCls} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
-      <MinMaxRow label="YCls" filterKey="ycls" mode={sharedRangeFilterModes.ycls} onToggleMode={toggleSharedRangeFilterMode} minValue={minYCls} maxValue={maxYCls} setMin={setMinYCls} setMax={setMaxYCls} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
       <MinMaxRow label="TCls" filterKey="tcls" mode={sharedRangeFilterModes.tcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minTCls} maxValue={maxTCls} setMin={setMinTCls} setMax={setMaxTCls} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
       <MinMaxRow label="ClsToCls%" filterKey="clstocls" mode={sharedRangeFilterModes.clstocls} onToggleMode={toggleSharedRangeFilterMode} minValue={minClsToClsPct} maxValue={maxClsToClsPct} setMin={setMinClsToClsPct} setMax={setMaxClsToClsPct} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
       <MinMaxRow label="Lo" filterKey="lo" mode={sharedRangeFilterModes.lo} onToggleMode={toggleSharedRangeFilterMode} minValue={minLo} maxValue={maxLo} setMin={setMinLo} setMax={setMaxLo} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} />
@@ -401,6 +408,11 @@ export default function SharedMinMaxPanel({
       <MinMaxRow label="PreMhMDV20NF" filterKey="premhmdv20nf" mode={sharedRangeFilterModes.premhmdv20nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV20NF} maxValue={maxPreMhMDV20NF} setMin={setMinPreMhMDV20NF} setMax={setMaxPreMhMDV20NF} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhmdv20nf")} />
       <MinMaxRow label="PreMhMDV90NF" filterKey="premhmdv90nf" mode={sharedRangeFilterModes.premhmdv90nf} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhMDV90NF} maxValue={maxPreMhMDV90NF} setMin={setMinPreMhMDV90NF} setMax={setMaxPreMhMDV90NF} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhmdv90nf")} />
       <MinMaxRow label="VolRel" filterKey="volrel" mode={sharedRangeFilterModes.volrel} onToggleMode={toggleSharedRangeFilterMode} minValue={minVolRel} maxValue={maxVolRel} setMin={setMinVolRel} setMax={setMaxVolRel} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("volrel")} />
+      {/* The operator's own calculation (2026-10-11): TradingApp's real premarket volume anomaly
+          reading, captured once at 9:20 and held for the day — unlike VolRel's own undocumented
+          formula above, this one was already sitting in the raw tape (TapeRowV1.PreMhVolAnomaly)
+          and just never threaded up into any strategy's own DTO until now. */}
+      <MinMaxRow label="PreMhVolAnomaly" filterKey="premhvolanomaly" mode={sharedRangeFilterModes.premhvolanomaly} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhVolAnomaly} maxValue={maxPreMhVolAnomaly} setMin={setMinPreMhVolAnomaly} setMax={setMaxPreMhVolAnomaly} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhvolanomaly")} />
       <MinMaxRow label="PreMhHiLstPrc%" filterKey="premhbidlstprc" mode={sharedRangeFilterModes.premhbidlstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhBidLstPrcPct} maxValue={maxPreMhBidLstPrcPct} setMin={setMinPreMhBidLstPrcPct} setMax={setMaxPreMhBidLstPrcPct} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhbidlstprc")} />
       <MinMaxRow label="PreMhLoLstPrc%" filterKey="premhlolstprc" mode={sharedRangeFilterModes.premhlolstprc} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhLoLstPrcPct} maxValue={maxPreMhLoLstPrcPct} setMin={setMinPreMhLoLstPrcPct} setMax={setMaxPreMhLoLstPrcPct} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhlolstprc")} />
       <MinMaxRow label="PreMhHiLstCls%" filterKey="premhhilstcls" mode={sharedRangeFilterModes.premhhilstcls} onToggleMode={toggleSharedRangeFilterMode} minValue={minPreMhHiLstClsPct} maxValue={maxPreMhHiLstClsPct} setMin={setMinPreMhHiLstClsPct} setMax={setMaxPreMhHiLstClsPct} card clearable onStartEditing={onStartEditing} onStopEditing={onStopEditing} zeroCoverage={zeroCoverageFilterKeys.has("premhhilstcls")} />

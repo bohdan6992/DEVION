@@ -51,7 +51,8 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
 import type { DateMode, EpisodeScanResult, EpisodeSortKey, GlassSelectOption, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, ScannerLogContext, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
@@ -71,6 +72,35 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel, { DirectionBalanceControls, SaveModeButton } from "./shell/panels/ExecutionSettingsPanel";
+/**
+ * EVENT FILTERS split by side (2026-10-11, the operator's own instruction), e.g. "START" becomes
+ * "START LONG"/"START SHORT" as two separate cards. Deliberately NOT built by calling
+ * buildFallbackScopeOptimizerParameter with a renamed `definition.key` — that function resolves
+ * the actual VALUE SOURCE off `definition.key` too (via optimizerKeyToScopeResearchParameterKey),
+ * so renaming it to e.g. "startabs_long" broke the lookup and silently returned null for every
+ * row, which is exactly how the whole EVENT FILTERS group vanished the first time this shipped.
+ * This keeps `definition.key` untouched for resolving the value, and only renames the OUTPUT
+ * parameter's own key/label (what the card shows and what React/the de-dup Map key off).
+ */
+function buildSideSplitOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  definition: ScopeParameterDefinition,
+  bucketCount: number,
+  binMode: ScopeOptimizerBinMode,
+  outputKey: string,
+  outputLabel: string,
+): PaperArbOptimizerParameterDto | null {
+  const parameterKey = optimizerKeyToScopeResearchParameterKey(definition.key);
+  if (!parameterKey) return null;
+  const entries: OptimizerValueEntry[] = [];
+  for (const row of rows) {
+    const value = scopeResearchParameterValue(row, parameterKey);
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
+  }
+  return buildNumericOptimizerParameter({ key: outputKey, label: outputLabel, group: definition.group, bucketCount, entries, binMode });
+}
+
 // Everything this scanner varies from the shared shell. Adding a strategy means adding one of
 // these (plus its bespoke panels) — not forking the scanner.
 const STRATEGY = defineScannerStrategy({
@@ -4711,6 +4741,19 @@ export default function ArbitrageScanner({
               optimizerBinMode
             );
           }
+          // EVENT FILTERS (ZAP THRESHOLDS) metrics split by side (2026-10-11, the operator's own
+          // instruction — generalized across whichever metric is selected, not just START): two
+          // cards instead of one, via buildSideSplitOptimizerParameter (see its own doc comment
+          // for why this is not just buildFallbackScopeOptimizerParameter with a renamed key).
+          if (definition.group === "ZAP THRESHOLDS") {
+            const long = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === true);
+            const short = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === false);
+            const longParam = buildSideSplitOptimizerParameter(long, definition, optimizerBucketCount, optimizerBinMode, `${definition.key}_long`, `${definition.label} LONG`);
+            const shortParam = buildSideSplitOptimizerParameter(short, definition, optimizerBucketCount, optimizerBinMode, `${definition.key}_short`, `${definition.label} SHORT`);
+            if (longParam) catResults.push(longParam);
+            if (shortParam) catResults.push(shortParam);
+            return null;
+          }
           return buildFallbackScopeOptimizerParameter(filteredEpisodes, definition, optimizerBucketCount, optimizerBinMode);
         })
         .filter((parameter): parameter is PaperArbOptimizerParameterDto => parameter != null);
@@ -4724,6 +4767,23 @@ export default function ArbitrageScanner({
 
     for (const definition of SCOPE_PARAMETER_DEFINITIONS) {
       if (!includeAllParameters && !selectedKeySet.has(definition.key)) continue;
+
+      // EVENT FILTERS (ZAP THRESHOLDS) metrics split by side (2026-10-11, the operator's own
+      // instruction) — checked BEFORE the server-answer skip just below, because the server's own
+      // /optimizer/ranges response for this group is a single combined bucket set with no side
+      // axis; the split is always built client-side instead (via buildSideSplitOptimizerParameter
+      // — see its own doc comment), and whatever the server already put in parameterMap for this
+      // key is dropped so the combined version doesn't also show up.
+      if (definition.group === "ZAP THRESHOLDS") {
+        parameterMap.delete(definition.key);
+        const long = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === true);
+        const short = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === false);
+        const longParam = buildSideSplitOptimizerParameter(long, definition, optimizerBucketCount, optimizerBinMode, `${definition.key}_long`, `${definition.label} LONG`);
+        const shortParam = buildSideSplitOptimizerParameter(short, definition, optimizerBucketCount, optimizerBinMode, `${definition.key}_short`, `${definition.label} SHORT`);
+        if (longParam) parameterMap.set(`${definition.key}_long`, longParam);
+        if (shortParam) parameterMap.set(`${definition.key}_short`, shortParam);
+        continue;
+      }
       if (parameterMap.has(definition.key)) continue;
 
       // Categorical parameters: sector and bench — computed fully client-side
@@ -4790,37 +4850,73 @@ export default function ArbitrageScanner({
             : bucket.avgPnlUsd;
   const optimizerRangeParametersSorted = useMemo(() => {
     // tailDamage sort: parameters where tail regions have the most concentrated losses come first
-    if (optimizerRangeRankMetric === "tailDamage") {
-      return [...optimizerRangeParameters].sort((a, b) => {
-        const da = scoreTailDamage(a, optimizerRangeMinTrades);
-        const db = scoreTailDamage(b, optimizerRangeMinTrades);
-        if (db !== da) return db - da;
-        return (b.baseTrades ?? 0) - (a.baseTrades ?? 0);
-      });
+    const sorted = optimizerRangeRankMetric === "tailDamage"
+      ? [...optimizerRangeParameters].sort((a, b) => {
+          const da = scoreTailDamage(a, optimizerRangeMinTrades);
+          const db = scoreTailDamage(b, optimizerRangeMinTrades);
+          if (db !== da) return db - da;
+          return (b.baseTrades ?? 0) - (a.baseTrades ?? 0);
+        })
+      : [...optimizerRangeParameters].sort((a, b) => {
+          const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
+            .filter((x) => x.trades >= optimizerRangeMinTrades)
+            .sort((x, y) => {
+            if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+            if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+            return y.trades - x.trades;
+          })[0];
+          const bestB = [...(b.buckets ?? []), ...(b.lowerTailBuckets ?? []), ...(b.upperTailBuckets ?? [])]
+            .filter((x) => x.trades >= optimizerRangeMinTrades)
+            .sort((x, y) => {
+            if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+            if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+            return y.trades - x.trades;
+          })[0];
+          const aAvg = bestA ? optimizerRankValue(bestA) : Number.NEGATIVE_INFINITY;
+          const bAvg = bestB ? optimizerRankValue(bestB) : Number.NEGATIVE_INFINITY;
+          if (bAvg !== aAvg) return bAvg - aAvg;
+          const aPnl = bestA?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+          const bPnl = bestB?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+          if (bPnl !== aPnl) return bPnl - aPnl;
+          return (bestB?.trades ?? 0) - (bestA?.trades ?? 0);
+        });
+
+    // LONG/SHORT halves of the same split EVENT FILTERS metric always sit together, in the same
+    // row (2026-10-11, the operator's own instruction) — generalized across however many metrics
+    // are selected at once (START, END, ... each its own pair), not hardcoded to one key. The
+    // score-based sort above ranks every card independently, which would otherwise scatter a pair
+    // apart. Walk the sorted list once: the first time either half of a pair is reached (whichever
+    // scored better), emit BOTH halves right there — the pair's overall position follows its own
+    // best-scoring half, same as before, just no longer tied to a single hardcoded key.
+    const hasPairs = sorted.some((p) => p.key.endsWith("_long") || p.key.endsWith("_short"));
+    if (!hasPairs) return sorted;
+    const byKey = new Map(sorted.map((p) => [p.key, p]));
+    const used = new Set<string>();
+    const result: PaperArbOptimizerParameterDto[] = [];
+    for (const p of sorted) {
+      if (used.has(p.key)) continue;
+      const base = p.key.endsWith("_long") ? p.key.slice(0, -5) : p.key.endsWith("_short") ? p.key.slice(0, -6) : null;
+      if (base != null) {
+        const longP = byKey.get(`${base}_long`);
+        const shortP = byKey.get(`${base}_short`);
+        if (longP) { result.push(longP); used.add(longP.key); }
+        if (shortP) { result.push(shortP); used.add(shortP.key); }
+        continue;
+      }
+      result.push(p);
+      used.add(p.key);
     }
-    return [...optimizerRangeParameters].sort((a, b) => {
-      const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
-        .filter((x) => x.trades >= optimizerRangeMinTrades)
-        .sort((x, y) => {
-        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
-        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
-        return y.trades - x.trades;
-      })[0];
-      const bestB = [...(b.buckets ?? []), ...(b.lowerTailBuckets ?? []), ...(b.upperTailBuckets ?? [])]
-        .filter((x) => x.trades >= optimizerRangeMinTrades)
-        .sort((x, y) => {
-        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
-        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
-        return y.trades - x.trades;
-      })[0];
-      const aAvg = bestA ? optimizerRankValue(bestA) : Number.NEGATIVE_INFINITY;
-      const bAvg = bestB ? optimizerRankValue(bestB) : Number.NEGATIVE_INFINITY;
-      if (bAvg !== aAvg) return bAvg - aAvg;
-      const aPnl = bestA?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
-      const bPnl = bestB?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
-      if (bPnl !== aPnl) return bPnl - aPnl;
-      return (bestB?.trades ?? 0) - (bestA?.trades ?? 0);
-    });
+
+    // START always leads the EVENT FILTERS card order (2026-10-11, the operator's own
+    // instruction) — pulled to the very front regardless of score, ahead of whatever else is
+    // selected (END, ...), which keep their own score-sorted relative order behind it. A no-op
+    // when START is not among the selected/built cards (filter finds nothing to move).
+    const startPair = result.filter((p) => p.key === "startabs_long" || p.key === "startabs_short");
+    if (startPair.length > 0) {
+      const rest = result.filter((p) => p.key !== "startabs_long" && p.key !== "startabs_short");
+      return [...startPair, ...rest];
+    }
+    return result;
   }, [optimizerRangeParameters, optimizerRangeMinTrades, optimizerRangeRankMetric]);
   const optimizerRangeGroups = useMemo(() => {
     const groupOrder = ["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"];
@@ -6298,6 +6394,12 @@ export default function ArbitrageScanner({
                       onClick={() => {
                         // Pressing the lit one only drops the gate; it must NEVER rewrite the
                         // metric, which is what made every other button spring back to sigma.
+                        // Deliberately does NOT re-run the scan (2026-10-11, the operator's own
+                        // correction to an earlier attempt here that auto-triggered RUN on every
+                        // pill click) — building trades is the operator's own explicit RUN press,
+                        // not implied by changing the metric; SCOPE always analyzes whichever
+                        // episodesRows the last RUN actually produced, which is correct as long as
+                        // that stays a deliberate action, not something this button does for them.
                         if (on) { setZapMode("off"); return; }
                         setZapMode(u.mode);
                         setMetric(u.metric);

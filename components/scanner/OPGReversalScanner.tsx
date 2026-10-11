@@ -48,10 +48,11 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
-import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, OPGReversalAnalyticsSummaryDto, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
+import type { DateMode, EpisodeScanResult, EpisodeSortKey, OptimizerImpactRow, OptimizerRangeGroupKey, OptimizerRangeGroupStatus, OptimizerRangeRankMetric, OptimizerResultRow, OptimizerScenario, PaperArbActiveRow, PaperArbAnalyticsRequest, PaperArbAnalyticsResponse, PaperArbCloseMode, PaperArbClosedDto, PaperArbDilutionMode, PaperArbEquityPointDto, PaperArbMetric, PaperArbOptimizerParameterDto, PaperArbOptimizerRangeBucketDto, PaperArbOptimizerRangesResponse, PaperArbPnlMode, PaperArbPriceMode, PaperArbRatingBand, PaperArbRatingMode, PaperArbRatingRule, PaperArbRatingType, PaperArbSession, PaperArbSizingMode, PaperListMode, PrimaryPanelKey, OPGReversalAnalyticsSummaryDto, ScopeBatchResponse, ScopeBatchScenarioRequest, ScopePanelKey, ScopeOptimizerBinMode, ScopeParameterDefinition, ScopeResearchChartType, ScopeResearchComputed, ScopeResearchDraft, ScopeResearchParameterKey, ScopeResearchPoint, ScopeResearchResultKey, ScopeResearchSelection, ScopeResearchThresholdMode, ScopeResearchValueFormat, SharedRangeFilterKey, SharedRangeFilterMode, SortDir, TabKey, TriMode, ZapMode } from "../../lib/scanner/types";
 import { EquityChart, OptimizerDualMetricChart, OptimizerParameterRangeCard, ScopeResearchBoxChart, ScopeResearchCumsumChart, ScopeResearchDistributionChart, ScopeResearchScatterByDateChart, ScopeResearchSeriesChart, ScopeResearchTradePerformanceChart, ScopeResearchViolinChart, StartsByTimeChart, StartsEndsByTimeChart } from "./shared/charts";
 import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM_FIXED_ACTIVE_SOFT, STREAM_FIXED_ACTIVE_TEXT, STREAM_FIXED_ICON_GREEN } from "./shared/styles";
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
@@ -67,6 +68,69 @@ import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/fil
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+type OPGReversalUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
+
+/** Same six glyphs as the %/σ/α/γ/τ/λ unit-toggle pills (opgReversalUnitMode's own render block). */
+const OPG_REVERSAL_UNIT_LABEL: Record<OPGReversalUnit, string> = {
+  pct: "%", sigma: "σ", alpha: "α", gamma: "γ", atr: "τ", lambda: "λ",
+};
+
+/**
+ * A raw deviation reading as a MULTIPLE of the given unit's own per-ticker scale — the single
+ * source formatOPGReversalDev (display) and the START LONG/START SHORT scope cards (bucketing)
+ * both convert through, so a number means the same thing everywhere it is shown. `pct` is the raw
+ * value, unscaled; every other unit divides by that trade's own published scale for it (gamma
+ * rides the generic DTO's `rating` slot — see opgReversalSnapshotRows' own comment on why). Null
+ * wherever that scale is missing or zero, so a bucket is built only from readings that genuinely
+ * convert, never a silent divide-by-zero or a reading that fell back to the wrong unit.
+ */
+function opgReversalDevInUnit(
+  raw: number | null | undefined,
+  unit: OPGReversalUnit,
+  gamma: number | null | undefined,
+  sigma: number | null | undefined,
+  alpha: number | null | undefined,
+  atr14Pct: number | null | undefined,
+  lambda: number | null | undefined,
+): number | null {
+  if (raw == null || !Number.isFinite(raw)) return null;
+  if (unit === "pct") return raw;
+  const scale = unit === "gamma" ? gamma : unit === "sigma" ? sigma : unit === "atr" ? atr14Pct : unit === "lambda" ? lambda : alpha;
+  if (scale == null || !Number.isFinite(scale) || scale === 0) return null;
+  return raw / scale;
+}
+
+/**
+ * START split by side (2026-10-11, the operator's own instruction: "START LONG"/"START SHORT" as
+ * their own cards, same shape as every other SCOPE card — OptimizerParameterRangeCard, fed by
+ * buildNumericOptimizerParameter like every other parameter here). Bucket VALUES are genuinely in
+ * the selected unit, unlike the generic buildFallbackScopeOptimizerParameter path for this same
+ * "startabs" key, which reads row.startMetricAbs raw — the real bug report this replaces: a trade
+ * can gate in at ">= 1σ" (OPGReversalGate.Check scales the THRESHOLD by sigma; it never scales the
+ * stored metric) and still show up in a "0.65 .. 0.91" bucket, because that bucket axis was the raw
+ * % all along, not a sigma-multiple. row.rating/row.sigma/row.alpha/row.atr14Pct/row.lambda are the
+ * exact fields opgReversalSnapshotRows already reads for the same trade's own DEV column — alpha/
+ * atr14Pct/lambda are real wire fields PaperArbClosedDto's own TS declaration just does not list.
+ */
+function buildOpgReversalStartParameter(
+  rows: PaperArbClosedDto[],
+  key: string,
+  label: string,
+  group: OptimizerRangeGroupKey,
+  bucketCount: number,
+  binMode: ScopeOptimizerBinMode,
+  unit: OPGReversalUnit,
+): PaperArbOptimizerParameterDto | null {
+  const entries: OptimizerValueEntry[] = [];
+  for (const row of rows) {
+    const anyRow = row as any;
+    const value = opgReversalDevInUnit(row.startMetricAbs, unit, row.rating, row.sigma, anyRow.alpha, anyRow.atr14Pct, anyRow.lambda);
+    if (value == null) continue;
+    entries.push({ value, pnl: row.totalPnlUsd ?? 0 });
+  }
+  return buildNumericOptimizerParameter({ key, label, group, bucketCount, entries, binMode, valueDigits: 2 });
+}
+
 // OPGReversal tracks no sigma metric and no peak (the mapper leaves those slots null and
 // MinHoldCandles is a constant 0), and it has no hedge leg — so those research axes and result
 // metrics are excluded rather than rendering empty charts that look like a bug. Same exclusion set
@@ -747,7 +811,10 @@ export default function OPGReversalScanner({
 
   /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
    * are now enforced in server-side (see opgReversalUnitMode's own comment), so what's typed into the
-   * threshold boxes and what's shown here always mean the same thing. */
+   * threshold boxes and what's shown here always mean the same thing. Delegates the actual
+   * conversion to opgReversalDevInUnit (module-level, 2026-10-11) — the START LONG/START SHORT
+   * scope cards convert through that exact same function, so this column and those buckets can
+   * never disagree about what a reading's own number means. */
   function formatOPGReversalDev(
     raw: number | null | undefined,
     gamma: number | null | undefined,
@@ -756,26 +823,10 @@ export default function OPGReversalScanner({
     atr14Pct?: number | null,
     lambda?: number | null,
   ): string {
-    if (raw == null || !Number.isFinite(raw)) return "—";
-    if (opgReversalUnitMode === "pct") return num(raw, 3);
-    if (opgReversalUnitMode === "gamma") {
-      if (gamma == null || !Number.isFinite(gamma) || gamma === 0) return "—";
-      return `${num(raw / gamma, 2)}γ`;
-    }
-    if (opgReversalUnitMode === "sigma") {
-      if (sigma == null || !Number.isFinite(sigma) || sigma === 0) return "—";
-      return `${num(raw / sigma, 2)}σ`;
-    }
-    if (opgReversalUnitMode === "atr") {
-      if (atr14Pct == null || !Number.isFinite(atr14Pct) || atr14Pct === 0) return "—";
-      return `${num(raw / atr14Pct, 2)}τ`;
-    }
-    if (opgReversalUnitMode === "lambda") {
-      if (lambda == null || !Number.isFinite(lambda) || lambda === 0) return "—";
-      return `${num(raw / lambda, 2)}λ`;
-    }
-    if (alpha == null || !Number.isFinite(alpha) || alpha === 0) return "—";
-    return `${num(raw / alpha, 2)}α`;
+    const value = opgReversalDevInUnit(raw, opgReversalUnitMode, gamma, sigma, alpha, atr14Pct, lambda);
+    if (value == null) return "—";
+    if (opgReversalUnitMode === "pct") return num(value, 3);
+    return `${num(value, 2)}${OPG_REVERSAL_UNIT_LABEL[opgReversalUnitMode]}`;
   }
 
   /** What SHORT/LONG/MAX are currently entered in, for their own tooltips — mirrors
@@ -4992,6 +5043,19 @@ export default function OPGReversalScanner({
             if (catParam) catResults.push(catParam);
             return null;
           }
+          // START split by side (2026-10-11, the operator's own instruction) — see
+          // buildOpgReversalStartParameter's own doc comment for the unit bug this replaces.
+          // Pushed to catResults (a generic extra-results accumulator despite the name) instead of
+          // returned, since this one definition now produces TWO cards, not one.
+          if (definition.key === "startabs") {
+            const long = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === true);
+            const short = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === false);
+            const startLong = buildOpgReversalStartParameter(long, "startabs_long", "START LONG", definition.group, optimizerBucketCount, optimizerBinMode, opgReversalUnitMode);
+            const startShort = buildOpgReversalStartParameter(short, "startabs_short", "START SHORT", definition.group, optimizerBucketCount, optimizerBinMode, opgReversalUnitMode);
+            if (startLong) catResults.push(startLong);
+            if (startShort) catResults.push(startShort);
+            return null;
+          }
           if (definition.key === "minrate" || definition.key === "mintotal") {
             return buildFallbackBinRatingOptimizerParameter(
               filteredEpisodes,
@@ -5049,6 +5113,18 @@ export default function OPGReversalScanner({
         continue;
       }
 
+      // START split by side (2026-10-11, the operator's own instruction) — mirrors the
+      // useBinRatingFilter branch above; see buildOpgReversalStartParameter's own doc comment.
+      if (definition.key === "startabs") {
+        const long = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === true);
+        const short = filteredEpisodes.filter((r) => normalizeSide(r.side).isLong === false);
+        const startLong = buildOpgReversalStartParameter(long, "startabs_long", "START LONG", definition.group, optimizerBucketCount, optimizerBinMode, opgReversalUnitMode);
+        const startShort = buildOpgReversalStartParameter(short, "startabs_short", "START SHORT", definition.group, optimizerBucketCount, optimizerBinMode, opgReversalUnitMode);
+        if (startLong) parameterMap.set("startabs_long", startLong);
+        if (startShort) parameterMap.set("startabs_short", startShort);
+        continue;
+      }
+
       // MINRATE / MINTOTAL need the bin builder, not the generic one: the generic path goes through
       // optimizerKeyToScopeResearchParameterKey, which has no case for these two and so returns
       // null. Mirrors the client-side branch above and reads the same episode rate/total.
@@ -5099,7 +5175,7 @@ export default function OPGReversalScanner({
     }
 
     return [...parameterMap.values()];
-  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, optimizerBinMode, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session]);
+  }, [optimizerRanges, filteredEpisodes, optimizerBucketCount, optimizerBinMode, scopeSelectedParameterKeys, arbitrageTickerMetaByTicker, ratingMode, metric, session, opgReversalUnitMode]);
   const optimizerRankValue = (bucket: PaperArbOptimizerRangeBucketDto) =>
     optimizerRangeRankMetric === "winRate"
       ? bucket.winRate
@@ -5112,37 +5188,50 @@ export default function OPGReversalScanner({
             : bucket.avgPnlUsd;
   const optimizerRangeParametersSorted = useMemo(() => {
     // tailDamage sort: parameters where tail regions have the most concentrated losses come first
-    if (optimizerRangeRankMetric === "tailDamage") {
-      return [...optimizerRangeParameters].sort((a, b) => {
-        const da = scoreTailDamage(a, optimizerRangeMinTrades);
-        const db = scoreTailDamage(b, optimizerRangeMinTrades);
-        if (db !== da) return db - da;
-        return (b.baseTrades ?? 0) - (a.baseTrades ?? 0);
-      });
+    const sorted = optimizerRangeRankMetric === "tailDamage"
+      ? [...optimizerRangeParameters].sort((a, b) => {
+          const da = scoreTailDamage(a, optimizerRangeMinTrades);
+          const db = scoreTailDamage(b, optimizerRangeMinTrades);
+          if (db !== da) return db - da;
+          return (b.baseTrades ?? 0) - (a.baseTrades ?? 0);
+        })
+      : [...optimizerRangeParameters].sort((a, b) => {
+          const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
+            .filter((x) => x.trades >= optimizerRangeMinTrades)
+            .sort((x, y) => {
+            if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+            if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+            return y.trades - x.trades;
+          })[0];
+          const bestB = [...(b.buckets ?? []), ...(b.lowerTailBuckets ?? []), ...(b.upperTailBuckets ?? [])]
+            .filter((x) => x.trades >= optimizerRangeMinTrades)
+            .sort((x, y) => {
+            if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
+            if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
+            return y.trades - x.trades;
+          })[0];
+          const aAvg = bestA ? optimizerRankValue(bestA) : Number.NEGATIVE_INFINITY;
+          const bAvg = bestB ? optimizerRankValue(bestB) : Number.NEGATIVE_INFINITY;
+          if (bAvg !== aAvg) return bAvg - aAvg;
+          const aPnl = bestA?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+          const bPnl = bestB?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
+          if (bPnl !== aPnl) return bPnl - aPnl;
+          return (bestB?.trades ?? 0) - (bestA?.trades ?? 0);
+        });
+
+    // START LONG / START SHORT always sit together, in the same row (2026-10-11, the operator's
+    // own instruction) — the rank sort above scores every card independently, which could
+    // otherwise scatter this matched pair anywhere in the list (reported: a DEV card landed
+    // between them). Pinned to the very front, LONG then SHORT, so the grid below (grid-cols-2)
+    // always places them in row one together regardless of how either one scores.
+    const longParam = sorted.find((p) => p.key === "startabs_long");
+    const shortParam = sorted.find((p) => p.key === "startabs_short");
+    if (longParam || shortParam) {
+      const rest = sorted.filter((p) => p.key !== "startabs_long" && p.key !== "startabs_short");
+      const pinned = [longParam, shortParam].filter((p): p is PaperArbOptimizerParameterDto => p != null);
+      return [...pinned, ...rest];
     }
-    return [...optimizerRangeParameters].sort((a, b) => {
-      const bestA = [...(a.buckets ?? []), ...(a.lowerTailBuckets ?? []), ...(a.upperTailBuckets ?? [])]
-        .filter((x) => x.trades >= optimizerRangeMinTrades)
-        .sort((x, y) => {
-        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
-        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
-        return y.trades - x.trades;
-      })[0];
-      const bestB = [...(b.buckets ?? []), ...(b.lowerTailBuckets ?? []), ...(b.upperTailBuckets ?? [])]
-        .filter((x) => x.trades >= optimizerRangeMinTrades)
-        .sort((x, y) => {
-        if (optimizerRankValue(y) !== optimizerRankValue(x)) return optimizerRankValue(y) - optimizerRankValue(x);
-        if (y.totalPnlUsd !== x.totalPnlUsd) return y.totalPnlUsd - x.totalPnlUsd;
-        return y.trades - x.trades;
-      })[0];
-      const aAvg = bestA ? optimizerRankValue(bestA) : Number.NEGATIVE_INFINITY;
-      const bAvg = bestB ? optimizerRankValue(bestB) : Number.NEGATIVE_INFINITY;
-      if (bAvg !== aAvg) return bAvg - aAvg;
-      const aPnl = bestA?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
-      const bPnl = bestB?.totalPnlUsd ?? Number.NEGATIVE_INFINITY;
-      if (bPnl !== aPnl) return bPnl - aPnl;
-      return (bestB?.trades ?? 0) - (bestA?.trades ?? 0);
-    });
+    return sorted;
   }, [optimizerRangeParameters, optimizerRangeMinTrades, optimizerRangeRankMetric]);
   const optimizerRangeGroups = useMemo(() => {
     const groupOrder = ["RATING GATES", "ZAP THRESHOLDS", "TAPE FILTERS"];

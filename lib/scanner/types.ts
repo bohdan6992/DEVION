@@ -255,6 +255,7 @@ export type PaperArbClosedDto = {
   preMhMDV20NF?: number | null;
   preMhMDV90NF?: number | null;
   volRel?: number | null;
+  preMhVolAnomaly?: number | null;
   preMhBidLstPrcPct?: number | null;
   preMhLoLstPrcPct?: number | null;
   preMhHiLstClsPct?: number | null;
@@ -473,6 +474,8 @@ export type PaperArbAnalyticsRequest = {
   maxVolatility90?: number | null;
   minVolRel?: number | null;
   maxVolRel?: number | null;
+  minPreMhVolAnomaly?: number | null;
+  maxPreMhVolAnomaly?: number | null;
   minPreMhBidLstPrcPct?: number | null;
   maxPreMhBidLstPrcPct?: number | null;
   minPreMhLoLstPrcPct?: number | null;
@@ -802,6 +805,7 @@ export type ScopeResearchParameterKey =
   | "preMhMDV20NF"
   | "preMhMDV90NF"
   | "volRel"
+  | "preMhVolAnomaly"
   | "preMhBidLstPrcPct"
   | "preMhLoLstPrcPct"
   | "preMhHiLstClsPct"
@@ -972,6 +976,7 @@ export type SharedRangeFilterKey =
   | "premhmdv20nf"
   | "premhmdv90nf"
   | "volrel"
+  | "premhvolanomaly"
   | "premhbidlstprc"
   | "premhlolstprc"
   | "premhhilstcls"

@@ -116,6 +116,7 @@ export type ScannerFilterState = {
   maxVWAP: string;
   maxVolNFfromLstCls: string;
   maxVolRel: string;
+  maxPreMhVolAnomaly: string;
   maxVolatility20: string;
   maxVolatility90: string;
   maxYCls: string;
@@ -168,6 +169,7 @@ export type ScannerFilterState = {
   minVWAP: string;
   minVolNFfromLstCls: string;
   minVolRel: string;
+  minPreMhVolAnomaly: string;
   minVolatility20: string;
   minVolatility90: string;
   minYCls: string;
@@ -352,6 +354,7 @@ export type ScannerFilterSetters = {
   setMaxVWAP: React.Dispatch<React.SetStateAction<string>>;
   setMaxVolNFfromLstCls: React.Dispatch<React.SetStateAction<string>>;
   setMaxVolRel: React.Dispatch<React.SetStateAction<string>>;
+  setMaxPreMhVolAnomaly: React.Dispatch<React.SetStateAction<string>>;
   setMaxVolatility20: React.Dispatch<React.SetStateAction<string>>;
   setMaxVolatility90: React.Dispatch<React.SetStateAction<string>>;
   setMaxYCls: React.Dispatch<React.SetStateAction<string>>;
@@ -404,6 +407,7 @@ export type ScannerFilterSetters = {
   setMinVWAP: React.Dispatch<React.SetStateAction<string>>;
   setMinVolNFfromLstCls: React.Dispatch<React.SetStateAction<string>>;
   setMinVolRel: React.Dispatch<React.SetStateAction<string>>;
+  setMinPreMhVolAnomaly: React.Dispatch<React.SetStateAction<string>>;
   setMinVolatility20: React.Dispatch<React.SetStateAction<string>>;
   setMinVolatility90: React.Dispatch<React.SetStateAction<string>>;
   setMinYCls: React.Dispatch<React.SetStateAction<string>>;

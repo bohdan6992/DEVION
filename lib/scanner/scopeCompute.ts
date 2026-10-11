@@ -161,6 +161,8 @@ export function scopeResearchParameterValue(row: PaperArbClosedDto, key: ScopeRe
       return row.preMhMDV90NF ?? null;
     case "volRel":
       return row.volRel ?? null;
+    case "preMhVolAnomaly":
+      return row.preMhVolAnomaly ?? null;
     case "preMhBidLstPrcPct":
       return row.preMhBidLstPrcPct ?? null;
     case "preMhLoLstPrcPct":

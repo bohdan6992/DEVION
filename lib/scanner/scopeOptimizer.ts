@@ -473,6 +473,8 @@ export function optimizerKeyToScopeResearchParameterKey(key: string): ScopeResea
       return "preMhMDV90NF";
     case "volrel":
       return "volRel";
+    case "premhvolanomaly":
+      return "preMhVolAnomaly";
     case "premhbidlstprc":
       return "preMhBidLstPrcPct";
     case "premhlolstprc":

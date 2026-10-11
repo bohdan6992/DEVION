@@ -33,6 +33,7 @@ export const DEFAULT_SHARED_RANGE_FILTER_MODES: Record<SharedRangeFilterKey, Sha
   premhmdv20nf: "on",
   premhmdv90nf: "on",
   volrel: "on",
+  premhvolanomaly: "on",
   premhbidlstprc: "on",
   premhlolstprc: "on",
   premhhilstcls: "on",
@@ -93,6 +94,7 @@ export const SCOPE_RESEARCH_PARAMETER_OPTIONS_ALL: Array<ScopeResearchOption<Sco
   { value: "preMhMDV20NF", label: "PreMhMDV20NF", format: "number" },
   { value: "preMhMDV90NF", label: "PreMhMDV90NF", format: "number" },
   { value: "volRel", label: "VolRel", format: "number" },
+  { value: "preMhVolAnomaly", label: "PreMhVolAnomaly", format: "number" },
   { value: "preMhBidLstPrcPct", label: "PreMhBidLstPrc%", format: "percent" },
   { value: "preMhLoLstPrcPct", label: "PreMhLoLstPrc%", format: "percent" },
   { value: "preMhHiLstClsPct", label: "PreMhHiLstCls%", format: "percent" },
@@ -165,6 +167,7 @@ function buildParameterSelectGroups(
         "preMhMDV20NF",
         "preMhMDV90NF",
         "volRel",
+        "preMhVolAnomaly",
         "preMhBidLstPrcPct",
         "preMhLoLstPrcPct",
         "preMhHiLstClsPct",
@@ -296,9 +299,10 @@ export const SCOPE_THRESHOLD_MODE_OPTIONS: GlassSelectOption[] = [
   { value: "less_than", label: "<= x" },
 ];
 
+/** "ZAP THRESHOLDS" renamed to "EVENT FILTERS" on display (2026-10-11, the operator's own instruction) — the internal group key stays ZAP THRESHOLDS everywhere else (request payloads, status maps, OptimizerRangeGroupKey itself), only the label shown on SCOPE changed. */
 export const OPTIMIZER_GROUP_DISPLAY_LABELS: Record<OptimizerRangeGroupKey, string> = {
   "RATING GATES": "RATING FILTERS",
-  "ZAP THRESHOLDS": "ZAP FILTERS",
+  "ZAP THRESHOLDS": "EVENT FILTERS",
   "TAPE FILTERS": "TAPE FILTERS",
 };
 
@@ -359,6 +363,7 @@ export const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "premhmdv20nf", label: "PreMhMDV20NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV20NF" },
   { key: "premhmdv90nf", label: "PreMhMDV90NF", group: "TAPE FILTERS", scenarioParameter: "PreMhMDV90NF" },
   { key: "volrel", label: "VolRel", group: "TAPE FILTERS", scenarioParameter: "VolRel" },
+  { key: "premhvolanomaly", label: "PreMhVolAnomaly", group: "TAPE FILTERS", scenarioParameter: "PreMhVolAnomaly" },
   { key: "premhbidlstprc", label: "PreMhHiLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstPrc%" },
   { key: "premhlolstprc", label: "PreMhLoLstPrc%", group: "TAPE FILTERS", scenarioParameter: "PreMhLoLstPrc%" },
   { key: "premhhilstcls", label: "PreMhHiLstCls%", group: "TAPE FILTERS", scenarioParameter: "PreMhHiLstCls%" },

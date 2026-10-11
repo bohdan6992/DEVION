@@ -704,7 +704,7 @@ const RANGE_BOUND_KEYS = [
   "MarketCapM", "PreMhVolNF", "VolNFfromLstCls",
   "AvPostMhVol90NF", "AvPreMhVol90NF", "AvPreMhValue20NF", "AvPreMhValue90NF",
   "AvgDailyValue20", "AvgDailyValue90", "Volatility20", "Volatility90",
-  "PreMhMDV20NF", "PreMhMDV90NF", "VolRel",
+  "PreMhMDV20NF", "PreMhMDV90NF", "VolRel", "PreMhVolAnomaly",
   "PreMhBidLstPrcPct", "PreMhLoLstPrcPct", "PreMhHiLstClsPct", "PreMhLoLstClsPct",
   "LstPrcLstClsPct", "ImbExch925", "ImbExch1555",
 ] as const;
@@ -2124,6 +2124,8 @@ export default function OpenDoorSonar() {
   const [preMhMDV90NFMax, setPreMhMDV90NFMax] = useState("");
   const [volRelMin, setVolRelMin] = useState("");
   const [volRelMax, setVolRelMax] = useState("");
+  const [preMhVolAnomalyMin, setPreMhVolAnomalyMin] = useState("");
+  const [preMhVolAnomalyMax, setPreMhVolAnomalyMax] = useState("");
   const [preMhBidLstPrcPctMin, setPreMhBidLstPrcPctMin] = useState("");
   const [preMhBidLstPrcPctMax, setPreMhBidLstPrcPctMax] = useState("");
   const [preMhLoLstPrcPctMin, setPreMhLoLstPrcPctMin] = useState("");
@@ -2589,7 +2591,7 @@ export default function OpenDoorSonar() {
           'avPreMhValue20NFMin','avPreMhValue20NFMax','avPreMhValue90NFMin','avPreMhValue90NFMax',
           'avgDailyValue20Min','avgDailyValue20Max','avgDailyValue90Min','avgDailyValue90Max',
           'volatility20Min','volatility20Max','volatility90Min','volatility90Max',
-          'preMhMDV20NFMin','preMhMDV20NFMax','preMhMDV90NFMin','preMhMDV90NFMax','volRelMin','volRelMax',
+          'preMhMDV20NFMin','preMhMDV20NFMax','preMhMDV90NFMin','preMhMDV90NFMax','volRelMin','volRelMax','preMhVolAnomalyMin','preMhVolAnomalyMax',
           'preMhBidLstPrcPctMin','preMhBidLstPrcPctMax','preMhLoLstPrcPctMin','preMhLoLstPrcPctMax',
           'preMhHiLstClsPctMin','preMhHiLstClsPctMax','preMhLoLstClsPctMin','preMhLoLstClsPctMax',
           'lstPrcLstClsPctMin','lstPrcLstClsPctMax','imbExch925Min','imbExch925Max','imbExch1555Min','imbExch1555Max',
@@ -2655,6 +2657,8 @@ export default function OpenDoorSonar() {
               case 'preMhMDV90NFMax': setPreMhMDV90NFMax(v); break;
               case 'volRelMin': setVolRelMin(v); break;
               case 'volRelMax': setVolRelMax(v); break;
+              case 'preMhVolAnomalyMin': setPreMhVolAnomalyMin(v); break;
+              case 'preMhVolAnomalyMax': setPreMhVolAnomalyMax(v); break;
               case 'preMhBidLstPrcPctMin': setPreMhBidLstPrcPctMin(v); break;
               case 'preMhBidLstPrcPctMax': setPreMhBidLstPrcPctMax(v); break;
               case 'preMhLoLstPrcPctMin': setPreMhLoLstPrcPctMin(v); break;
@@ -2740,7 +2744,7 @@ export default function OpenDoorSonar() {
           volatility90Min, volatility90Max,
           preMhMDV20NFMin, preMhMDV20NFMax,
           preMhMDV90NFMin, preMhMDV90NFMax,
-          volRelMin, volRelMax,
+          volRelMin, volRelMax, preMhVolAnomalyMin, preMhVolAnomalyMax,
           preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
           preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
           preMhHiLstClsPctMin, preMhHiLstClsPctMax,
@@ -2792,7 +2796,7 @@ export default function OpenDoorSonar() {
     volatility90Min, volatility90Max,
     preMhMDV20NFMin, preMhMDV20NFMax,
     preMhMDV90NFMin, preMhMDV90NFMax,
-    volRelMin, volRelMax,
+    volRelMin, volRelMax, preMhVolAnomalyMin, preMhVolAnomalyMax,
     preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
     preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
     preMhHiLstClsPctMin, preMhHiLstClsPctMax,
@@ -2869,7 +2873,7 @@ export default function OpenDoorSonar() {
       avPreMhValue20NFMin, avPreMhValue20NFMax, avPreMhValue90NFMin, avPreMhValue90NFMax,
       avgDailyValue20Min, avgDailyValue20Max, avgDailyValue90Min, avgDailyValue90Max,
       volatility20Min, volatility20Max, volatility90Min, volatility90Max,
-      preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax,
+      preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax, preMhVolAnomalyMin, preMhVolAnomalyMax,
       preMhBidLstPrcPctMin, preMhBidLstPrcPctMax, preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
       preMhHiLstClsPctMin, preMhHiLstClsPctMax, preMhLoLstClsPctMin, preMhLoLstClsPctMax,
       lstPrcLstClsPctMin, lstPrcLstClsPctMax, imbExch925Min, imbExch925Max, imbExch1555Min, imbExch1555Max,
@@ -2956,6 +2960,8 @@ export default function OpenDoorSonar() {
     preMhMDV90NFMax: setPreMhMDV90NFMax,
     volRelMin: setVolRelMin,
     volRelMax: setVolRelMax,
+    preMhVolAnomalyMin: setPreMhVolAnomalyMin,
+    preMhVolAnomalyMax: setPreMhVolAnomalyMax,
     preMhBidLstPrcPctMin: setPreMhBidLstPrcPctMin,
     preMhBidLstPrcPctMax: setPreMhBidLstPrcPctMax,
     preMhLoLstPrcPctMin: setPreMhLoLstPrcPctMin,
@@ -3114,6 +3120,7 @@ export default function OpenDoorSonar() {
       PreMhMDV20NF: mm("PreMhMDV20NF", preMhMDV20NFMin, preMhMDV20NFMax),
       PreMhMDV90NF: mm("PreMhMDV90NF", preMhMDV90NFMin, preMhMDV90NFMax),
       VolRel: mm("VolRel", volRelMin, volRelMax),
+      PreMhVolAnomaly: mm("PreMhVolAnomaly", preMhVolAnomalyMin, preMhVolAnomalyMax),
       PreMhBidLstPrcPct: mm("PreMhBidLstPrcPct", preMhBidLstPrcPctMin, preMhBidLstPrcPctMax),
       PreMhLoLstPrcPct: mm("PreMhLoLstPrcPct", preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
       PreMhHiLstClsPct: mm("PreMhHiLstClsPct", preMhHiLstClsPctMin, preMhHiLstClsPctMax),
@@ -3155,7 +3162,7 @@ export default function OpenDoorSonar() {
     volatility90Min, volatility90Max,
     preMhMDV20NFMin, preMhMDV20NFMax,
     preMhMDV90NFMin, preMhMDV90NFMax,
-    volRelMin, volRelMax,
+    volRelMin, volRelMax, preMhVolAnomalyMin, preMhVolAnomalyMax,
     preMhBidLstPrcPctMin, preMhBidLstPrcPctMax,
     preMhLoLstPrcPctMin, preMhLoLstPrcPctMax,
     preMhHiLstClsPctMin, preMhHiLstClsPctMax,
@@ -3785,6 +3792,8 @@ export default function OpenDoorSonar() {
     setMinPreMhMDV90NF: setPreMhMDV90NFMin, setMaxPreMhMDV90NF: setPreMhMDV90NFMax,
     minVolRel: volRelMin, maxVolRel: volRelMax,
     setMinVolRel: setVolRelMin, setMaxVolRel: setVolRelMax,
+    minPreMhVolAnomaly: preMhVolAnomalyMin, maxPreMhVolAnomaly: preMhVolAnomalyMax,
+    setMinPreMhVolAnomaly: setPreMhVolAnomalyMin, setMaxPreMhVolAnomaly: setPreMhVolAnomalyMax,
     minPreMhBidLstPrcPct: preMhBidLstPrcPctMin, maxPreMhBidLstPrcPct: preMhBidLstPrcPctMax,
     setMinPreMhBidLstPrcPct: setPreMhBidLstPrcPctMin, setMaxPreMhBidLstPrcPct: setPreMhBidLstPrcPctMax,
     minPreMhLoLstPrcPct: preMhLoLstPrcPctMin, maxPreMhLoLstPrcPct: preMhLoLstPrcPctMax,
@@ -3834,6 +3843,7 @@ export default function OpenDoorSonar() {
       premhmdv20nf: rangeModes.PreMhMDV20NF,
       premhmdv90nf: rangeModes.PreMhMDV90NF,
       volrel: rangeModes.VolRel,
+      premhvolanomaly: rangeModes.PreMhVolAnomaly,
       premhbidlstprc: rangeModes.PreMhBidLstPrcPct,
       premhlolstprc: rangeModes.PreMhLoLstPrcPct,
       premhhilstcls: rangeModes.PreMhHiLstClsPct,
@@ -3843,7 +3853,7 @@ export default function OpenDoorSonar() {
       imbexch1555: rangeModes.ImbExch1555,
     },
   }), [
-    adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax, avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax, lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax, clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax, marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax, avPostMhVol90NFMin, avPostMhVol90NFMax, avPreMhVol90NFMin, avPreMhVol90NFMax, avPreMhValue20NFMin, avPreMhValue20NFMax, avPreMhValue90NFMin, avPreMhValue90NFMax, avgDailyValue20Min, avgDailyValue20Max, avgDailyValue90Min, avgDailyValue90Max, volatility20Min, volatility20Max, volatility90Min, volatility90Max, preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax, preMhBidLstPrcPctMin, preMhBidLstPrcPctMax, preMhLoLstPrcPctMin, preMhLoLstPrcPctMax, preMhHiLstClsPctMin, preMhHiLstClsPctMax, preMhLoLstClsPctMin, preMhLoLstClsPctMax, lstPrcLstClsPctMin, lstPrcLstClsPctMax, imbExch925Min, imbExch925Max, imbExch1555Min, imbExch1555Max,
+    adv20Min, adv20Max, adv20NFMin, adv20NFMax, adv90Min, adv90Max, adv90NFMin, adv90NFMax, avPreMhvMin, avPreMhvMax, roundLotMin, roundLotMax, vwapMin, vwapMax, spreadMin, spreadMax, lstPrcLMin, lstPrcLMax, lstClsMin, lstClsMax, yClsMin, yClsMax, tClsMin, tClsMax, clsToClsPctMin, clsToClsPctMax, loMin, loMax, lstClsNewsCntMin, lstClsNewsCntMax, marketCapMMin, marketCapMMax, preMhVolNFMin, preMhVolNFMax, volNFfromLstClsMin, volNFfromLstClsMax, avPostMhVol90NFMin, avPostMhVol90NFMax, avPreMhVol90NFMin, avPreMhVol90NFMax, avPreMhValue20NFMin, avPreMhValue20NFMax, avPreMhValue90NFMin, avPreMhValue90NFMax, avgDailyValue20Min, avgDailyValue20Max, avgDailyValue90Min, avgDailyValue90Max, volatility20Min, volatility20Max, volatility90Min, volatility90Max, preMhMDV20NFMin, preMhMDV20NFMax, preMhMDV90NFMin, preMhMDV90NFMax, volRelMin, volRelMax, preMhVolAnomalyMin, preMhVolAnomalyMax, preMhBidLstPrcPctMin, preMhBidLstPrcPctMax, preMhLoLstPrcPctMin, preMhLoLstPrcPctMax, preMhHiLstClsPctMin, preMhHiLstClsPctMax, preMhLoLstClsPctMin, preMhLoLstClsPctMax, lstPrcLstClsPctMin, lstPrcLstClsPctMax, imbExch925Min, imbExch925Max, imbExch1555Min, imbExch1555Max,
     rangeModes,
   ]);
 

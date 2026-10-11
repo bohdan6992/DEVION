@@ -236,6 +236,8 @@ export function useScannerFilters(
   const [maxAvPostMhVol90NF, setMaxAvPostMhVol90NF] = useState<string>("");
   const [minVolRel, setMinVolRel] = useState<string>("");
   const [maxVolRel, setMaxVolRel] = useState<string>("");
+  const [minPreMhVolAnomaly, setMinPreMhVolAnomaly] = useState<string>("");
+  const [maxPreMhVolAnomaly, setMaxPreMhVolAnomaly] = useState<string>("");
   const [minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct] = useState<string>("");
   const [maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct] = useState<string>("");
   const [minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct] = useState<string>("");
@@ -492,6 +494,8 @@ export function useScannerFilters(
     maxAvPostMhVol90NF, setMaxAvPostMhVol90NF,
     minVolRel, setMinVolRel,
     maxVolRel, setMaxVolRel,
+    minPreMhVolAnomaly, setMinPreMhVolAnomaly,
+    maxPreMhVolAnomaly, setMaxPreMhVolAnomaly,
     minPreMhBidLstPrcPct, setMinPreMhBidLstPrcPct,
     maxPreMhBidLstPrcPct, setMaxPreMhBidLstPrcPct,
     minPreMhLoLstPrcPct, setMinPreMhLoLstPrcPct,
