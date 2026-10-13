@@ -511,12 +511,12 @@ export const MultiSelectFilter = ({
           {selected.size > 0 && (
             <span
               className={clsx(
-                "ml-2 inline-flex min-w-5 items-center justify-center rounded-full border bg-black/25 px-1.5 py-0.5 text-[10px] font-mono leading-none",
+                "ml-2 inline-flex min-w-5 items-center justify-center px-1 text-[13px] font-mono font-bold leading-none",
                 // `accent-text` is the CSS-variable utility that replaced getSonarAccent(); the
                 // Sonar copy of this component had already moved and this one had not.
-                enabled === "off" && `border-yellow-200/35 accent-text`,
-                enabled === "include" && "border-emerald-400/50 text-emerald-400",
-                enabled === "exclude" && "border-red-400/50 text-red-400",
+                enabled === "off" && `accent-text`,
+                enabled === "include" && "text-emerald-400",
+                enabled === "exclude" && "text-red-400",
               )}
             >
               {selected.size}

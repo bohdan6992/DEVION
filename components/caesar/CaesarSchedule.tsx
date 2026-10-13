@@ -440,6 +440,26 @@ export default function CaesarSchedule() {
     return [...inSegment, ...overnight];
   }, [plan, selected]);
 
+  /**
+   * Strategy keys genuinely scheduled in the SELECTED segment's own plan row — unlike chartInstances
+   * above, this does NOT exclude holdsOvernight strategies, and does NOT fold in carryovers from
+   * other segments. Passed to CaesarCharts (null on allDay) so PNL OVER TIME/AVERAGE TRADE's hover
+   * tooltip can tell "Reversal is charted here because its book is still held" (chartInstances'
+   * overnight category) apart from "Reversal is actually this segment's own strategy" (POST) — the
+   * operator's own complaint, 2026-10-13: Reversal's P&L carryover line was showing up in INTRA's
+   * tooltip even though INTRA never runs it.
+   */
+  const assignedKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!plan) return keys;
+    for (const row of plan[selected] ?? []) {
+      if (!row.enabled) continue;
+      const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
+      if (strategy) keys.add(strategy.key);
+    }
+    return keys;
+  }, [plan, selected]);
+
   // Positions can close long after their segment has ended, so this stays every strategy the
   // registry knows about — not scoped to the current segment like chartInstances above. Used to
   // also filter to streamEngine === "browser", on the same now-false theory chartInstances'
@@ -577,6 +597,7 @@ export default function CaesarSchedule() {
               toMin={allDay ? DAY_MINUTES : selectedSegment.toMin}
               nowMin={nowMin}
               instances={allDay ? positionInstances : chartInstances}
+              assignedKeys={allDay ? null : assignedKeys}
             />
             <CaesarPositions instances={positionInstances} tableSlot={positionsTableSlot} selectedSegment={positionsSegmentKey} />
             <CaesarBridgeDecisions />

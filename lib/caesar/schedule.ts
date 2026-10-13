@@ -130,19 +130,23 @@ export const CAESAR_SEGMENTS: readonly CaesarSegment[] = [
     key: "open",
     label: "OPEN",
     fromMin: axisMinutes(9, 0),
-    toMin: axisMinutes(10, 0),
+    // Runs to 11:00, not 10:00: the OPG strategies enter 09:20-09:25 and leave on their 09:45 /
+    // 10:00 / 10:30 exit classes. A segment that ended at 10:00 had Caesar STOP them before the last
+    // classes, which cleared their queued orders (and raised queue panic-off), so those exits never
+    // went out. The window now covers every exit with room to spare.
+    toMin: axisMinutes(11, 0),
     color: RED,
-    bands: [{ fromMin: axisMinutes(9, 0), toMin: axisMinutes(10, 0), color: RED, label: "OPEN" }],
-    hint: "Run-up into the bell and the first 30 minutes of the regular session",
+    bands: [{ fromMin: axisMinutes(9, 0), toMin: axisMinutes(11, 0), color: RED, label: "OPEN" }],
+    hint: "Run-up into the bell and the first 90 minutes of the regular session",
   },
   {
     key: "intra",
     label: "INTRA",
-    fromMin: axisMinutes(10, 0),
+    fromMin: axisMinutes(11, 0),
     toMin: axisMinutes(16, 0),
     color: ORANGE,
-    bands: [{ fromMin: axisMinutes(10, 0), toMin: axisMinutes(16, 0), color: ORANGE, label: "INTRA" }],
-    hint: "Regular session body, 10:00 to the close",
+    bands: [{ fromMin: axisMinutes(11, 0), toMin: axisMinutes(16, 0), color: ORANGE, label: "INTRA" }],
+    hint: "Regular session body, 11:00 to the close",
   },
   {
     key: "post",

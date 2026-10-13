@@ -51,7 +51,7 @@ export type ArbitrageLiveParams = {
    * represented side (classic) or sends real QQQ hedge orders to close the gap directly (hedged).
    * Null/disabled = it never touches a threshold or sends a hedge order.
    */
-  autoBalance: { enabled: boolean; ratio: number; hedged: boolean } | null;
+  autoBalance: { enabled: boolean; ratio: number; hedged: boolean; minGapBp: number } | null;
   /**
    * SAVE mode: every hour, Ctrl+Q (cancels unfilled limits), then forgets whatever is still awaiting
    * its fill so the ordinary entry path re-sends it if it is still signalling. Nothing to do with
@@ -276,7 +276,7 @@ export function toArbitrageLiveParams(args: {
   signalsMinRate: number;
   signalsMinTotal: number;
   ignoreRatings?: boolean;
-  autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean } | null;
+  autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean; minGapBp?: number } | null;
   saveMode?: boolean;
   source: string;
 }): ArbitrageLiveParams {
@@ -310,7 +310,7 @@ export function toArbitrageLiveParams(args: {
     filters: args.sonar ? null : toArbitrageServerFilters(args.filters),
     sonar: args.sonar ? toArbitrageServerSonarFilters(args.sonar) : null,
     autoBalance: args.autoBalance
-      ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2, hedged: !!args.autoBalance.hedged }
+      ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2, hedged: !!args.autoBalance.hedged, minGapBp: Math.max(0, num(args.autoBalance.minGapBp) ?? 0) }
       : null,
     saveMode: !!args.saveMode,
     source: args.source,

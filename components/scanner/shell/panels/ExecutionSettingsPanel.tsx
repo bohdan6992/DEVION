@@ -1,6 +1,7 @@
 import React from "react";
 import clsx from "clsx";
 import { GlassCard } from "../../shared/ui";
+import { IDENTITY_YELLOW_HEX, SCANNER_CORAL_HEX, SCANNER_MINT_HEX } from "../../shared/styles";
 import { clampInt, formatDilutionStepValue, formatScannerSizeValue, normalizeScannerSizeValue, stepDilutionStepValue, stepScannerSizeValue } from "../../../../lib/scanner/format";
 import type { ScannerFilterBag } from "../../../../lib/scanner/filterState";
 import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArbPriceMode, PaperArbSizingMode, TabKey } from "../../../../lib/scanner/types";
@@ -94,6 +95,13 @@ export type DirectionBalanceControl = {
   ratio: number;
   onToggle: () => void;
   onRatio: (value: number) => void;
+  /**
+   * Absolute trigger in BP; 0 = off. When above 0 it replaces the ratio rule: any difference of at
+   * least this much between the two sides is a skew (15 against 14 included), and the book counts as
+   * balanced only once the difference is back under it. See DirectionBalanceSettings.MinGapBp.
+   */
+  minGapBp: number;
+  onMinGapBp: (value: number) => void;
   /**
    * HEDGED mode: on a skew, send real QQQ orders (buy/sell) to close the BP gap directly instead of
    * lowering the starved side's entry threshold. Only matters while `enabled` is true, and only
@@ -189,6 +197,126 @@ function BalanceRatioInput({ value, onChange, disabled }: { value: number; onCha
           onClick={() => bump(-1)}
           className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
           aria-label="Decrease balance trigger ratio"
+        >
+          ▼
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One HH:MM control: two spinner inputs (hour, minute) in a single h-7 pill, no caption - the
+ * meaning lives in the pill's own title and the colour (START mint, ENTRY yellow, CUTOFF coral).
+ * Same arrow-column pattern as every other spinner here (hover/focus only, flush right).
+ */
+function TimePill({
+  title, ariaLabel, color, value, fallbackHour, onChange,
+}: {
+  title: string;
+  ariaLabel: string;
+  color: string;
+  value: string;
+  fallbackHour: string;
+  onChange: (next: string) => void;
+}) {
+  const [hRaw, mRaw] = value.split(":");
+  const h = hRaw ?? fallbackHour;
+  const m = mRaw ?? "00";
+  const setH = (n: number) => onChange(`${String(Math.max(0, Math.min(23, n))).padStart(2, "0")}:${m}`);
+  const setM = (n: number) => onChange(`${h}:${String(Math.max(0, Math.min(59, n))).padStart(2, "0")}`);
+  const inputClass = "center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono font-bold tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all";
+  const arrowsClass = "absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity";
+  const upClass = "flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors";
+  const downClass = "flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors";
+  const hNum = Number(h);
+  const mNum = Number(m);
+
+  return (
+    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title={title}>
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
+        <input
+          type="number" inputMode="numeric" min={0} max={23} step={1}
+          value={hNum}
+          onChange={(e) => setH(clampInt(e.target.value, 0))}
+          aria-label={`${ariaLabel} hour`}
+          className={inputClass}
+          style={{ color }}
+        />
+        <div className={arrowsClass}>
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setH(hNum + 1)} className={upClass} aria-label={`Increase ${ariaLabel} hour`}>▲</button>
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setH(hNum - 1)} className={downClass} aria-label={`Decrease ${ariaLabel} hour`}>▼</button>
+        </div>
+      </div>
+      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
+      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
+        <input
+          type="number" inputMode="numeric" min={0} max={59} step={5}
+          value={mNum}
+          onChange={(e) => setM(clampInt(e.target.value, 0))}
+          aria-label={`${ariaLabel} minute`}
+          className={inputClass}
+          style={{ color }}
+        />
+        <div className={arrowsClass}>
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setM(mNum + 5)} className={upClass} aria-label={`Increase ${ariaLabel} minute`}>▲</button>
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setM(mNum - 5)} className={downClass} aria-label={`Decrease ${ariaLabel} minute`}>▼</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BalanceGapInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
+  const [text, setText] = React.useState(String(value));
+
+  React.useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const n = Number(raw.replace(",", "."));
+    if (Number.isFinite(n) && n >= 0) onChange(n);
+  };
+  const bump = (dir: 1 | -1) => {
+    const next = Math.max(0, (Number.isFinite(value) ? value : 0) + dir * 500);
+    setText(String(next));
+    onChange(next);
+  };
+
+  return (
+    <div className="group relative h-8 w-14 overflow-hidden rounded-md">
+      <input
+        type="number"
+        inputMode="numeric"
+        min={0}
+        step={500}
+        value={text}
+        disabled={disabled}
+        onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
+        onBlur={() => setText(String(value))}
+        aria-label="Balance minimum gap in BP"
+        className="center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99] disabled:opacity-40 accent-text"
+      />
+      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => bump(1)}
+          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+          aria-label="Increase balance minimum gap"
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => bump(-1)}
+          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+          aria-label="Decrease balance minimum gap"
         >
           ▼
         </button>
@@ -298,6 +426,13 @@ export function DirectionBalanceControls({ directionBalance }: { directionBalanc
       >
         <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
         <BalanceRatioInput value={directionBalance.ratio} onChange={directionBalance.onRatio} disabled={!directionBalance.enabled} />
+        <span
+          className="flex h-8 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
+          title="MIN GAP (BP). 0 = off, the RATIO decides. Above 0 it replaces the ratio: any difference of at least this many BP between longs and shorts counts as a skew (15 against 14 included), and the balance works until the difference is back UNDER it - i.e. to ~0. HEDGED sends QQQ in whole orders of 1,000 BP, so use 1,000 or more there."
+        >
+          GAP
+        </span>
+        <BalanceGapInput value={directionBalance.minGapBp} onChange={directionBalance.onMinGapBp} disabled={!directionBalance.enabled} />
         {directionBalance.enabled && (
           <span
             className="flex h-8 items-center gap-1.5 pr-2 text-[10px] font-mono tabular-nums select-none"
@@ -498,8 +633,8 @@ export default function ExecutionSettingsPanel({
     <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
       <TwoTonePairButtons
         options={[
-          { key: "Undiluted", label: "UNDILUTED" },
           { key: "Diluted", label: "DILUTED" },
+          { key: "Undiluted", label: "UNDILUTED" },
         ] as const}
         active={dilutionMode}
         onSelect={(key) => applyDilutionMode(key as PaperArbDilutionMode)}
@@ -507,8 +642,7 @@ export default function ExecutionSettingsPanel({
     </div>
 
 
-    <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-      <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">STEP</span>
+    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="STEP — how far apart each add rung sits, in the dilution ladder's own unit.">
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"
@@ -520,7 +654,7 @@ export default function ExecutionSettingsPanel({
           disabled={dilutionMode !== "Diluted"}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-            "accent-text"
+            "text-amber-300"
           )}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -548,8 +682,7 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-      <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MAXADD</span>
+    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="MAXADD — the most adds a single position may take before the ladder stops.">
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"
@@ -562,7 +695,7 @@ export default function ExecutionSettingsPanel({
           disabled={dilutionMode !== "Diluted"}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-            "accent-text"
+            "text-sky-300"
           )}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -590,8 +723,7 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center pl-3 pr-0 rounded-lg bg-black/20">
-      <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
+    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="DELAY — minutes to wait after a rung qualifies before the add is actually sent.">
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"
@@ -604,7 +736,7 @@ export default function ExecutionSettingsPanel({
           disabled={dilutionMode !== "Diluted"}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
-            "accent-text"
+            "text-violet-300"
           )}
         />
         <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -780,105 +912,6 @@ export default function ExecutionSettingsPanel({
       <span className="flex h-8 items-center pr-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">SEC</span>
     </div>
 
-    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="Position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning.">
-      <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">START</span>
-      {/* Hour stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={23}
-          step={1}
-          value={Number(preStartTime.split(":")[0] ?? "21")}
-          onChange={(e) => {
-            const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
-            const m = preStartTime.split(":")[1] ?? "00";
-            const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-            setPreStartTime(nextPreStartTime);
-            onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") + 1));
-              const m = preStartTime.split(":")[1] ?? "00";
-              const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-              setPreStartTime(nextPreStartTime);
-              onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase pre-session start hour"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(preStartTime.split(":")[0] ?? "21") - 1));
-              const m = preStartTime.split(":")[1] ?? "00";
-              const nextPreStartTime = `${String(h).padStart(2, "0")}:${m}`;
-              setPreStartTime(nextPreStartTime);
-              onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease pre-session start hour"
-          >▼</button>
-        </div>
-      </div>
-      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
-      {/* Minute stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={59}
-          step={5}
-          value={Number(preStartTime.split(":")[1] ?? "00")}
-          onChange={(e) => {
-            const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
-            const h = preStartTime.split(":")[0] ?? "21";
-            const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-            setPreStartTime(nextPreStartTime);
-            onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") + 5));
-              const h = preStartTime.split(":")[0] ?? "21";
-              const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-              setPreStartTime(nextPreStartTime);
-              onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase pre-session start minute"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(preStartTime.split(":")[1] ?? "00") - 5));
-              const h = preStartTime.split(":")[0] ?? "21";
-              const nextPreStartTime = `${h}:${String(m).padStart(2, "0")}`;
-              setPreStartTime(nextPreStartTime);
-              onStreamAutomationConfigChange?.({ preStartTime: nextPreStartTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease pre-session start minute"
-          >▼</button>
-        </div>
-      </div>
-    </div>
-
     {scheduledStart && (scheduledStart.armedAtUtc || scheduledStart.lastOutcome) && (
       <span
         className={clsx(
@@ -901,204 +934,6 @@ export default function ExecutionSettingsPanel({
       </span>
     )}
 
-    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="New entries stop at this time.">
-      <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">CUTOFF</span>
-      {/* Hour stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={23}
-          step={1}
-          value={Number(startCutoffTime.split(":")[0] ?? "9")}
-          onChange={(e) => {
-            const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
-            const m = startCutoffTime.split(":")[1] ?? "00";
-            const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-            setStartCutoffTime(nextCutoffTime);
-            onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") + 1));
-              const m = startCutoffTime.split(":")[1] ?? "00";
-              const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setStartCutoffTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase cutoff hour"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(startCutoffTime.split(":")[0] ?? "9") - 1));
-              const m = startCutoffTime.split(":")[1] ?? "00";
-              const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setStartCutoffTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease cutoff hour"
-          >▼</button>
-        </div>
-      </div>
-      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
-      {/* Minute stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={59}
-          step={5}
-          value={Number(startCutoffTime.split(":")[1] ?? "20")}
-          onChange={(e) => {
-            const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
-            const h = startCutoffTime.split(":")[0] ?? "09";
-            const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-            setStartCutoffTime(nextCutoffTime);
-            onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") + 5));
-              const h = startCutoffTime.split(":")[0] ?? "09";
-              const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setStartCutoffTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase cutoff minute"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(startCutoffTime.split(":")[1] ?? "20") - 5));
-              const h = startCutoffTime.split(":")[0] ?? "09";
-              const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setStartCutoffTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ startCutoffTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease cutoff minute"
-          >▼</button>
-        </div>
-      </div>
-    </div>
-
-    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title="ENTRY STOP: after this time no NEW positions are taken. Leave equal to CUTOFF to stop entries at the close; set it earlier (e.g. 09:25 vs a 10:00 close) to give the dispatch queue time to flush.">
-      <span className="flex h-8 items-center pr-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">ENTRY</span>
-      {/* Hour stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={23}
-          step={1}
-          value={Number(entryStopValue.split(":")[0] ?? "9")}
-          onChange={(e) => {
-            const h = Math.max(0, Math.min(23, clampInt(e.target.value, 0)));
-            const m = entryStopValue.split(":")[1] ?? "00";
-            const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-            setEntryStopTime(nextCutoffTime);
-            onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(entryStopValue.split(":")[0] ?? "9") + 1));
-              const m = entryStopValue.split(":")[1] ?? "00";
-              const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setEntryStopTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase entry stop hour"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const h = Math.max(0, Math.min(23, Number(entryStopValue.split(":")[0] ?? "9") - 1));
-              const m = entryStopValue.split(":")[1] ?? "00";
-              const nextCutoffTime = `${String(h).padStart(2, "0")}:${m}`;
-              setEntryStopTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease entry stop hour"
-          >▼</button>
-        </div>
-      </div>
-      <span className="text-[10px] font-mono text-zinc-500 select-none">:</span>
-      {/* Minute stepper */}
-      <div className="group relative h-8 w-8 overflow-hidden rounded-md">
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={59}
-          step={5}
-          value={Number(entryStopValue.split(":")[1] ?? "20")}
-          onChange={(e) => {
-            const m = Math.max(0, Math.min(59, clampInt(e.target.value, 0)));
-            const h = entryStopValue.split(":")[0] ?? "09";
-            const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-            setEntryStopTime(nextCutoffTime);
-            onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-          }}
-          className={clsx("center-spin w-full h-8 bg-transparent border-0 !pl-0.5 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all", "accent-text")}
-        />
-        <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(entryStopValue.split(":")[1] ?? "20") + 5));
-              const h = entryStopValue.split(":")[0] ?? "09";
-              const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setEntryStopTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Increase entry stop minute"
-          >▲</button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const m = Math.max(0, Math.min(59, Number(entryStopValue.split(":")[1] ?? "20") - 5));
-              const h = entryStopValue.split(":")[0] ?? "09";
-              const nextCutoffTime = `${h}:${String(m).padStart(2, "0")}`;
-              setEntryStopTime(nextCutoffTime);
-              onStreamAutomationConfigChange?.({ entryStopTime: nextCutoffTime });
-            }}
-            className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Decrease entry stop minute"
-          >▼</button>
-        </div>
-      </div>
-    </div>
-
     <div className="flex-1" />
 
     {tab === "episodes" && !isStreamOnlyShell && filteredEpisodes.length > 0 && (
@@ -1111,6 +946,42 @@ export default function ExecutionSettingsPanel({
         ↓ LOG
       </button>
     )}
+
+    <TimePill
+      title="START: position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning."
+      ariaLabel="start"
+      color={SCANNER_MINT_HEX}
+      value={preStartTime}
+      fallbackHour="21"
+      onChange={(next) => {
+        setPreStartTime(next);
+        onStreamAutomationConfigChange?.({ preStartTime: next });
+      }}
+    />
+
+    <TimePill
+      title="ENTRY STOP: after this time no NEW positions are taken, and the bridge print-closes the book. Leave equal to CUTOFF to stop entries at the close; set it earlier (e.g. 09:25 vs a 10:00 close) to give the dispatch queue time to flush."
+      ariaLabel="entry stop"
+      color={IDENTITY_YELLOW_HEX}
+      value={entryStopValue}
+      fallbackHour="09"
+      onChange={(next) => {
+        setEntryStopTime(next);
+        onStreamAutomationConfigChange?.({ entryStopTime: next });
+      }}
+    />
+
+    <TimePill
+      title="CUTOFF: end of the START..CUTOFF session. It is also the ENTRY STOP whenever ENTRY is left unset; the scheduled start uses it to know when a session is over."
+      ariaLabel="cutoff"
+      color={SCANNER_CORAL_HEX}
+      value={startCutoffTime}
+      fallbackHour="09"
+      onChange={(next) => {
+        setStartCutoffTime(next);
+        onStreamAutomationConfigChange?.({ startCutoffTime: next });
+      }}
+    />
 
   </div>
 </GlassCard>

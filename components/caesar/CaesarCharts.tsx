@@ -49,6 +49,14 @@ export type CaesarChartsProps = {
   toMin: number | null;
   /** Minutes since 21:00 right now, for the "now" rule. */
   nowMin: number | null;
+  /**
+   * Strategy keys genuinely assigned to the segment currently being viewed (Caesar's own plan row
+   * for it), or null when the whole day is in view. PNL OVER TIME and AVERAGE TRADE's hover
+   * tooltips use this to drop a strategy that only appears in `instances` as an overnight carryover
+   * (e.g. Reversal, held through to POST) but is not actually scheduled in the segment on screen —
+   * the LINE itself and the pooled total are unaffected, only the tooltip's own strategy list.
+   */
+  assignedKeys?: ReadonlySet<string> | null;
 };
 
 /**
@@ -470,6 +478,7 @@ function LinesChart({
   meta,
   heightPx = 320,
   heightClass = "h-[320px]",
+  assignedKeys = null,
 }: {
   series: ValueSeries[];
   fromMin: number | null;
@@ -486,6 +495,8 @@ function LinesChart({
    */
   heightPx?: number;
   heightClass?: string;
+  /** See CaesarChartsProps' own doc comment — null means "don't filter" (whole day in view). */
+  assignedKeys?: ReadonlySet<string> | null;
 }) {
   const uid = useId().replace(/:/g, "");
   const plotRef = useRef<SVGSVGElement | null>(null);
@@ -543,16 +554,23 @@ function LinesChart({
 
   const hoverValues = useMemo(() => {
     if (hoverMin == null) return null;
-    return series.map((s) => {
-      let nearest: number | null = null;
-      let bestDiff = Infinity;
-      for (const p of inRange(s)) {
-        const diff = Math.abs(p.min - hoverMin);
-        if (diff < bestDiff) { bestDiff = diff; nearest = p.value; }
-      }
-      return { key: s.key, color: s.dashed ? s.color : GOLD_LINE, value: nearest };
-    });
-  }, [hoverMin, series, inRange]);
+    return series
+      // The total (s.dashed === false) always shows; a per-strategy row is dropped when a specific
+      // segment is in view (assignedKeys non-null) and that strategy is not actually scheduled in
+      // it — the overnight carryover case (Reversal still charted on PRE/INTRA because its book is
+      // still held, but not really "this segment's own strategy"). Whole-day view passes null here
+      // and nothing is filtered.
+      .filter((s) => !s.dashed || assignedKeys == null || assignedKeys.has(s.key))
+      .map((s) => {
+        let nearest: number | null = null;
+        let bestDiff = Infinity;
+        for (const p of inRange(s)) {
+          const diff = Math.abs(p.min - hoverMin);
+          if (diff < bestDiff) { bestDiff = diff; nearest = p.value; }
+        }
+        return { key: s.key, color: s.dashed ? s.color : GOLD_LINE, value: nearest };
+      });
+  }, [hoverMin, series, inRange, assignedKeys]);
   const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / width) * 100;
 
   const zeroY = y(0);
@@ -901,7 +919,7 @@ function intnLike(n: number): string {
 
 // =========================================================================================
 
-export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: CaesarChartsProps) {
+export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assignedKeys = null }: CaesarChartsProps) {
   const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
   const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
   const [bridgePositions, setBridgePositions] = useState<BridgePosition[]>([]);
@@ -1206,34 +1224,48 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
   //
   // Total is POOLED (sum of every active strategy's own value at that sample), not an average of
   // averages — same convention the donut's own "total" already uses for situations.
+  //
+  // BAD SAMPLE WINDOW (2026-10-13, the operator's own instruction): the bridge's own 10-minute
+  // sampler lands one reading inside 03:59-04:01 NY that is wrong — a spike neither the total nor
+  // any one strategy's own line should ever show. Dropped for both charts below rather than fixed
+  // at the source, since the source of the bad number has not been diagnosed; this just keeps it
+  // off screen.
+  const cleanPnlPoints = useMemo(
+    () => pnlPoints.filter((p) => {
+      const m = axisMinuteOf(new Date(p.atUtc).getTime());
+      return m < 419 || m > 421;
+    }),
+    [pnlPoints],
+  );
+
   const pnlLineSeries = useMemo<ValueSeries[]>(() => {
     const perStrategy: ValueSeries[] = instances.map((inst) => ({
       key: inst.key,
       color: colorByInstance.get(inst.instanceId) ?? OTHER,
       dashed: true,
-      points: pnlPoints
+      points: cleanPnlPoints
         .filter((p) => p.perStrategy[inst.instanceId] !== undefined)
         .map((p) => ({ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: p.perStrategy[inst.instanceId].total })),
     }));
-    const totalPoints: ValuePoint[] = pnlPoints.map((p) => ({
+    const totalPoints: ValuePoint[] = cleanPnlPoints.map((p) => ({
       min: axisMinuteOf(new Date(p.atUtc).getTime()),
       value: instances.reduce((sum, inst) => sum + (p.perStrategy[inst.instanceId]?.total ?? 0), 0),
     }));
     return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
-  }, [instances, colorByInstance, pnlPoints]);
+  }, [instances, colorByInstance, cleanPnlPoints]);
 
   const avgTradeLineSeries = useMemo<ValueSeries[]>(() => {
     const perStrategy: ValueSeries[] = instances.map((inst) => ({
       key: inst.key,
       color: colorByInstance.get(inst.instanceId) ?? OTHER,
       dashed: true,
-      points: pnlPoints.flatMap((p) => {
+      points: cleanPnlPoints.flatMap((p) => {
         const s = p.perStrategy[inst.instanceId];
         if (!s || s.situations <= 0) return [];
         return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: s.total / s.situations }];
       }),
     }));
-    const totalPoints: ValuePoint[] = pnlPoints.flatMap((p) => {
+    const totalPoints: ValuePoint[] = cleanPnlPoints.flatMap((p) => {
       let total = 0;
       let situations = 0;
       for (const inst of instances) {
@@ -1246,7 +1278,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
       return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: total / situations }];
     });
     return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
-  }, [instances, colorByInstance, pnlPoints]);
+  }, [instances, colorByInstance, cleanPnlPoints]);
 
   // ---- the time scale ------------------------------------------------------------------------
   // W measured off the svg itself (useMeasuredWidth — see its own doc comment); H is simply the
@@ -1349,35 +1381,40 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
    * The dodge logic that used to live here existed only to keep the always-on end-of-line NUMBER
    * label from colliding with its neighbours. That label is gone (2026-10-07, the operator's own
    * instruction — hover reads the exact count instead), so there is nothing left to dodge.
+   *
+   * ENTERED/DISPATCHED is the plain dashed line now (2026-10-13, swapped from the previous
+   * 2026-10-08 assignment — see activeEndMarks, which took over the solid glow treatment): no area
+   * fill or gradient needed here any more, the same way activeEndMarks never needed one before.
    */
   const endMarks = useMemo(() => {
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    return series.map((s, i) => ({
+    return series.map((s) => ({
       key: s.key,
       color: s.color,
       d: pathFor(s),
-      areaD: areaPathFor(s),
-      gradientId: `caesar-arrival-fill-${i}`,
       endX,
       y: y(s.entered),
     }));
-  }, [series, from, to, nowMin, x, y, pathFor, areaPathFor]);
+  }, [series, from, to, nowMin, x, y, pathFor]);
 
   /**
-   * The active-tickers line's own marks — same shape as endMarks, minus the area fill: this one is
-   * a plain dashed stroke, drawn in its strategy's own colour so the two lines read as "this
+   * The active-tickers line's own marks — same shape as endMarks, area fill included: ACTIVE is the
+   * solid, glowing line now (2026-10-13, the operator's own instruction — swapped from the previous
+   * 2026-10-08 assignment), drawn in its strategy's own colour so the two lines still read as "this
    * strategy, two readings of it" rather than as a whole second palette to learn.
    */
   const activeEndMarks = useMemo(() => {
     const endX = x(Math.min(Math.max(nowMin ?? to, from), to));
-    return activeArrivalsSeries.map((s) => ({
+    return activeArrivalsSeries.map((s, i) => ({
       key: s.key,
       color: s.color,
       d: pathFor(s),
+      areaD: areaPathFor(s),
+      gradientId: `caesar-active-fill-${i}`,
       endX,
       y: y(s.entered),
     }));
-  }, [activeArrivalsSeries, from, to, nowMin, x, y, pathFor]);
+  }, [activeArrivalsSeries, from, to, nowMin, x, y, pathFor, areaPathFor]);
 
   const onMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = plotRef.current;
@@ -1486,6 +1523,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
           meta="total ÷ situations"
           heightPx={384}
           heightClass="h-[384px]"
+          assignedKeys={assignedKeys}
         />
       </div>
 
@@ -1525,7 +1563,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                     (areaPathFor), so the glow only ever reads as sitting under the step, not
                     around it.
                   */}
-                  {endMarks.map((m) => (
+                  {activeEndMarks.map((m) => (
                     <linearGradient key={m.gradientId} id={m.gradientId} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={m.color} stopOpacity="0.38" />
                       <stop offset="55%" stopColor={m.color} stopOpacity="0.12" />
@@ -1587,7 +1625,15 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                   <line x1={x(hoverMin)} y1={PAD_T} x2={x(hoverMin)} y2={H - PAD_B} stroke="rgba(255,255,255,0.30)" strokeWidth={1} />
                 )}
 
-                {endMarks.map((m) => {
+                {/*
+                  ACTIVE, WITH BPUSED — the solid, glowing line now (2026-10-13, swapped from the
+                  previous 2026-10-08 assignment, the operator's own instruction): not every dispatch
+                  below becomes a real position, some get cancelled, some get retried several times
+                  for the same ticker, so this counts each strategy's own currently-active tickers
+                  once each instead. Carries the hover interaction (onMouseEnter/Leave) — the other
+                  line just dims with it via the same hoverKey.
+                */}
+                {activeEndMarks.map((m) => {
                   const dim = hoverKey != null && hoverKey !== m.key;
                   return (
                     <g
@@ -1610,27 +1656,26 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
                 })}
 
                 {/*
-                  ACTIVE, WITH BPUSED — the same strategy's own colour, dashed instead of solid
-                  (2026-10-08, the operator's own instruction): not every dispatch above becomes a
-                  real position, some get cancelled, some get retried several times for the same
-                  ticker, so this counts each strategy's own currently-active tickers once each
-                  instead. No area fill — a second glowing wedge per strategy would compete with the
+                  ENTERED/DISPATCHED — the plain dashed line now (2026-10-13, swapped from the
+                  previous 2026-10-08 assignment): a dispatch is not yet a confirmed position (see
+                  ACTIVE above), so this reads as the secondary line to compare the solid one
+                  against. No area fill — a second glowing wedge per strategy would compete with the
                   first one instead of reading as "one more line to compare it against". Dims with
                   its own strategy's main line on hover, via the same hoverKey.
                 */}
-                {activeEndMarks.map((m) => {
+                {endMarks.map((m) => {
                   const dim = hoverKey != null && hoverKey !== m.key;
                   return (
                     <g
-                      key={`active-${m.key}`}
+                      key={`entered-${m.key}`}
                       className="caesar-chart-fade-up"
                       opacity={dim ? 0.22 : 1}
                       style={{ transition: "opacity 140ms ease" }}
                     >
                       {/*
-                        A REAL dash pattern (not the main line's pathLength=1 draw-in trick, which
+                        A REAL dash pattern (not the other line's pathLength=1 draw-in trick, which
                         would turn "5 4" into one unreadable dash the length of the whole line) —
-                        this is the "different line type, same colour" the main line's own count
+                        this is the "different line type, same colour" the solid line's own count
                         gets compared against, so the fade-up entrance above is enough on its own.
                       */}
                       <path
@@ -1693,6 +1738,7 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin }: Caes
             meta="open + closed, every 10m"
             heightPx={384}
             heightClass="h-[384px]"
+            assignedKeys={assignedKeys}
           />
       </div>
       </>

@@ -1129,6 +1129,8 @@ export default function ArbitrageScanner({
   // working with this tab closed. See DirectionBalancer on the bridge.
   const [autoBalance, setAutoBalance] = useState<boolean>(false);
   const [autoBalanceRatio, setAutoBalanceRatio] = useState<number>(2);
+  // Absolute trigger in BP; 0 = off (the ratio rule decides). See DirectionBalanceSettings.MinGapBp.
+  const [autoBalanceMinGapBp, setAutoBalanceMinGapBp] = useState<number>(0);
   const [autoBalanceHedged, setAutoBalanceHedged] = useState<boolean>(false);
   const directionBalanceStatus = useDirectionBalanceStatus(autoBalance);
 
@@ -1420,6 +1422,7 @@ export default function ArbitrageScanner({
         if (typeof s.startAbsNeg === "string") setStartAbsNeg(s.startAbsNeg);
         if (typeof s.autoBalance === "boolean") setAutoBalance(s.autoBalance);
         if (typeof s.autoBalanceRatio === "number" && s.autoBalanceRatio >= 1.1) setAutoBalanceRatio(s.autoBalanceRatio);
+        if (typeof s.autoBalanceMinGapBp === "number" && s.autoBalanceMinGapBp >= 0) setAutoBalanceMinGapBp(s.autoBalanceMinGapBp);
         if (typeof s.autoBalanceHedged === "boolean") setAutoBalanceHedged(s.autoBalanceHedged);
         if (typeof s.saveMode === "boolean") setSaveMode(s.saveMode);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
@@ -1676,6 +1679,7 @@ export default function ArbitrageScanner({
       startAbsNeg,
       autoBalance,
       autoBalanceRatio,
+      autoBalanceMinGapBp,
       autoBalanceHedged,
       saveMode,
       endAbs,
@@ -1852,7 +1856,7 @@ export default function ArbitrageScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, saveMode, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, autoBalanceMinGapBp, saveMode, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
       // changing any of them left persistedFilters identical and the debounced write never fired —
       // they reached localStorage only by accident, whenever some other field changed next. All of
@@ -2580,7 +2584,7 @@ export default function ArbitrageScanner({
         signalsMinRate: streamRatingRule.minRate,
         signalsMinTotal: streamRatingRule.minTotal,
         ignoreRatings: arbitrageIgnoreRatings,
-        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged },
+        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged, minGapBp: autoBalanceMinGapBp },
         saveMode,
         source: "arbitrage-scanner",
       }));
@@ -2598,6 +2602,7 @@ export default function ArbitrageScanner({
     arbitrageIgnoreRatings,
     autoBalance,
     autoBalanceRatio,
+    autoBalanceMinGapBp,
     autoBalanceHedged,
     saveMode,
   ]);
@@ -6791,6 +6796,8 @@ export default function ArbitrageScanner({
                 ratio: autoBalanceRatio,
                 onToggle: toggleBalanceMode,
                 onRatio: (v) => setAutoBalanceRatio(Math.max(1.1, Math.min(20, Number.isFinite(v) ? v : 2))),
+                minGapBp: autoBalanceMinGapBp,
+                onMinGapBp: (v) => setAutoBalanceMinGapBp(Math.max(0, Math.min(1_000_000, Number.isFinite(v) ? Math.round(v) : 0))),
                 hedged: autoBalanceHedged,
                 onToggleHedged: toggleHedgedMode,
                 status: directionBalanceStatus,
