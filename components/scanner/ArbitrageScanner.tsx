@@ -2296,7 +2296,7 @@ export default function ArbitrageScanner({
     () => [...(episodesRows as any[]), ...(activeRows as any[])],
     [episodesRows, activeRows]
   );
-  const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr, corrThreshold, reportSessionForRow);
+  const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr || excludeHasReport, corrThreshold, reportSessionForRow);
 
   const streamExactSonarFilterSnapshot = useMemo<SonarExactFilterSnapshot>(() => {
     const mm = (key: SharedRangeFilterKey, minRaw: string, maxRaw: string) => ({
@@ -2371,6 +2371,7 @@ export default function ArbitrageScanner({
       excludeHard: excludeHard,
       excludeCorr: excludeCorr,
       corrExcluded: sectorCorr.excluded,
+      corrThreshold,
       activeMode: "off",
       includeUSA: includeUSA,
       includeChina: includeChina,
@@ -4021,7 +4022,8 @@ export default function ArbitrageScanner({
     // Borrow availability (B5ETB), written to the tape so it exists on a Scanner row at all.
     if (rowExcludedByBorrow(row, excludeItb, excludeHard)) return false;
     // CORR: not "this ticker reports" but "this ticker moves with one that does".
-    if (excludeCorr && rowExcludedByCorr(row, sectorCorr.excluded)) return false;
+    // REP also drops the peers of today's reporters (same set CORR uses).
+    if ((excludeCorr || excludeHasReport) && rowExcludedByCorr(row, sectorCorr.excluded)) return false;
     const ticker = String(row.ticker ?? "").trim().toUpperCase();
     const tickerMeta = ticker ? arbitrageTickerMetaByTicker[ticker] ?? null : null;
 
@@ -8837,7 +8839,7 @@ export default function ArbitrageScanner({
                 const req = buildPostRequest(from, to);
                 // CORR is computed on the page (a set of tickers correlated with today's reporters), so the
                 // bridge only learns of it as extra excluded tickers - which is exactly what it is.
-                if (excludeCorr && sectorCorr.excluded.size > 0) {
+                if ((excludeCorr || excludeHasReport) && sectorCorr.excluded.size > 0) {
                   req.excludeTickers = Array.from(new Set([...(req.excludeTickers ?? []), ...Array.from(sectorCorr.excluded)]));
                 }
                 return req;

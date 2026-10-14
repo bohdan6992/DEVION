@@ -1511,6 +1511,8 @@ export type SonarExactFilterSnapshot = {
   excludeCorr: boolean;
   /** Peers of today's reporting tickers, resolved by the bridge. See `lib/filters/sectorCorr`. */
   corrExcluded: Set<string>;
+  /** |corr| cutoff. The bridge resolves reporters over the WHOLE universe at this value itself. */
+  corrThreshold?: number;
   activeMode: ActiveMode;
   includeUSA: boolean;
   includeChina: boolean;
@@ -3402,7 +3404,7 @@ export default function ArbitrageSonar() {
     () => clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
     [corrThresholdInput]
   );
-  const sectorCorr = useSectorCorrExclusion(allItems, excludeCorr, corrThreshold);
+  const sectorCorr = useSectorCorrExclusion(allItems, excludeCorr || excludeReport, corrThreshold);
 
   const snapshot = useMemo(() => {
     return {
@@ -3434,6 +3436,7 @@ export default function ArbitrageSonar() {
       excludeHard,
       excludeCorr,
       corrExcluded: sectorCorr.excluded,
+      corrThreshold,
       activeMode,
 
       includeUSA,

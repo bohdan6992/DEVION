@@ -116,6 +116,8 @@ export type ArbitrageServerSonarFilters = {
   excludeHardToBorrow: boolean;
   excludeCorr: boolean;
   corrExcluded: string[];
+  /** |corr| cutoff the bridge resolves the whole-universe CORR peers at (0.5..1). */
+  corrThreshold: number;
   includeUsa: boolean;
   includeChina: boolean;
   countries: string[];
@@ -246,6 +248,7 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
     excludeHardToBorrow: !!f.excludeHard,
     excludeCorr: !!f.excludeCorr,
     corrExcluded: upper(f.corrExcluded),
+    corrThreshold: num(f.corrThreshold) ?? 0.8,
     includeUsa: !!f.includeUSA,
     includeChina: !!f.includeChina,
     countries: upper(f.selCountries),
