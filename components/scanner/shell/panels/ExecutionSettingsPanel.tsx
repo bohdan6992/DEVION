@@ -468,7 +468,7 @@ export function DirectionBalanceControls({ directionBalance }: { directionBalanc
  * down for the hour whenever another strategy is also running, rather than cancel its orders too.
  */
 const SAVE_MODE_TITLE =
-  "SAVE MODE. Every hour: Ctrl+Q cancels any limit order still unfilled, then any position still awaiting its fill is forgotten so it is re-sent if still signalling. Independent of BALANCE/HEDGED (neither touches QQQ or a threshold) — stands down for the hour if another strategy is also running, since Ctrl+Q is global.";
+  "SAVE MODE. Every hour, at a RANDOM minute 1-5 past the hour, a new draw every hour (e.g. 01:03, 02:05, 03:03 - never the bare :00): Ctrl+Q cancels any limit order still unfilled, then any position still awaiting its fill is forgotten so it is re-sent if still signalling. Independent of BALANCE/HEDGED (neither touches QQQ or a threshold) — stands down for the hour if another strategy is also running, since Ctrl+Q is global.";
 
 export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
   return (

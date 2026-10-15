@@ -30,7 +30,8 @@ import { createPortal } from "react-dom";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { getLiveStrategy, getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
+import { getLiveStrategy } from "@/lib/strategies/registry";
+import { resolveClassByBridgeId } from "@/lib/caesar/hedge";
 import type { StreamPosition } from "@/components/stream/streamEngine";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import { AllSituationsSection } from "./CaesarBridgeDecisions";
@@ -387,7 +388,7 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
       if (!alive || err || !value) return;
       setClaims(
         value.flatMap((p) => {
-          const strategy = getLiveStrategyByBridgeId(p.strategyId);
+          const strategy = resolveClassByBridgeId(p.strategyId);
           return strategy
             ? [{ strategyKey: strategy.key, position: positionFromBridge(p), beta: p.beta, corr: p.corr, sigma: p.sigma, awaitingFill: p.awaitingFill === true }]
             : [];
@@ -445,7 +446,7 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
       const t = ticker.trim().toUpperCase();
       if (!t || claimsByTicker.has(t)) continue;
       const claimed = strategyKeys.flatMap((id) => {
-        const strategy = getLiveStrategyByBridgeId(id);
+        const strategy = resolveClassByBridgeId(id);
         return strategy ? [{ strategyKey: strategy.key, position: closedClaim(), beta: null, corr: null, sigma: null }] : [];
       });
       if (claimed.length > 0) claimsByTicker.set(t, claimed);
@@ -603,7 +604,7 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
       .map(([ticker, pnl]) => {
         const ownerIds = closedOwners[ticker] ?? [];
         const owners = ownerIds.flatMap((id) => {
-          const s = getLiveStrategyByBridgeId(id);
+          const s = resolveClassByBridgeId(id);
           return s ? [s.key] : [];
         });
         return {
@@ -839,7 +840,7 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
               const prune = r.untracked && r.claim
                 ? [...prunes].reverse().find((e) =>
                     e.ticker.toUpperCase() === r.ticker &&
-                    getLiveStrategyByBridgeId(e.strategyId)?.key === r.claim?.strategyKey)
+                    resolveClassByBridgeId(e.strategyId)?.key === r.claim?.strategyKey)
                 : undefined;
               const money = (v: number | null) =>
                 v == null

@@ -21,7 +21,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
-import { getLiveStrategyByBridgeId } from "@/lib/strategies/registry";
+import { resolveClassByBridgeId } from "@/lib/caesar/hedge";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 
 type StreamCandidateRow = {
@@ -765,7 +765,7 @@ export function AllSituationsSection({
     return sum;
   }, [positions, accountPnlByTicker]);
 
-  const strategyKeyOf = (r: SituationRow) => (getLiveStrategyByBridgeId(r.strategyId)?.key ?? r.strategyId).toUpperCase();
+  const strategyKeyOf = (r: SituationRow) => (resolveClassByBridgeId(r.strategyId)?.key ?? r.strategyId).toUpperCase();
 
   const sortedRows = useMemo(() => {
     const base = strategySort === 0

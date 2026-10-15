@@ -29,6 +29,7 @@
  * rather than inventing a hue.
  */
 
+import { HEDGE_BRIDGE_ID, HEDGE_COLOR } from "@/lib/caesar/hedge";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
@@ -1003,7 +1004,10 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
     let regular = 0;
     let overnight = 0;
     for (const inst of instances) {
-      if (inst.overnight) {
+      if (inst.instanceId === HEDGE_BRIDGE_ID) {
+        // The hedge class keeps its own fixed colour and never takes a SERIES slot.
+        map.set(inst.instanceId, HEDGE_COLOR);
+      } else if (inst.overnight) {
         map.set(inst.instanceId, overnight < OVERNIGHT_SERIES.length ? OVERNIGHT_SERIES[overnight] : OTHER);
         overnight += 1;
       } else {

@@ -8,6 +8,7 @@ import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import CaesarControlBar from "./CaesarControlBar";
 import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
+import { HEDGE_INSTANCE } from "@/lib/caesar/hedge";
 import {
   fetchBridgeEngineStatus,
   fetchBridgePlan,
@@ -437,7 +438,9 @@ export default function CaesarSchedule() {
         overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
       }
     }
-    return [...inSegment, ...overnight];
+    // The QQQ direction-balance hedge is a class of its own, charted in every segment (it can be
+    // pressed whenever a balancing strategy runs, and it is held until the balance unwinds it).
+    return [...inSegment, ...overnight, { ...HEDGE_INSTANCE, overnight: false }];
   }, [plan, selected]);
 
   /**
@@ -465,14 +468,14 @@ export default function CaesarSchedule() {
   // also filter to streamEngine === "browser", on the same now-false theory chartInstances'
   // own doc comment describes: every strategy is bridge-hosted today, so that left this list
   // permanently empty and CaesarPositions' STRATEGY column read UNCLAIMED for everything, always.
-  const positionInstances = useMemo(() => (
-    Object.values(LIVE_STRATEGIES)
-      .map((strategy) => ({
-        key: strategy.key,
-        instanceId: strategy.bridgeStrategyId,
-        priority: strategy.priority,
-      }))
-  ), []);
+  const positionInstances = useMemo(() => [
+    ...Object.values(LIVE_STRATEGIES).map((strategy) => ({
+      key: strategy.key,
+      instanceId: strategy.bridgeStrategyId,
+      priority: strategy.priority,
+    })),
+    { ...HEDGE_INSTANCE },
+  ], []);
 
   // NOT min-h-screen. This used to be the only thing on the page, so filling the viewport was
   // free; it is not any more. With ~645px of content the div still stretched to 100vh, and
