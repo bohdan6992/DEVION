@@ -623,6 +623,13 @@ export type OPGReversalAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 // (see PaperOPGContinuumController.cs's own doc comment).
 export type OPGContinuumAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
+// OPG•Fade's own copy - identical shape, same ported-unchanged BuildAnalyticsSummary computation
+// (see PaperOPGFadeController.cs's own doc comment).
+export type OPGFadeAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
+// OPG•Ride's own copy - identical shape (see PaperOPGRideController.cs).
+export type OPGRideAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
 export type PaperArbOptimizerRangeBucketDto = {
   bucketId: string;
   label: string;

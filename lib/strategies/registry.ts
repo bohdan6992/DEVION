@@ -346,6 +346,58 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // OPG•Fade: OPG•Reversal's own copy with ONE difference - the entry signal is ZAP% (the deviation
+  // from the ticker's benchmark leg, stack% - beta x bench%), not Stack%. Side rule unchanged:
+  // positive = Short, negative = Long. Same OPG clock (signal 9:20-9:25, open-anchored entry at 9:30,
+  // three same-day exits 9:45/10:00/10:30) and the same gap-anchored ENTRY pricing.
+  // Hotkeys.OPGFadeBuy/Sell default to the same Ctrl+F7/Ctrl+F8 chord. AutoEnabled defaults false -
+  // no real order can go out until the operator explicitly enables the strategy. Ratings are IGNORED
+  // by default: no zap-based rating table is published yet (see OPGFadeRatingsService).
+  // priority 16 - below opgcontinuum (18) and vwapbounce (17), above openride (15): it reads the same
+  // window and the same tickers as opgreversal, has not traded for real even once, and must not
+  // outrank either. Priorities must be distinct (the registry throws on a clash).
+  opgfade: {
+    key: "opgfade",
+    bridgeStrategyId: "stream.opgfade",
+    nav: {
+      stream: "/opg-fade/stream",
+      scanner: "/opg-fade/scanner",
+      sonar: "/opg-fade/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
+    priority: 16,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/opgfade", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.opgfade", sonarPrefix: "bridge.opgfade", streamPrefix: "stream.opgfade" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0945", "exit1000", "exit1030"],
+      labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
+  opgride: {
+    key: "opgride",
+    bridgeStrategyId: "stream.opgride",
+    nav: {
+      stream: "/opg-ride/stream",
+      scanner: "/opg-ride/scanner",
+      sonar: "/opg-ride/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
+    priority: 14,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/opgride", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.opgride", sonarPrefix: "bridge.opgride", streamPrefix: "stream.opgride" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0945", "exit1000", "exit1030"],
+      labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
   // VWAP Bounce: intraday residual-reversal fade (spec: OriON-strategies/notebooks/VWAPBounce.ipynb).
   // FRONTEND-ONLY for now (2026-10-05): scanner/sonar/stream pages are wired, but there is no bridge
   // backend (no tape engine, gate, ratings or server strategy), so the paper/stream endpoints under

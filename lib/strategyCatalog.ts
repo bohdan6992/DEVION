@@ -19,6 +19,8 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "continuum", name: "CLO•Continuum", icon: "🌊", description: "Продовження руху після екстремуму (вхід по клоузу)." },
   { key: "opgReversal", name: "OPG•Reversal", icon: "🔔", description: "Розворот навколо відкриття ринку, вхід по ціні оупена." },
   { key: "opgContinuum", name: "OPG•Continuum", icon: "🌊", description: "Продовження руху навколо відкриття ринку, вхід по ціні оупена." },
+  { key: "opgFade", name: "OPG•Fade", icon: "🌅", description: "Фейд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
+  { key: "opgRide", name: "OPG•Ride", icon: "🏄", description: "Проїзд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
   { key: "pullback", name: "Pullback", icon: "🪝", description: "Відкат у тренді для заходу." },
