@@ -129,17 +129,6 @@ type ArbitrageScannerProps = {
 
 const ACTIVE_TICKER_STRATEGY = "vwapbounce" as const;
 
-/**
- * VWAPBounce's exit classes — VWAPBounceTiming.Default.ExitTargetMinByClass: three same-day
- * clock-time exits (09:45/10:00/10:30), not Reversal's own five spanning into the next morning.
- * Lowercase keys exactly as the bridge (PaperVWAPBounceRequest.ExitClass) expects them.
- */
-const VWAPBOUNCE_EXIT_CLASSES = [
-  { key: "target", label: "TARGET" },
-  { key: "stop", label: "STOP" },
-  { key: "eod", label: "EOD" },
-] as const;
-
 export default function VWAPBounceScanner({
   initialPrimaryPanel = "scanner",
   shellMode = "full",
@@ -671,19 +660,15 @@ export default function VWAPBounceScanner({
   // buckets client-side rather than calling /scope/evaluate.
   const VWAPBOUNCE_SCENARIO_RUNNER_ENABLED = true;
 
-  const [vwapBounceExitClass, setVWAPBounceExitClass] = useState<"target" | "stop" | "eod">("target");
-  // VWAPBounceGate.Check's whole rule: |9:20-9:25 deviation| must clear BOTH a flat floor (now split by
-  // side — see below) AND the ticker's own published gamma for (class, sign) — see VWAPBounceGate.cs.
-  // MinDevAbsShort gates a POSITIVE (Short) reading, defaulting to the published file's own min_dev
-  // (0.5) — same convention as ArbitrageScanner's startAbs (a plain number, never empty).
-  const [vwapBounceMinDevAbsShort, setVWAPBounceMinDevAbsShort] = useState(0.5);
-  // MinDevAbsLong gates a NEGATIVE (Long) reading. String, like ArbitrageScanner's startAbsNeg, so it
-  // can be left empty — empty means "the same threshold as the short one" (optNumOrNull(...) ??
-  // vwapBounceMinDevAbsShort), mirroring startAbsNeg's own fallback UX exactly.
-  const [vwapBounceMinDevAbsLong, setVWAPBounceMinDevAbsLong] = useState("");
-  // Upper cap on |9:20-9:25 deviation|, either side — a reading beyond it is an anomalous outlier and is
-  // NOT taken. String, like ArbitrageScanner's startAbsMax; empty = no cap.
-  const [vwapBounceMinDevAbsMax, setVWAPBounceMinDevAbsMax] = useState("");
+  // VWAP Bounce's whole gate (VWAPBounceGate.Check): BOTH legs extreme and of one sign - |tech_z| (distance
+  // from VWAP in sigmas) >= vwapBounceMinTechZ AND |rel_z| (residual vs market + sector in sigmas) >=
+  // vwapBounceMinRelZ. Spec defaults 2 / 2. No exit class and no signed "deviation": the side is the FADE.
+  const [vwapBounceMinTechZ, setVWAPBounceMinTechZ] = useState(2);
+  const [vwapBounceMinRelZ, setVWAPBounceMinRelZ] = useState(2);
+  // Upper cap on score = min(|tech_z|, |rel_z|); empty = no cap.
+  const [vwapBounceMaxScore, setVWAPBounceMaxScore] = useState("");
+  // The Scanner runs ON THE TAPE (operator, 2026-10-19); the notebook's published sigmas are used first, the tape's own history only as a fallback.
+  const [vwapBounceSigmaMinDays, setVWAPBounceSigmaMinDays] = useState(8);
   // Sample-size floor on the ticker's own published gamma (VWAPBounceGammaEntry.GammaN) — same spirit
   // as OpenDoorGate.TryGetRatedBin's minTotalGate. 0 (or below) turns this off.
   const [vwapBounceMinGammaTotal, setVWAPBounceMinGammaTotal] = useState(0);
@@ -700,7 +685,8 @@ export default function VWAPBounceScanner({
   // Sonar's own Γ/Ø pills already drive (VWAPBounceGate.cs) — removed from THIS file 2026-09-23 as a
   // separate violet-strip toggle the operator said was not needed there ("не потрібні"), now brought
   // back here in its own place and style, not restoring the old Γ/Ø pills.
-  const [vwapBounceIgnoreRatings, setVWAPBounceIgnoreRatings] = useState(false);
+  // DEFAULTS TO UNIVERSE: no ratings file is published yet, and with ratings on every ticker would be rejected.
+  const [vwapBounceIgnoreRatings, setVWAPBounceIgnoreRatings] = useState(true);
   // Bumped by applyVWAPBounceAutoOptimizerRow once a result has landed in state, so the run that
   // follows always sees the FRESH values — mirrors ArbitrageScanner's own autoRunTick exactly.
   const [autoRunTick, setAutoRunTick] = useState(0);
@@ -711,82 +697,24 @@ export default function VWAPBounceScanner({
   // which PairFlux/every strategy's tape row already carry).
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
-  // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
-  // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
-  // the short-side floor when the field is empty.
-  const bumpVWAPBounceMinDevAbsMax = (delta: number) => {
-    setVWAPBounceMinDevAbsMax((prev) => {
+  // The cap is a string (so it can be empty = no cap); its arrows bump from the larger floor when empty.
+  const bumpVWAPBounceMaxScore = (delta: number) => {
+    setVWAPBounceMaxScore((prev) => {
       const raw = String(prev ?? "").trim();
       const parsed = Number(raw.replace(",", "."));
-      const cur = Number.isFinite(parsed) ? parsed : vwapBounceMinDevAbsShort;
-      const next = Math.max(0, +(cur + delta).toFixed(4));
-      return String(next);
+      const cur = Number.isFinite(parsed) ? parsed : Math.max(vwapBounceMinTechZ, vwapBounceMinRelZ);
+      return String(Math.max(0, +(cur + delta).toFixed(4)));
     });
   };
 
-  // The %/σ/α/γ strip: what MinDevAbsShort/Long/Max (the coral/mint/silver boxes below) are
-  // ENTERED and ENFORCED in, sent to the bridge as `thresholdUnit` and resolved PER TICKER inside
-  // VWAPBounceGate.Check (see that file's own doc comment) — "2" under σ means "reject unless |dev|
-  // clears 2x THIS ticker's own published sigma", not a flat 2pp for everyone. Also drives the
-  // Signal Dev column's display (formatVWAPBounceDev below), same unit, so the number typed into the
-  // threshold box and the number shown in the table are always directly comparable.
-  // %     — raw Stack% points, the original, only-ever behavior.
-  // σ     — divided by the ticker's own published static sigma (r.sigma — real on every row, same
-  //         TapeStaticMeta.Sigma the black σ range box already reads).
-  // α     — divided by the ticker's own published alpha, sign-matched (r.alpha — real on every row
-  //         as of this pass; previously unwired, see VWAPBounceClosed.Alpha/PaperVWAPBounceMapper.cs).
-  // γ     — divided by the ticker's own MATCHED gamma for this (class, sign) (r.gamma, via Rating).
-  // τ     — divided by the ticker's own CURRENT live ATR14% reading (r.atr14Pct) — added 2026-09-25.
-  //         Unlike σ/α/γ this is NOT a published ratings constant, it is a moment-to-moment tape/
-  //         live value (TradingApp's own "ATR14%" field), so it can genuinely differ signal-to-
-  //         signal for the same ticker — see VWAPBounceThresholdUnit.Atr's own doc comment.
-  // λ     — divided by the ticker's own published lambda (r.lambda) — added 2026-09-27. Like σ, a
-  //         published per-ticker CONSTANT (VWAPBounce.ipynb's compute_lambda: sample std of the raw
-  //         ENTRY-checkpoint Stack% reading), not sign-matched the way α is.
-  const [vwapBounceUnitMode, setVWAPBounceUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
-
-  /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
-   * are now enforced in server-side (see vwapBounceUnitMode's own comment), so what's typed into the
-   * threshold boxes and what's shown here always mean the same thing. */
-  function formatVWAPBounceDev(
-    raw: number | null | undefined,
-    gamma: number | null | undefined,
-    sigma?: number | null,
-    alpha?: number | null,
-    atr14Pct?: number | null,
-    lambda?: number | null,
-  ): string {
-    if (raw == null || !Number.isFinite(raw)) return "—";
-    if (vwapBounceUnitMode === "pct") return num(raw, 3);
-    if (vwapBounceUnitMode === "gamma") {
-      if (gamma == null || !Number.isFinite(gamma) || gamma === 0) return "—";
-      return `${num(raw / gamma, 2)}γ`;
-    }
-    if (vwapBounceUnitMode === "sigma") {
-      if (sigma == null || !Number.isFinite(sigma) || sigma === 0) return "—";
-      return `${num(raw / sigma, 2)}σ`;
-    }
-    if (vwapBounceUnitMode === "atr") {
-      if (atr14Pct == null || !Number.isFinite(atr14Pct) || atr14Pct === 0) return "—";
-      return `${num(raw / atr14Pct, 2)}τ`;
-    }
-    if (vwapBounceUnitMode === "lambda") {
-      if (lambda == null || !Number.isFinite(lambda) || lambda === 0) return "—";
-      return `${num(raw / lambda, 2)}λ`;
-    }
-    if (alpha == null || !Number.isFinite(alpha) || alpha === 0) return "—";
-    return `${num(raw / alpha, 2)}α`;
-  }
-
-  /** What SHORT/LONG/MAX are currently entered in, for their own tooltips — mirrors
-   * VWAPBounceThresholdUnit's own labels 1-to-1. */
+  // What the two leg floors are measured IN: z = as typed; alpha / gamma / lambda multiply the floors by the
+  // ticker's own PUBLISHED constant (needs a ratings row, so they are inert under UNIVERSE).
+  const [vwapBounceUnitMode, setVWAPBounceUnitMode] = useState<"sigma" | "alpha" | "gamma" | "lambda">("sigma");
   const vwapBounceThresholdUnitLabel =
-    vwapBounceUnitMode === "pct" ? "raw percentage points" :
-    vwapBounceUnitMode === "sigma" ? "× this ticker's own published sigma" :
+    vwapBounceUnitMode === "sigma" ? "sigmas (vwap_sigma for the technical leg, div_sigma for the relative one)" :
     vwapBounceUnitMode === "alpha" ? "× this ticker's own published alpha (sign-matched)" :
-    vwapBounceUnitMode === "atr" ? "× this ticker's own CURRENT live ATR14% reading" :
     vwapBounceUnitMode === "lambda" ? "× this ticker's own published lambda" :
-    "× this ticker's own matched gamma for this (class, sign)";
+    "× this ticker's own published gamma";
 
 
 
@@ -1338,14 +1266,13 @@ export default function VWAPBounceScanner({
       if (toYmd(dateFrom) && toYmd(dateTo) && dateFrom > dateTo) e.push("dateFrom must be <= dateTo");
     }
 
-    if (!(vwapBounceMinDevAbsShort >= 0)) e.push("SHORT floor must be >= 0");
-    const longNum = optNumOrNull(vwapBounceMinDevAbsLong);
-    if (longNum != null && longNum < 0) e.push("LONG floor must be >= 0");
-    const maxNum = optNumOrNull(vwapBounceMinDevAbsMax);
+    if (!(vwapBounceMinTechZ >= 0)) e.push("tech_z floor must be >= 0");
+    if (!(vwapBounceMinRelZ >= 0)) e.push("rel_z floor must be >= 0");
+    const maxNum = optNumOrNull(vwapBounceMaxScore);
     if (maxNum != null && maxNum < 0) e.push("MAX cap must be >= 0");
 
     return e;
-  }, [dateMode, dateNy, dateFrom, dateTo, vwapBounceMinDevAbsShort, vwapBounceMinDevAbsLong, vwapBounceMinDevAbsMax]);
+  }, [dateMode, dateNy, dateFrom, dateTo, vwapBounceMinTechZ, vwapBounceMinRelZ, vwapBounceMaxScore]);
 
   const canRun = validationErrors.length === 0 && !loading;
   const episodesUseSearchEffective = episodesUseSearch || forceEpisodesSearch;
@@ -1419,6 +1346,11 @@ export default function VWAPBounceScanner({
     move?: number | null;
     pnl?: number | null;
     signalDev?: number | null;
+    techZ?: number | null;
+    relZ?: number | null;
+    /** TARGET | STOP | EOD */
+    exitClass?: string | null;
+    netMovePct?: number | null;
     gamma?: number | null;
     gammaN?: number | null;
     // σ/α/τ — found missing from this curated shape while wiring the τ (Atr) unit (2026-09-25):
@@ -1596,14 +1528,15 @@ export default function VWAPBounceScanner({
 
         // VWAPBounce gate settings. Restored here rather than left at their defaults so the toolbar
         // shows what is actually being traded after a reload.
-        if (VWAPBOUNCE_EXIT_CLASSES.some((c) => c.key === s.vwapBounceExitClass)) setVWAPBounceExitClass(s.vwapBounceExitClass);
-        if (typeof s.vwapBounceMinDevAbsShort === "number") setVWAPBounceMinDevAbsShort(s.vwapBounceMinDevAbsShort);
-        if (typeof s.vwapBounceMinDevAbsLong === "string") setVWAPBounceMinDevAbsLong(s.vwapBounceMinDevAbsLong);
-        if (typeof s.vwapBounceMinDevAbsMax === "string") setVWAPBounceMinDevAbsMax(s.vwapBounceMinDevAbsMax);
+        if (typeof s.vwapBounceMinTechZ === "number") setVWAPBounceMinTechZ(s.vwapBounceMinTechZ);
+        if (typeof s.vwapBounceMinRelZ === "number") setVWAPBounceMinRelZ(s.vwapBounceMinRelZ);
+        if (typeof s.vwapBounceMaxScore === "string") setVWAPBounceMaxScore(s.vwapBounceMaxScore);
+        if (typeof s.vwapBounceSigmaMinDays === "number") setVWAPBounceSigmaMinDays(s.vwapBounceSigmaMinDays);
         if (typeof s.vwapBounceMinGammaTotal === "number") setVWAPBounceMinGammaTotal(s.vwapBounceMinGammaTotal);
         if (typeof s.vwapBounceMinRate === "number") setVWAPBounceMinRate(s.vwapBounceMinRate);
         if (typeof s.vwapBounceMinTotal === "number") setVWAPBounceMinTotal(s.vwapBounceMinTotal);
-        if (s.vwapBounceUnitMode === "pct" || s.vwapBounceUnitMode === "sigma" || s.vwapBounceUnitMode === "alpha" || s.vwapBounceUnitMode === "gamma" || s.vwapBounceUnitMode === "atr" || s.vwapBounceUnitMode === "lambda") setVWAPBounceUnitMode(s.vwapBounceUnitMode);
+        if (s.vwapBounceUnitMode === "z") setVWAPBounceUnitMode("sigma");
+        else if (s.vwapBounceUnitMode === "sigma" || s.vwapBounceUnitMode === "alpha" || s.vwapBounceUnitMode === "gamma" || s.vwapBounceUnitMode === "lambda") setVWAPBounceUnitMode(s.vwapBounceUnitMode);
         if (typeof s.vwapBounceIgnoreRatings === "boolean") setVWAPBounceIgnoreRatings(s.vwapBounceIgnoreRatings);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
@@ -1841,10 +1774,10 @@ export default function VWAPBounceScanner({
       sizeValue,
       // VWAPBounce's own gate settings. These used to be plain component state that reset on every
       // reload, so "the filters I trade with" existed only until the tab was refreshed.
-      vwapBounceExitClass,
-      vwapBounceMinDevAbsShort,
-      vwapBounceMinDevAbsLong,
-      vwapBounceMinDevAbsMax,
+      vwapBounceMinTechZ,
+      vwapBounceMinRelZ,
+      vwapBounceMaxScore,
+      vwapBounceSigmaMinDays,
       vwapBounceMinGammaTotal,
       vwapBounceMinRate,
       vwapBounceMinTotal,
@@ -2055,7 +1988,7 @@ export default function VWAPBounceScanner({
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
-      vwapBounceExitClass, vwapBounceMinDevAbsShort, vwapBounceMinDevAbsLong, vwapBounceMinDevAbsMax, vwapBounceMinGammaTotal,
+      vwapBounceMinTechZ, vwapBounceMinRelZ, vwapBounceMaxScore, vwapBounceSigmaMinDays, vwapBounceMinGammaTotal,
       vwapBounceMinRate, vwapBounceMinTotal, vwapBounceUnitMode, vwapBounceIgnoreRatings,
     ]
   );
@@ -2254,10 +2187,10 @@ export default function VWAPBounceScanner({
     // The UNIT row: the pill first, then the three MIN DEV boxes. The two optional ones are written
     // as they are - "off" (empty) clears the box, it does not leave an old value behind.
     const th = row.thresholds;
-    if (th.unit) setVWAPBounceUnitMode(th.unit);
-    if (th.minDevAbsShort != null) setVWAPBounceMinDevAbsShort(th.minDevAbsShort);
-    setVWAPBounceMinDevAbsLong(th.minDevAbsLong != null ? String(th.minDevAbsLong) : "");
-    setVWAPBounceMinDevAbsMax(th.minDevAbsMax != null ? String(th.minDevAbsMax) : "");
+    // The auto-optimizer still speaks the OPG-era threshold names: short -> tech_z floor, long -> rel_z floor.
+    if (th.minDevAbsShort != null) setVWAPBounceMinTechZ(th.minDevAbsShort);
+    if (th.minDevAbsLong != null) setVWAPBounceMinRelZ(th.minDevAbsLong);
+    setVWAPBounceMaxScore(th.minDevAbsMax != null ? String(th.minDevAbsMax) : "");
 
     // Show the days the search was over, then re-run once all of the above has landed in state.
     if (range) {
@@ -2490,10 +2423,9 @@ export default function VWAPBounceScanner({
     if (!filtersHydratedRef.current) return;
     const timer = window.setTimeout(() => {
       void pushVWAPBounceStreamLiveParams(toVWAPBounceStreamLiveParams({
-        exitClass: vwapBounceExitClass,
-        minDevAbsShort: vwapBounceMinDevAbsShort,
-        minDevAbsLong: optNumOrNull(vwapBounceMinDevAbsLong) ?? vwapBounceMinDevAbsShort,
-        minDevAbsMax: optNumOrNull(vwapBounceMinDevAbsMax),
+        minTechZ: vwapBounceMinTechZ,
+        minRelZ: vwapBounceMinRelZ,
+        maxScore: optNumOrNull(vwapBounceMaxScore),
         minGammaTotal: vwapBounceMinGammaTotal,
         // Found missing while checking Scanner-vs-Stream parity (2026-09-29): the backtest already
         // sends minRate/minTotal to PaperVWAPBounceController (see buildVWAPBounceParams), but this push
@@ -2516,7 +2448,7 @@ export default function VWAPBounceScanner({
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
-    vwapBounceExitClass, vwapBounceMinDevAbsShort, vwapBounceMinDevAbsLong, vwapBounceMinDevAbsMax,
+    vwapBounceMinTechZ, vwapBounceMinRelZ, vwapBounceMaxScore,
     vwapBounceMinGammaTotal, vwapBounceMinRate, vwapBounceMinTotal, vwapBounceUnitMode, vwapBounceIgnoreRatings,
     priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled,
   ]);
@@ -2817,26 +2749,15 @@ export default function VWAPBounceScanner({
   function buildVWAPBounceParams() {
     const reqTickers = requestScopedTickers;
     return {
-      exitClass: vwapBounceExitClass,
-      // Was missing entirely: the PRINT/BIDASK toggle (ExecutionSettingsPanel) updated local state
-      // but this request never carried it, so the bridge always computed LastPrint regardless of
-      // what the toolbar showed pressed. Now paired with the bridge actually reading it (see
-      // VWAPBouncePaperScanner.ToParams/TapeVWAPBounceEngine.EntryPricedPct|ExitPricedPct).
+      // Fill price only (print vs bid/ask): the signal itself is always the Stack% print.
       priceMode,
-      // Carried for toolbar shape parity, but CloseMode is INERT for VWAPBounce — the settled
-      // opening Gap% anchors ENTRY unconditionally for every exit class, not a PASSIVE-only special
-      // case the way Reversal's own print-class exit rule works — see VWAPBounceCloseMode's own doc
-      // comment.
       closeMode,
-      // A THIRD instance of the same bug, and the worst one: the USD/TIER toggle (same panel) was
-      // also never sent, so pressing TIER silently sized every VWAPBounce position off the raw
-      // per-unit multiplier as if it were a flat $ notional (~1000x too small) instead of scaling by
-      // the ticker's own TierBp — wrong P&L on screen, no error. See VWAPBounceSizingMode's own doc
-      // comment and TapeVWAPBounceEngine.ResolvePositionNotionalUsd.
       sizingMode,
-      minDevAbsShort: vwapBounceMinDevAbsShort,
-      minDevAbsLong: optNumOrNull(vwapBounceMinDevAbsLong) ?? vwapBounceMinDevAbsShort,
-      minDevAbsMax: optNumOrNull(vwapBounceMinDevAbsMax),
+      minTechZ: vwapBounceMinTechZ,
+      minRelZ: vwapBounceMinRelZ,
+      maxScore: optNumOrNull(vwapBounceMaxScore),
+      // The walk-forward history the betas / div_sigma are rebuilt from on the TAPE (see the state comment).
+      sigmaMinDays: vwapBounceSigmaMinDays,
       minGammaTotal: vwapBounceMinGammaTotal,
       // Real bridge-side gate on the published (class, sign) cell's own win_rate/total — added
       // alongside VWAPBounceGate.cs's own minRate/minTotal floor. 0 = off, same convention as the rest
@@ -4435,9 +4356,12 @@ export default function VWAPBounceScanner({
           exitStack: r?.endLstPrcLstClsPct ?? null,
           move: r?.move ?? null,
           pnl: r?.totalPnlUsd ?? null,
-          // The SIGNAL's own 9:20-9:25 deviation — not the same value as entryStack, which is the
-          // settled Gap% the trade is actually priced from. See VWAPBounceClosed.SignalDev.
-          signalDev: r?.entryDevSig ?? null,
+          // score = min(|tech_z|, |rel_z|) - the number the gate's floors and gamma are about.
+          signalDev: r?.score ?? r?.entryDevSig ?? null,
+          techZ: r?.techZ ?? null,
+          relZ: r?.relZ ?? null,
+          exitClass: r?.exitClass ?? r?.closeMode ?? null,
+          netMovePct: r?.netMovePct ?? null,
           // Gamma/GammaN — the ticker's own published gate level for this (class, sign), riding
           // the shared DTO's Rating/RatingTotal slots (see PaperVWAPBounceMapper.ToClosedDto).
           gamma: r?.rating ?? null,
@@ -4489,7 +4413,9 @@ export default function VWAPBounceScanner({
         entryMinuteIdx: Number(r?.start?.minuteIdx ?? NaN),
         minutesToExit: r?.minutesToExit ?? null,
         exitClass: r?.closeMode ?? null,
-        signalDev: r?.start?.metric ?? null,
+        signalDev: r?.score ?? r?.start?.metric ?? null,
+        techZ: r?.techZ ?? null,
+        relZ: r?.relZ ?? null,
         entryStack: r?.start?.lstPrcLstClsPct ?? null,
         lastStack: r?.last?.lstPrcLstClsPct ?? null,
         pnl: r?.totalPnlUsd ?? r?.rawPnlUsd ?? null,
@@ -5951,6 +5877,7 @@ export default function VWAPBounceScanner({
               filter than MINRATE/MINTOTAL above: a floor/ceiling on a STATIC published value, not a
               threshold on the trade's own win_rate. */}
           {[
+            { label: "β", title: "Beta — the market beta the notebook published for this ticker (fit on daily returns vs market + sector, as of the previous session)", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
             { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
             { label: "α", title: "Alpha — the ticker's own modal |9:20-9:25 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
             { label: "γ", title: "Gamma — the (class, sign) vwapBounce-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
@@ -6024,24 +5951,14 @@ export default function VWAPBounceScanner({
 
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
           
-            <div className="flex h-7 items-center gap-2">
-              {[
-                ...VWAPBOUNCE_EXIT_CLASSES,
-              ].map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => setVWAPBounceExitClass(b.key as "target" | "stop" | "eod")}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    vwapBounceExitClass === b.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {b.label}
-                </button>
-                ))}
+            <div
+              className="flex h-7 items-center gap-2 pl-3 pr-3 rounded-lg bg-black/20 text-[10px] font-mono uppercase tracking-wide text-zinc-400"
+              title="VWAP Bounce replays the TAPE: one price sample per minute (Stack%). Betas and div_sigma come from the notebook's per-day files (final.parquet is used only for those and the ratings); a day it has not published falls back to the tape's own short history. SPY/QQQ/IWM are not on the tape - the S&P 500 proxy is IVV/VOO. Exits are TARGET (VWAP), STOP (1.5 vwap sigma) or EOD."
+            >
+              <span className="text-emerald-400">TAPE</span>
+              <span>10:00-15:55</span>
+              <span className="text-zinc-600">|</span>
+              <span>exit TARGET / STOP / EOD</span>
             </div>
 
             <div className="flex-1" />
@@ -6314,12 +6231,10 @@ export default function VWAPBounceScanner({
                   first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
               <div className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-violet-500/20 bg-violet-500/[0.06]">
                 {([
-                  { key: "pct", label: "%", title: "Raw Stack% points (default) — SHORT/LONG/MAX entered as flat percentage points", disabled: false },
-                  { key: "sigma", label: "σ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published static sigma — resolved per ticker server-side", disabled: false },
-                  { key: "alpha", label: "α", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published alpha, sign-matched — resolved per ticker server-side", disabled: false },
-                  { key: "gamma", label: "γ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own matched gamma for this (class, sign) — resolved per ticker server-side", disabled: false },
-                  { key: "atr", label: "τ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own CURRENT live ATR14% reading — resolved per ticker server-side, not a published constant", disabled: false },
-                  { key: "lambda", label: "λ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published lambda (sample std of the raw ENTRY-checkpoint reading) — resolved per ticker server-side", disabled: false },
+                  { key: "sigma", label: "σ", title: "Floors as typed, in sigmas (default): the technical leg in vwap_sigma and the relative leg in div_sigma - both are the strategy's own measured sigmas, not the ticker's static one", disabled: false },
+                  { key: "alpha", label: "α", title: "Floors x the ticker's own published alpha, sign-matched (needs ratings, so inert under UNIVERSE)", disabled: false },
+                  { key: "gamma", label: "γ", title: "Floors x the ticker's own published gamma (needs ratings, so inert under UNIVERSE)", disabled: false },
+                  { key: "lambda", label: "λ", title: "Floors x the ticker's own published lambda (needs ratings, so inert under UNIVERSE)", disabled: false },
                 ] as const).map((u) => {
                   const on = vwapBounceUnitMode === u.key;
                   return (
@@ -6343,83 +6258,76 @@ export default function VWAPBounceScanner({
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry), entered in ${vwapBounceThresholdUnitLabel}. Coral = short.`}>
+                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |tech_z| = |price - VWAP| / vwap_sigma: how far the price is from its own VWAP, in ${vwapBounceThresholdUnitLabel}. Spec: 2. Coral = technical leg.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={vwapBounceMinDevAbsShort}
-                    onChange={(e) => setVWAPBounceMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
+                    value={vwapBounceMinTechZ}
+                    onChange={(e) => setVWAPBounceMinTechZ(Math.max(0, clampNumber(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase short-side floor"
+                      aria-label="Increase tech_z floor"
                     >
                       ▲
                     </button>
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease short-side floor"
+                      aria-label="Decrease tech_z floor"
                     >
                       ▼
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry), entered in ${vwapBounceThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
+                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |rel_z| = (move - beta x market - beta x sector) / div_sigma: how far the stock is from what the market and its sector explain, in ${vwapBounceThresholdUnitLabel}. Spec: 2. Mint = relative leg.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={vwapBounceMinDevAbsLong}
-                    onChange={(e) => setVWAPBounceMinDevAbsLong(e.target.value)}
-                    placeholder="as short"
+                    value={vwapBounceMinRelZ}
+                    onChange={(e) => setVWAPBounceMinRelZ(Math.max(0, clampNumber(e.target.value, 0)))}
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? vwapBounceMinDevAbsShort;
-                        return String(Math.max(0, +(cur + 0.1).toFixed(4)));
-                      })}
+                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase long-side floor"
+                      aria-label="Increase rel_z floor"
                     >
                       ▲
                     </button>
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? vwapBounceMinDevAbsShort;
-                        return String(Math.max(0, +(cur - 0.1).toFixed(4)));
-                      })}
+                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease long-side floor"
+                      aria-label="Decrease rel_z floor"
                     >
                       ▼
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |9:20-9:25 deviation|, either side (empty = none), entered in ${vwapBounceThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
+                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on score = min(|tech_z|, |rel_z|) (empty = none), in ${vwapBounceThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
                   <input
                     type="number"
                     inputMode="decimal"
                     step={0.1}
                     min={0}
-                    value={vwapBounceMinDevAbsMax}
-                    onChange={(e) => setVWAPBounceMinDevAbsMax(e.target.value)}
+                    value={vwapBounceMaxScore}
+                    onChange={(e) => setVWAPBounceMaxScore(e.target.value)}
                     placeholder="no cap"
                     className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
@@ -6427,7 +6335,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpVWAPBounceMinDevAbsMax(0.1)}
+                      onClick={() => bumpVWAPBounceMaxScore(0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase max cap"
                     >
@@ -6436,7 +6344,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpVWAPBounceMinDevAbsMax(-0.1)}
+                      onClick={() => bumpVWAPBounceMaxScore(-0.1)}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease max cap"
                     >
@@ -6827,7 +6735,7 @@ export default function VWAPBounceScanner({
                   OPEN POSITIONS | rows {vwapBounceActiveStats.rows.length}
                 </div>
                 <div className="text-[10px] font-mono text-zinc-600">
-                  signalled ~9:20-9:25 · entered ~9:30 · {vwapBounceExitClass} exit not yet reached
+                  signalled from 10:00 · entered one minute later · exit (TARGET / STOP / EOD) not yet reached
                 </div>
               </div>
 
@@ -6841,7 +6749,9 @@ export default function VWAPBounceScanner({
                       <th className="text-right p-2.5">Mins To Exit</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Last Stack%</th>
-                      <th className="text-right p-2.5">Signal Dev</th>
+                      <th className="text-right p-2.5">tech_z</th>
+                      <th className="text-right p-2.5">rel_z</th>
+                      <th className="text-right p-2.5">Score</th>
                       <th className="text-right p-2.5">P&amp;L ($)</th>
                       <th className="text-right p-2.5 border-l border-white/10">Gamma × N</th>
                     </tr>
@@ -6860,11 +6770,13 @@ export default function VWAPBounceScanner({
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
                         {/* Entry always shown as 09:30 (the open) — operator's own instruction (2026-09-23); the
                             actual order is VWAPBounce's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">09:30</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.minutesToExit ?? "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.lastStack ?? null, 3)}</td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{formatVWAPBounceDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.techZ ?? null, 2)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.relZ ?? null, 2)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.signalDev ?? null, 2)}</td>
                         <td
                           className={clsx(
                             "p-2.5 text-right tabular-nums font-bold",
@@ -8571,10 +8483,11 @@ export default function VWAPBounceScanner({
               initialFrom={dateFrom}
               initialTo={dateTo}
               current={{
-                minDevAbsShort: vwapBounceMinDevAbsShort,
-                minDevAbsLong: vwapBounceMinDevAbsLong,
-                minDevAbsMax: vwapBounceMinDevAbsMax,
-                unit: vwapBounceUnitMode,
+                // The optimizer still speaks the OPG-era names: short -> tech_z floor, long -> rel_z floor.
+                minDevAbsShort: vwapBounceMinTechZ,
+                minDevAbsLong: String(vwapBounceMinRelZ),
+                minDevAbsMax: vwapBounceMaxScore,
+                unit: vwapBounceUnitMode === "sigma" ? "pct" : vwapBounceUnitMode,
               }}
               onApply={applyVWAPBounceAutoOptimizerRow}
             />
@@ -8585,7 +8498,7 @@ export default function VWAPBounceScanner({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                VWAP•BOUNCE SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {vwapBounceExitClass} exit
+                VWAP•BOUNCE SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | exits TARGET / STOP / EOD
               </div>
               {vwapBounceSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
               {vwapBounceSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{vwapBounceSnapshotError}</span>}
@@ -8747,9 +8660,12 @@ export default function VWAPBounceScanner({
                       <th className="text-right p-2.5">Exit Time</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Exit Stack%</th>
-                      <th className="text-right p-2.5">Move (pts)</th>
+                      <th className="text-right p-2.5">Move (%)</th>
                       <th className="text-right p-2.5">P&amp;L ($)</th>
-                      <th className="text-right p-2.5 border-l border-white/10">Signal Dev</th>
+                      <th className="text-right p-2.5">Exit</th>
+                      <th className="text-right p-2.5 border-l border-white/10">tech_z</th>
+                      <th className="text-right p-2.5">rel_z</th>
+                      <th className="text-right p-2.5">Score</th>
                       <th className="text-right p-2.5 border-l border-white/10">Gamma × N</th>
                     </tr>
                   </thead>
@@ -8767,7 +8683,7 @@ export default function VWAPBounceScanner({
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
                         {/* Entry always shown as 09:30 (the open) — operator's own instruction (2026-09-23); the
                             actual order is VWAPBounce's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
-                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">09:30</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
@@ -8780,7 +8696,10 @@ export default function VWAPBounceScanner({
                         >
                           {num(r.pnl ?? null, 2)}
                         </td>
-                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{formatVWAPBounceDev(r.signalDev ?? null, r.gamma ?? null, r.sigma ?? null, r.alpha ?? null, r.atr14Pct ?? null, r.lambda ?? null)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{r.exitClass ?? "—"}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400 border-l border-white/10">{num(r.techZ ?? null, 2)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-400">{num(r.relZ ?? null, 2)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.signalDev ?? null, 2)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-500 border-l border-white/10">
                           {r.gamma != null ? num(r.gamma, 3) : "—"}×{r.gammaN ?? "—"}
                         </td>
@@ -8788,7 +8707,7 @@ export default function VWAPBounceScanner({
                     ))}
                     {!vwapBounceSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-zinc-500">
+                        <td colSpan={13} className="p-8 text-center text-zinc-500">
                           {vwapBounceSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

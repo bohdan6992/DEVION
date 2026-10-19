@@ -1190,6 +1190,17 @@ export default function ContinuumScanner({
   const continuumSummaryByKeyRef = useRef<Map<string, ContinuumAnalyticsSummaryDto | null>>(new Map());
   const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: ContinuumAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
 
+  /**
+   * Days in the last /episodes/search response the bridge had no FROZEN gamma snapshot for, so it
+   * gated them on today's LIVE table instead (ContinuumRatingsService.GetForDayAsync's own
+   * look-ahead fallback) — the backend has sent this back all along (`ratingsLookAheadDays`), just
+   * never read here (2026-10-18, the operator's own bug report: a day the Stream actually traded
+   * can show ZERO episodes on replay once the live gamma table has since moved on from what gated
+   * it live). Keyed the same way continuumSummaryByKeyRef is, for the same cache-hit reason.
+   */
+  const continuumLookAheadByKeyRef = useRef<Map<string, string[]>>(new Map());
+  const [continuumLookAheadDays, setContinuumLookAheadDays] = useState<string[]>([]);
+
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
       if (!prev.length) return prev;
@@ -3268,6 +3279,7 @@ export default function ContinuumScanner({
       apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
         .then((j) => {
           continuumSummaryByKeyRef.current.set(key, (j?.summary as ContinuumAnalyticsSummaryDto | undefined) ?? null);
+          continuumLookAheadByKeyRef.current.set(key, Array.isArray(j?.ratingsLookAheadDays) ? j.ratingsLookAheadDays : []);
           return normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [];
         })
     );
@@ -3275,6 +3287,7 @@ export default function ContinuumScanner({
     // fetched (or reused from cache) — one call site to keep in sync instead of three.
     const fetchedSummary = continuumSummaryByKeyRef.current.get(key) ?? null;
     setServerAnalyticsSummary(fetchedSummary ? { summary: fetchedSummary, equityCurveMode: String(body.equityCurveMode ?? "Daily") } : null);
+    setContinuumLookAheadDays(continuumLookAheadByKeyRef.current.get(key) ?? []);
     return rows;
   }
 
@@ -3299,6 +3312,9 @@ export default function ContinuumScanner({
       } else if (tab === "episodes") {
         setAnalytics(null);
         if (!(episodesUseSearch || forceEpisodesSearch || isStreamOnlyShell)) {
+          // This GET path carries no ratingsLookAheadDays of its own — clear rather than show a
+          // stale warning left over from a previous /episodes/search call.
+          setContinuumLookAheadDays([]);
           const qs = buildPaperQuery(buildContinuumGetParams(dateNy));
           const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
@@ -6501,6 +6517,20 @@ export default function ContinuumScanner({
         {err && (
           <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-200 text-xs font-mono p-3">
             {err}
+          </div>
+        )}
+
+        {/* UNFROZEN/LOOK-AHEAD — days in the current result with no frozen gamma snapshot of their
+            own, replayed on TODAY's live gamma table instead. A day Stream traded live can show
+            fewer (or zero) episodes here if the live table has since moved on from what gated it
+            that day — the numbers for these specific days are not guaranteed to match what Stream
+            actually did. */}
+        {continuumLookAheadDays.length > 0 && (
+          <div
+            className="rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 text-xs font-mono p-3"
+            title="These days have no frozen gamma snapshot, so they are gated on today's live gamma table — not necessarily the table Stream traded against live that day."
+          >
+            UNFROZEN ({continuumLookAheadDays.length}): {continuumLookAheadDays.join(", ")} — gated on today&apos;s live gamma, not that day&apos;s own. Results may not match what Stream actually traded.
           </div>
         )}
 

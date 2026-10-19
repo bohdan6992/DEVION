@@ -5,26 +5,20 @@ import type { ArbitrageFilterConfigV1 } from "../filters/arbitrageFilterConfigV1
 /**
  * VWAPBounce's STREAM-tab toolbar, pushed to the bridge — mirrors lib/reversal/liveParamsClient.ts
  * byte-for-byte (see that file's own doc comment for the shape rationale). Points at
- * `/api/stream/vwapbounce/params`, backed by VWAPBounceLiveParamsService/VWAPBounceServerStrategy
- * (wired 2026-10-01 — see lib/strategies/registry.ts's own "vwapbounce" entry). Hotkeys.
- * VWAPBounceBuy/Sell default to Ctrl+F7/Ctrl+F8 (bound 2026-10-02). AutoEnabled still defaults
- * false, so saving this toolbar alone cannot send a real order yet.
+ * `/api/stream/vwapbounce/params` - the Stream strategy does NOT exist on the bridge yet (Sonar and the
+ * tape Scanner do), so this push is a no-op until it does.
  */
-export type VWAPBounceThresholdUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
+export type VWAPBounceThresholdUnit = "sigma" | "alpha" | "gamma" | "lambda";
 
-/** Mirrors VWAPBouncePriceMode (TapeVWAPBounceModels.cs) — what the GATE's own signal reading is
- * computed from, not just entry/exit pricing. See VWAPBounceParams.PriceMode's own doc comment. */
+/** What an entry / add is FILLED at. The signal itself is always the Stack% print. */
 export type VWAPBouncePriceMode = "LastPrint" | "BidAsk";
 
-/** VWAPBounceTiming.Default's own three same-day exits — 09:45 / 10:00 / 10:30, NOT Reversal's own
- * five (no print/exit18/exit21/exit04/exit07 here, every OPG exit lands the same calendar day). */
-export type VWAPBounceExitClass = "target" | "stop" | "eod";
-
 export type VWAPBounceStreamLiveParams = {
-  exitClass: VWAPBounceExitClass;
-  minDevAbsShort: number;
-  minDevAbsLong: number;
-  minDevAbsMax: number | null;
+  /** Floor on |tech_z| (distance from VWAP in sigmas) and |rel_z| (residual vs market + sector). Spec: 2 / 2. */
+  minTechZ: number;
+  minRelZ: number;
+  /** Upper cap on score = min(|tech_z|, |rel_z|); null = none. */
+  maxScore: number | null;
   minGammaTotal: number;
   minRate: number;
   minTotal: number;
@@ -36,10 +30,9 @@ export type VWAPBounceStreamLiveParams = {
 };
 
 export function toVWAPBounceStreamLiveParams(args: {
-  exitClass: VWAPBounceExitClass;
-  minDevAbsShort: number;
-  minDevAbsLong: number;
-  minDevAbsMax: number | null;
+  minTechZ: number;
+  minRelZ: number;
+  maxScore: number | null;
   minGammaTotal: number;
   minRate: number;
   minTotal: number;
@@ -51,10 +44,9 @@ export function toVWAPBounceStreamLiveParams(args: {
   source: string;
 }): VWAPBounceStreamLiveParams {
   return {
-    exitClass: args.exitClass,
-    minDevAbsShort: args.minDevAbsShort,
-    minDevAbsLong: args.minDevAbsLong,
-    minDevAbsMax: args.minDevAbsMax,
+    minTechZ: args.minTechZ,
+    minRelZ: args.minRelZ,
+    maxScore: args.maxScore,
     minGammaTotal: args.minGammaTotal,
     minRate: args.minRate,
     minTotal: args.minTotal,

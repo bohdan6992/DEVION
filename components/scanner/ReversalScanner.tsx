@@ -1242,6 +1242,17 @@ export default function ReversalScanner({
   const reversalSummaryByKeyRef = useRef<Map<string, ReversalAnalyticsSummaryDto | null>>(new Map());
   const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: ReversalAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
 
+  /**
+   * Days in the last /episodes/search response the bridge had no FROZEN gamma snapshot for, so it
+   * gated them on today's LIVE table instead (ReversalRatingsService.GetForDayAsync's own look-ahead
+   * fallback) — the backend has sent this back all along (`ratingsLookAheadDays`), just never read
+   * here (2026-10-18, the operator's own bug report: a day the Stream actually traded can show ZERO
+   * episodes on replay once the live gamma table has since moved on from what gated it live). Keyed
+   * the same way reversalSummaryByKeyRef is, for the same cache-hit reason.
+   */
+  const reversalLookAheadByKeyRef = useRef<Map<string, string[]>>(new Map());
+  const [reversalLookAheadDays, setReversalLookAheadDays] = useState<string[]>([]);
+
   useEffect(() => {
     setScopeSelectedParameterKeys((prev) => {
       if (!prev.length) return prev;
@@ -3320,12 +3331,14 @@ export default function ReversalScanner({
       apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
         .then((j) => {
           reversalSummaryByKeyRef.current.set(key, (j?.summary as ReversalAnalyticsSummaryDto | undefined) ?? null);
+          reversalLookAheadByKeyRef.current.set(key, Array.isArray(j?.ratingsLookAheadDays) ? j.ratingsLookAheadDays : []);
           return normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [];
         })
     );
     // Every caller of this function wants the SNAPSHOT cards to reflect whatever rows it just
     // fetched (or reused from cache) — one call site to keep in sync instead of three.
     const fetchedSummary = reversalSummaryByKeyRef.current.get(key) ?? null;
+    setReversalLookAheadDays(reversalLookAheadByKeyRef.current.get(key) ?? []);
     setServerAnalyticsSummary(fetchedSummary ? { summary: fetchedSummary, equityCurveMode: String(body.equityCurveMode ?? "Daily") } : null);
     return rows;
   }
@@ -3351,6 +3364,9 @@ export default function ReversalScanner({
       } else if (tab === "episodes") {
         setAnalytics(null);
         if (!(episodesUseSearch || forceEpisodesSearch || isStreamOnlyShell)) {
+          // This GET path carries no ratingsLookAheadDays of its own — clear rather than show a
+          // stale warning left over from a previous /episodes/search call.
+          setReversalLookAheadDays([]);
           const qs = buildPaperQuery(buildReversalGetParams(dateNy));
           const j = await apiGet<any>(`${STRATEGY.api.base}/episodes${qs}`);
           const rows = normalizeRows<PaperArbClosedDto>(j);
@@ -6591,6 +6607,20 @@ export default function ReversalScanner({
         {err && (
           <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-200 text-xs font-mono p-3">
             {err}
+          </div>
+        )}
+
+        {/* UNFROZEN/LOOK-AHEAD — days in the current result with no frozen gamma snapshot of their
+            own, replayed on TODAY's live gamma table instead. A day Stream traded live can show
+            fewer (or zero) episodes here if the live table has since moved on from what gated it
+            that day — the numbers for these specific days are not guaranteed to match what Stream
+            actually did. */}
+        {reversalLookAheadDays.length > 0 && (
+          <div
+            className="rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 text-xs font-mono p-3"
+            title="These days have no frozen gamma snapshot, so they are gated on today's live gamma table — not necessarily the table Stream traded against live that day."
+          >
+            UNFROZEN ({reversalLookAheadDays.length}): {reversalLookAheadDays.join(", ")} — gated on today&apos;s live gamma, not that day&apos;s own. Results may not match what Stream actually traded.
           </div>
         )}
 

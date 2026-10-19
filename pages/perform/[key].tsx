@@ -35,7 +35,7 @@ const STRATEGY_CATALOG: Record<string, { title: string; description?: string; ic
   opendoor: { title: "Open Door", description: "Сигнали на open: імпульс, fail, bounce.", icon: "🚪" },
   rLine: { title: "R-Line", description: "Робота з лініями ризику/рівнями R.", icon: "📏" },
   intraDance: { title: "Intra Dance", description: "Інтра-рухи та “танець” усередині дня.", icon: "🩰" },
-  morningLounch: { title: "Morning Lounch", description: "Ранковий імпульс і continuation.", icon: "🌅" },
+  morLaunch: { title: "Morning Launch", description: "Різкий рух 03:50-04:20 проти напрямку, вихід гепом.", icon: "🌅" },
   coupleDating: { title: "Couple Dating", description: "Парні залежності: SPY/QQQ, XLF/SPY тощо.", icon: "💞" },
   volumeArrival: { title: "Volume Arrival", description: "Прихід об’єму і реакція ціни.", icon: "📊" },
   latePrint: { title: "Late Print", description: "Пізні принти та after-effects.", icon: "🕯️" },

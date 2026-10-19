@@ -23,7 +23,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "opgRide", name: "OPG•Ride", icon: "🏄", description: "Проїзд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
-  { key: "pullback", name: "Pullback", icon: "🪝", description: "Відкат у тренді для заходу." },
+  { key: "pullback", name: "PullBack", icon: "🪝", description: "Стак, що стоїть задалеко від вчорашнього закриття, розвертаємо о 4:30/5:00/5:30, вихід гепом." },
   { key: "vwapBounce", name: "VWAP Bounce", icon: "〰️", description: "Реакція ціни на VWAP." },
   { key: "uptickRule", name: "Uptick Rule", icon: "🛡️", description: "Падіння 10%+ і поведінка після правила." },
   { key: "quartalDep", name: "Quartal Dep", icon: "📅", description: "Квартальні залежності й події." },
@@ -34,7 +34,10 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "pairflux", name: "PairFlux", icon: "⚖️", description: "Пари, що ходять разом: торгівля розходження спреду та його зведення." },
   { key: "rLine", name: "R-Line", icon: "📏", description: "Рівні ризику/нагороди та відпрацювання." },
   { key: "intraDance", name: "Intra Dance", icon: "🩰", description: "Інтра-динаміка: рух/нормалізація." },
-  { key: "morningLounch", name: "Morning Launch", icon: "🌅", description: "Ранковий імпульс після відкриття." },
+  // Key was "morningLounch" (a placeholder, never wired to anything) until 2026-10-17; renamed to
+  // "morLaunch" so it lowercases to the registry/bridge key "morlaunch" the way every other live
+  // strategy's does (see lib/caesar/schedule.ts's own note on that convention).
+  { key: "morLaunch", name: "Morning Launch", icon: "🌅", description: "Різкий рух 03:50-04:20 беремо в протилежну сторону, вихід гепом на 9:30." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },

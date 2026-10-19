@@ -145,6 +145,14 @@ export type ExecutionSettingsPanelProps = {
    * the other three (still backtest-only) pairs. False for every other strategy.
    */
   priceModeAffectsLive?: boolean;
+  /**
+   * PullBack only (for now): the glyph of the unit its threshold strip is currently set to - "%",
+   * "σ", "α", "γ", "τ", "λ". PullBack's add STEP is scaled server-side by the same
+   * per-ticker number as its entry floor, so "0.5" in this box means half a sigma, not half a
+   * percentage point, and the box has to say which. Left undefined by every other strategy, whose
+   * step is flat percentage points - then the control renders exactly as before.
+   */
+  dilutionStepUnitLabel?: string;
 };
 
 function BalanceRatioInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
@@ -506,6 +514,7 @@ export default function ExecutionSettingsPanel({
   downloadEpisodesLog,
   downloadStreamFilterPassLog,
   priceModeAffectsLive = false,
+  dilutionStepUnitLabel,
 }: ExecutionSettingsPanelProps) {
   const {
     addDelayMinutes,
@@ -642,7 +651,17 @@ export default function ExecutionSettingsPanel({
     </div>
 
 
-    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="STEP — how far apart each add rung sits, in the dilution ladder's own unit.">
+    <div
+      className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20"
+      title={dilutionStepUnitLabel
+        ? `STEP — how far apart each add rung sits, in ${dilutionStepUnitLabel} — the unit the threshold strip is set to. Resolved per ticker server-side, exactly like the entry floor.`
+        : "STEP — how far apart each add rung sits, in the dilution ladder's own unit."}
+    >
+      {dilutionStepUnitLabel ? (
+        <span className="pl-1.5 pr-0.5 text-[10px] font-mono font-bold leading-none text-amber-300/60" style={{ textTransform: "none" }}>
+          {dilutionStepUnitLabel}
+        </span>
+      ) : null}
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"

@@ -398,11 +398,97 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // Morning Launch: the OPG family's clock run backwards. The signal is the SIZE OF A ONE-MINUTE MOVE
+  // inside 03:50-04:20 (a DELTA, not a level at a checkpoint), the position is taken against it the
+  // moment the move prints, and the settled Gap% prices the EXIT at 9:30 — the mirror of OPG•Reversal,
+  // where the gap prices the entry. ONE rating class ("gap0930"): the operator's own spec, "лише один
+  // клас 9:30".
+  //
+  // FULL STACK as of 2026-10-17: scanner/paper, Sonar, Stream and a registered MorLaunchServerStrategy
+  // (streamEngine "bridge" is a fact here now, not the inert placeholder it was earlier that day).
+  //
+  // TWO THINGS ABOUT THE LIVE HALF THAT NOTHING ELSE IN THIS REGISTRY SHARES:
+  //   * Its gate is STATEFUL. A one-minute move cannot be computed from one snapshot, so
+  //     MorLaunchLiveEngine keeps a per-ticker sample memory (MorLaunchMoveMemory) and only knows
+  //     anything once it has been polled through a previous minute. The server strategy therefore
+  //     opens its runner window five minutes BEFORE the send window to warm up.
+  //   * Its send window crosses the 04:00 EARLY/DAY hotkey boundary, the first one here that does, so
+  //     its entries resolve to Ctrl+F3/F4 before 04:00 and Ctrl+F1/F2 after.
+  //
+  // tradingWindow spans entry to exit (03:50 -> 9:31), not just the signal window, because the
+  // position is HELD across all of it — over five hours, far longer than anything else in this family.
+  // priority 5, below every strategy that can actually trade: this one has never traded once, and its
+  // window overlaps the whole morning. AutoEnabled still defaults false.
+  morlaunch: {
+    key: "morlaunch",
+    bridgeStrategyId: "stream.morlaunch",
+    nav: {
+      stream: "/mor-launch/stream",
+      scanner: "/mor-launch/scanner",
+      sonar: "/mor-launch/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 3 * 60 + 50, toMinuteIdx: 9 * 60 + 31 },
+    priority: 5,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/morlaunch", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.morlaunch", sonarPrefix: "bridge.morlaunch", streamPrefix: "stream.morlaunch" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["gap0930"],
+      labels: { gap0930: "09:30" },
+    },
+  },
+
+  // PullBack: fade a stack that stands too far from yesterday's close in the early pre-market. Spec is
+  // the operator's own OriON-strategies/notebooks/PullBack.ipynb, which has been RUN over 65 sessions -
+  // the bridge side is a port of its scan_day, not an independent design.
+  //
+  // THE CLASSES ARE ENTRY TIMES, NOT EXIT TIMES. Three reversal start times (04:30 / 05:00 / 05:30,
+  // +/-5) into ONE shared 09:30 exit, with 04:04 as a reference minute used only to measure the move
+  // since. That is the mirror of the whole OPG family, where a class is an exit off one shared entry,
+  // so ratingClasses below is labelled ENTRY.
+  //
+  // SCANNER + SONAR, NO DISPATCH. The bridge has the tape engine, gate, ratings service, parser, paper
+  // endpoints, a live engine and a Sonar snapshot service - but NO IServerStrategy, no order intent
+  // type and no hotkeys, so nothing can place a trade. nav.stream therefore points back at the scanner
+  // (the Stream surface is the scanner's own tab) rather than at a route that does not exist,
+  // bridgeStrategyId names an id nothing on the bridge answers to, and streamEngine is "bridge"
+  // because that is the INERT value ("browser" would make CaesarRunners mount this scanner in a tab
+  // and try to run the day from it).
+  //
+  // Its live engine is STATEFUL: one of the two admission triggers is a move since 04:04, so the
+  // engine latches that reference per ticker per session. Sonar needs to be polling from before 04:04
+  // for the MOVE trigger to have anything to measure against later in the morning.
+  //
+  // tradingWindow spans entry to exit (04:30 -> 09:31) because the position is HELD across all of it.
+  // priority 4, below morlaunch (5) and everything that can actually trade.
+  pullback: {
+    key: "pullback",
+    bridgeStrategyId: "stream.pullback",
+    nav: {
+      stream: "/pull-back/scanner",
+      scanner: "/pull-back/scanner",
+      sonar: "/pull-back/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 4 * 60 + 30, toMinuteIdx: 9 * 60 + 31 },
+    priority: 4,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/pullback", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.pullback", sonarPrefix: "bridge.pullback", streamPrefix: "stream.pullback" },
+    ratingClasses: {
+      dimension: "ENTRY",
+      keys: ["T0430", "T0500", "T0530"],
+      labels: { T0430: "04:30", T0500: "05:00", T0530: "05:30" },
+    },
+  },
+
   // VWAP Bounce: intraday residual-reversal fade (spec: OriON-strategies/notebooks/VWAPBounce.ipynb).
   // FRONTEND-ONLY for now (2026-10-05): scanner/sonar/stream pages are wired, but there is no bridge
   // backend (no tape engine, gate, ratings or server strategy), so the paper/stream endpoints under
   // these routes do not exist yet and the pages show no data. Exits are TARGET/STOP/EOD per trade
-  // (not clock classes). Window 10:00-15:55 decision points. holdsOvernight false (EOD flat).
+  // (not clock classes, not rating classes). Window 10:00-15:55 decision points. holdsOvernight false (EOD flat).
   vwapbounce: {
     key: "vwapbounce",
     bridgeStrategyId: "stream.vwapbounce",
@@ -417,10 +503,13 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     api: { paperBase: "/api/paper/vwapbounce", signalsBase: "/api/arbitrage" },
     streamEngine: "bridge",
     storage: { scannerPrefix: "paper.vwapbounce", sonarPrefix: "bridge.vwapbounce", streamPrefix: "stream.vwapbounce" },
+    // NO rating classes: one rating per TICKER (win_rate + total, pooled over every trade; operator, 2026-10-19).
+    // TARGET / STOP / EOD are how one trade ended, not a situation a ticker is rated on separately. The type
+    // wants a class axis, so this is the single degenerate one.
     ratingClasses: {
-      dimension: "EXIT",
-      keys: ["target", "stop", "eod"],
-      labels: { target: "TARGET", stop: "STOP", eod: "EOD" },
+      dimension: "TICKER",
+      keys: ["all"],
+      labels: { all: "ALL" },
     },
   },
 
