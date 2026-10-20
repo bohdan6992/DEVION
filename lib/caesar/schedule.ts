@@ -163,6 +163,38 @@ export const SEGMENT_BY_KEY = Object.fromEntries(
   CAESAR_SEGMENTS.map((s) => [s.key, s])
 ) as Record<CaesarSegmentKey, CaesarSegment>;
 
+/**
+ * VISUAL ONLY (operator's own instruction, 2026-10-20: "НА ГРАФІКАХ PRE МАЄ ЗАКІНЧУВАТИСЬ НА 9:30")
+ * — PRE's own timeline bar/band should read as ending at 09:30 and OPEN as starting there, matching
+ * when PRE's own strategies actually settle (SettledPnlCheckpointService's own "pre" checkpoint is
+ * 09:35, 5 minutes after this). Deliberately NOT a change to CAESAR_SEGMENTS itself: that array's
+ * own 09:00 boundary still drives the REAL plan/cutoff logic (CaesarRunners' own entry-stop time for
+ * whatever strategy sits on the PRE plan row today) — the operator was explicit that only the chart
+ * should move, not when a PRE-assigned strategy actually stops entering. Used ONLY by CaesarSchedule
+ * .tsx's own SessionBar/Connectors rendering; every other consumer of CAESAR_SEGMENTS (segmentMinuteIdxRange,
+ * GetActiveSegmentKey, the plan editor, CaesarRunners) must keep reading the real array, unchanged.
+ */
+export function caesarSegmentsForDisplay(): readonly CaesarSegment[] {
+  const preOpenBoundary = axisMinutes(9, 30);
+  return CAESAR_SEGMENTS.map((seg) => {
+    if (seg.key === "pre") {
+      return {
+        ...seg,
+        toMin: preOpenBoundary,
+        bands: seg.bands.map((b, i) => (i === seg.bands.length - 1 ? { ...b, toMin: preOpenBoundary } : b)),
+      };
+    }
+    if (seg.key === "open") {
+      return {
+        ...seg,
+        fromMin: preOpenBoundary,
+        bands: seg.bands.map((b, i) => (i === 0 ? { ...b, fromMin: preOpenBoundary } : b)),
+      };
+    }
+    return seg;
+  });
+}
+
 export function segmentRangeLabel(seg: CaesarSegment): string {
   return `${clockLabel(seg.fromMin)} – ${clockLabel(seg.toMin)}`;
 }

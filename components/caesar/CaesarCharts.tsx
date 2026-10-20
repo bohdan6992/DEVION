@@ -29,7 +29,10 @@
  * rather than inventing a hue.
  */
 
-import { HEDGE_BRIDGE_ID, HEDGE_COLOR } from "@/lib/caesar/hedge";
+import {
+  CLO_HEDGE_BRIDGE_ID, CLO_HEDGE_COLOR, CLO_HEDGE_KEY,
+  ARBITRAGE_HEDGE_BRIDGE_ID, ARBITRAGE_HEDGE_COLOR, ARBITRAGE_HEDGE_KEY,
+} from "@/lib/caesar/hedge";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
@@ -540,6 +543,17 @@ function LinesChart({
     const first = Math.ceil(from / 60) * 60;
     const step = span > 600 ? 180 : span > 240 ? 60 : 30;
     for (let m = first; m <= to; m += step) out.push(m);
+    // The segment's own END must always read on the axis (operator's own instruction, 2026-10-20:
+    // "ЧАСОВА ШКАЛА МАЄ БУТИ ДО 9:30") — a whole-hour step can land short of it (09:00, not 09:30),
+    // which used to make the chart look like it stopped at the hour even though the plotted area
+    // already extended the rest of the way. Within half a step of the last tick, MOVE that tick to
+    // the endpoint instead of adding a second one right beside it (there is nothing to render a
+    // collision check here, so two close labels would simply overlap); otherwise append it as its
+    // own extra tick.
+    if (out.length === 0 || out[out.length - 1] !== to) {
+      if (out.length > 0 && to - out[out.length - 1] < step / 2) out[out.length - 1] = to;
+      else out.push(to);
+    }
     return out;
   }, [from, to, span]);
 
@@ -758,6 +772,17 @@ function LongShortHistogram({
     const first = Math.ceil(from / 60) * 60;
     const step = span > 600 ? 180 : span > 240 ? 60 : 30;
     for (let m = first; m <= to; m += step) out.push(m);
+    // The segment's own END must always read on the axis (operator's own instruction, 2026-10-20:
+    // "ЧАСОВА ШКАЛА МАЄ БУТИ ДО 9:30") — a whole-hour step can land short of it (09:00, not 09:30),
+    // which used to make the chart look like it stopped at the hour even though the plotted area
+    // already extended the rest of the way. Within half a step of the last tick, MOVE that tick to
+    // the endpoint instead of adding a second one right beside it (there is nothing to render a
+    // collision check here, so two close labels would simply overlap); otherwise append it as its
+    // own extra tick.
+    if (out.length === 0 || out[out.length - 1] !== to) {
+      if (out.length > 0 && to - out[out.length - 1] < step / 2) out[out.length - 1] = to;
+      else out.push(to);
+    }
     return out;
   }, [from, to, span]);
 
@@ -1004,9 +1029,11 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
     let regular = 0;
     let overnight = 0;
     for (const inst of instances) {
-      if (inst.instanceId === HEDGE_BRIDGE_ID) {
-        // The hedge class keeps its own fixed colour and never takes a SERIES slot.
-        map.set(inst.instanceId, HEDGE_COLOR);
+      if (inst.instanceId === CLO_HEDGE_BRIDGE_ID) {
+        // Each hedge class keeps its own fixed colour and never takes a SERIES slot.
+        map.set(inst.instanceId, CLO_HEDGE_COLOR);
+      } else if (inst.instanceId === ARBITRAGE_HEDGE_BRIDGE_ID) {
+        map.set(inst.instanceId, ARBITRAGE_HEDGE_COLOR);
       } else if (inst.overnight) {
         map.set(inst.instanceId, overnight < OVERNIGHT_SERIES.length ? OVERNIGHT_SERIES[overnight] : OTHER);
         overnight += 1;
@@ -1091,19 +1118,20 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
       // neutral shared slice, never twice in the ring.
       //
       // QQQ / TQQQ specifically (2026-10-08, the operator's own instruction; TQQQ added 2026-10-20
-      // when ReversalContinuumEntryHedgeService's own hedge ticker moved to it for its 3x leverage):
-      // ArbitrageServerStrategy's own HEDGED mode hedges with QQQ (1x, unchanged) and
-      // ReversalContinuumEntryHedgeService hedges with TQQQ — neither tracks that order as a position
-      // (DispatchHedgeBatchAsync's own doc comment: "never tracked as a position" — the whole point is
-      // it bypasses the normal per-strategy book). ownersByTicker can therefore never claim either, so
-      // without this it read as UNCLAIMED — "something is wrong, the bridge lost track of this" — when
-      // it is working exactly as designed. No strategy ever trades QQQ or TQQQ as an actual signal
-      // ticker, so this is a safe tell, not a guess from the ticker alone.
+      // when ReversalContinuumEntryHedgeService's own hedge ticker moved to it for its 3x leverage,
+      // split into its own "clo-hedge" class the same day — see this function's own CLO_HEDGE_KEY/
+      // ARBITRAGE_HEDGE_KEY import): ArbitrageServerStrategy's own HEDGED mode hedges with QQQ (1x)
+      // and ReversalContinuumEntryHedgeService hedges with TQQQ — neither tracks that order as a
+      // position (DispatchHedgeBatchAsync's own doc comment: "never tracked as a position" — the
+      // whole point is it bypasses the normal per-strategy book). ownersByTicker can therefore never
+      // claim either, so without this it read as UNCLAIMED — "something is wrong, the bridge lost
+      // track of this" — when it is working exactly as designed. No strategy ever trades QQQ or
+      // TQQQ as an actual signal ticker, so this is a safe tell, not a guess from the ticker alone.
       const key = owners.length === 1
         ? owners[0]
         : owners.length > 1
           ? "shared"
-          : ticker === "QQQ" || ticker === "TQQQ" ? "hedge" : "unclaimed";
+          : ticker === "TQQQ" ? CLO_HEDGE_KEY : ticker === "QQQ" ? ARBITRAGE_HEDGE_KEY : "unclaimed";
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
 
@@ -1111,13 +1139,15 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
       .map((s) => ({ ...s, active: counts.get(s.key) ?? 0 }))
       .filter((s) => s.active > 0);
     const shared = counts.get("shared") ?? 0;
-    const hedge = counts.get("hedge") ?? 0;
+    const cloHedge = counts.get(CLO_HEDGE_KEY) ?? 0;
+    const arbitrageHedge = counts.get(ARBITRAGE_HEDGE_KEY) ?? 0;
     const unclaimed = counts.get("unclaimed") ?? 0;
-    // None of the three is a strategy identity or a sign — reuses CaesarPositions.tsx's own
-    // sky/"shared" and amber/"unclaimed" badge colours, plus a new emerald/"hedge" one, rather than a
-    // SERIES entry, which by design is reserved for actual strategies (see SERIES's own doc comment).
+    // None of these is a strategy identity or a sign — reuses CaesarPositions.tsx's own sky/"shared"
+    // and amber/"unclaimed" badge colours, plus each hedge's own fixed colour, rather than a SERIES
+    // entry, which by design is reserved for actual strategies (see SERIES's own doc comment).
     if (shared > 0) result.push({ key: "shared", color: "#38bdf8", active: shared, entered: 0, points: [] });
-    if (hedge > 0) result.push({ key: "hedge", color: "#34d399", active: hedge, entered: 0, points: [] });
+    if (cloHedge > 0) result.push({ key: CLO_HEDGE_KEY, color: CLO_HEDGE_COLOR, active: cloHedge, entered: 0, points: [] });
+    if (arbitrageHedge > 0) result.push({ key: ARBITRAGE_HEDGE_KEY, color: ARBITRAGE_HEDGE_COLOR, active: arbitrageHedge, entered: 0, points: [] });
     if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fbbf24", active: unclaimed, entered: 0, points: [] });
     return result;
   }, [accountActiveCount, accountPositions, ownersByTicker, series]);
@@ -1310,6 +1340,17 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
     const first = Math.ceil(from / 60) * 60;
     const step = span > 600 ? 180 : span > 240 ? 60 : 30;
     for (let m = first; m <= to; m += step) out.push(m);
+    // The segment's own END must always read on the axis (operator's own instruction, 2026-10-20:
+    // "ЧАСОВА ШКАЛА МАЄ БУТИ ДО 9:30") — a whole-hour step can land short of it (09:00, not 09:30),
+    // which used to make the chart look like it stopped at the hour even though the plotted area
+    // already extended the rest of the way. Within half a step of the last tick, MOVE that tick to
+    // the endpoint instead of adding a second one right beside it (there is nothing to render a
+    // collision check here, so two close labels would simply overlap); otherwise append it as its
+    // own extra tick.
+    if (out.length === 0 || out[out.length - 1] !== to) {
+      if (out.length > 0 && to - out[out.length - 1] < step / 2) out[out.length - 1] = to;
+      else out.push(to);
+    }
     return out;
   }, [from, to, span]);
 

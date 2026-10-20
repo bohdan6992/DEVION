@@ -345,6 +345,63 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
     return () => { alive2 = false; unsubscribe(); };
   }, []);
 
+  // ---- "closed by checkpoint / after checkpoint" breakdown (operator's own instruction, 2026-10-20) ----
+  //
+  // A transparency split of each strategy's own Closed number, not a replacement for it — see
+  // SettledPnlCheckpointService's own doc comment on the bridge. TWO checkpoints exist, and which
+  // one applies to a given strategy is NOT uniform:
+  //   "pre" (09:35)  — CLO Reversal, CLO Continuum, Arbitrage, Morning Launch. The operator's own
+  //                    words: "всі ці стратегії закриваються в кінці pre, просто CLO відправляються
+  //                    ще за день до закриття" — CLO's own ENTRY is sent the day before at the
+  //                    close, but the POSITION itself closes within PRE, same as the others here.
+  //                    ClosedByCheckpoint should read the WHOLE closed total for these once 09:35
+  //                    has passed.
+  //   "opg" (10:35)  — the OPG family (their own exit classes resolve after 09:45, so ClosedBy
+  //                    Checkpoint should read 0 for these in the ordinary case — the mirror image).
+  // Every other strategy (PairFlux, PullBack, MorLaunch Basket, ...) was not named either way, so no
+  // breakdown is shown for it rather than guessing which checkpoint, if any, fits its own thesis.
+  const PRE_CHECKPOINT_BRIDGE_IDS = useMemo(
+    () => new Set(["stream.reversal", "stream.continuum", "stream.arbitrage", "stream.morlaunch"]),
+    [],
+  );
+  const OPG_CHECKPOINT_BRIDGE_IDS = useMemo(
+    () => new Set(["stream.opgreversal", "stream.opgcontinuum", "stream.opgfade", "stream.opgride"]),
+    [],
+  );
+
+  type Breakdown = { closedByCheckpoint: number; closedAfterCheckpoint: number; ready: boolean; checkpointLabel: string };
+  const [preBreakdown, setPreBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
+  const [opgBreakdown, setOpgBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
+
+  useEffect(() => {
+    let alive4 = true;
+    const load = (checkpoint: "pre" | "opg", set: typeof setPreBreakdown) =>
+      fetchWithTimeout(bridgeUrl(`/api/stream/caesar/pnl-breakdown?checkpoint=${checkpoint}`), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>)
+        .then((body) => { if (alive4) set({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} }); })
+        .catch(() => {});
+    const loadBoth = () => { void load("pre", setPreBreakdown); void load("opg", setOpgBreakdown); };
+    loadBoth();
+    const interval = window.setInterval(loadBoth, POLL_MS);
+    return () => { alive4 = false; window.clearInterval(interval); };
+  }, []);
+
+  /** UI strategy key -> its own classified checkpoint breakdown, or undefined for an unclassified
+   * strategy or one its own checkpoint has not fired for yet. */
+  const breakdownByKey = useMemo(() => {
+    const map = new Map<string, Breakdown>();
+    for (const inst of instances) {
+      if (PRE_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)) {
+        const b = preBreakdown.perStrategy[inst.instanceId];
+        if (b) map.set(inst.key, { ...b, ready: preBreakdown.ready, checkpointLabel: "09:35" });
+      } else if (OPG_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)) {
+        const b = opgBreakdown.perStrategy[inst.instanceId];
+        if (b) map.set(inst.key, { ...b, ready: opgBreakdown.ready, checkpointLabel: "10:35" });
+      }
+    }
+    return map;
+  }, [instances, preBreakdown, opgBreakdown, PRE_CHECKPOINT_BRIDGE_IDS, OPG_CHECKPOINT_BRIDGE_IDS]);
+
   // The account as the page reads it: realised P&L net of the day's baseline. A ticker that was
   // closed before the roll and did nothing since reads 0 realised, so `isRelevant` drops its row —
   // yesterday's results stop being listed as today's.
@@ -754,6 +811,15 @@ export default function CaesarPositions({ instances, tableSlot = null, selectedS
                   <Metric label="Open" value={strategy.openPnl} tone={pnlTone(strategy.openPnl)} />
                   <Metric label="Closed" value={strategy.closedPnl} tone={pnlTone(strategy.closedPnl)} />
                 </div>
+                {breakdownByKey.has(key) && breakdownByKey.get(key)!.ready && (
+                  <div
+                    className="mt-1.5 flex justify-end gap-3 text-[10px] text-zinc-500"
+                    title={`Closed, split by the ${breakdownByKey.get(key)!.checkpointLabel} settle checkpoint (SettledPnlCheckpointService).`}
+                  >
+                    <span>by {breakdownByKey.get(key)!.checkpointLabel}: <span className={pnlTone(breakdownByKey.get(key)!.closedByCheckpoint)}>{breakdownByKey.get(key)!.closedByCheckpoint.toFixed(2)}</span></span>
+                    <span>after: <span className={pnlTone(breakdownByKey.get(key)!.closedAfterCheckpoint)}>{breakdownByKey.get(key)!.closedAfterCheckpoint.toFixed(2)}</span></span>
+                  </div>
+                )}
               </div>
             );
           })}

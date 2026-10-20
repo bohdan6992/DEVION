@@ -440,6 +440,52 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // A second, unrelated way to run Morning Launch's thesis (operator's own, 2026-10-20): no tape, no
+  // signal — a scheduled keystroke macro against TradingApp's own Basket feature (03:58 places
+  // resting limits on every ticker already in the basket, 04:02 cancels what's left unfilled). A
+  // fill is never auto-exited — the operator closes it by hand on purpose — so this exists purely so
+  // its P&L gets its own Caesar card. See MorLaunchBasketServerStrategy.cs's own header comment on
+  // the bridge for the full spec.
+  //
+  // NO SCANNER/SONAR/STREAM PAGE OF ITS OWN: there is no historical "which tickers were in the
+  // basket on a past day" data to replay. nav/api/ratingClasses below deliberately point at
+  // morlaunch's own pages (same underlying thesis, a different execution mechanism) rather than at
+  // routes that do not exist. storage gets its OWN distinct prefixes, not morlaunch's, so filter/UI
+  // state never leaks between the two.
+  //
+  // holdsOvernight: true even though most fills close same day — a manual close is not on any
+  // schedule the bridge knows, so treating it as scoped to the PRE segment risks the exact bug this
+  // flag exists to prevent (CaesarPositions.tsx's own doc comment): a position still open when the
+  // Caesar day rolls at 21:00 would otherwise vanish into UNCLAIMED instead of staying visible.
+  morlaunchbasket: {
+    key: "morlaunchbasket",
+    bridgeStrategyId: "stream.morlaunchbasket",
+    nav: {
+      stream: "/mor-launch/stream",
+      scanner: "/mor-launch/scanner",
+      sonar: "/mor-launch/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 3 * 60 + 58, toMinuteIdx: 4 * 60 + 3 },
+    // 3, below pullback's 4 and morlaunch's own 5 — every priority in this registry must be
+    // distinct (the runtime check at the bottom of this file enforces it), and this one is
+    // cosmetic in practice: EvaluateAsync never submits a StrategyIntent, so it never actually
+    // competes for a ticker claim through the normal arbitration this number tie-breaks.
+    priority: 3,
+    holdsOvernight: true,
+    api: { paperBase: "/api/paper/morlaunch", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: {
+      scannerPrefix: "paper.morlaunchbasket",
+      sonarPrefix: "bridge.morlaunchbasket",
+      streamPrefix: "stream.morlaunchbasket",
+    },
+    ratingClasses: {
+      dimension: "ENTRY",
+      keys: ["basket0350"],
+      labels: { basket0350: "03:50" },
+    },
+  },
+
   // PullBack: fade a stack that stands too far from yesterday's close in the early pre-market. Spec is
   // the operator's own OriON-strategies/notebooks/PullBack.ipynb, which has been RUN over 65 sessions -
   // the bridge side is a port of its scan_day, not an independent design.

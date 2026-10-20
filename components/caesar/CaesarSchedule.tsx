@@ -8,7 +8,7 @@ import { GlitchTitle } from "@/components/ui/GlitchTitle";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import CaesarControlBar from "./CaesarControlBar";
 import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
-import { HEDGE_INSTANCE } from "@/lib/caesar/hedge";
+import { HEDGE_INSTANCES } from "@/lib/caesar/hedge";
 import {
   fetchBridgeEngineStatus,
   fetchBridgePlan,
@@ -20,6 +20,7 @@ import {
 } from "@/lib/caesar/planClient";
 import {
   CAESAR_SEGMENTS,
+  caesarSegmentsForDisplay,
   CAESAR_STRATEGIES,
   CAESAR_STRATEGY_BY_KEY,
   DAY_MINUTES,
@@ -87,6 +88,17 @@ const GRAPH_SURFACE =
 
 const HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60);
 const HALF_HOUR_TICKS = Array.from({ length: 23 }, (_, i) => i * 60 + 30);
+
+/**
+ * VISUAL ONLY — PRE reads as ending at 09:30 / OPEN as starting there (operator's own instruction,
+ * 2026-10-20). Used ONLY by SessionBar/Connectors below, which draw the timeline bar itself; every
+ * other reader in this file (SEGMENT CARDS, the plan editor, isNow/nowSegment) keeps using the real
+ * CAESAR_SEGMENTS — see caesarSegmentsForDisplay's own doc comment for why the two must stay apart.
+ */
+const DISPLAY_SEGMENTS = caesarSegmentsForDisplay();
+const DISPLAY_SEGMENT_BY_KEY = Object.fromEntries(
+  DISPLAY_SEGMENTS.map((s) => [s.key, s])
+) as Record<CaesarSegmentKey, CaesarSegment>;
 
 const FIT_COPY: Record<WindowFit, { label: string; tone: "ok" | "warn" | "bad" | "muted" }> = {
   full: { label: "COVERS SEGMENT", tone: "ok" },
@@ -438,9 +450,10 @@ export default function CaesarSchedule() {
         overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
       }
     }
-    // The QQQ direction-balance hedge is a class of its own, charted in every segment (it can be
-    // pressed whenever a balancing strategy runs, and it is held until the balance unwinds it).
-    return [...inSegment, ...overnight, { ...HEDGE_INSTANCE, overnight: false }];
+    // CLO's own TQQQ hedge and Arbitrage's own QQQ hedge are each a class of their own, charted in
+    // every segment (either can be pressed whenever its own balancing strategy runs, and is held
+    // until unwound) — two distinct instances, not one merged "hedge" (2026-10-20).
+    return [...inSegment, ...overnight, ...HEDGE_INSTANCES.map((h) => ({ ...h, overnight: false }))];
   }, [plan, selected]);
 
   /**
@@ -474,7 +487,7 @@ export default function CaesarSchedule() {
       instanceId: strategy.bridgeStrategyId,
       priority: strategy.priority,
     })),
-    { ...HEDGE_INSTANCE },
+    ...HEDGE_INSTANCES.map((h) => ({ ...h })),
   ], []);
 
   // NOT min-h-screen. This used to be the only thing on the page, so filling the viewport was
@@ -596,8 +609,12 @@ export default function CaesarSchedule() {
                 own doc comment. allDay overrides all three props to the whole axis and every
                 strategy — see allDay's own doc comment above. */}
             <CaesarCharts
-              fromMin={allDay ? 0 : selectedSegment.fromMin}
-              toMin={allDay ? DAY_MINUTES : selectedSegment.toMin}
+              // VISUAL ONLY: the PRE/OPEN charts' own x-axis reads the DISPLAY segment (09:30
+              // boundary), not the real one (09:00) — same reasoning as SessionBar/Connectors
+              // above, see caesarSegmentsForDisplay's own doc comment. The real selectedSegment
+              // still drives everything else (which data this panel fetches, isNow, etc).
+              fromMin={allDay ? 0 : DISPLAY_SEGMENT_BY_KEY[selectedSegment.key].fromMin}
+              toMin={allDay ? DAY_MINUTES : DISPLAY_SEGMENT_BY_KEY[selectedSegment.key].toMin}
               nowMin={nowMin}
               instances={allDay ? positionInstances : chartInstances}
               assignedKeys={allDay ? null : assignedKeys}
@@ -775,7 +792,7 @@ function SessionBar({
       {/* Grouping bracket, only where a segment is split across several bands: BLUE and ARK are two
           bands but one PRE segment, and the cards below are per segment, not per band. */}
       <div className="relative mb-1.5 h-5">
-        {CAESAR_SEGMENTS.filter((seg) => seg.bands.length > 1).map((seg) => (
+        {DISPLAY_SEGMENTS.filter((seg) => seg.bands.length > 1).map((seg) => (
           <div
             key={`group-${seg.key}`}
             className="absolute inset-y-0 flex items-center gap-2"
@@ -794,7 +811,7 @@ function SessionBar({
       </div>
 
       <div className="relative h-16 w-full overflow-hidden rounded-lg border border-white/10">
-        {CAESAR_SEGMENTS.map((seg) =>
+        {DISPLAY_SEGMENTS.map((seg) =>
           seg.bands.map((band) => {
             const active = selected === seg.key;
             const widthPct = axisPct(axisClip(band.toMin) - band.fromMin);
@@ -830,7 +847,7 @@ function SessionBar({
         )}
 
         {/* Segment boundaries, drawn over the bands so a band edge never reads as a colour seam. */}
-        {CAESAR_SEGMENTS.slice(1).map((seg) => (
+        {DISPLAY_SEGMENTS.slice(1).map((seg) => (
           <div
             key={`edge-${seg.key}`}
             className="pointer-events-none absolute inset-y-0 w-px bg-black/50"
@@ -863,9 +880,9 @@ function SessionBar({
 function Connectors({ selected }: { selected: CaesarSegmentKey }) {
   return (
     <svg className="h-9 w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-      {CAESAR_SEGMENTS.map((seg, i) => {
+      {DISPLAY_SEGMENTS.map((seg, i) => {
         const barX = axisPct((seg.fromMin + axisClip(seg.toMin)) / 2);
-        const cardX = ((i + 0.5) / CAESAR_SEGMENTS.length) * 100;
+        const cardX = ((i + 0.5) / DISPLAY_SEGMENTS.length) * 100;
         const active = selected === seg.key;
         return (
           <path
