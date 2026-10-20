@@ -1090,18 +1090,20 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
       // Account reports one position per ticker. A ticker claimed by two strategies belongs in a
       // neutral shared slice, never twice in the ring.
       //
-      // QQQ specifically (2026-10-08, the operator's own instruction): ReversalContinuumEntryHedgeService
-      // and ArbitrageServerStrategy's own HEDGED mode both hedge an imbalance with QQQ, and neither
-      // tracks that order as a position (DispatchHedgeBatchAsync's own doc comment: "never tracked as
-      // a position" — the whole point is it bypasses the normal per-strategy book). ownersByTicker can
-      // therefore never claim it, so without this it read as UNCLAIMED — "something is wrong, the
-      // bridge lost track of this" — when it is working exactly as designed. No strategy ever trades
-      // QQQ as an actual signal ticker, so this is a safe tell, not a guess from the ticker alone.
+      // QQQ / TQQQ specifically (2026-10-08, the operator's own instruction; TQQQ added 2026-10-20
+      // when ReversalContinuumEntryHedgeService's own hedge ticker moved to it for its 3x leverage):
+      // ArbitrageServerStrategy's own HEDGED mode hedges with QQQ (1x, unchanged) and
+      // ReversalContinuumEntryHedgeService hedges with TQQQ — neither tracks that order as a position
+      // (DispatchHedgeBatchAsync's own doc comment: "never tracked as a position" — the whole point is
+      // it bypasses the normal per-strategy book). ownersByTicker can therefore never claim either, so
+      // without this it read as UNCLAIMED — "something is wrong, the bridge lost track of this" — when
+      // it is working exactly as designed. No strategy ever trades QQQ or TQQQ as an actual signal
+      // ticker, so this is a safe tell, not a guess from the ticker alone.
       const key = owners.length === 1
         ? owners[0]
         : owners.length > 1
           ? "shared"
-          : ticker === "QQQ" ? "hedge" : "unclaimed";
+          : ticker === "QQQ" || ticker === "TQQQ" ? "hedge" : "unclaimed";
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
 
