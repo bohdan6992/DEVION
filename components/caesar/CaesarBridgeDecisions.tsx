@@ -22,7 +22,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { resolveClassByBridgeId } from "@/lib/caesar/hedge";
-import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 
 type StreamCandidateRow = {
   ticker: string;
@@ -781,9 +780,11 @@ export function AllSituationsSection({
   const longRows = useMemo(() => sortedRows.filter((r) => !isShort(r)), [sortedRows]);
 
   const table = (rowsForSide: SituationRow[], emptyLabel: string) => (
-    // No header bar (2026-10-21, the operator's own instruction) — side-by-side with its twin, each
-    // taking half the width, so together they fill exactly what the single wide table used to.
-    <div className={CAESAR_PANEL_SURFACE}>
+    // No header bar — side-by-side with its twin, each taking half the width, so together they
+    // fill exactly what the single wide table used to. Same semi-transparent surface + hover
+    // darkening as CaesarPositions' own strategy cards (2026-10-21, the operator's own instruction),
+    // not CAESAR_PANEL_SURFACE's own static, more opaque panel look.
+    <div className="scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
       {/*
         Capped at two chart rows' own height (384 + the 12px gap between them + 384 = 780,
         CaesarCharts' own numbers — 2026-10-08, the operator's own instruction) so a long book

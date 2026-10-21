@@ -32,6 +32,7 @@ import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import { resolveClassByBridgeId, CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
+import { SEGMENT_STRATEGY_KEYS } from "@/lib/caesar/segmentStrategies";
 import type { StreamPosition } from "@/components/stream/streamEngine";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import { AllSituationsSection } from "./CaesarBridgeDecisions";
@@ -589,6 +590,14 @@ export default function CaesarPositions({
     let unclaimedClosedPnl = 0;
     let openCount = 0;
     let untrackedCount = 0;
+    // Account-wide, once per physical ticker (not once per claim — see firstForTicker below), for
+    // the header's own open/closed/long/short/volume readout (2026-10-21, the operator's own
+    // instruction: replace the Total/Open/Closed split up there with activity counts instead).
+    let closedCount = 0;
+    let longCount = 0;
+    let shortCount = 0;
+    let longVolume = 0;
+    let shortVolume = 0;
 
     // The account reports ONE P&L per ticker and does not say who owns which part of it, so a
     // shared ticker's money is counted once into a shared bucket rather than added to both
@@ -600,15 +609,21 @@ export default function CaesarPositions({
 
     for (const r of rows) {
       const firstForTicker = !countedTickers.has(r.ticker);
+      const openPnl = r.open ? r.bridge.openPnL ?? 0 : 0;
+      // null (field absent) contributes nothing rather than a fabricated zero.
+      const closedPnl = r.bridge.closedPnL ?? 0;
+
       if (firstForTicker) {
         countedTickers.add(r.ticker);
         if (r.open) openCount += 1;
         if (r.untracked) untrackedCount += 1;
+        if (!r.open && closedPnl !== 0) closedCount += 1;
+        if (r.open && !r.untracked) {
+          const size = Math.abs(r.bridge.posSize ?? 0);
+          if (r.bridge.side === "Short") { shortCount += 1; shortVolume += size; }
+          else { longCount += 1; longVolume += size; }
+        }
       }
-
-      const openPnl = r.open ? r.bridge.openPnL ?? 0 : 0;
-      // null (field absent) contributes nothing rather than a fabricated zero.
-      const closedPnl = r.bridge.closedPnL ?? 0;
 
       if (!r.claim) {
         if (firstForTicker) {
@@ -663,6 +678,7 @@ export default function CaesarPositions({
       sharedCount, sharedOpenPnl, sharedClosedPnl,
       grandOpenPnl, grandClosedPnl,
       openCount, untrackedCount, rowCount: countedTickers.size,
+      closedCount, longCount, shortCount, longVolume, shortVolume,
     };
   }, [claims, closedOwners, snapshot, instances]);
 
@@ -687,26 +703,10 @@ export default function CaesarPositions({
     return withOrder.map((x) => x.r);
   }, [view.rows, strategySort]);
 
-  /**
-   * Which strategies' own cards show under each segment tab — the operator's own explicit mapping,
-   * 2026-10-21, after an earlier attempt conflated TWO separate questions into one (which checkpoint
-   * family a strategy's NUMBER comes from vs. which segment TAB it is shown under): CLO Reversal/
-   * Continuum settle by the SAME 09:35 checkpoint Arbitrage/Morning Launch do, but are plan-assigned
-   * to POST (their own entry is sent the evening before — see CaesarPlanReversalEarlyEnableTests'
-   * own doc comment), not PRE. OPG shows only under OPEN (its own assigned segment); INTRA shows
-   * nothing at all. Each hedge sits with its own balancing strategy's own tab (Arbitrage's own QQQ
-   * hedge under PRE, CLO's own TQQQ hedge under POST) rather than every segment, now that a card's
-   * own segment placement is explicit rather than inferred from checkpoint family membership.
-   */
-  const SEGMENT_CARD_KEYS: Partial<Record<string, readonly string[]>> = useMemo(() => ({
-    // CLO Reversal/Continuum (and its own hedge) show on BOTH tabs, not just one — their position
-    // is held and settling throughout PRE (the operator's own instruction, 2026-10-21: PRE shows
-    // everything active on it) even though the entry itself is sent the evening before, on POST.
-    pre: ["arbitrage", "morlaunch", "morlaunchbasket", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
-    open: ["opgreversal", "opgcontinuum", "opgfade", "opgride"],
-    intra: [],
-    post: ["reversal", "continuum", CLO_HEDGE_KEY],
-  }), []);
+  // Which strategies' own cards show under each segment tab — SEGMENT_STRATEGY_KEYS's own doc
+  // comment has the full history; shared with CaesarSchedule.tsx's own chartInstances (the donut/
+  // charts) so the two can never disagree about which segment a strategy belongs to again.
+  const SEGMENT_CARD_KEYS = SEGMENT_STRATEGY_KEYS;
 
   const cardEntries = useMemo((): [string, StrategyAgg][] => {
     if (!selectedSegment) return Array.from(view.perStrategy.entries());
@@ -773,26 +773,42 @@ export default function CaesarPositions({
         onClick={() => setCardFilter(null)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setCardFilter(null); }}
         title="Click to clear the strategy filter and show every situation"
-        className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl transition-colors hover:bg-white/[0.02]"
+        className="flex flex-wrap items-baseline justify-between gap-4 border-b border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 backdrop-blur-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80"
       >
         <div className="font-mono text-[14px] font-bold uppercase tracking-[0.18em] text-zinc-400">
           P&amp;L
           <span className="ml-2 font-normal tracking-normal text-zinc-600">
             {snapshot?.account ? `acct ${snapshot.account} · ` : ""}
-            {view.openCount} open across the account
-            {view.untrackedCount > 0 && (
-              <span
-                className="text-amber-300/90"
-                title="Held in the account, but the bridge stopped tracking them (they are not closed). Nothing is managing their adds or exits."
-              > · {view.untrackedCount} not tracked by the bridge</span>
-            )}
-            {cardFilter && <> · filtered to {cardFilter}</>}
+            {cardFilter && <>filtered to {cardFilter}</>}
           </span>
         </div>
-        <div className="flex items-baseline gap-6">
-          <HeaderMetric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
-          <HeaderMetric label="Open" value={view.grandOpenPnl} tone={pnlTone(view.grandOpenPnl)} />
-          <HeaderMetric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
+        {/*
+          Activity counts, not dollars, up here (2026-10-21, the operator's own instruction) — the
+          Total/Open/Closed $ split moved onto each strategy's own card below; this line is now the
+          account-wide shape of the book (open/closed/long/short/volume), with the one P&L number
+          that stays here — the grand total — closing it out exactly as before.
+        */}
+        <div className="flex flex-wrap items-baseline gap-5 font-mono text-[12px]">
+          <span><span className="text-zinc-500">open</span> <span className="font-bold text-sky-300">{view.openCount}</span></span>
+          <span><span className="text-zinc-500">closed</span> <span className="font-bold text-fuchsia-300">{view.closedCount}</span></span>
+          <span>
+            <span className="font-bold text-emerald-300">{view.longCount}L</span>
+            <span className="mx-1 text-zinc-700">/</span>
+            <span className="font-bold text-rose-300">{view.shortCount}S</span>
+          </span>
+          <span>
+            <span className="text-zinc-500">vol</span>{" "}
+            <span className="font-bold text-emerald-300/80">{fmtInt(view.longVolume)}</span>
+            <span className="mx-1 text-zinc-700">/</span>
+            <span className="font-bold text-rose-300/80">{fmtInt(view.shortVolume)}</span>
+          </span>
+          {view.untrackedCount > 0 && (
+            <span
+              className="text-amber-300/90"
+              title="Held in the account, but the bridge stopped tracking them (they are not closed). Nothing is managing their adds or exits."
+            >{view.untrackedCount} untracked</span>
+          )}
+          <HeaderMetric label="P&L" value={grandTotal} tone={pnlTone(grandTotal)} />
         </div>
       </div>
       </div>

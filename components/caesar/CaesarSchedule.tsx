@@ -10,6 +10,7 @@ import CaesarControlBar from "./CaesarControlBar";
 import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
 import { HEDGE_INSTANCES } from "@/lib/caesar/hedge";
 import { buildColorByInstance } from "@/lib/caesar/colors";
+import { SEGMENT_STRATEGY_KEYS } from "@/lib/caesar/segmentStrategies";
 import {
   fetchBridgeEngineStatus,
   fetchBridgePlan,
@@ -418,50 +419,34 @@ export default function CaesarSchedule() {
     setAllDay(false);
   }, [setSelected]);
   const selectedSegment = SEGMENT_BY_KEY[selected];
+  /**
+   * The donut/PNL-over-time/average-trade/arrivals charts' own instance list for the selected
+   * segment — built from the SAME explicit SEGMENT_STRATEGY_KEYS list CaesarPositions.tsx's own
+   * cards use (see that constant's own doc comment for the full history), not the live Caesar
+   * plan's own per-segment assignment. Reading the live plan here used to repeatedly disagree with
+   * what the cards showed — CLO Reversal/Continuum settle by the SAME 09:35 checkpoint Arbitrage/
+   * Morning Launch do, but are plan-assigned to POST (their own entry is sent the evening before),
+   * so the donut's own ownersByTicker (CaesarCharts.tsx) could never find their real open positions
+   * under POST's own `instances` and read them as UNCLAIMED (the operator's own bug report,
+   * 2026-10-21: 24 of 25 open tickers read UNCLAIMED on POST despite the cards showing 7 and 17
+   * open), then the same class of bug recurred for OPG under OPEN. One list, read by both sides,
+   * settles it for good.
+   */
   const chartInstances = useMemo(() => {
-    if (!plan) return [];
-    const inSegment = (plan[selected] ?? []).flatMap((row) => {
-      if (!row.enabled) return [];
-      const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
+    const keys = SEGMENT_STRATEGY_KEYS[selected] ?? [];
+    return keys.flatMap((key) => {
+      const hedge = HEDGE_INSTANCES.find((h) => h.key === key);
+      if (hedge) return [{ ...hedge, overnight: false }];
+      const strategy = LIVE_STRATEGIES[key.toLowerCase()];
       if (!strategy) return [];
-      // Every strategy today runs on the bridge, not in a browser tab — CaesarCharts reads its
-      // entries and open positions from the bridge itself (GET api/stream/caesar/entries and
-      // /positions), keyed by this same bridgeStrategyId. This used to be filtered to
-      // streamEngine === "browser" only, on the theory that a bridge engine had no action log to
-      // chart — true, but it meant the chart read NOTHING for any strategy that had migrated
-      // server-side, which by now is all six: "0 total" forever, not because nothing happened.
-      // Overnight strategies are not scoped to a segment at all — they are added below, once,
-      // whichever segment their row sits in.
-      if (strategy.holdsOvernight) return [];
-      return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: false }];
+      return [{
+        key: strategy.key,
+        instanceId: strategy.bridgeStrategyId,
+        priority: strategy.priority,
+        overnight: strategy.holdsOvernight === true,
+      }];
     });
-
-    // OVERNIGHT CATEGORY — PRE only (the operator's own instruction, 2026-10-21: "для проміжку Pre
-    // відображай всі стратегії які були на ньому активні", every OTHER segment shows only what its
-    // own plan row actually assigns). Day Two and Reversal enter at the 16:00 close and exit on a
-    // later day, so their book is held straight through the 21:00 roll into a Caesar day whose plan
-    // may not mention them at all in the segment being viewed — PRE is where an operator actually
-    // assigns them, so this still finds them there regardless of which OTHER segment's row they
-    // might also sit in. Previously charted in EVERY segment; narrowed because OPEN's own donut was
-    // showing them (and, if their position still happened to be open, double as a live slice) even
-    // though OPEN's own plan never runs them — "лише ті стратегії які назначені на проміжок OPEN".
-    const overnight: { key: string; instanceId: string; priority: number; overnight: boolean }[] = [];
-    if (selected === "pre") {
-      for (const seg of CAESAR_SEGMENTS) {
-        for (const row of plan[seg.key] ?? []) {
-          if (!row.enabled) continue;
-          const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
-          if (!strategy?.holdsOvernight) continue;
-          if (overnight.some((o) => o.instanceId === strategy.bridgeStrategyId)) continue;
-          overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
-        }
-      }
-    }
-    // CLO's own TQQQ hedge and Arbitrage's own QQQ hedge are each a class of their own, charted in
-    // every segment (either can be pressed whenever its own balancing strategy runs, and is held
-    // until unwound) — two distinct instances, not one merged "hedge" (2026-10-20).
-    return [...inSegment, ...overnight, ...HEDGE_INSTANCES.map((h) => ({ ...h, overnight: false }))];
-  }, [plan, selected]);
+  }, [selected]);
 
   /**
    * Strategy keys genuinely scheduled in the SELECTED segment's own plan row — unlike chartInstances
