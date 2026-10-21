@@ -751,20 +751,6 @@ export function AllSituationsSection({
     return out;
   }, [positions, accountPnlByTicker]);
 
-  // Each ticker counted once, straight from the account — not a sum of row.totalPnl, which would
-  // double-count a ticker legging two pairs at once (see the section's own doc comment).
-  const grandTotal = useMemo(() => {
-    const seen = new Set<string>();
-    let sum = 0;
-    for (const p of positions ?? []) {
-      const t = p.ticker.trim().toUpperCase();
-      if (seen.has(t)) continue;
-      seen.add(t);
-      sum += accountPnlByTicker.get(t) ?? 0;
-    }
-    return sum;
-  }, [positions, accountPnlByTicker]);
-
   const strategyKeyOf = (r: SituationRow) => (resolveClassByBridgeId(r.strategyId)?.key ?? r.strategyId).toUpperCase();
 
   const sortedRows = useMemo(() => {
@@ -787,27 +773,17 @@ export function AllSituationsSection({
 
   const pnlTone = (v: number) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-zinc-500");
 
-  return (
-    // Same block shape as CaesarPositions' own header/cards/table split (2026-10-08, the operator's
-    // own instruction: this section moved here from Bridge Decisions and now matches it) — a
-    // CAESAR_PANEL_SURFACE card, a muted title bar, the grand total on the right.
+  // Same rule the Side column's own colour already used (mixed/long-leaning reads long) — a
+  // PairFlux row with legs going opposite ways has no clean single side, so it falls into LONGS
+  // rather than inventing a third group.
+  const isShort = (r: SituationRow) => r.side.includes("Short") && !r.side.includes("Long");
+  const shortRows = useMemo(() => sortedRows.filter(isShort), [sortedRows]);
+  const longRows = useMemo(() => sortedRows.filter((r) => !isShort(r)), [sortedRows]);
+
+  const table = (rowsForSide: SituationRow[], emptyLabel: string) => (
+    // No header bar (2026-10-21, the operator's own instruction) — side-by-side with its twin, each
+    // taking half the width, so together they fill exactly what the single wide table used to.
     <div className={CAESAR_PANEL_SURFACE}>
-      <div className="flex flex-wrap items-baseline justify-between gap-4 bg-[#0a0a0a]/40 px-3 py-2.5 backdrop-blur-xl">
-        <span className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-          All situations
-          {activeStrategy && (
-            <span className="ml-2 font-normal tracking-normal text-zinc-600">
-              · {activeStrategy} sorted to the top
-            </span>
-          )}
-        </span>
-        <div className="flex items-baseline gap-3">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">{rows.length} open</span>
-          <span className={`font-mono text-[16px] font-bold tabular-nums ${pnlTone(grandTotal)}`}>
-            {grandTotal >= 0 ? "+" : ""}{fmt(grandTotal)}
-          </span>
-        </div>
-      </div>
       {/*
         Capped at two chart rows' own height (384 + the 12px gap between them + 384 = 780,
         CaesarCharts' own numbers — 2026-10-08, the operator's own instruction) so a long book
@@ -815,7 +791,7 @@ export function AllSituationsSection({
         an opaque fill, not the title bar's translucent one) so the column names never scroll away.
       */}
       <div className="max-h-[780px] overflow-x-auto overflow-y-auto">
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-white/[0.06] bg-[#0a0a0a]/95 backdrop-blur-sm text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
               <th className="px-2 py-2">Ticker / Pair</th>
@@ -838,20 +814,20 @@ export function AllSituationsSection({
             </tr>
           </thead>
           <tbody>
-            {sortedRows.length === 0 ? (
+            {rowsForSide.length === 0 ? (
               <tr>
                 <td colSpan={11} className="px-2 py-6 text-center font-mono text-[12px] text-zinc-600">
-                  no open situations
+                  {emptyLabel}
                 </td>
               </tr>
             ) : (
-              sortedRows.map((r) => (
+              rowsForSide.map((r) => (
                 <tr key={r.key} className="border-b border-white/[0.03] font-mono text-[13px]">
                   <td className="px-2 py-2 font-bold text-zinc-200">{r.label}</td>
                   <td className="px-2 py-2 font-bold" style={{ color: strategyColor(strategyKeyOf(r)) }}>
                     {strategyKeyOf(r)}
                   </td>
-                  <td className={r.side.includes("Short") && !r.side.includes("Long") ? "px-2 py-2 text-rose-300" : "px-2 py-2 text-emerald-300"}>
+                  <td className={isShort(r) ? "px-2 py-2 text-rose-300" : "px-2 py-2 text-emerald-300"}>
                     {r.side}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums text-zinc-300">{fmt(r.signal)}</td>
@@ -874,6 +850,13 @@ export function AllSituationsSection({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {table(shortRows, "no open shorts")}
+      {table(longRows, "no open longs")}
     </div>
   );
 }

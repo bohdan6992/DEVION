@@ -724,22 +724,22 @@ export default function CaesarPositions({
       }
 
       const b = breakdownByKey.get(key);
+      const live = view.perStrategy.get(key);
       // The checkpoint has not actually fired yet today (PnlBreakdown's own `ready` flag — see its
       // doc comment: "not fired" and "fired but saw zero" must never be conflated), or this key was
       // not classified into a checkpoint family at all — either way, fall back to the live total
       // instead of hiding the card: the SAME "don't change anything during the day, only the final
       // freeze differs" principle SegmentPnlLedgerService's own settledOverride/baselineFloor
-      // already follow on the bridge (the operator's own bug report, 2026-10-21: every PRE-family
-      // card but the special-cased ones vanished entirely while real money was still moving on PNL
-      // OVER TIME, because this used to return [] instead of falling back).
-      if (!b || !b.ready) {
-        const live = view.perStrategy.get(key);
-        return live ? [[key, live]] : [];
-      }
-      return [[key, {
-        open: 0, untracked: 0, long: 0, short: 0, adds: 0, priority: inst.priority,
-        openPnl: 0, closedPnl: b.closedByCheckpoint, closedCount: b.closedByCheckpoint !== 0 ? 1 : 0,
-      }]];
+      // already follow on the bridge.
+      if (!b || !b.ready) return live ? [[key, live]] : [];
+      if (!live) return [];
+      // Checkpoint ready: show the SETTLED closed figure, but keep `live`'s own open/untracked/
+      // long/short/closedCount — a strategy that trades past its own checkpoint (Arbitrage runs all
+      // day; its own 09:35-settled slice can easily be 0 on a day most of it closed later) must
+      // still show its card on whatever real activity it has TODAY, not vanish because this ONE
+      // narrow slice happened to be zero (the operator's own bug report, 2026-10-21: Arbitrage/
+      // MorLaunch/Reversal all missing from PRE/POST while PNL OVER TIME showed real money moving).
+      return [[key, { ...live, openPnl: 0, closedPnl: b.closedByCheckpoint }]];
     });
   }, [selectedSegment, SEGMENT_CARD_KEYS, instances, breakdownByKey, view.perStrategy]);
 

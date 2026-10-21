@@ -29,10 +29,7 @@
  * rather than inventing a hue.
  */
 
-import {
-  CLO_HEDGE_BRIDGE_ID, CLO_HEDGE_COLOR, CLO_HEDGE_KEY,
-  ARBITRAGE_HEDGE_BRIDGE_ID, ARBITRAGE_HEDGE_COLOR, ARBITRAGE_HEDGE_KEY,
-} from "@/lib/caesar/hedge";
+import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
 import { SERIES, OTHER, OVERNIGHT_SERIES, MAX_SERIES, buildColorByInstance } from "@/lib/caesar/colors";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -1135,19 +1132,24 @@ export default function CaesarCharts({
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
 
+    // Both hedge classes are already real entries in `series` (chartInstances appends HEDGE_INSTANCES
+    // unconditionally, with their own fixed colour via colorByInstance), so the map/filter below
+    // already picks each one up whenever `counts` has a non-zero entry for its key — whether that
+    // count came from the normal owners.length===1 path above or the ticker-based fallback. Pushing
+    // a SECOND entry for them here (as this used to) double-counted the exact same total into two
+    // adjacent wedges of the same colour — "one wedge that looks cut into two parts" (the operator's
+    // own report, 2026-10-21) — now that hedges are tracked as real claims, the normal path already
+    // finds them every time; the ticker fallback above only still matters for the brief window right
+    // after a press, before the next account poll has caught up.
     const result = series
       .map((s) => ({ ...s, active: counts.get(s.key) ?? 0 }))
       .filter((s) => s.active > 0);
     const shared = counts.get("shared") ?? 0;
-    const cloHedge = counts.get(CLO_HEDGE_KEY) ?? 0;
-    const arbitrageHedge = counts.get(ARBITRAGE_HEDGE_KEY) ?? 0;
     const unclaimed = counts.get("unclaimed") ?? 0;
-    // None of these is a strategy identity or a sign — reuses CaesarPositions.tsx's own sky/"shared"
-    // and amber/"unclaimed" badge colours, plus each hedge's own fixed colour, rather than a SERIES
-    // entry, which by design is reserved for actual strategies (see SERIES's own doc comment).
+    // Neither of these is a strategy identity or a sign — reuses CaesarPositions.tsx's own sky/
+    // "shared" and amber/"unclaimed" badge colours rather than a SERIES entry, which by design is
+    // reserved for actual strategies (see SERIES's own doc comment).
     if (shared > 0) result.push({ key: "shared", color: "#38bdf8", active: shared, entered: 0, points: [] });
-    if (cloHedge > 0) result.push({ key: CLO_HEDGE_KEY, color: CLO_HEDGE_COLOR, active: cloHedge, entered: 0, points: [] });
-    if (arbitrageHedge > 0) result.push({ key: ARBITRAGE_HEDGE_KEY, color: ARBITRAGE_HEDGE_COLOR, active: arbitrageHedge, entered: 0, points: [] });
     if (unclaimed > 0) result.push({ key: "unclaimed", color: "#fbbf24", active: unclaimed, entered: 0, points: [] });
     return result;
   }, [accountActiveCount, accountPositions, ownersByTicker, series]);
