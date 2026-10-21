@@ -292,6 +292,7 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   continuum: "CLO•CONTINUUM",
   opgreversal: "OPG•REVERSAL",
   opgcontinuum: "OPG•CONTINUUM",
+  opgfade: "OPG•FADE",
   [CLO_HEDGE_KEY]: "HEDGE•CLO",
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",
   morlaunchbasket: "LAUNCH•MORNING",
@@ -687,38 +688,60 @@ export default function CaesarPositions({
   }, [view.rows, strategySort]);
 
   /**
-   * When a specific segment is selected (not LIVE/allDay), the strategy cards switch from "today's
-   * running total" to the SAME settled-by-checkpoint number the general view's own breakdown line
-   * already shows — the operator's own instruction, 2026-10-21: the old segment-scoped panel
-   * (SegmentClosedPanel, now removed) measured a boundary-to-boundary clock delta instead, which for
-   * a PRE-family strategy disagreed with its own live total for no good reason, and could even leak
-   * an OPG-family ticker that happened to settle inside PRE's own [09:30, 09:35) tail into PRE's own
-   * number (see CaesarPlanController.SegmentPnl's own PRE-leak guard, fixed the same session). "pre"
-   * selected shows the 09:35 checkpoint family; "open"/"intra"/"post" all show the 10:35 (OPG) one —
-   * OPG's own exit classes resolve at 09:45/10:00/10:30, so none of its three segments differs.
+   * Which strategies' own cards show under each segment tab — the operator's own explicit mapping,
+   * 2026-10-21, after an earlier attempt conflated TWO separate questions into one (which checkpoint
+   * family a strategy's NUMBER comes from vs. which segment TAB it is shown under): CLO Reversal/
+   * Continuum settle by the SAME 09:35 checkpoint Arbitrage/Morning Launch do, but are plan-assigned
+   * to POST (their own entry is sent the evening before — see CaesarPlanReversalEarlyEnableTests'
+   * own doc comment), not PRE. OPG shows only under OPEN (its own assigned segment); INTRA shows
+   * nothing at all. Each hedge sits with its own balancing strategy's own tab (Arbitrage's own QQQ
+   * hedge under PRE, CLO's own TQQQ hedge under POST) rather than every segment, now that a card's
+   * own segment placement is explicit rather than inferred from checkpoint family membership.
    */
-  const segmentCheckpointLabel = selectedSegment === "pre" ? "09:35" : selectedSegment ? "10:35" : null;
+  const SEGMENT_CARD_KEYS: Partial<Record<string, readonly string[]>> = useMemo(() => ({
+    // CLO Reversal/Continuum (and its own hedge) show on BOTH tabs, not just one — their position
+    // is held and settling throughout PRE (the operator's own instruction, 2026-10-21: PRE shows
+    // everything active on it) even though the entry itself is sent the evening before, on POST.
+    pre: ["arbitrage", "morlaunch", "morlaunchbasket", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
+    open: ["opgreversal", "opgcontinuum", "opgfade", "opgride"],
+    intra: [],
+    post: ["reversal", "continuum", CLO_HEDGE_KEY],
+  }), []);
 
   const cardEntries = useMemo((): [string, StrategyAgg][] => {
-    if (segmentCheckpointLabel == null) return Array.from(view.perStrategy.entries());
-    return instances.flatMap((inst): [string, StrategyAgg][] => {
-      // CLO's own TQQQ hedge and Arbitrage's own QQQ hedge belong to neither checkpoint family (they
-      // are pressed whenever their own balancing strategy needs it, not on a fixed settle clock), so
-      // they keep showing their own LIVE total regardless of which segment is selected — the
-      // operator's own instruction, 2026-10-21, after the checkpoint switch above made them vanish
-      // from every segment-scoped view (they used to show there, via the old SegmentClosedPanel).
-      if (inst.key === CLO_HEDGE_KEY || inst.key === ARBITRAGE_HEDGE_KEY) {
-        const live = view.perStrategy.get(inst.key);
-        return live ? [[inst.key, live]] : [];
+    if (!selectedSegment) return Array.from(view.perStrategy.entries());
+    const keys = SEGMENT_CARD_KEYS[selectedSegment] ?? [];
+    return keys.flatMap((key): [string, StrategyAgg][] => {
+      const inst = instances.find((i) => i.key === key);
+      if (!inst) return [];
+
+      // Hedges and MorLaunchBasket have no settle checkpoint of their own (a hedge is pressed
+      // whenever its own balancing strategy needs it, not on a fixed clock; MorLaunchBasket's own
+      // exit is manual) — always their own LIVE total, regardless of which segment tab they sit on.
+      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket") {
+        const live = view.perStrategy.get(key);
+        return live ? [[key, live]] : [];
       }
-      const b = breakdownByKey.get(inst.key);
-      if (!b || b.checkpointLabel !== segmentCheckpointLabel || !b.ready) return [];
-      return [[inst.key, {
+
+      const b = breakdownByKey.get(key);
+      // The checkpoint has not actually fired yet today (PnlBreakdown's own `ready` flag — see its
+      // doc comment: "not fired" and "fired but saw zero" must never be conflated), or this key was
+      // not classified into a checkpoint family at all — either way, fall back to the live total
+      // instead of hiding the card: the SAME "don't change anything during the day, only the final
+      // freeze differs" principle SegmentPnlLedgerService's own settledOverride/baselineFloor
+      // already follow on the bridge (the operator's own bug report, 2026-10-21: every PRE-family
+      // card but the special-cased ones vanished entirely while real money was still moving on PNL
+      // OVER TIME, because this used to return [] instead of falling back).
+      if (!b || !b.ready) {
+        const live = view.perStrategy.get(key);
+        return live ? [[key, live]] : [];
+      }
+      return [[key, {
         open: 0, untracked: 0, long: 0, short: 0, adds: 0, priority: inst.priority,
         openPnl: 0, closedPnl: b.closedByCheckpoint, closedCount: b.closedByCheckpoint !== 0 ? 1 : 0,
       }]];
     });
-  }, [segmentCheckpointLabel, instances, breakdownByKey, view.perStrategy]);
+  }, [selectedSegment, SEGMENT_CARD_KEYS, instances, breakdownByKey, view.perStrategy]);
 
   // Strategy KEY -> colour, from the parent's own instanceId-keyed map (colorByInstance is keyed
   // by bridge instanceId, not the display key perStrategy/cardFilter use) — a card's title uses the
@@ -845,7 +868,7 @@ export default function CaesarPositions({
                   <Metric label="Open" value={strategy.openPnl} tone={pnlTone(strategy.openPnl)} />
                   <Metric label="Closed" value={strategy.closedPnl} tone={pnlTone(strategy.closedPnl)} />
                 </div>
-                {segmentCheckpointLabel == null && breakdownByKey.has(key) && breakdownByKey.get(key)!.ready && (
+                {!selectedSegment && breakdownByKey.has(key) && breakdownByKey.get(key)!.ready && (
                   <div
                     className="mt-1.5 flex justify-end gap-3 text-[10px] text-zinc-500"
                     title={`Closed, split by the ${breakdownByKey.get(key)!.checkpointLabel} settle checkpoint (SettledPnlCheckpointService).`}

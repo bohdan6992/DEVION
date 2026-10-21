@@ -43,7 +43,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // resting limits on everything in the basket, 04:02 cancels what's left). A fill is never
   // auto-exited; the card exists purely to show its own P&L. See
   // MorLaunchBasketServerStrategy.cs's own header comment on the bridge for the full spec.
-  { key: "morLaunchBasket", name: "Morning Launch Basket", icon: "🧺", description: "Лімітки на весь баскет о 3:58, скасування о 4:02 — ловимо різкий рух 3:59-4:00. Вихід ручний." },
+  { key: "morLaunchBasket", name: "Launch•Morning", icon: "🧺", description: "Лімітки на весь баскет о 3:58, скасування о 4:02 — ловимо різкий рух 3:59-4:00. Вихід ручний." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },
