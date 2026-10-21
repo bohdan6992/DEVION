@@ -9,6 +9,7 @@ import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import CaesarControlBar from "./CaesarControlBar";
 import { LIVE_STRATEGIES } from "@/lib/strategies/registry";
 import { HEDGE_INSTANCES } from "@/lib/caesar/hedge";
+import { buildColorByInstance } from "@/lib/caesar/colors";
 import {
   fetchBridgeEngineStatus,
   fetchBridgePlan,
@@ -30,6 +31,7 @@ import {
   SEGMENT_BY_KEY,
   axisClip,
   axisPct,
+  chartFromMinFor,
   clampPriority,
   clockLabel,
   conflictingPriorities,
@@ -434,20 +436,25 @@ export default function CaesarSchedule() {
       return [{ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: false }];
     });
 
-    // OVERNIGHT CATEGORY. Day Two and Reversal enter at the 16:00 close and exit on a later day, so
-    // their book is held straight through the 21:00 roll into a Caesar day whose plan may not
-    // mention them at all in the segment being viewed. Scoping them like everyone else meant that
-    // on PRE/OPEN the positions they were still holding read UNCLAIMED in the donut, and their P&L
-    // dropped out of every line and out of the total. They are charted in EVERY segment, as long as
-    // the plan runs them anywhere, under one colour family of their own.
+    // OVERNIGHT CATEGORY — PRE only (the operator's own instruction, 2026-10-21: "для проміжку Pre
+    // відображай всі стратегії які були на ньому активні", every OTHER segment shows only what its
+    // own plan row actually assigns). Day Two and Reversal enter at the 16:00 close and exit on a
+    // later day, so their book is held straight through the 21:00 roll into a Caesar day whose plan
+    // may not mention them at all in the segment being viewed — PRE is where an operator actually
+    // assigns them, so this still finds them there regardless of which OTHER segment's row they
+    // might also sit in. Previously charted in EVERY segment; narrowed because OPEN's own donut was
+    // showing them (and, if their position still happened to be open, double as a live slice) even
+    // though OPEN's own plan never runs them — "лише ті стратегії які назначені на проміжок OPEN".
     const overnight: { key: string; instanceId: string; priority: number; overnight: boolean }[] = [];
-    for (const seg of CAESAR_SEGMENTS) {
-      for (const row of plan[seg.key] ?? []) {
-        if (!row.enabled) continue;
-        const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
-        if (!strategy?.holdsOvernight) continue;
-        if (overnight.some((o) => o.instanceId === strategy.bridgeStrategyId)) continue;
-        overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
+    if (selected === "pre") {
+      for (const seg of CAESAR_SEGMENTS) {
+        for (const row of plan[seg.key] ?? []) {
+          if (!row.enabled) continue;
+          const strategy = LIVE_STRATEGIES[row.strategyKey.toLowerCase()];
+          if (!strategy?.holdsOvernight) continue;
+          if (overnight.some((o) => o.instanceId === strategy.bridgeStrategyId)) continue;
+          overnight.push({ key: strategy.key, instanceId: strategy.bridgeStrategyId, priority: row.priority, overnight: true });
+        }
       }
     }
     // CLO's own TQQQ hedge and Arbitrage's own QQQ hedge are each a class of their own, charted in
@@ -486,9 +493,32 @@ export default function CaesarSchedule() {
       key: strategy.key,
       instanceId: strategy.bridgeStrategyId,
       priority: strategy.priority,
+      // Carried so this same array can also be colorByInstanceId's own canonical basis (below) —
+      // without it every strategy here would fall into the "regular" palette, including Reversal/
+      // Continuum/Day Two/MorLaunchBasket, which chartInstances' own overnight category colours
+      // from a separate family everywhere else.
+      overnight: strategy.holdsOvernight === true,
     })),
-    ...HEDGE_INSTANCES.map((h) => ({ ...h })),
+    ...HEDGE_INSTANCES.map((h) => ({ ...h, overnight: false })),
   ], []);
+
+  /**
+   * One colour per strategy, STABLE across every view this page has (a segment, allDay, the
+   * positions cards) — built once from positionInstances (the full, registry-ordered set, not a
+   * segment-scoped subset whose own order shifts with the plan) so CaesarCharts' lines/donut and
+   * CaesarPositions' own card titles are provably the same colour for the same strategy, never two
+   * independently-computed palettes that happen to agree today (2026-10-21, the operator's own
+   * instruction to colour the card titles to match).
+   */
+  const colorByInstanceId = useMemo(() => buildColorByInstance(positionInstances), [positionInstances]);
+
+  /**
+   * Hovering a CaesarPositions card highlights that strategy's own lines on every CaesarCharts
+   * panel (the donut, PNL OVER TIME, AVERAGE TRADE, the arrivals chart) and vice versa — one shared
+   * key, not a one-way push, so either surface can start the interaction (2026-10-21, the
+   * operator's own instruction).
+   */
+  const [hoveredStrategyKey, setHoveredStrategyKey] = useState<string | null>(null);
 
   // NOT min-h-screen. This used to be the only thing on the page, so filling the viewport was
   // free; it is not any more. With ~645px of content the div still stretched to 100vh, and
@@ -609,17 +639,28 @@ export default function CaesarSchedule() {
                 own doc comment. allDay overrides all three props to the whole axis and every
                 strategy — see allDay's own doc comment above. */}
             <CaesarCharts
-              // VISUAL ONLY: the PRE/OPEN charts' own x-axis reads the DISPLAY segment (09:30
-              // boundary), not the real one (09:00) — same reasoning as SessionBar/Connectors
-              // above, see caesarSegmentsForDisplay's own doc comment. The real selectedSegment
-              // still drives everything else (which data this panel fetches, isNow, etc).
-              fromMin={allDay ? 0 : DISPLAY_SEGMENT_BY_KEY[selectedSegment.key].fromMin}
+              // OPEN's own charts widen back to 09:20 (chartFromMinFor's own doc comment) so OPG's
+              // real 09:20-09:25 entry ramp is not clipped off ENTERED DURING THE SEGMENT's own
+              // window — every other segment keeps reading the DISPLAY segment exactly as before.
+              // The real selectedSegment still drives everything else (which data this panel
+              // fetches, isNow, etc).
+              fromMin={allDay ? 0 : chartFromMinFor(selectedSegment.key, DISPLAY_SEGMENT_BY_KEY[selectedSegment.key])}
               toMin={allDay ? DAY_MINUTES : DISPLAY_SEGMENT_BY_KEY[selectedSegment.key].toMin}
               nowMin={nowMin}
               instances={allDay ? positionInstances : chartInstances}
               assignedKeys={allDay ? null : assignedKeys}
+              colorByInstanceId={colorByInstanceId}
+              hoveredStrategyKey={hoveredStrategyKey}
+              onHoverStrategy={setHoveredStrategyKey}
             />
-            <CaesarPositions instances={positionInstances} tableSlot={positionsTableSlot} selectedSegment={positionsSegmentKey} />
+            <CaesarPositions
+              instances={positionInstances}
+              tableSlot={positionsTableSlot}
+              selectedSegment={positionsSegmentKey}
+              colorByInstanceId={colorByInstanceId}
+              hoveredStrategyKey={hoveredStrategyKey}
+              onHoverStrategy={setHoveredStrategyKey}
+            />
             <CaesarBridgeDecisions />
             {/* CaesarPositions' own detail table lands here, via the portal above — see
                 positionsTableSlot's own doc comment. */}

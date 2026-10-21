@@ -33,14 +33,12 @@ import {
   CLO_HEDGE_BRIDGE_ID, CLO_HEDGE_COLOR, CLO_HEDGE_KEY,
   ARBITRAGE_HEDGE_BRIDGE_ID, ARBITRAGE_HEDGE_COLOR, ARBITRAGE_HEDGE_KEY,
 } from "@/lib/caesar/hedge";
+import { SERIES, OTHER, OVERNIGHT_SERIES, MAX_SERIES, buildColorByInstance } from "@/lib/caesar/colors";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import {
-  IDENTITY_LAVENDER_HEX,
-  IDENTITY_ORANGE_HEX,
-  IDENTITY_YELLOW_HEX,
   SOFT_LOSS_MUTED,
   SOFT_LOSS_SOLID,
   SOFT_LOSS_STROKE,
@@ -61,26 +59,19 @@ export type CaesarChartsProps = {
    * the LINE itself and the pooled total are unaffected, only the tooltip's own strategy list.
    */
   assignedKeys?: ReadonlySet<string> | null;
+  /**
+   * The STABLE, registry-ordered colour map (see lib/caesar/colors.ts) — CaesarSchedule builds this
+   * once from its own full `positionInstances` and hands the SAME map to CaesarPositions, so a
+   * strategy's chart line and its card title are provably the same colour. Omitted falls back to
+   * computing it from `instances` alone (keeps this component usable standalone), which can
+   * repaint survivors across a segment change the shared map does not.
+   */
+  colorByInstanceId?: ReadonlyMap<string, string>;
+  /** Shared with CaesarPositions: hovering either surface highlights the same strategy on both. */
+  hoveredStrategyKey?: string | null;
+  onHoverStrategy?: (key: string | null) => void;
 };
 
-/**
- * Strategy IDENTITY colours — deliberately excludes mint/emerald and coral/rose. Those two are
- * reserved app-wide for POSITIVE/NEGATIVE (or long/short) — see the SOFT_LOSS_* constants in
- * components/scanner/shared/styles.ts and pnlTone() below. A strategy assigned one of those by
- * coincidence of palette order would read as "this strategy is good/bad" in any chart that also
- * shows a signed total nearby (exactly what LinesChart's legend does), which is not what the
- * colour is there to say. Lavender / orange / cyan / yellow / blue, in that order; OTHER is the
- * fold-over past five strategies.
- */
-const SERIES = [IDENTITY_LAVENDER_HEX, IDENTITY_ORANGE_HEX, "#22d3ee", IDENTITY_YELLOW_HEX, "#60a5fa"] as const;
-const OTHER = "#818cf8";
-/**
- * The OVERNIGHT category's own colour family (Day Two, Reversal — see LiveStrategy.holdsOvernight):
- * strategies that enter at the close and are still held after the 21:00 roll. Fuchsia and a pale
- * orchid — neither is in SERIES, and neither is the mint/coral pair reserved for positive/negative,
- * so on every chart "magenta" reads as "carried overnight" whatever else is on screen.
- */
-const OVERNIGHT_SERIES = ["#e879f9", "#f5d0fe"] as const;
 const SURFACE = "#0a0a0a";
 
 /**
@@ -89,7 +80,6 @@ const SURFACE = "#0a0a0a";
  * colour (reverted 2026-09-18 — a uniform silver secondary tone made every strategy look alike).
  */
 const GOLD_LINE = "#d4af37";
-const MAX_SERIES = SERIES.length;
 
 const AXIS = "rgba(255,255,255,0.10)";
 /** The empty ring, and the unfilled remainder of a partial one. */
@@ -483,6 +473,8 @@ function LinesChart({
   heightPx = 320,
   heightClass = "h-[320px]",
   assignedKeys = null,
+  hoverKey = null,
+  onHoverKey,
 }: {
   series: ValueSeries[];
   fromMin: number | null;
@@ -501,6 +493,13 @@ function LinesChart({
   heightClass?: string;
   /** See CaesarChartsProps' own doc comment — null means "don't filter" (whole day in view). */
   assignedKeys?: ReadonlySet<string> | null;
+  /**
+   * Shared with the donut/arrivals chart (and, through them, CaesarPositions' own cards) — hovering
+   * a per-strategy line here dims every other one, and hovering anywhere else that sets the same
+   * key does too. The gold Total line is never dimmed; it is not any one strategy's own identity.
+   */
+  hoverKey?: string | null;
+  onHoverKey?: (key: string | null) => void;
 }) {
   const uid = useId().replace(/:/g, "");
   const plotRef = useRef<SVGSVGElement | null>(null);
@@ -656,12 +655,21 @@ function LinesChart({
           const lastPt = pts[pts.length - 1];
           const isTotal = !s.dashed;
           const color = isTotal ? GOLD_LINE : s.color;
+          // Total is the pooled sum, not any one strategy's own identity — never dimmed, and never
+          // itself the thing a hover picks (no onMouseEnter below for it).
+          const dim = !isTotal && hoverKey != null && hoverKey !== s.key;
           return (
             // Fade-and-rise on mount, staggered per series (2026-10-07) — the same entrance style
             // the arrivals chart's own lines already use (caesar-line-reveal), adapted for a line
             // that needs its own dash pattern (8 4) intact, so it cannot also repurpose
             // strokeDasharray for a stroke-draw reveal the way arrivals does.
-            <g key={s.key} className="caesar-chart-fade-up" style={{ animationDelay: `${i * 70}ms` }}>
+            <g
+              key={s.key}
+              className="caesar-chart-fade-up"
+              style={{ animationDelay: `${i * 70}ms` }}
+              onMouseEnter={isTotal ? undefined : () => onHoverKey?.(s.key)}
+              onMouseLeave={isTotal ? undefined : () => onHoverKey?.(null)}
+            >
               <path
                 d={d}
                 fill="none"
@@ -670,10 +678,11 @@ function LinesChart({
                 strokeDasharray={isTotal ? undefined : "8 4"}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                opacity={isTotal ? 1 : 0.95}
+                opacity={dim ? 0.25 : isTotal ? 1 : 0.95}
                 filter={isTotal ? `url(#${uid}-glow)` : undefined}
+                style={{ transition: "opacity 140ms ease" }}
               />
-              <circle cx={x(lastPt.min)} cy={y(lastPt.value)} r={isTotal ? 5 : 4} fill={color} />
+              <circle cx={x(lastPt.min)} cy={y(lastPt.value)} r={isTotal ? 5 : 4} fill={color} opacity={dim ? 0.25 : 1} style={{ transition: "opacity 140ms ease" }} />
             </g>
           );
         })}
@@ -945,14 +954,22 @@ function intnLike(n: number): string {
 
 // =========================================================================================
 
-export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assignedKeys = null }: CaesarChartsProps) {
+export default function CaesarCharts({
+  instances, fromMin, toMin, nowMin, assignedKeys = null,
+  colorByInstanceId, hoveredStrategyKey, onHoverStrategy,
+}: CaesarChartsProps) {
   const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
   const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
   const [bridgePositions, setBridgePositions] = useState<BridgePosition[]>([]);
   const [bridgeEntries, setBridgeEntries] = useState<Record<string, EntryLogEntry[]>>({});
   const [pnlPoints, setPnlPoints] = useState<PnlSamplePoint[]>([]);
   const [hoverMin, setHoverMin] = useState<number | null>(null);
-  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  // Controlled by the parent when it passes hoveredStrategyKey/onHoverStrategy (CaesarSchedule, so
+  // CaesarPositions' own cards can drive this chart's highlight too); otherwise self-contained,
+  // exactly as before — every internal hover (the donut, the arrivals lines) still works standalone.
+  const [internalHoverKey, setInternalHoverKey] = useState<string | null>(null);
+  const hoverKey = hoveredStrategyKey !== undefined ? hoveredStrategyKey : internalHoverKey;
+  const setHoverKey = onHoverStrategy ?? setInternalHoverKey;
   const plotRef = useRef<SVGSVGElement | null>(null);
 
   // ACTIVE NOW is account truth, not any engine's own memory. That distinction matters after
@@ -1020,30 +1037,13 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
     return () => { alive = false; unsubscribe(); };
   }, []);
 
-  // One colour per strategy, assigned in order WITHIN its own category: the regular strategies walk
-  // SERIES, the overnight ones walk OVERNIGHT_SERIES, so adding or removing an overnight strategy
-  // never repaints a segment strategy (and vice versa) — the same never-cycled rule SERIES already
-  // documents, applied per category.
-  const colorByInstance = useMemo(() => {
-    const map = new Map<string, string>();
-    let regular = 0;
-    let overnight = 0;
-    for (const inst of instances) {
-      if (inst.instanceId === CLO_HEDGE_BRIDGE_ID) {
-        // Each hedge class keeps its own fixed colour and never takes a SERIES slot.
-        map.set(inst.instanceId, CLO_HEDGE_COLOR);
-      } else if (inst.instanceId === ARBITRAGE_HEDGE_BRIDGE_ID) {
-        map.set(inst.instanceId, ARBITRAGE_HEDGE_COLOR);
-      } else if (inst.overnight) {
-        map.set(inst.instanceId, overnight < OVERNIGHT_SERIES.length ? OVERNIGHT_SERIES[overnight] : OTHER);
-        overnight += 1;
-      } else {
-        map.set(inst.instanceId, regular < MAX_SERIES ? SERIES[regular] : OTHER);
-        regular += 1;
-      }
-    }
-    return map;
-  }, [instances]);
+  // The parent's STABLE, registry-ordered map (see CaesarChartsProps.colorByInstanceId's own doc
+  // comment) when given — falls back to computing it from `instances` alone so this component
+  // still works with no parent wiring, exactly as before.
+  const colorByInstance = useMemo(
+    () => colorByInstanceId ?? buildColorByInstance(instances),
+    [colorByInstanceId, instances],
+  );
 
   const series = useMemo<Series[]>(() => instances.map((inst) => {
     // One step per ENTRY, in time order, carried forward as a running total — of the entries that
@@ -1571,6 +1571,8 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
           heightPx={384}
           heightClass="h-[384px]"
           assignedKeys={assignedKeys}
+          hoverKey={hoverKey}
+          onHoverKey={setHoverKey}
         />
       </div>
 
@@ -1786,6 +1788,8 @@ export default function CaesarCharts({ instances, fromMin, toMin, nowMin, assign
             heightPx={384}
             heightClass="h-[384px]"
             assignedKeys={assignedKeys}
+            hoverKey={hoverKey}
+            onHoverKey={setHoverKey}
           />
       </div>
       </>

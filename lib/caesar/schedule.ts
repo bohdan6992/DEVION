@@ -118,25 +118,31 @@ export const CAESAR_SEGMENTS: readonly CaesarSegment[] = [
     key: "pre",
     label: "PRE",
     fromMin: axisMinutes(21, 0), // 0
-    toMin: axisMinutes(9, 0), // 720
+    // 09:30, not 09:00 (moved 2026-10-21, the operator's own instruction — the automatic PRE→OPEN
+    // switch used to fire too early, before PRE's own strategies (Arbitrage/Reversal/Continuum/
+    // Morning Launch) had actually gap-settled at the open). This is the REAL boundary — see
+    // CaesarPlanService.cs's own EarlyEnableFloorMinuteIdx for why OPG's own 09:20 entries still
+    // fire on time despite OPEN's own segment no longer starting until 09:30.
+    toMin: axisMinutes(9, 30),
     color: GREEN,
     bands: [
       { fromMin: axisMinutes(21, 0), toMin: axisMinutes(4, 0), color: GREEN, label: "BLUE" },
-      { fromMin: axisMinutes(4, 0), toMin: axisMinutes(9, 0), color: YELLOW, label: "ARK" },
+      { fromMin: axisMinutes(4, 0), toMin: axisMinutes(9, 30), color: YELLOW, label: "ARK" },
     ],
-    hint: "Overnight 21:00–04:00, early pre-market 04:00–09:00",
+    hint: "Overnight 21:00–04:00, early pre-market 04:00–09:30",
   },
   {
     key: "open",
     label: "OPEN",
-    fromMin: axisMinutes(9, 0),
-    // Runs to 11:00, not 10:00: the OPG strategies enter 09:20-09:25 and leave on their 09:45 /
+    fromMin: axisMinutes(9, 30),
+    // Runs to 11:00, not 10:00: the OPG strategies enter 09:20-09:25 (before this segment's own
+    // start — see CaesarPlanService.cs's own EarlyEnableFloorMinuteIdx) and leave on their 09:45 /
     // 10:00 / 10:30 exit classes. A segment that ended at 10:00 had Caesar STOP them before the last
     // classes, which cleared their queued orders (and raised queue panic-off), so those exits never
     // went out. The window now covers every exit with room to spare.
     toMin: axisMinutes(11, 0),
     color: RED,
-    bands: [{ fromMin: axisMinutes(9, 0), toMin: axisMinutes(11, 0), color: RED, label: "OPEN" }],
+    bands: [{ fromMin: axisMinutes(9, 30), toMin: axisMinutes(11, 0), color: RED, label: "OPEN" }],
     hint: "Run-up into the bell and the first 90 minutes of the regular session",
   },
   {
@@ -164,39 +170,38 @@ export const SEGMENT_BY_KEY = Object.fromEntries(
 ) as Record<CaesarSegmentKey, CaesarSegment>;
 
 /**
- * VISUAL ONLY (operator's own instruction, 2026-10-20: "НА ГРАФІКАХ PRE МАЄ ЗАКІНЧУВАТИСЬ НА 9:30")
- * — PRE's own timeline bar/band should read as ending at 09:30 and OPEN as starting there, matching
- * when PRE's own strategies actually settle (SettledPnlCheckpointService's own "pre" checkpoint is
- * 09:35, 5 minutes after this). Deliberately NOT a change to CAESAR_SEGMENTS itself: that array's
- * own 09:00 boundary still drives the REAL plan/cutoff logic (CaesarRunners' own entry-stop time for
- * whatever strategy sits on the PRE plan row today) — the operator was explicit that only the chart
- * should move, not when a PRE-assigned strategy actually stops entering. Used ONLY by CaesarSchedule
- * .tsx's own SessionBar/Connectors rendering; every other consumer of CAESAR_SEGMENTS (segmentMinuteIdxRange,
- * GetActiveSegmentKey, the plan editor, CaesarRunners) must keep reading the real array, unchanged.
+ * Used to shift PRE/OPEN's own displayed boundary to 09:30 on top of a real 09:00 one (operator's
+ * own instruction, 2026-10-20: "НА ГРАФІКАХ PRE МАЄ ЗАКІНЧУВАТИСЬ НА 9:30"). CAESAR_SEGMENTS' own
+ * boundary moved to the real 09:30 (2026-10-21), so there is nothing left to shift — kept as a
+ * passthrough, not deleted, so CaesarSchedule.tsx's own SessionBar/Connectors (the only callers)
+ * do not need to change which function they read the timeline from if this ever needs to diverge
+ * from the real boundary again.
  */
 export function caesarSegmentsForDisplay(): readonly CaesarSegment[] {
-  const preOpenBoundary = axisMinutes(9, 30);
-  return CAESAR_SEGMENTS.map((seg) => {
-    if (seg.key === "pre") {
-      return {
-        ...seg,
-        toMin: preOpenBoundary,
-        bands: seg.bands.map((b, i) => (i === seg.bands.length - 1 ? { ...b, toMin: preOpenBoundary } : b)),
-      };
-    }
-    if (seg.key === "open") {
-      return {
-        ...seg,
-        fromMin: preOpenBoundary,
-        bands: seg.bands.map((b, i) => (i === 0 ? { ...b, fromMin: preOpenBoundary } : b)),
-      };
-    }
-    return seg;
-  });
+  return CAESAR_SEGMENTS;
 }
 
 export function segmentRangeLabel(seg: CaesarSegment): string {
   return `${clockLabel(seg.fromMin)} – ${clockLabel(seg.toMin)}`;
+}
+
+/**
+ * The window CaesarCharts' own data (the donut, PNL OVER TIME, AVERAGE TRADE, and — this is the one
+ * it actually matters for — ENTERED DURING THE SEGMENT) is scoped to, for a given segment. OPEN's
+ * own real `fromMin` moved to 09:30 (2026-10-21), but the OPG family's own entry signal fires
+ * 09:20-09:25 — ten minutes before OPEN itself is "active" (see CaesarPlanService.cs's own
+ * EarlyEnableFloorMinuteIdx, added the same day for exactly this). A chart scoped to OPEN's own
+ * real fromMin clipped that whole ramp off: ENTERED DURING THE SEGMENT counts cumulative entries
+ * from its own left edge forward, so an entry at 09:22 simply never happened as far as that chart's
+ * own window could see, even though it is completely real (operator's own report, 2026-10-21).
+ *
+ * Visual/data-window only — the ruler/SessionBar (DISPLAY_SEGMENTS/caesarSegmentsForDisplay) still
+ * show OPEN starting at its own real 09:30, and the plan/cutoff logic this function never touches
+ * stays on 09:30 too; only the charts' own window widens backward to show what already happened.
+ */
+export function chartFromMinFor(segmentKey: CaesarSegmentKey, segment: CaesarSegment): number {
+  if (segmentKey === "open") return axisMinutes(9, 20);
+  return segment.fromMin;
 }
 
 /** The segment's span in minuteIdx space, for comparison against strategy trading windows. */
