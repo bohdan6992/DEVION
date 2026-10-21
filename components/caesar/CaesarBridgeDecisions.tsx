@@ -656,6 +656,7 @@ function strategyColor(key: string): string {
  */
 export function AllSituationsSection({
   activeStrategy = null,
+  segmentKeys = null,
 }: {
   /**
    * The registry key of the strategy card clicked in CaesarPositions' own cards row (its
@@ -665,6 +666,15 @@ export function AllSituationsSection({
    * strategyKeyOf's own result is upper, so the match below is case-insensitive.
    */
   activeStrategy?: string | null;
+  /**
+   * Which strategy keys belong to the currently-selected Caesar segment (CaesarPositions' own
+   * `SEGMENT_STRATEGY_KEYS[selectedSegment]`), or null for the LIVE/general view — unlike
+   * activeStrategy above, this one DOES hide rows: "for PRE there, only its own strategies' tickers
+   * in the Longs/Shorts windows below" (the operator's own instruction, 2026-10-21) — selecting a
+   * segment is picking which book to look at, not just which strategy to skim to the top of all of
+   * them. Registry keys are lowercase; strategyKeyOf's own result is upper, matched lowercased.
+   */
+  segmentKeys?: readonly string[] | null;
 } = {}) {
   const { positions } = useAllPositions();
   const accountPnlByTicker = useAccountPnlByTicker();
@@ -752,10 +762,17 @@ export function AllSituationsSection({
 
   const strategyKeyOf = (r: SituationRow) => (resolveClassByBridgeId(r.strategyId)?.key ?? r.strategyId).toUpperCase();
 
+  // Segment-scoped: only the tickers belonging to THIS segment's own strategies, not every open
+  // situation — null (LIVE/general) keeps every row, exactly as before.
+  const visibleRows = useMemo(
+    () => (segmentKeys ? rows.filter((r) => segmentKeys.includes(strategyKeyOf(r).toLowerCase())) : rows),
+    [rows, segmentKeys],
+  );
+
   const sortedRows = useMemo(() => {
     const base = strategySort === 0
-      ? [...rows].sort((a, b) => b.totalPnl - a.totalPnl)
-      : [...rows].sort((a, b) =>
+      ? [...visibleRows].sort((a, b) => b.totalPnl - a.totalPnl)
+      : [...visibleRows].sort((a, b) =>
           strategySort * strategyKeyOf(a).localeCompare(strategyKeyOf(b)) || b.totalPnl - a.totalPnl
         );
     if (!activeStrategy) return base;
@@ -768,7 +785,7 @@ export function AllSituationsSection({
       const bActive = strategyKeyOf(b) === active ? 0 : 1;
       return aActive - bActive;
     });
-  }, [rows, strategySort, activeStrategy]);
+  }, [visibleRows, strategySort, activeStrategy]);
 
   const pnlTone = (v: number) => (v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-zinc-500");
 

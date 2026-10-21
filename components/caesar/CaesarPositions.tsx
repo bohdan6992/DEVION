@@ -775,20 +775,17 @@ export default function CaesarPositions({
         title="Click to clear the strategy filter and show every situation"
         className="flex flex-wrap items-baseline justify-between gap-4 border-b border-white/[0.06] bg-[#0a0a0a]/60 px-3 py-2.5 backdrop-blur-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80"
       >
-        <div className="font-mono text-[14px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-          P&amp;L
-          <span className="ml-2 font-normal tracking-normal text-zinc-600">
-            {snapshot?.account ? `acct ${snapshot.account} · ` : ""}
-            {cardFilter && <>filtered to {cardFilter}</>}
-          </span>
-        </div>
         {/*
-          Activity counts, not dollars, up here (2026-10-21, the operator's own instruction) — the
-          Total/Open/Closed $ split moved onto each strategy's own card below; this line is now the
-          account-wide shape of the book (open/closed/long/short/volume), with the one P&L number
-          that stays here — the grand total — closing it out exactly as before.
+          Left: account label + activity shape (open/closed/long-short/volume), not dollars — the
+          operator's own instruction, 2026-10-21. Right: Total/Open/Closed restored to how it always
+          was (the $ breakdown), so this line carries both the account's own activity shape AND its
+          money, same panel, left/right.
         */}
         <div className="flex flex-wrap items-baseline gap-5 font-mono text-[12px]">
+          <span className="text-zinc-500">
+            {snapshot?.account ? `acct ${snapshot.account}` : ""}
+            {cardFilter && <> · filtered to {cardFilter}</>}
+          </span>
           <span><span className="text-zinc-500">open</span> <span className="font-bold text-sky-300">{view.openCount}</span></span>
           <span><span className="text-zinc-500">closed</span> <span className="font-bold text-fuchsia-300">{view.closedCount}</span></span>
           <span>
@@ -808,7 +805,11 @@ export default function CaesarPositions({
               title="Held in the account, but the bridge stopped tracking them (they are not closed). Nothing is managing their adds or exits."
             >{view.untrackedCount} untracked</span>
           )}
-          <HeaderMetric label="P&L" value={grandTotal} tone={pnlTone(grandTotal)} />
+        </div>
+        <div className="flex items-baseline gap-6">
+          <HeaderMetric label="Total" value={grandTotal} tone={pnlTone(grandTotal)} />
+          <HeaderMetric label="Open" value={view.grandOpenPnl} tone={pnlTone(view.grandOpenPnl)} />
+          <HeaderMetric label="Closed" value={view.grandClosedPnl} tone={pnlTone(view.grandClosedPnl)} />
         </div>
       </div>
       </div>
@@ -904,7 +905,10 @@ export default function CaesarPositions({
         sorts this strategy's own rows to the top here too — grouped, not filtered down to just it,
         which the detail table below already does on the same click.
       */}
-      <AllSituationsSection activeStrategy={cardFilter} />
+      <AllSituationsSection
+        activeStrategy={cardFilter}
+        segmentKeys={selectedSegment ? SEGMENT_CARD_KEYS[selectedSegment] ?? [] : null}
+      />
 
       {/*
         TABLE — its own block too (2026-10-08), and now portaled out to AFTER Bridge Decisions
