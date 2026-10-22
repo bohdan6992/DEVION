@@ -192,6 +192,37 @@ function closedClaim(): StreamPosition {
 }
 
 /**
+ * A synthetic OPEN claim for a QQQ/TQQQ account position the bridge has no real claim for at all —
+ * see the hedge safety net in `view`'s own useMemo below for why this exists and when it fires.
+ */
+function syntheticHedgeClaim(ticker: string, side: "Long" | "Short"): StreamPosition {
+  const now = Date.now();
+  return {
+    ticker,
+    pairKey: null,
+    benchmark: "",
+    side,
+    entrySignal: null,
+    lastSignal: null,
+    lastScaleSignal: null,
+    spread: null,
+    spreadBidPct: null,
+    status: "OPEN",
+    reason: "no bridge claim yet — attributed from the ticker alone (QQQ/TQQQ is never a real signal ticker)",
+    entryCount: 1,
+    belowThresholdTicks: 0,
+    lockedForPrint: false,
+    pendingIntent: null,
+    entryDispatchedAt: null,
+    lastDispatchedAt: now,
+    lastConfirmedActiveAt: now,
+    lastAboveAddCapAt: null,
+    openedAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
  * A bridge-tracked position, as this panel's STRATEGY join needs it. Only the fields the table
  * below actually reads are filled from real data; everything else here is add-grid bookkeeping
  * this panel never shows, so a fixed, honest placeholder is more honest than inventing one.
@@ -415,6 +446,34 @@ export default function CaesarPositions({
     return () => { alive4 = false; window.clearInterval(interval); };
   }, []);
 
+  /**
+   * PRE's own per-TICKER result (operator's own instruction, 2026-10-22): the account/claims poll
+   * above already keeps every open ticker's own number live and current, right up until PRE's own
+   * clock (09:30) — nothing extra needed for that half. This is the OTHER half: once the 09:35
+   * settle checkpoint has fired, fetch the frozen per-stack figures ONE TIME (the operator's own
+   * words: "один раз дістань закриті значення... в 9:35") rather than keep polling data that
+   * CANNOT change again until tomorrow's own checkpoint — so this keeps retrying on the same cadence
+   * ONLY until `ready` turns true, then stops asking for good.
+   */
+  const [preStack, setPreStack] = useState<{ ready: boolean; stacks: { ticker: string; strategyId: string; pnl: number }[] }>({ ready: false, stacks: [] });
+  useEffect(() => {
+    let alive5 = true;
+    let timer: number | undefined;
+    const load = () => {
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pre-stack-performance"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; stacks?: { ticker: string; strategyId: string; pnl: number }[] }>)
+        .then((body) => {
+          if (!alive5) return;
+          const ready = body.ready === true;
+          setPreStack({ ready, stacks: body.stacks ?? [] });
+          if (!ready) timer = window.setTimeout(load, POLL_MS);
+        })
+        .catch(() => { if (alive5) timer = window.setTimeout(load, POLL_MS); });
+    };
+    load();
+    return () => { alive5 = false; if (timer != null) window.clearTimeout(timer); };
+  }, []);
+
   /** UI strategy key -> its own classified checkpoint breakdown, or undefined for an unclassified
    * strategy or one its own checkpoint has not fired for yet. */
   const breakdownByKey = useMemo(() => {
@@ -536,6 +595,26 @@ export default function CaesarPositions({
         return strategy ? [{ strategyKey: strategy.key, position: closedClaim(), beta: null, corr: null, sigma: null }] : [];
       });
       if (claimed.length > 0) claimsByTicker.set(t, claimed);
+    }
+
+    // Hedge safety net (2026-10-23, the operator's own repeated report: the HEDGE•CLO card would
+    // not appear despite the donut already showing real TQQQ activity). No strategy ever trades
+    // QQQ or TQQQ as a real signal ticker (lib/caesar/hedge.ts's own doc comment) — CaesarCharts.tsx's
+    // own donut already uses that as a last-resort fallback when its claim join comes up empty for
+    // one of these two tickers; this is the SAME tell, applied here so the card can never disagree
+    // with the donut reading the exact same account data. Only for a ticker with genuinely NO claim
+    // at all (a real claim, from TrackHedgePosition or ServerPositionTracker's own migration, always
+    // wins) and only while it is actually open — a flat QQQ/TQQQ with no claim is simply unclaimed.
+    for (const p of snapshot?.positions ?? []) {
+      const t = (p.ticker ?? "").trim().toUpperCase();
+      if (!t || claimsByTicker.has(t) || !isOpen(p)) continue;
+      const hedgeKey = t === "TQQQ" ? CLO_HEDGE_KEY : t === "QQQ" ? ARBITRAGE_HEDGE_KEY : null;
+      if (!hedgeKey) continue;
+      claimsByTicker.set(t, [{
+        strategyKey: hedgeKey,
+        position: syntheticHedgeClaim(t, accountSide(p, "Long") as "Long" | "Short"),
+        beta: null, corr: null, sigma: null,
+      }]);
     }
 
     const relevant = (snapshot?.positions ?? []).filter(isRelevant);
@@ -733,13 +812,15 @@ export default function CaesarPositions({
       // already follow on the bridge.
       if (!b || !b.ready) return live ? [[key, live]] : [];
       if (!live) return [];
-      // Checkpoint ready: show the SETTLED closed figure, but keep `live`'s own open/untracked/
-      // long/short/closedCount — a strategy that trades past its own checkpoint (Arbitrage runs all
-      // day; its own 09:35-settled slice can easily be 0 on a day most of it closed later) must
-      // still show its card on whatever real activity it has TODAY, not vanish because this ONE
-      // narrow slice happened to be zero (the operator's own bug report, 2026-10-21: Arbitrage/
-      // MorLaunch/Reversal all missing from PRE/POST while PNL OVER TIME showed real money moving).
-      return [[key, { ...live, openPnl: 0, closedPnl: b.closedByCheckpoint }]];
+      // Checkpoint ready: swap in the SETTLED closed figure, but `live`'s own openPnl stays live —
+      // a strategy that trades past its own checkpoint (Arbitrage runs all day) can easily still
+      // hold real, non-zero open money at 09:35; forcing openPnl to 0 here used to read as the
+      // whole card going to "+0.00" even while the account genuinely still held the position (the
+      // operator's own bug report, 2026-10-21: ARBITRAGE/CLO•REVERSAL/CLO•CONTINUUM all flattened
+      // to +0.00 on PRE the moment the checkpoint fired, open count unchanged, open $ zeroed out —
+      // "дані стають порожніми"). Only closedPnl is the checkpoint's own business; open money is
+      // never the checkpoint's to zero.
+      return [[key, { ...live, closedPnl: b.closedByCheckpoint }]];
     });
   }, [selectedSegment, SEGMENT_CARD_KEYS, instances, breakdownByKey, view.perStrategy]);
 
@@ -898,6 +979,51 @@ export default function CaesarPositions({
             );
           })}
       </div>
+
+      {/*
+        PRE STACK PERFORMANCE — PRE only, and only once the 09:35 settle checkpoint has actually
+        fired (preStack's own doc comment above): each ticker's own realised result since the day
+        began, frozen at the checkpoint, not a live number. Before 09:35 the all-situations table
+        right below already shows every PRE ticker's own live, continuously-updating figure — this
+        panel has nothing to add until then, so it stays hidden rather than showing a stale "0".
+      */}
+      {selectedSegment === "pre" && preStack.ready && preStack.stacks.length > 0 && (
+        <div className="scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: "#63e6be", boxShadow: "0 0 8px #63e6be80" }} />
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-300">Pre Stack Performance</span>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">settled at 09:35, per ticker</span>
+          </div>
+          <div className="max-h-[320px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-white/[0.06] bg-[#0a0a0a]/95 text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
+                  <th className="px-3 py-2">Ticker</th>
+                  <th className="px-3 py-2">Strategy</th>
+                  <th className="px-3 py-2 text-right">P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preStack.stacks
+                  .slice()
+                  .sort((a, b) => b.pnl - a.pnl)
+                  .map((s) => {
+                    const key = resolveClassByBridgeId(s.strategyId)?.key ?? s.strategyId;
+                    return (
+                      <tr key={s.ticker} className="border-b border-white/[0.03] font-mono text-[13px]">
+                        <td className="px-3 py-2 font-bold text-zinc-200">{s.ticker}</td>
+                        <td className="px-3 py-2 font-bold" style={{ color: colorByKey.get(key) }}>{strategyDisplayLabel(key)}</td>
+                        <td className={`px-3 py-2 text-right tabular-nums font-bold ${pnlTone(s.pnl)}`}>
+                          {s.pnl >= 0 ? "+" : ""}{fmt(s.pnl)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/*
         ALL SITUATIONS — moved here from Bridge Decisions (2026-10-08, the operator's own
