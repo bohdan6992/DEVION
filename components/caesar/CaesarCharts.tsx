@@ -30,6 +30,7 @@
  */
 
 import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
+import { PRE_CHECKPOINT_BRIDGE_IDS, OPG_CHECKPOINT_BRIDGE_IDS } from "@/lib/caesar/checkpoints";
 import { SERIES, OTHER, OVERNIGHT_SERIES, MAX_SERIES, buildColorByInstance } from "@/lib/caesar/colors";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -580,6 +581,144 @@ function RadarChart({
               >
                 <title>{s.key.toUpperCase()}</title>
               </polygon>
+            );
+          })
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// =========================================================================================
+// SETTLE BREAKDOWN — one grouped pair of bars per strategy: CLOSED BY its own checkpoint (solid)
+// vs CLOSED AFTER it (outlined), the same split CaesarPositions.tsx's own cards already print as
+// small text under two of them (2026-10-23, the operator's own instruction — option 1 of the five
+// offered). A categorical x-axis (one slot per strategy), not time — the one chart in this file
+// that is not a time series, because the question it answers ("how much of each strategy's own
+// closed total came in before vs after its own settle clock") is a snapshot, not a trend.
+// =========================================================================================
+
+function SettleBreakdownChart({
+  rows,
+  hoverKey,
+  onHover,
+  title,
+  meta,
+  heightPx = 384,
+  heightClass = "h-[384px]",
+}: {
+  rows: { key: string; color: string; ready: boolean; checkpointLabel: string; byCheckpoint: number; afterCheckpoint: number }[];
+  hoverKey: string | null;
+  onHover: (key: string | null) => void;
+  title?: string;
+  meta?: string;
+  heightPx?: number;
+  heightClass?: string;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const width = useMeasuredWidth(svgRef, 1100);
+  const height = heightPx;
+  const PAD_L = 46;
+  const PAD_R = 16;
+  const PAD_T = 36;
+  const PAD_B = 30;
+  const plotW = width - PAD_L - PAD_R;
+  const plotH = height - PAD_T - PAD_B;
+
+  const maxAbs = Math.max(1, ...rows.flatMap((r) => [Math.abs(r.byCheckpoint), Math.abs(r.afterCheckpoint)]));
+  const yZero = PAD_T + plotH / 2;
+  const yFor = (v: number) => yZero - (v / maxAbs) * (plotH / 2);
+  const yTicks = [maxAbs, 0, -maxAbs];
+
+  const n = Math.max(1, rows.length);
+  const groupW = plotW / n;
+  const barW = Math.max(8, Math.min(36, groupW * 0.3));
+  const barGap = 4;
+
+  return (
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
+      {(title || meta) && (
+        <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
+          <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
+        </div>
+      )}
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        className="block h-full w-full"
+        role="img"
+        aria-label="Closed by checkpoint versus closed after checkpoint, per strategy"
+      >
+        {yTicks.map((t, i) => (
+          <g key={i}>
+            <line x1={PAD_L} x2={width - PAD_R} y1={yFor(t)} y2={yFor(t)} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
+            <text x={PAD_L - 8} y={yFor(t) + 3} textAnchor="end" fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} fontFamily="ui-monospace, monospace">
+              {t >= 0 ? "+" : ""}{t.toFixed(0)}
+            </text>
+          </g>
+        ))}
+        <line x1={PAD_L} x2={width - PAD_R} y1={yZero} y2={yZero} stroke="rgba(255,255,255,0.15)" />
+
+        {rows.length === 0 ? (
+          <text x={width / 2} y={height / 2} textAnchor="middle" fill="rgba(255,255,255,0.32)" fontSize={11} fontFamily="ui-monospace, monospace">
+            NOTHING SETTLED YET
+          </text>
+        ) : (
+          rows.map((r, i) => {
+            const gx = PAD_L + groupW * i + groupW / 2;
+            const on = hoverKey === r.key;
+            const dim = hoverKey != null && !on;
+            const byY = yFor(r.byCheckpoint);
+            const afterY = yFor(r.afterCheckpoint);
+            return (
+              <g
+                key={r.key}
+                opacity={dim ? 0.4 : 1}
+                style={{ transition: "opacity 140ms ease", cursor: "pointer" }}
+                onMouseEnter={() => onHover(r.key)}
+                onMouseLeave={() => onHover(null)}
+              >
+                <rect
+                  x={gx - barGap / 2 - barW}
+                  y={Math.min(yZero, byY)}
+                  width={barW}
+                  height={Math.max(0.5, Math.abs(yZero - byY))}
+                  rx={3}
+                  fill={r.color}
+                  fillOpacity={0.85}
+                />
+                <rect
+                  x={gx + barGap / 2}
+                  y={Math.min(yZero, afterY)}
+                  width={barW}
+                  height={Math.max(0.5, Math.abs(yZero - afterY))}
+                  rx={3}
+                  fill={r.color}
+                  fillOpacity={0.22}
+                  stroke={r.color}
+                  strokeWidth={1}
+                />
+                <text
+                  x={gx}
+                  y={height - 10}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill={on ? r.color : "rgba(255,255,255,0.5)"}
+                  fontFamily="ui-monospace, monospace"
+                  letterSpacing="0.3"
+                >
+                  {r.key.toUpperCase()}
+                </text>
+                {!r.ready && (
+                  <text x={gx} y={PAD_T - 10} textAnchor="middle" fontSize={8} fill="rgba(251,191,36,0.75)" fontFamily="ui-monospace, monospace">
+                    pending
+                  </text>
+                )}
+                <title>
+                  {`${r.key.toUpperCase()}: by ${r.checkpointLabel} ${r.byCheckpoint >= 0 ? "+" : ""}${r.byCheckpoint.toFixed(2)}, after ${r.checkpointLabel} ${r.afterCheckpoint >= 0 ? "+" : ""}${r.afterCheckpoint.toFixed(2)}${r.ready ? "" : " (checkpoint has not fired yet today)"}`}
+                </title>
+              </g>
             );
           })
         )}
@@ -1229,6 +1368,32 @@ export default function CaesarCharts({
     return () => { alive = false; unsubscribe(); };
   }, []);
 
+  // SETTLE BREAKDOWN — feeds the "closed by checkpoint / after checkpoint" chart below. Same two
+  // shared-poll keys CaesarPositions.tsx's own cards already use ("bridge-pnl-breakdown-pre"/"-opg"),
+  // so this never runs a second independent poll of the same endpoint.
+  const [preBreakdown, setPreBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
+  const [opgBreakdown, setOpgBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
+  useEffect(() => {
+    let aliveP = true;
+    const fetchPre = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=pre"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>);
+    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-pre", fetchPre, 6_000, (body, err) => {
+      if (aliveP && !err && body) setPreBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
+    });
+    return () => { aliveP = false; unsubscribe(); };
+  }, []);
+  useEffect(() => {
+    let aliveO = true;
+    const fetchOpg = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=opg"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>);
+    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-opg", fetchOpg, 6_000, (body, err) => {
+      if (aliveO && !err && body) setOpgBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
+    });
+    return () => { aliveO = false; unsubscribe(); };
+  }, []);
+
   // The parent's STABLE, registry-ordered map (see CaesarChartsProps.colorByInstanceId's own doc
   // comment) when given — falls back to computing it from `instances` alone so this component
   // still works with no parent wiring, exactly as before.
@@ -1545,6 +1710,36 @@ export default function CaesarCharts({
       .filter((s) => s.hasActivity);
   }, [instances, colorByInstance, cleanPnlPoints, series, activeSeries, bridgeEntries, fromMin, toMin]);
 
+  /**
+   * SETTLE BREAKDOWN — one of the five options the operator picked from (2026-10-23): per strategy,
+   * how much of today's CLOSED total was already settled by that strategy's own checkpoint (09:35
+   * for the PRE family, 10:35 for OPG) versus closed AFTER it — the same split CaesarPositions.tsx's
+   * own cards already print as small text under two of them, given its own chart here instead of
+   * staying buried in a footnote. Only a strategy classified into one of the two checkpoint families
+   * (PRE_CHECKPOINT_BRIDGE_IDS/OPG_CHECKPOINT_BRIDGE_IDS) and currently shown in this segment is
+   * included — the same "nothing to add if it was not named" rule the cards already follow.
+   */
+  const settleRows = useMemo(() => {
+    return instances.flatMap((inst) => {
+      const family = PRE_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)
+        ? { breakdown: preBreakdown, label: "09:35" }
+        : OPG_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)
+          ? { breakdown: opgBreakdown, label: "10:35" }
+          : null;
+      if (!family) return [];
+      const b = family.breakdown.perStrategy[inst.instanceId];
+      if (!b) return [];
+      return [{
+        key: inst.key,
+        color: colorByInstance.get(inst.instanceId) ?? OTHER,
+        ready: family.breakdown.ready,
+        checkpointLabel: family.label,
+        byCheckpoint: b.closedByCheckpoint,
+        afterCheckpoint: b.closedAfterCheckpoint,
+      }];
+    });
+  }, [instances, colorByInstance, preBreakdown, opgBreakdown]);
+
   // ---- the time scale ------------------------------------------------------------------------
   // W measured off the svg itself (useMeasuredWidth — see its own doc comment); H is simply the
   // figure's real height (384px, the same literal the wrapper below uses as h-[384px]). Measured
@@ -1761,13 +1956,15 @@ export default function CaesarCharts({
           operator's own instruction): every chart below already names a series in its own hover
           tooltip, so a standing legend repeated the same colour→name mapping for nothing. */}
 
-      {/* ---------- ACCOUNT BOOK / LONGS-SHORTS / STRATEGY SHAPE — three across, on top ----------
+      {/* ---------- ACCOUNT BOOK / PNL OVER TIME / STRATEGY SHAPE — three across, on top ----------
           The donut's and radar's own columns are a FIXED 384px each, bookending the row — the
           operator's own instruction that both read as the same perfect-square block AND that the
-          histogram sit in the MIDDLE (2026-10-23). 384 is deliberately the same number as the row's
-          height (320 * 1.2), so width == height for both squares. Everything left over goes to the
-          histogram alone, in the middle column. All three blocks share the donut's own height via
-          heightPx/heightClass, so the row stays one even line. */}
+          wide middle column sit between them (2026-10-23). 384 is deliberately the same number as
+          the row's height (320 * 1.2), so width == height for both squares. Everything left over
+          goes to the middle column alone — PNL OVER TIME here now, swapped with LONGS/SHORTS SENT
+          below (same date, the operator's own instruction to trade both place AND size with it).
+          All three blocks share the donut's own height via heightPx/heightClass, so the row stays
+          one even line. */}
       <div className="mt-3 grid gap-4 lg:grid-cols-[384px_1fr_384px]">
         <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
           <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
@@ -1777,15 +1974,22 @@ export default function CaesarCharts({
           <Donut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
         </figure>
 
-        <LongShortHistogram
-          buckets={longShortBuckets}
+        {/* PNL OVER TIME — swapped here with LONGS/SHORTS SENT below (2026-10-23, the operator's
+            own instruction: trade BOTH place and size), so it now gets the wide middle column
+            instead of half of the row underneath. */}
+        <LinesChart
+          series={pnlLineSeries}
           fromMin={fromMin}
           toMin={toMin}
           nowMin={nowMin}
-          title="LONGS / SHORTS SENT"
-          meta="per 10m"
+          valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
+          title="PNL OVER TIME"
+          meta="open + closed, every 10m"
           heightPx={384}
           heightClass="h-[384px]"
+          assignedKeys={assignedKeys}
+          hoverKey={hoverKey}
+          onHoverKey={setHoverKey}
         />
 
         <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
@@ -1797,8 +2001,10 @@ export default function CaesarCharts({
         </figure>
       </div>
 
-      {/* ---------- ARRIVALS + PNL OVER TIME — two across, underneath ---------- */}
-      <div className="mt-3 grid gap-4 lg:grid-cols-2">
+      {/* ---------- ARRIVALS + SETTLE BREAKDOWN + LONGS/SHORTS SENT — three equal across, underneath
+          (2026-10-23, the operator's own instruction: add the new chart "в нижньому ряді по
+          середині" — in the bottom row, in the middle — and make all three equal width). ---------- */}
+      <div className="mt-3 grid gap-4 lg:grid-cols-3">
           {/* ---------- ARRIVALS ---------- */}
           <figure className="scanner-glass-card relative m-0 h-[384px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
             <div className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between">
@@ -1997,20 +2203,27 @@ export default function CaesarCharts({
             </div>
           </figure>
 
-          {/* ---------- PNL OVER TIME ---------- */}
-          <LinesChart
-            series={pnlLineSeries}
+          {/* ---------- SETTLE BREAKDOWN ---------- */}
+          <SettleBreakdownChart
+            rows={settleRows}
+            hoverKey={hoverKey}
+            onHover={setHoverKey}
+            title="SETTLE BREAKDOWN"
+            meta="solid=by checkpoint, outline=after"
+            heightPx={384}
+            heightClass="h-[384px]"
+          />
+
+          {/* ---------- LONGS / SHORTS SENT ---------- */}
+          <LongShortHistogram
+            buckets={longShortBuckets}
             fromMin={fromMin}
             toMin={toMin}
             nowMin={nowMin}
-            valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
-            title="PNL OVER TIME"
-            meta="open + closed, every 10m"
+            title="LONGS / SHORTS SENT"
+            meta="per 10m"
             heightPx={384}
             heightClass="h-[384px]"
-            assignedKeys={assignedKeys}
-            hoverKey={hoverKey}
-            onHoverKey={setHoverKey}
           />
       </div>
       </>

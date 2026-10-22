@@ -33,6 +33,7 @@ import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import { resolveClassByBridgeId, CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
 import { SEGMENT_STRATEGY_KEYS } from "@/lib/caesar/segmentStrategies";
+import { PRE_CHECKPOINT_BRIDGE_IDS, OPG_CHECKPOINT_BRIDGE_IDS } from "@/lib/caesar/checkpoints";
 import type { StreamPosition } from "@/components/stream/streamEngine";
 import { CAESAR_PANEL_SURFACE } from "./CaesarPanel";
 import { AllSituationsSection } from "./CaesarBridgeDecisions";
@@ -420,58 +421,37 @@ export default function CaesarPositions({
   //                    Checkpoint should read 0 for these in the ordinary case — the mirror image).
   // Every other strategy (PairFlux, PullBack, MorLaunch Basket, ...) was not named either way, so no
   // breakdown is shown for it rather than guessing which checkpoint, if any, fits its own thesis.
-  const PRE_CHECKPOINT_BRIDGE_IDS = useMemo(
-    () => new Set(["stream.reversal", "stream.continuum", "stream.arbitrage", "stream.morlaunch"]),
-    [],
-  );
-  const OPG_CHECKPOINT_BRIDGE_IDS = useMemo(
-    () => new Set(["stream.opgreversal", "stream.opgcontinuum", "stream.opgfade", "stream.opgride"]),
-    [],
-  );
+  // The two id sets themselves live in lib/caesar/checkpoints.ts — shared with CaesarCharts.tsx's
+  // own settle-breakdown chart, so the two can never disagree about which strategy belongs to which
+  // checkpoint family (2026-10-23, the same shared-constant fix already applied once this session
+  // for segment membership — see segmentStrategies.ts's own doc comment).
 
   type Breakdown = { closedByCheckpoint: number; closedAfterCheckpoint: number; ready: boolean; checkpointLabel: string };
+  type PnlBreakdownResponse = { ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> };
   const [preBreakdown, setPreBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
   const [opgBreakdown, setOpgBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
 
+  // Shared-poll keys ("bridge-pnl-breakdown-pre"/"-opg") — CaesarCharts.tsx's own settle-breakdown
+  // chart subscribes to the SAME two keys rather than running its own second poll of this endpoint.
   useEffect(() => {
     let alive4 = true;
-    const load = (checkpoint: "pre" | "opg", set: typeof setPreBreakdown) =>
-      fetchWithTimeout(bridgeUrl(`/api/stream/caesar/pnl-breakdown?checkpoint=${checkpoint}`), { cache: "no-store" })
-        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>)
-        .then((body) => { if (alive4) set({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} }); })
-        .catch(() => {});
-    const loadBoth = () => { void load("pre", setPreBreakdown); void load("opg", setOpgBreakdown); };
-    loadBoth();
-    const interval = window.setInterval(loadBoth, POLL_MS);
-    return () => { alive4 = false; window.clearInterval(interval); };
+    const fetchPre = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=pre"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<PnlBreakdownResponse>);
+    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-pre", fetchPre, POLL_MS, (body, err) => {
+      if (alive4 && !err && body) setPreBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
+    });
+    return () => { alive4 = false; unsubscribe(); };
   }, []);
-
-  /**
-   * PRE's own per-TICKER result (operator's own instruction, 2026-10-22): the account/claims poll
-   * above already keeps every open ticker's own number live and current, right up until PRE's own
-   * clock (09:30) — nothing extra needed for that half. This is the OTHER half: once the 09:35
-   * settle checkpoint has fired, fetch the frozen per-stack figures ONE TIME (the operator's own
-   * words: "один раз дістань закриті значення... в 9:35") rather than keep polling data that
-   * CANNOT change again until tomorrow's own checkpoint — so this keeps retrying on the same cadence
-   * ONLY until `ready` turns true, then stops asking for good.
-   */
-  const [preStack, setPreStack] = useState<{ ready: boolean; stacks: { ticker: string; strategyId: string; pnl: number }[] }>({ ready: false, stacks: [] });
   useEffect(() => {
-    let alive5 = true;
-    let timer: number | undefined;
-    const load = () => {
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pre-stack-performance"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; stacks?: { ticker: string; strategyId: string; pnl: number }[] }>)
-        .then((body) => {
-          if (!alive5) return;
-          const ready = body.ready === true;
-          setPreStack({ ready, stacks: body.stacks ?? [] });
-          if (!ready) timer = window.setTimeout(load, POLL_MS);
-        })
-        .catch(() => { if (alive5) timer = window.setTimeout(load, POLL_MS); });
-    };
-    load();
-    return () => { alive5 = false; if (timer != null) window.clearTimeout(timer); };
+    let alive4b = true;
+    const fetchOpg = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=opg"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<PnlBreakdownResponse>);
+    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-opg", fetchOpg, POLL_MS, (body, err) => {
+      if (alive4b && !err && body) setOpgBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
+    });
+    return () => { alive4b = false; unsubscribe(); };
   }, []);
 
   /** UI strategy key -> its own classified checkpoint breakdown, or undefined for an unclassified
@@ -488,7 +468,7 @@ export default function CaesarPositions({
       }
     }
     return map;
-  }, [instances, preBreakdown, opgBreakdown, PRE_CHECKPOINT_BRIDGE_IDS, OPG_CHECKPOINT_BRIDGE_IDS]);
+  }, [instances, preBreakdown, opgBreakdown]);
 
   // The account as the page reads it: realised P&L net of the day's baseline. A ticker that was
   // closed before the roll and did nothing since reads 0 realised, so `isRelevant` drops its row —
@@ -980,50 +960,6 @@ export default function CaesarPositions({
           })}
       </div>
 
-      {/*
-        PRE STACK PERFORMANCE — PRE only, and only once the 09:35 settle checkpoint has actually
-        fired (preStack's own doc comment above): each ticker's own realised result since the day
-        began, frozen at the checkpoint, not a live number. Before 09:35 the all-situations table
-        right below already shows every PRE ticker's own live, continuously-updating figure — this
-        panel has nothing to add until then, so it stays hidden rather than showing a stale "0".
-      */}
-      {selectedSegment === "pre" && preStack.ready && preStack.stacks.length > 0 && (
-        <div className="scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
-          <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: "#63e6be", boxShadow: "0 0 8px #63e6be80" }} />
-            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-300">Pre Stack Performance</span>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">settled at 09:35, per ticker</span>
-          </div>
-          <div className="max-h-[320px] overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 z-10">
-                <tr className="border-b border-white/[0.06] bg-[#0a0a0a]/95 text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
-                  <th className="px-3 py-2">Ticker</th>
-                  <th className="px-3 py-2">Strategy</th>
-                  <th className="px-3 py-2 text-right">P&amp;L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {preStack.stacks
-                  .slice()
-                  .sort((a, b) => b.pnl - a.pnl)
-                  .map((s) => {
-                    const key = resolveClassByBridgeId(s.strategyId)?.key ?? s.strategyId;
-                    return (
-                      <tr key={s.ticker} className="border-b border-white/[0.03] font-mono text-[13px]">
-                        <td className="px-3 py-2 font-bold text-zinc-200">{s.ticker}</td>
-                        <td className="px-3 py-2 font-bold" style={{ color: colorByKey.get(key) }}>{strategyDisplayLabel(key)}</td>
-                        <td className={`px-3 py-2 text-right tabular-nums font-bold ${pnlTone(s.pnl)}`}>
-                          {s.pnl >= 0 ? "+" : ""}{fmt(s.pnl)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/*
         ALL SITUATIONS — moved here from Bridge Decisions (2026-10-08, the operator's own
