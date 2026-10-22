@@ -862,27 +862,27 @@ export default function CaesarPositions({
           was (the $ breakdown), so this line carries both the account's own activity shape AND its
           money, same panel, left/right.
         */}
-        <div className="flex flex-wrap items-baseline gap-5 font-mono text-[12px]">
-          <span className="text-zinc-500">
+        <div className="flex flex-wrap items-baseline gap-5 font-mono">
+          <span className="text-[13px] text-zinc-500">
             {snapshot?.account ? `acct ${snapshot.account}` : ""}
             {cardFilter && <> · filtered to {cardFilter}</>}
           </span>
-          <span><span className="text-zinc-500">open</span> <span className="font-bold text-sky-300">{view.openCount}</span></span>
-          <span><span className="text-zinc-500">closed</span> <span className="font-bold text-fuchsia-300">{view.closedCount}</span></span>
+          <span><span className="text-[13px] text-zinc-500">open</span> <span className="text-xl font-bold text-sky-300">{view.openCount}</span></span>
+          <span><span className="text-[13px] text-zinc-500">closed</span> <span className="text-xl font-bold text-fuchsia-300">{view.closedCount}</span></span>
           <span>
-            <span className="font-bold text-emerald-300">{view.longCount}L</span>
+            <span className="text-xl font-bold text-emerald-300">{view.longCount}L</span>
             <span className="mx-1 text-zinc-700">/</span>
-            <span className="font-bold text-rose-300">{view.shortCount}S</span>
+            <span className="text-xl font-bold text-rose-300">{view.shortCount}S</span>
           </span>
           <span>
-            <span className="text-zinc-500">vol</span>{" "}
-            <span className="font-bold text-emerald-300/80">{fmtInt(view.longVolume)}</span>
+            <span className="text-[13px] text-zinc-500">vol</span>{" "}
+            <span className="text-xl font-bold text-emerald-300/80">{fmtInt(view.longVolume)}</span>
             <span className="mx-1 text-zinc-700">/</span>
-            <span className="font-bold text-rose-300/80">{fmtInt(view.shortVolume)}</span>
+            <span className="text-xl font-bold text-rose-300/80">{fmtInt(view.shortVolume)}</span>
           </span>
           {view.untrackedCount > 0 && (
             <span
-              className="text-amber-300/90"
+              className="text-[13px] text-amber-300/90"
               title="Held in the account, but the bridge stopped tracking them (they are not closed). Nothing is managing their adds or exits."
             >{view.untrackedCount} untracked</span>
           )}
