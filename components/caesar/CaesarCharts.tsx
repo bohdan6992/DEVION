@@ -451,6 +451,144 @@ function Donut({
 }
 
 // =========================================================================================
+// RADAR (petal) CHART — one polygon per strategy, five axes, EACH AXIS SCALED INDEPENDENTLY
+// (min..max across whichever strategies are currently shown lands on 0..100 for THAT axis) so a
+// strategy that leads on one metric and trails on another still draws a readable, non-degenerate
+// shape — a single shared scale would flatten every axis but whichever has the largest raw numbers.
+// Same hover-dims-the-rest convention as the donut right beside it (hoverKey/onHover is the SAME
+// state both already share), so hovering a strategy's wedge highlights its own petal shape too.
+// =========================================================================================
+
+const RADAR_SIZE = 384;
+const RADAR_C = RADAR_SIZE / 2;
+const RADAR_R = RADAR_SIZE / 2 - 56; // leaves room for the axis labels ringing the outside
+
+function RadarChart({
+  axes,
+  series,
+  hoverKey,
+  onHover,
+}: {
+  axes: readonly { key: string; label: string }[];
+  series: { key: string; color: string; values: number[] }[];
+  hoverKey: string | null;
+  onHover: (key: string | null) => void;
+}) {
+  const n = axes.length;
+  const angleFor = (i: number) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const pointAt = (i: number, radius: number): readonly [number, number] => {
+    const a = angleFor(i);
+    return [RADAR_C + radius * Math.cos(a), RADAR_C + radius * Math.sin(a)];
+  };
+
+  // Per-axis min..max across the series actually shown — see this section's own header comment.
+  const ranges = useMemo(
+    () => axes.map((_, i) => {
+      const vals = series.map((s) => s.values[i] ?? 0);
+      return vals.length > 0 ? { min: Math.min(...vals), max: Math.max(...vals) } : { min: 0, max: 1 };
+    }),
+    [axes, series],
+  );
+  const radiusFor = (axisIdx: number, value: number) => {
+    const { min, max } = ranges[axisIdx];
+    // Every strategy tied on this axis (often true for a single-strategy day): sit at the SAME
+    // mid radius rather than dividing by zero, which would otherwise collapse to the centre.
+    if (max === min) return RADAR_R * 0.55;
+    return RADAR_R * ((value - min) / (max - min));
+  };
+  const polygonFor = (s: { values: number[] }) =>
+    axes.map((_, i) => pointAt(i, radiusFor(i, s.values[i] ?? 0)).join(",")).join(" ");
+
+  const RINGS = [0.25, 0.5, 0.75, 1];
+  const hovered = series.find((s) => s.key === hoverKey) ?? null;
+
+  return (
+    <div className="relative mx-auto shrink-0" style={{ width: RADAR_SIZE, height: RADAR_SIZE }}>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-full opacity-50 blur-2xl"
+        style={{
+          background: `radial-gradient(circle at 50% 50%, ${(hovered ?? series[0])?.color ?? "#3987e5"}22 0%, transparent 62%)`,
+        }}
+      />
+      <svg
+        viewBox={`0 0 ${RADAR_SIZE} ${RADAR_SIZE}`}
+        className="relative w-full"
+        role="img"
+        aria-label={
+          series.length > 0
+            ? `Per-strategy shape across ${axes.map((a) => a.label).join(", ")}: ${series.map((s) => s.key).join(", ")}`
+            : "No active strategy to shape today"
+        }
+      >
+        {RINGS.map((f) => (
+          <polygon
+            key={f}
+            points={axes.map((_, i) => pointAt(i, RADAR_R * f).join(",")).join(" ")}
+            fill="none"
+            stroke="rgba(255,255,255,0.06)"
+            strokeWidth={1}
+          />
+        ))}
+        {axes.map((ax, i) => {
+          const [x, y] = pointAt(i, RADAR_R);
+          const [lx, ly] = pointAt(i, RADAR_R + 20);
+          return (
+            <g key={ax.key}>
+              <line x1={RADAR_C} y1={RADAR_C} x2={x} y2={y} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+              <text
+                x={lx}
+                y={ly}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fill="rgba(255,255,255,0.4)"
+                fontSize={9}
+                fontFamily="ui-monospace, monospace"
+                letterSpacing="0.6"
+              >
+                {ax.label}
+              </text>
+            </g>
+          );
+        })}
+        {series.length === 0 ? (
+          <text
+            x={RADAR_C}
+            y={RADAR_C}
+            textAnchor="middle"
+            fill="rgba(255,255,255,0.32)"
+            fontSize={11}
+            fontFamily="ui-monospace, monospace"
+          >
+            NOTHING ACTIVE
+          </text>
+        ) : (
+          series.map((s) => {
+            const on = hoverKey === s.key;
+            return (
+              <polygon
+                key={s.key}
+                points={polygonFor(s)}
+                fill={s.color}
+                fillOpacity={on ? 0.3 : 0.14}
+                stroke={s.color}
+                strokeWidth={on ? 2.5 : 1.5}
+                opacity={hoverKey && !on ? 0.35 : 1}
+                style={{ transition: "opacity 140ms ease, fill-opacity 140ms ease", cursor: "pointer" }}
+                onMouseEnter={() => onHover(s.key)}
+                onMouseLeave={() => onHover(null)}
+              >
+                <title>{s.key.toUpperCase()}</title>
+              </polygon>
+            );
+          })
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// =========================================================================================
 // MULTI-SERIES LINE CHART — shared by the PnL-over-time and average-trade charts. Total is always
 // solid and glowed, coloured by its own sign (the app-wide emerald/soft-rose money convention);
 // every per-strategy line is dashed. Same card shell, gradient/glow language, tick sizing and
@@ -773,6 +911,28 @@ function LongShortHistogram({
   const y = useCallback((count: number) => PAD_T + plotH - (count / maxCount) * plotH, [maxCount, plotH]);
   const yTicks = [0, Math.ceil(maxCount * 0.33), Math.ceil(maxCount * 0.66), maxCount];
 
+  /**
+   * NET (long minus short, running) — overlaid on the bars (2026-10-23, the operator's own
+   * instruction: the bars alone, per 10-minute bucket only, read as empty/sparse on a quiet day
+   * and never say whether the ACCOUNT as a whole is skewing long or short). A SEPARATE y-scale from
+   * the bars' own (0..maxCount): net is a running SUM across the whole segment so far, a completely
+   * different magnitude than one bucket's own count, and zero sits at the plot's own vertical
+   * middle so a swing either way reads symmetrically rather than clipping against one edge.
+   */
+  const netPoints = useMemo(() => {
+    let running = 0;
+    return buckets.map((b) => {
+      running += b.long - b.short;
+      return { min: b.min, value: running };
+    });
+  }, [buckets]);
+  const maxAbsNet = Math.max(1, ...netPoints.map((p) => Math.abs(p.value)));
+  const yNet = useCallback((v: number) => PAD_T + plotH / 2 - (v / maxAbsNet) * (plotH / 2), [maxAbsNet, plotH]);
+  const netPathD = netPoints.length > 0
+    ? roundedPolyline(netPoints.map((p): [number, number] => [x(p.min) + barW / 2, yNet(p.value)]), 4)
+    : "";
+  const lastNet = netPoints.length > 0 ? netPoints[netPoints.length - 1] : null;
+
   const ticks = useMemo(() => {
     const out: number[] = [];
     const first = Math.ceil(from / 60) * 60;
@@ -815,6 +975,7 @@ function LongShortHistogram({
     }
     return nearest;
   }, [hoverMin, buckets]);
+  const hoverNet = hoverBucket ? netPoints.find((p) => p.min === hoverBucket.min)?.value ?? null : null;
   const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / width) * 100;
 
   return (
@@ -832,7 +993,7 @@ function LongShortHistogram({
         onMouseMove={onMove}
         onMouseLeave={() => setHoverMin(null)}
         role="img"
-        aria-label="Longs and shorts sent per 10 minutes"
+        aria-label="Longs and shorts sent per 10 minutes, with a running net long-minus-short line"
       >
         <defs>
           <linearGradient id={`${uid}-long`} x1="0" y1="0" x2="0" y2="1">
@@ -843,6 +1004,13 @@ function LongShortHistogram({
             <stop offset="0%" stopColor={SOFT_LOSS_SOLID} />
             <stop offset="100%" stopColor={SOFT_LOSS_MUTED} />
           </linearGradient>
+          <filter id={`${uid}-glow`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
 
         {yTicks.map((t, i) => {
@@ -904,6 +1072,26 @@ function LongShortHistogram({
           );
         })}
 
+        {/* NET's own zero line — a separate reference from the bars' own baseline at the bottom,
+            since net can swing either side of it. */}
+        <line x1={PAD_L} x2={width - PAD_R} y1={yNet(0)} y2={yNet(0)} stroke="rgba(255,255,255,0.10)" strokeDasharray="3 4" />
+        {netPathD && (
+          <g className="caesar-chart-fade-up">
+            <path
+              d={netPathD}
+              fill="none"
+              stroke="rgba(255,255,255,0.75)"
+              strokeWidth={2.2}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              filter={`url(#${uid}-glow)`}
+            />
+            {lastNet && (
+              <circle cx={x(lastNet.min) + barW / 2} cy={yNet(lastNet.value)} r={4} fill="rgba(255,255,255,0.9)" />
+            )}
+          </g>
+        )}
+
         <line x1={PAD_L} x2={width - PAD_R} y1={height - PAD_B} y2={height - PAD_B} stroke="rgba(255,255,255,0.15)" />
         {ticks.map((m) => {
           const px = x(m);
@@ -932,6 +1120,13 @@ function LongShortHistogram({
             <span className="text-zinc-400">SHORT</span>
             <span className="ml-auto font-bold tabular-nums text-zinc-100">{intnLike(hoverBucket.short)}</span>
           </div>
+          {hoverNet != null && (
+            <div className="mt-1 flex items-center gap-2 border-t border-white/10 pt-1 font-mono text-[13px]">
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.85)" }} />
+              <span className="text-zinc-400">NET (running)</span>
+              <span className="ml-auto font-bold tabular-nums text-zinc-100">{hoverNet >= 0 ? "+" : ""}{intnLike(hoverNet)}</span>
+            </div>
+          )}
           {hasOvernight && (
             <div className="mt-1 flex items-center gap-2 font-mono text-[13px]">
               <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: OVERNIGHT_SERIES[0] }} />
@@ -1292,31 +1487,63 @@ export default function CaesarCharts({
     return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
   }, [instances, colorByInstance, cleanPnlPoints]);
 
-  const avgTradeLineSeries = useMemo<ValueSeries[]>(() => {
-    const perStrategy: ValueSeries[] = instances.map((inst) => ({
-      key: inst.key,
-      color: colorByInstance.get(inst.instanceId) ?? OTHER,
-      dashed: true,
-      points: cleanPnlPoints.flatMap((p) => {
-        const s = p.perStrategy[inst.instanceId];
-        if (!s || s.situations <= 0) return [];
-        return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: s.total / s.situations }];
-      }),
-    }));
-    const totalPoints: ValuePoint[] = cleanPnlPoints.flatMap((p) => {
-      let total = 0;
-      let situations = 0;
-      for (const inst of instances) {
-        const s = p.perStrategy[inst.instanceId];
-        if (!s) continue;
-        total += s.total;
-        situations += s.situations;
-      }
-      if (situations <= 0) return [];
-      return [{ min: axisMinuteOf(new Date(p.atUtc).getTime()), value: total / situations }];
-    });
-    return [{ key: "total", color: "rgba(255,255,255,0.85)", dashed: false, points: totalPoints }, ...perStrategy];
-  }, [instances, colorByInstance, cleanPnlPoints]);
+  /**
+   * STRATEGY SHAPE (radar/petal) — replaces the old AVERAGE TRADE line (2026-10-23, the operator's
+   * own instruction). A radar's own strength is comparing strategies against EACH OTHER across
+   * several axes at once, not one metric over time, so this is a snapshot (right now), not a
+   * history — unlike every other chart in this row. Five axes, all already computed elsewhere in
+   * this file for other charts (no new endpoint): TOTAL P&L and AVG/TRADE from the same latest
+   * pnl-series sample AVERAGE TRADE used to read; ENTERED reuses `series[i].entered` (the same
+   * segment-scoped count the arrivals chart below already shows, so this never disagrees with it);
+   * OPEN NOW reuses `activeSeries[i].active` (the account-verified count the donut itself shows);
+   * LONG SKEW is the one new computation, the same segment-scoped entries `longShortBuckets` already
+   * sums, just split per strategy instead of pooled.
+   */
+  const RADAR_AXES = [
+    { key: "total", label: "TOTAL P&L" },
+    { key: "avg", label: "AVG/TRADE" },
+    { key: "entered", label: "ENTERED" },
+    { key: "open", label: "OPEN NOW" },
+    { key: "skew", label: "LONG SKEW" },
+  ] as const;
+
+  const radarSeries = useMemo(() => {
+    const segFrom = fromMin ?? 0;
+    const segTo = toMin ?? 1440;
+    const latest = cleanPnlPoints.length > 0 ? cleanPnlPoints[cleanPnlPoints.length - 1] : null;
+    const activeByKey = new Map(activeSeries.map((s) => [s.key, s.active]));
+    const enteredByKey = new Map(series.map((s) => [s.key, s.entered]));
+
+    return instances
+      .map((inst) => {
+        const sample = latest?.perStrategy[inst.instanceId];
+        const total = sample?.total ?? 0;
+        const avg = sample && sample.situations > 0 ? sample.total / sample.situations : 0;
+        const entered = enteredByKey.get(inst.key) ?? 0;
+        const open = activeByKey.get(inst.key) ?? 0;
+
+        let long = 0;
+        let short = 0;
+        for (const e of bridgeEntries[inst.instanceId] ?? []) {
+          const ts = new Date(e.atUtc).getTime();
+          if (!Number.isFinite(ts)) continue;
+          const min = axisMinuteOf(ts);
+          if (min < segFrom || min >= segTo) continue;
+          if (e.side?.toUpperCase() === "SHORT") short += 1; else long += 1;
+        }
+        const skew = long + short > 0 ? (long / (long + short)) * 100 : 50;
+
+        return {
+          key: inst.key,
+          color: colorByInstance.get(inst.instanceId) ?? OTHER,
+          values: [total, avg, entered, open, skew],
+          hasActivity: entered > 0 || open > 0,
+        };
+      })
+      // Same declutter rule the donut's own wedges already apply (active > 0) — a strategy with
+      // nothing to show today would otherwise sit as a flat dot at the centre on every axis.
+      .filter((s) => s.hasActivity);
+  }, [instances, colorByInstance, cleanPnlPoints, series, activeSeries, bridgeEntries, fromMin, toMin]);
 
   // ---- the time scale ------------------------------------------------------------------------
   // W measured off the svg itself (useMeasuredWidth — see its own doc comment); H is simply the
@@ -1534,15 +1761,14 @@ export default function CaesarCharts({
           operator's own instruction): every chart below already names a series in its own hover
           tooltip, so a standing legend repeated the same colour→name mapping for nothing. */}
 
-      {/* ---------- SITUATIONS / LONGS-SHORTS / AVG TRADE — three across, on top ----------
-          The donut's column is a FIXED 384px — the operator's own instruction that the block be a
-          perfect square, which an fr share can't guarantee since it stretches with viewport width.
-          384 is deliberately the same number as the row's height (320 * 1.2), so width == height.
-          The other two columns split whatever is left 1:1, same ratio as their original 2fr:2fr —
-          taking space from both neighbours equally, same as the donut's own +20% did before this.
-          All three blocks share the donut's new height via heightPx/heightClass, so the row stays
-          one even line. */}
-      <div className="mt-3 grid gap-4 lg:grid-cols-[384px_1fr_1fr]">
+      {/* ---------- ACCOUNT BOOK / LONGS-SHORTS / STRATEGY SHAPE — three across, on top ----------
+          The donut's and radar's own columns are a FIXED 384px each, bookending the row — the
+          operator's own instruction that both read as the same perfect-square block AND that the
+          histogram sit in the MIDDLE (2026-10-23). 384 is deliberately the same number as the row's
+          height (320 * 1.2), so width == height for both squares. Everything left over goes to the
+          histogram alone, in the middle column. All three blocks share the donut's own height via
+          heightPx/heightClass, so the row stays one even line. */}
+      <div className="mt-3 grid gap-4 lg:grid-cols-[384px_1fr_384px]">
         <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
           <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
             <span>ACTIVE ACCOUNT BOOK</span>
@@ -1562,20 +1788,13 @@ export default function CaesarCharts({
           heightClass="h-[384px]"
         />
 
-        <LinesChart
-          series={avgTradeLineSeries}
-          fromMin={fromMin}
-          toMin={toMin}
-          nowMin={nowMin}
-          valueFmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
-          title="AVERAGE TRADE"
-          meta="total ÷ situations"
-          heightPx={384}
-          heightClass="h-[384px]"
-          assignedKeys={assignedKeys}
-          hoverKey={hoverKey}
-          onHoverKey={setHoverKey}
-        />
+        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            <span>STRATEGY SHAPE</span>
+            <span className="text-zinc-600">now, per axis</span>
+          </figcaption>
+          <RadarChart axes={RADAR_AXES} series={radarSeries} hoverKey={hoverKey} onHover={setHoverKey} />
+        </figure>
       </div>
 
       {/* ---------- ARRIVALS + PNL OVER TIME — two across, underneath ---------- */}

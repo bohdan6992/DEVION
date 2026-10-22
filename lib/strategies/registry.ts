@@ -90,6 +90,18 @@ export type LiveStrategy = {
    * morning they exit (the donut read them as UNCLAIMED, the P&L lines dropped them).
    */
   holdsOvernight?: boolean;
+  /**
+   * Whether the card's own "overnight" badge is warranted — distinct from holdsOvernight above,
+   * which MorLaunchBasket also sets true for a reason that has nothing to do with the badge's own
+   * claim ("enters at the close, exits on a later trading day"): most of its fills close the SAME
+   * day, same session, by the operator's own hand — holdsOvernight is set there purely so a stray
+   * still-open fill is not dropped at the 21:00 roll (see its own doc comment), not because it is
+   * designed to hold overnight. The operator's own correction, 2026-10-23: "ЦЕ НЕ ОВЕРНАЙТ" — the
+   * badge read as a false claim about a strategy that is not actually an overnight one. Defaults to
+   * holdsOvernight's own value when omitted, so every OTHER strategy (DayTwo/Reversal/Continuum,
+   * genuinely overnight by design) needs no change here at all.
+   */
+  overnightBadge?: boolean;
   api: {
     /** Paper endpoints, e.g. `/api/paper/arbitrage`. No trailing slash. */
     paperBase: string;
@@ -472,6 +484,9 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     // competes for a ticker claim through the normal arbitration this number tie-breaks.
     priority: 3,
     holdsOvernight: true,
+    // The badge, not the carry-across-roll safety above: this is not a genuine overnight strategy —
+    // see overnightBadge's own doc comment.
+    overnightBadge: false,
     api: { paperBase: "/api/paper/morlaunch", signalsBase: "/api/arbitrage" },
     streamEngine: "bridge",
     storage: {

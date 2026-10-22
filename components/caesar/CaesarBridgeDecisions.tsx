@@ -588,6 +588,21 @@ type AccountPosition = {
  */
 function useAccountPnlByTicker() {
   const [byTicker, setByTicker] = useState<Map<string, number>>(new Map());
+  const [dayBaseline, setDayBaseline] = useState<Record<string, number>>({});
+
+  // Same poll key CaesarPositions.tsx's own day-baseline effect uses ("bridge-day-baseline") — one
+  // shared fetch/interval behind subscribeSharedPoll, not a second independent one.
+  useEffect(() => {
+    let alive = true;
+    const fetchBaseline = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/day-baseline"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<{ ok: boolean; closedPnlByTicker?: Record<string, number> }>)
+        .then((body) => body.closedPnlByTicker ?? {});
+    const unsubscribe = subscribeSharedPoll("bridge-day-baseline", fetchBaseline, 30_000, (value, err) => {
+      if (alive && !err && value) setDayBaseline(value);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -601,13 +616,20 @@ function useAccountPnlByTicker() {
         const ticker = (p.ticker ?? "").trim().toUpperCase();
         if (!ticker) continue;
         const openPnl = p.isFlat ? 0 : p.openPnL ?? 0;
-        const closedPnl = p.closedPnL ?? 0;
+        // Realised SINCE TODAY'S OWN 16:00 roll, not TradingApp's own raw running total — the exact
+        // same subtraction CaesarPositions.tsx's own snapshot already applies to the strategy cards
+        // above. Without this, this table's own Total P&L was reading a different, larger number
+        // than the card it sits right under for the same ticker (the operator's own report,
+        // 2026-10-23: "ЦИФРИ ДОСІ НЕ СХОДЯТЬСЯ" — two independent un-synced computations of "this
+        // ticker's own P&L" is exactly the recurring bug class this session keeps finding).
+        const start = dayBaseline[ticker];
+        const closedPnl = (p.closedPnL ?? 0) - (start ?? 0);
         map.set(ticker, openPnl + closedPnl);
       }
       setByTicker(map);
     });
     return () => { alive = false; unsubscribe(); };
-  }, []);
+  }, [dayBaseline]);
 
   return byTicker;
 }

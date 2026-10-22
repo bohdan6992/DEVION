@@ -940,7 +940,7 @@ export default function CaesarPositions({
                       {strategyDisplayLabel(key)}
                     </span>
                     <span className="shrink-0 text-[10px] text-zinc-600">#{strategy.priority}</span>
-                    {getLiveStrategy(key)?.holdsOvernight && (
+                    {getLiveStrategy(key)?.holdsOvernight && getLiveStrategy(key)?.overnightBadge !== false && (
                       <span
                         className="shrink-0 rounded border border-fuchsia-400/30 bg-fuchsia-400/[0.08] px-1.5 py-px text-[9px] font-bold uppercase tracking-widest text-fuchsia-300"
                         title="Enters at the close, exits on a later trading day — its book is carried across the 21:00 roll"

@@ -585,7 +585,13 @@ export default function CaesarSchedule() {
                             selected={selected === seg.key}
                             isNow={nowSegment?.key === seg.key}
                             pickerOpen={pickerFor === seg.key}
-                            onSelect={() => setSelected(seg.key)}
+                            // Same handler the timeline's own ruler bands use (handleBarSelect), not
+                            // a bare setSelected — this card row is a SECOND segment selector, and
+                            // using a different handler left positionsSegmentKey (what gates
+                            // CaesarPositions' own PRE STACK PERFORMANCE panel) stuck on whatever
+                            // segment was last picked from the ruler, so the panel did not disappear
+                            // switching segments from here (the operator's own report, 2026-10-23).
+                            onSelect={() => handleBarSelect(seg.key)}
                             onTogglePicker={() => setPickerFor((cur) => (cur === seg.key ? null : seg.key))}
                             onAdd={(strategyKey) => addStrategy(seg.key, strategyKey)}
                             onRemove={(strategyKey) => removeStrategy(seg.key, strategyKey)}
