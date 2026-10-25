@@ -38,6 +38,11 @@ export type MorLaunchStreamLiveParams = {
   thresholdUnit: MorLaunchThresholdUnit;
   priceMode: MorLaunchPriceMode;
   filters: OpenDoorLiveFilters | null;
+  /** ITB/HARD (borrow status) — NOT part of `filters`, same split as the Sonar panel's own copy:
+   * display-only, read by MorLaunchStreamUniverseService for the EXECUTOR tab's universe list,
+   * never folded into the dispatching engine's own params. */
+  excludeItb: boolean;
+  excludeHard: boolean;
   source: string;
 };
 
@@ -54,6 +59,8 @@ export function toMorLaunchStreamLiveParams(args: {
   priceMode: MorLaunchPriceMode;
   filters: ArbitrageFilterConfigV1;
   multiModes: MultiTriModes;
+  excludeItb: boolean;
+  excludeHard: boolean;
   source: string;
 }): MorLaunchStreamLiveParams {
   return {
@@ -68,8 +75,27 @@ export function toMorLaunchStreamLiveParams(args: {
     thresholdUnit: args.thresholdUnit,
     priceMode: args.priceMode,
     filters: toOpenDoorLiveFilters(args.filters, args.multiModes),
+    excludeItb: args.excludeItb,
+    excludeHard: args.excludeHard,
     source: args.source,
   };
+}
+
+/** One row of signals/morlaunch/morlaunch_tickers.csv — flat and undirected, same shape Sonar's
+ * MorLaunchUniverseRow uses. */
+export type MorLaunchStreamUniverseRow = {
+  ticker: string;
+  rating: number | null;
+  total: number | null;
+  sigma: number | null;
+  alpha: number | null;
+};
+
+export async function fetchMorLaunchStreamUniverse(): Promise<MorLaunchStreamUniverseRow[]> {
+  const response = await fetch(bridgeUrl("/api/stream/morlaunch/universe"), { cache: "no-store" });
+  if (!response.ok) return [];
+  const json = await response.json().catch(() => ({}));
+  return Array.isArray(json?.rows) ? (json.rows as MorLaunchStreamUniverseRow[]) : [];
 }
 
 export async function pushMorLaunchStreamLiveParams(params: MorLaunchStreamLiveParams): Promise<boolean> {

@@ -677,8 +677,9 @@ export default function ContinuumScanner({
   // ContinuumGate.Check's whole rule: |15:50 deviation| must clear BOTH a flat floor (now split by
   // side — see below) AND the ticker's own published gamma for (class, sign) — see ContinuumGate.cs.
   // MinDevAbsShort gates a NEGATIVE (Short) reading, defaulting to the published file's own min_dev
-  // (0.5) — same convention as ArbitrageScanner's startAbs (a plain number, never empty).
-  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(0.5);
+  // (1.0 — raised from 0.5, 2026-10-24) — same convention as ArbitrageScanner's startAbs (a plain
+  // number, never empty).
+  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(1.0);
   // MinDevAbsLong gates a POSITIVE (Long) reading. String, like ArbitrageScanner's startAbsNeg, so it
   // can be left empty — empty means "the same threshold as the short one" (optNumOrNull(...) ??
   // continuumMinDevAbsShort), mirroring startAbsNeg's own fallback UX exactly.
@@ -2841,6 +2842,12 @@ export default function ContinuumScanner({
       // (exit by settled Gap% instead of the nearest print/bid-ask to 09:30). Entry stays exactly
       // where it always was: whatever the 15:50 stack reading qualified.
       closeMode,
+      // HEDGED/RAWONLY toggle (2026-10-24, the operator's own instruction after a correctness
+      // audit found this button was a silent no-op for Continuum, same as Reversal's own copy of
+      // this fix). Now read server-side (TapeContinuumEngine.BuildHedgeRowAsync) to append one
+      // simulated TQQQ hedge row per day, sized/directioned by the same formula
+      // ReversalContinuumEntryHedgeService uses for the real live hedge.
+      pnlMode,
       // A THIRD instance of the same bug, and the worst one: the USD/TIER toggle (same panel) was
       // also never sent, so pressing TIER silently sized every Continuum position off the raw
       // per-unit multiplier as if it were a flat $ notional (~1000x too small) instead of scaling by

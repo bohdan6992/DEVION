@@ -1,0 +1,2190 @@
+"use client";
+
+import clsx from "clsx";
+import AutoSizer from "react-virtualized-auto-sizer";
+import { List, type RowComponentProps } from "react-window";
+import React, { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { useStreamActionLogRows } from "./streamActionLogStore";
+import { useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
+import { useStreamExecutionSnapshot } from "./streamExecutionStore";
+import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrderIntentStore";
+import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
+import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
+import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import { setActiveTicker, useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
+import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
+import { currentMinutesLocal, isPastSessionCutoff, parseTimeToMinutes } from "./streamEngine";
+import { useStreamStores } from "./streamStoreRegistry";
+import type {
+  StreamActionLogEntry,
+  MainWindowDataSnapshot,
+  MarketMakerBookSnapshot,
+  StreamAutomationConfig,
+  StreamDecisionRow,
+  StreamManualOrderAction,
+  StreamPosition,
+  TradingAppExecutionSnapshot,
+} from "./streamEngine";
+
+type StreamTabKey = "active" | "episodes" | "analytics";
+type StreamViewMode = "stream" | "auto" | "stream-auto-tab";
+
+type StreamDecisionTableRow = {
+  ticker: string;
+  benchmark: string;
+  side: "Long" | "Short";
+  signal: number | null;
+  spread: number | null;
+  spreadBidPct: number | null;
+  netEdge: number | null;
+  report?: string | null;
+  entrySignal?: number | null;
+  addBaseSignal?: number | null;
+  confirmedAddSignal?: number | null;
+  nextAddTrigger?: number | null;
+  addState?: string;
+  status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING";
+};
+
+type ArbitrageStreamViewProps = {
+  /** Which strategy's active-ticker slot this view reads. Day Two passes its own. */
+  activeTickerStrategy?: string;
+  tab: StreamTabKey;
+  streamSignalsCount: number;
+  streamAutoEnabled: boolean;
+  streamSessionStartedAt: number | null;
+  streamSessionStoppedAt: number | null;
+  streamSentOrdersCount: number;
+  onSetAutoEnabled: (enabled: boolean) => void;
+  manualExecutionBusy: boolean;
+  onSubmitManualOrders: (tickersText: string, action: StreamManualOrderAction) => Promise<void>;
+  onCaptureTickerPoint: () => Promise<void>;
+  onCaptureTickerPointDelayed: (delayMs?: number) => Promise<void>;
+  onClearTickerPoint: () => Promise<void>;
+  onTogglePanicOff: (enabled: boolean) => Promise<void>;
+  onStartAutomation?: () => Promise<void>;
+  /**
+   * Stop THIS strategy on the bridge. Without it the stop falls back to raising panic-off, which
+   * is a property of the shared TradingApp queue and therefore freezes every other strategy on the
+   * machine as well — see setAutomationRunning.
+   */
+  onStopAutomation?: () => Promise<void>;
+  onClearExecutionQueue: (options?: { thisStrategyOnly?: boolean }) => Promise<void>;
+  onResetAutomationState: () => void;
+  onDismissActivePositions?: (tickers: string[]) => void;
+  onForceRefresh: () => Promise<void>;
+  listModeLabel: string;
+  automationConfig: StreamAutomationConfig;
+  onAutomationConfigChange: (patch: Partial<StreamAutomationConfig>) => void;
+  accentActiveSoftClass: string;
+  accentActiveTextClass: string;
+  viewMode?: StreamViewMode;
+  automationLaunchEnabled?: boolean;
+  entryCutoffActive?: boolean;
+  hideAutomationButtons?: boolean;
+};
+
+function BookLevelsCard({
+  label,
+  levels,
+  accentClass,
+}: {
+  label: string;
+  levels: MarketMakerBookSnapshot["bidLevels"] | MarketMakerBookSnapshot["askLevels"];
+  accentClass: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
+      <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{label}</div>
+      <div className="mt-3 space-y-2">
+        {levels.length ? levels.map((level, index) => (
+          <div key={`${label}|${index}|${level.exchange}|${level.price}`} className="flex items-center justify-between gap-3 text-[11px] font-mono">
+            <span className="text-zinc-500">{level.exchange || "BOOK"}</span>
+            <span className={accentClass}>{num(level.price, 2)}</span>
+            <span className="text-zinc-300">{intn(level.size)}</span>
+          </div>
+        )) : (
+          <div className="text-[11px] font-mono text-zinc-500">No levels captured.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The fields of TradingApp's main window, in the order that window lists them.
+ *
+ * Two of these were spelled wrong and therefore never matched: "LongPosLtClsA%" and
+ * "ShortPosStClsA%" against the window's "LongPosLstClsA%" / "ShortPosLstClsA%". The matcher
+ * strips punctuation and tries a substring both ways, and "longposltclsa%" is not a substring of
+ * "longposlstclsa%" — so both rows sat at a permanent dash that looked like missing data rather
+ * than a typo.
+ */
+const MAIN_WINDOW_FIELD_ORDER = [
+  "TotalBPUsed",
+  "TotalShortBPUsed",
+  "TotalLongBPUsed",
+  "TotalClosedPnL",
+  "LongPosLstClsA%",
+  "ShortPosLstClsA%",
+  "LstPrcTotalPnL",
+  "BPLeft",
+  "LstPrcTotalPnLBP%",
+  "AccNetClosedPnL",
+  "OpenPositions",
+];
+
+/**
+ * Colour by family, so the nine fields read as three groups instead of one list: buying power,
+ * P&L, and the per-side position percentages. Long is green and short is rose throughout the
+ * board — the same pair the OPEN LONG / OPEN SHORT cards and the side badges use.
+ */
+const MAIN_WINDOW_FIELD_TONE: Record<string, string> = {
+  TotalBPUsed: "text-violet-300/80",
+  TotalShortBPUsed: "text-rose-300/80",
+  TotalLongBPUsed: "text-emerald-300/80",
+  BPLeft: "text-sky-300/80",
+  TotalClosedPnL: "text-teal-300/80",
+  AccNetClosedPnL: "text-teal-300/80",
+  LstPrcTotalPnL: "text-amber-300/80",
+  "LstPrcTotalPnLBP%": "text-amber-300/80",
+  "LongPosLstClsA%": "text-emerald-300/80",
+  "ShortPosLstClsA%": "text-rose-300/80",
+  OpenPositions: "text-violet-300/80",
+};
+
+/** P&L fields also colour their VALUE by sign, the one place a number says good or bad by itself. */
+const MAIN_WINDOW_SIGNED_FIELDS = new Set([
+  "TotalClosedPnL",
+  "AccNetClosedPnL",
+  "LstPrcTotalPnL",
+  "LstPrcTotalPnLBP%",
+]);
+
+/**
+ * Sign of an OCR-read value. The snapshot hands over display strings ("-1,204.50", "(320)"),
+ * so this reads the text rather than assuming a number: anything it cannot parse stays neutral,
+ * which is the honest answer for a field that was misread.
+ */
+function mainWindowValueTone(heading: string, value: string | null): string {
+  if (!value || !MAIN_WINDOW_SIGNED_FIELDS.has(heading)) return "text-zinc-200";
+  const n = Number(value.replace(/[\s,$]/g, "").replace(/^\((.*)\)$/, "-$1"));
+  if (!Number.isFinite(n) || n === 0) return "text-zinc-200";
+  return n > 0 ? "text-emerald-300" : "text-rose-300";
+}
+const STREAM_BID_MINT = "#7ef7d4";
+const STREAM_BID_MINT_SOFT = "rgba(126, 247, 212, 0.10)";
+const STREAM_BID_MINT_PANEL = "rgba(126, 247, 212, 0.04)";
+const STREAM_READY_GREEN = "#63e6be";
+const STREAM_READY_GREEN_SOFT = "rgba(99, 230, 190, 0.12)";
+const STREAM_READY_GREEN_BORDER = "rgba(99, 230, 190, 0.22)";
+const STREAM_ALERT_RED = "#f38ba8";
+const STREAM_ALERT_RED_SOFT = "rgba(243, 139, 168, 0.12)";
+const STREAM_ALERT_RED_BORDER = "rgba(243, 139, 168, 0.24)";
+
+function normalizeMainWindowFieldKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9%]+/g, "").toLowerCase();
+}
+
+function canonicalMainWindowHeading(value: string): string {
+  const normalized = normalizeMainWindowFieldKey(value);
+  const exactMatch = MAIN_WINDOW_FIELD_ORDER.find((label) => normalizeMainWindowFieldKey(label) === normalized);
+  if (exactMatch) {
+    return exactMatch;
+  }
+  const fuzzyMatch = MAIN_WINDOW_FIELD_ORDER.find((label) => {
+    const normalizedLabel = normalizeMainWindowFieldKey(label);
+    return normalized.includes(normalizedLabel) || normalizedLabel.includes(normalized);
+  });
+  return fuzzyMatch ?? value;
+}
+
+function extractMainWindowControls(snapshot: MainWindowDataSnapshot | null): Array<{ label: string; state: "GREEN" | "RED" | "UNKNOWN" }> {
+  if (Array.isArray(snapshot?.controls) && snapshot.controls.length) {
+    return snapshot.controls
+      .map((control) => {
+        const state: "GREEN" | "RED" | "UNKNOWN" =
+          control.state === "GREEN" || control.state === "RED" ? control.state : "UNKNOWN";
+        return {
+          label: String(control.label ?? "").trim().toUpperCase(),
+          state,
+        };
+      })
+      .filter((control) => control.label === "MD" || control.label === "NW" || control.label === "EX");
+  }
+
+  const sourceLines = [
+    ...(Array.isArray(snapshot?.ocrLines) ? snapshot.ocrLines : []),
+    ...String(snapshot?.ocrText ?? "")
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  ];
+  const seen = new Set<string>();
+  const controls: Array<{ label: string; state: "GREEN" | "RED" | "UNKNOWN" }> = [];
+  sourceLines.forEach((line) => {
+    line
+      .split(/\s+/g)
+      .map((token) => token.replace(/[^a-zA-Z]/g, "").toUpperCase())
+      .filter((token) => token === "MD" || token === "NW" || token === "EX")
+      .forEach((token) => {
+        if (seen.has(token)) return;
+        seen.add(token);
+        controls.push({ label: token, state: "UNKNOWN" });
+      });
+  });
+  return controls;
+}
+
+function MainWindowBookSplitCard({
+  mainWindowBound,
+  mainWindowSnapshot,
+  executionMessage,
+  bookSnapshot,
+}: {
+  mainWindowBound: TradingAppExecutionSnapshot["mainWindow"];
+  mainWindowSnapshot: MainWindowDataSnapshot | null;
+  executionMessage?: string | null;
+  bookSnapshot: MarketMakerBookSnapshot | null;
+}) {
+  const orderedFields = (() => {
+    const rawFields = Array.isArray(mainWindowSnapshot?.fields) ? mainWindowSnapshot.fields : [];
+    const canonicalFields = rawFields.map((field) => ({
+      ...field,
+      heading: canonicalMainWindowHeading(field.heading),
+    }));
+    const used = new Set<number>();
+    return MAIN_WINDOW_FIELD_ORDER.map((label) => {
+      const matchIndex = canonicalFields.findIndex(
+        (field, index) => !used.has(index) && normalizeMainWindowFieldKey(field.heading) === normalizeMainWindowFieldKey(label),
+      );
+      if (matchIndex >= 0) {
+        used.add(matchIndex);
+        return { heading: label, value: canonicalFields[matchIndex].value, rawLine: canonicalFields[matchIndex].rawLine };
+      }
+      return { heading: label, value: null as string | null, rawLine: "" };
+    });
+  })();
+  const mainWindowControls = extractMainWindowControls(mainWindowSnapshot);
+  const bookRows = Array.from({ length: 5 }, (_, index) => ({
+    level: index + 1,
+    bid: bookSnapshot?.bidLevels?.[index] ?? null,
+    ask: bookSnapshot?.askLevels?.[index] ?? null,
+  }));
+
+  return (
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+      <div className="scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        {/* Same title bar as every other panel on the board: this one used to carry its own
+            border, padding and title weight, which read as a different kind of thing. */}
+        <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+          <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">Main Window</div>
+          <div className="flex items-center gap-1.5">
+            {mainWindowControls.map((control) => (
+              <div
+                key={control.label}
+                className="flex h-7 w-7 items-center justify-center rounded-md font-mono text-[10px] font-bold uppercase leading-none"
+                style={
+                  control.state === "RED"
+                    ? { color: STREAM_ALERT_RED, border: `1px solid ${STREAM_ALERT_RED_BORDER}`, backgroundColor: STREAM_ALERT_RED_SOFT }
+                    : control.state === "GREEN"
+                      ? { color: STREAM_READY_GREEN, border: `1px solid ${STREAM_READY_GREEN}`, backgroundColor: "rgba(99,230,190,0.22)", boxShadow: `0 0 8px rgba(99,230,190,0.35)` }
+                      : { color: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.06)", backgroundColor: "rgba(0,0,0,0.3)" }
+                }
+              >
+                {control.label}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* One frame, not two — the inner box was a second border inside the panel. Each field now
+            reads like a MetricCard: muted label on the left, bright value on the right. */}
+        <div className="flex-1 overflow-y-auto p-3">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-3">
+            {orderedFields.map((field, index) => (
+              <div
+                key={`${field.heading}|${index}`}
+                className="flex items-center justify-between gap-3 border-b border-white/5 py-2 font-mono"
+              >
+                <div className={clsx(
+                  "truncate text-[10px] uppercase tracking-widest",
+                  MAIN_WINDOW_FIELD_TONE[field.heading] ?? "text-zinc-500",
+                )}>
+                  {field.heading}
+                </div>
+                <div className={clsx(
+                  "shrink-0 text-right text-sm font-semibold leading-none",
+                  field.value ? mainWindowValueTone(field.heading, field.value) : "text-zinc-600",
+                )}>
+                  {field.value ?? "—"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex h-full flex-col rounded-xl border border-white/10 bg-black/20">
+        <div className="grid h-full flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
+          <div
+            className="flex h-full flex-col rounded-xl px-4 py-4"
+            style={{ border: `1px solid rgba(126, 247, 212, 0.09)`, backgroundColor: "rgba(126, 247, 212, 0.036)" }}
+          >
+            <div
+              className="flex items-center justify-between gap-3 pb-2"
+              style={{ borderBottom: `1px solid ${STREAM_BID_MINT_SOFT}` }}
+            >
+              <div className="text-[10px] uppercase tracking-widest font-mono" style={{ color: STREAM_BID_MINT }}>Bids</div>
+              <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
+            </div>
+            <div className="mt-2 flex-1 space-y-1.5">
+              {bookRows.map(({ level, bid }, index) => (
+                <div
+                  key={`book-bid-${level}`}
+                  className={clsx(
+                    "grid grid-cols-[34px_minmax(0,1fr)_72px_64px] items-center gap-3 rounded-md px-2 py-1.5",
+                    index % 2 === 0 ? "bg-white/[0.02]" : "bg-transparent"
+                  )}
+                >
+                  <div className="text-[10px] font-mono text-zinc-500">L{level}</div>
+                  <div className="text-[11px] font-mono text-zinc-500 truncate">{bid?.exchange || "-"}</div>
+                  <div className="text-[11px] font-mono text-right" style={{ color: STREAM_BID_MINT }}>{num(bid?.price ?? null, 2)}</div>
+                  <div className="text-[11px] font-mono text-right text-zinc-300">{intn(bid?.size ?? null)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex h-full flex-col rounded-xl border border-[rgba(244,63,94,0.09)] bg-[rgba(244,63,94,0.027)] px-4 py-4">
+            <div className="flex items-center justify-between gap-3 border-b border-rose-500/10 pb-2">
+              <div className="text-[10px] uppercase tracking-widest font-mono text-rose-200">Asks</div>
+              <div className="text-[10px] font-mono uppercase text-zinc-500">5 Levels</div>
+            </div>
+            <div className="mt-2 flex-1 space-y-1.5">
+              {bookRows.map(({ level, ask }, index) => (
+                <div
+                  key={`book-ask-${level}`}
+                  className={clsx(
+                    "grid grid-cols-[34px_minmax(0,1fr)_72px_64px] items-center gap-3 rounded-md px-2 py-1.5",
+                    index % 2 === 0 ? "bg-white/[0.02]" : "bg-transparent"
+                  )}
+                >
+                  <div className="text-[10px] font-mono text-zinc-500">L{level}</div>
+                  <div className="text-[11px] font-mono text-zinc-500 truncate">{ask?.exchange || "-"}</div>
+                  <div className="text-[11px] font-mono text-right text-rose-200">{num(ask?.price ?? null, 2)}</div>
+                  <div className="text-[11px] font-mono text-right text-zinc-300">{intn(ask?.size ?? null)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function num(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function intn(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return Math.trunc(value).toLocaleString("en-US");
+}
+
+function timeToMinutes(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return fallback;
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return fallback;
+  return Math.max(0, Math.min(23 * 60 + 59, hh * 60 + mm));
+}
+
+function formatActionLogTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return "-";
+  return new Date(timestamp).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatRuntime(startedAt: number | null, stoppedAt: number | null): string {
+  if (!startedAt || !Number.isFinite(startedAt)) return "-";
+  const end = stoppedAt && Number.isFinite(stoppedAt) ? stoppedAt : Date.now();
+  const elapsedMs = Math.max(0, end - startedAt);
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function MetricCard({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="scanner-panel-surface border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] rounded-2xl p-3">
+      <div className="flex items-center justify-between gap-4 h-full">
+        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{label}</div>
+        <div className={clsx("flex items-center justify-end text-base md:text-xl font-semibold font-mono text-right text-zinc-200", valueClassName)}>
+          {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const STREAM_DECISION_ROW_HEIGHT = 57;
+const STREAM_DECISION_VIRTUAL_THRESHOLD = 240;
+
+function nextAddTriggerForPosition(position: StreamPosition | undefined, automationConfig: StreamAutomationConfig): number | null {
+  if (!position) return null;
+  if (automationConfig.scaleMode !== "scale_in") return null;
+  const maxAdds = Math.max(0, automationConfig.maxAdds ?? 0);
+  const addsUsed = Math.max(0, (position.entryCount ?? 1) - 1);
+  if (addsUsed >= maxAdds) return null;
+  const addBaseSignal = position.lastScaleSignal ?? position.entrySignal;
+  if (addBaseSignal == null || !Number.isFinite(addBaseSignal)) return null;
+  return Math.abs(addBaseSignal) + Math.max(0, automationConfig.dilutionStep ?? 0);
+}
+
+function addStateForPosition(
+  position: StreamPosition | undefined,
+  row: { signal: number | null },
+  automationConfig: StreamAutomationConfig,
+  nowMs: number
+): string {
+  if (!position) return "-";
+  if (automationConfig.scaleMode !== "scale_in") return "OFF";
+  const maxAdds = Math.max(0, automationConfig.maxAdds ?? 0);
+  const addsUsed = Math.max(0, (position.entryCount ?? 1) - 1);
+  if (addsUsed >= maxAdds) return "MAXED";
+  if (position.entryDispatchedAt == null) return "WAIT ENTRY";
+  const entryBase = position.entrySignal;
+  const addBase = position.lastScaleSignal ?? position.entrySignal;
+  if (entryBase == null || addBase == null) return "WAIT BASE";
+  const confirmed = position.confirmedAddSigned;
+  if (confirmed == null || !Number.isFinite(confirmed)) return "WAIT CONFIRM";
+  if (Math.sign(confirmed) !== Math.sign(entryBase)) return "REVERSED";
+  const trigger = nextAddTriggerForPosition(position, automationConfig);
+  if (trigger == null) return "OFF";
+  if (Math.abs(confirmed) < trigger) return "WAIT SIG";
+  const lastDispatchOrBreach = Math.max(
+    position.lastDispatchedAt ?? position.entryDispatchedAt ?? position.openedAt,
+    position.lastAboveAddCapAt ?? 0
+  );
+  const addDelayMs = Math.max(15000, Math.max(0, automationConfig.addDelayMinutes ?? 0) * 60_000);
+  if (nowMs - lastDispatchOrBreach < addDelayMs) return "WAIT DELAY";
+  if (Math.abs(row.signal ?? 0) < Math.max(0, automationConfig.endSignalThreshold ?? 0)) return "WAIT LIVE";
+  return "READY";
+}
+
+function StreamDecisionVirtualRow({
+  ariaAttributes,
+  index,
+  style,
+  rows,
+  onTickerClick,
+}: RowComponentProps<{ rows: StreamDecisionTableRow[]; onTickerClick?: (ticker: string) => void }>) {
+  const row = rows[index];
+  if (!row) return <div style={style} />;
+
+  return (
+    <div
+      {...ariaAttributes}
+      style={style}
+      onClick={() => onTickerClick?.(row.ticker)}
+      className={clsx(
+        "grid grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,0.9fr)_minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.15fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+        onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+      )}
+    >
+      <div className="px-2 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2"><SideBadge side={row.side} /></div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+      <div className="px-2 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
+      <div className="px-2"><StreamStatusBadge status={row.status} /></div>
+    </div>
+  );
+}
+
+function StreamDecisionStoreVirtualRow({
+  ariaAttributes,
+  index,
+  style,
+  rowIds,
+  onTickerClick,
+}: RowComponentProps<{ rowIds: string[]; onTickerClick?: (ticker: string) => void }>) {
+  const rowId = rowIds[index];
+  const row = useStreamDecisionRow(rowId);
+  if (!row) return <div style={style} />;
+
+  return (
+    <div
+      {...ariaAttributes}
+      style={style}
+      onClick={() => onTickerClick?.(row.ticker)}
+      className={clsx(
+        "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
+        index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+        onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+      )}
+    >
+      <div className="px-2 text-zinc-100 font-semibold">{row.ticker}</div>
+      <div className="px-2 text-zinc-400">{row.benchmark}</div>
+      <div className="px-2"><SideBadge side={row.side} /></div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+      <div className="px-2 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+      <div className="px-2"><StreamStatusBadge status={row.status} /></div>
+    </div>
+  );
+}
+
+/**
+ * Height of every panel on the stream board. The four blocks sit in two rows of two and
+ * only line up if all four are told the same number — left to their content, the metric
+ * grid, the log and the two tables each settled on a different one.
+ * Panels are flex columns: the title bar is fixed, the body scrolls inside it.
+ */
+const STREAM_PANEL_HEIGHT = "h-[320px]";
+
+const StreamDecisionTable = memo(function StreamDecisionTable({
+  title,
+  rows,
+  emptyMessage,
+  onDismissTicker,
+  onDismissAll,
+  onTickerClick,
+}: {
+  title: string;
+  rows: StreamDecisionTableRow[];
+  emptyMessage: string;
+  onDismissTicker?: (ticker: string) => void;
+  onDismissAll?: () => void;
+  onTickerClick?: (ticker: string) => void;
+}) {
+  const useVirtualRows = rows.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
+  const hasDismiss = !!onDismissTicker;
+  const gridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: hasDismiss
+      ? "minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,1.15fr) 36px"
+      : "minmax(0,1fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(0,0.9fr) minmax(0,0.95fr) minmax(0,1fr) minmax(0,1.15fr)",
+  };
+
+  return (
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          {title}
+        </div>
+        <div className="flex items-center gap-2">
+          {onDismissAll && rows.length > 0 && (
+            <button
+              onClick={onDismissAll}
+              className="rounded px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors border border-white/10"
+            >
+              Reset All
+            </button>
+          )}
+          <div className="text-[10px] font-mono uppercase text-zinc-500">
+            {intn(rows.length)}
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div>
+          <div
+            className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap"
+            style={gridStyle}
+          >
+            <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+            <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
+            <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
+            <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
+            <div className="px-2 py-2.5 text-left text-pink-400/80">REP</div>
+            <div className="px-2 py-2.5 text-right text-zinc-300">Entryσ</div>
+            <div className="px-2 py-2.5 text-right text-zinc-300">Baseσ</div>
+            <div className="px-2 py-2.5 text-right text-sky-300/80">Confσ</div>
+            <div className="px-2 py-2.5 text-right text-amber-300/80">NextAddσ</div>
+            <div className="px-2 py-2.5 text-left text-emerald-300/80">Add</div>
+            <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
+            {hasDismiss && <div className="p-2.5" />}
+          </div>
+
+          {!rows.length ? (
+            <div className="p-8 text-center text-xs font-mono text-zinc-500">
+              {emptyMessage}
+            </div>
+          ) : useVirtualRows ? (
+            <div className="h-[248px]">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    rowComponent={StreamDecisionVirtualRow}
+                    rowCount={rows.length}
+                    rowHeight={STREAM_DECISION_ROW_HEIGHT}
+                    rowProps={{ rows, onTickerClick }}
+                    overscanCount={8}
+                    style={{ width, height }}
+                  />
+                )}
+              </AutoSizer>
+            </div>
+          ) : (
+            <div className="text-xs font-mono">
+              {rows.map((row, i) => (
+                <div
+                  key={`${title}|${row.ticker}|${i}`}
+                  onClick={() => onTickerClick?.(row.ticker)}
+                  className={clsx(
+                    "items-center border-t border-white/5 transition-colors [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap",
+                    i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                    onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+                  )}
+                  style={gridStyle}
+                >
+                  <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                  <div className="px-2 py-2.5 text-zinc-400">{row.benchmark}</div>
+                  <div className="px-2 py-2.5"><SideBadge side={row.side} /></div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                  <div className="px-2 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{num(row.entrySignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{num(row.addBaseSignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-sky-200">{num(row.confirmedAddSignal, 2)}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-amber-200">{num(row.nextAddTrigger, 2)}</div>
+                  <div className="px-2 py-2.5 text-[10px] uppercase tracking-wide text-zinc-300">{row.addState ?? "-"}</div>
+                  <div className="px-2 py-2.5"><StreamStatusBadge status={row.status} /></div>
+                  {hasDismiss && (
+                    <div className="flex items-center justify-center px-1">
+                      <button
+                        onClick={() => onDismissTicker!(row.ticker)}
+                        className="rounded p-1 text-zinc-500 hover:text-zinc-200 hover:bg-white/10 transition-colors leading-none"
+                        title={`Reset ${row.ticker}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
+  title,
+  rowIds,
+  emptyMessage,
+  onTickerClick,
+}: {
+  title: string;
+  rowIds: string[];
+  emptyMessage: string;
+  onTickerClick?: (ticker: string) => void;
+}) {
+  const deferredRowIds = useDeferredValue(rowIds);
+  const decisionStore = useStreamStores().decision;
+  const useVirtualRows = deferredRowIds.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
+
+  return (
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          {title}
+        </div>
+        <div className="text-[10px] font-mono uppercase text-zinc-500">
+          {intn(deferredRowIds.length)}
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div>
+          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
+            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
+            <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
+            <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
+            <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
+            <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
+            <div className="px-2 py-2.5 text-left text-pink-400/80">REP</div>
+            <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
+          </div>
+
+          {!deferredRowIds.length ? (
+            <div className="p-8 text-center text-xs font-mono text-zinc-500">
+              {emptyMessage}
+            </div>
+          ) : useVirtualRows ? (
+            <div className="h-[248px]">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    rowComponent={StreamDecisionStoreVirtualRow}
+                    rowCount={deferredRowIds.length}
+                    rowHeight={STREAM_DECISION_ROW_HEIGHT}
+                    rowProps={{ rowIds: deferredRowIds, onTickerClick }}
+                    overscanCount={8}
+                    style={{ width, height }}
+                  />
+                )}
+              </AutoSizer>
+            </div>
+          ) : (
+            <div className="text-xs font-mono">
+              {deferredRowIds.map((id, i) => {
+                const row = decisionStore.getRow(id);
+                if (!row) return null;
+                return (
+                  <div
+                    key={`${title}|${row.ticker}|${i}`}
+                    onClick={() => onTickerClick?.(row.ticker)}
+                    className={clsx(
+                      "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center border-t border-white/5 transition-colors",
+                      i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                      onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+                    )}
+                  >
+                    <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                    <div className="px-2 py-2.5 text-zinc-400">{row.benchmark}</div>
+                    <div className="px-2 py-2.5"><SideBadge side={row.side} /></div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
+                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
+                    <div className="px-2 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
+                    <div className="px-2 py-2.5"><StreamStatusBadge status={row.status} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+function fmtDuration(ms: number | null | undefined): string {
+  if (ms == null || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+function actionLogLabel(row: StreamActionLogEntry): string {
+  if (row.kind === "ADD") {
+    const n = row.sequence != null ? row.sequence - 1 : "?";
+    return `ADD #${n}`;
+  }
+  if (row.kind === "CLOSE") {
+    const adds = row.entryCount != null && row.entryCount > 1 ? `×${row.entryCount}` : "";
+    return adds ? `CLOSE${adds}` : "CLOSE";
+  }
+  return "ENTRY";
+}
+
+function actionLogTxtRow(row: StreamActionLogEntry): string {
+  const sinceOrHold = row.kind === "ADD"
+    ? (row.sinceLastMs != null ? fmtDuration(row.sinceLastMs) + (row.delayRequiredMs != null ? `/req ${Math.floor(row.delayRequiredMs / 60_000)}m` : "") : "—")
+    : row.kind === "CLOSE"
+      ? (row.holdMs != null ? `held ${fmtDuration(row.holdMs)}` : "—")
+      : "—";
+  const threshold = row.kind === "ADD" && row.addThreshold != null ? `${row.addThreshold.toFixed(3)}σ` : "—";
+  return [
+    formatActionLogTime(row.at).padEnd(10),
+    row.ticker.padEnd(8),
+    row.benchmark.padEnd(6),
+    row.side.padEnd(6),
+    actionLogLabel(row).padEnd(9),
+    (row.deviation != null ? row.deviation.toFixed(4) : "—").padEnd(10),
+    sinceOrHold.padEnd(14),
+    threshold.padEnd(10),
+    (row.filtersOk ?? "—").slice(0, 30).padEnd(32),
+    row.reason ?? "—",
+  ].join(" | ");
+}
+
+const StreamActionLogTable = memo(function StreamActionLogTable({ rows, onTickerClick }: { rows: StreamActionLogEntry[]; onTickerClick?: (ticker: string) => void }) {
+  const structuredLogEntries = useStreamLogEntries();
+  const logStore = useStreamStores().log;
+
+  const handleDownloadCsv = () => {
+    const entries = logStore.getEntries();
+    if (entries.length === 0) return;
+    downloadStreamLog(entries);
+  };
+
+  const handleDownload = () => {
+    const latestCtx = structuredLogEntries[0] ?? null;
+    const ctxLine = latestCtx
+      ? `CTX: session=${latestCtx.session ?? "-"} | ruleBand=${latestCtx.ruleBand ?? "-"} | signalClass=${latestCtx.signalClass ?? "-"} | ratingMode=${latestCtx.ratingMode ?? "-"} | ratingType=${latestCtx.ratingType ?? "-"}`
+      : null;
+    const header = ["Time".padEnd(10), "Ticker".padEnd(8), "Bench".padEnd(6), "Side".padEnd(6), "Action".padEnd(9), "σ".padEnd(10), "Since/Hold".padEnd(14), "Threshold".padEnd(10), "Filters".padEnd(32), "Reason"].join(" | ");
+    const lines: string[] = [
+      "=== STREAM ORDER LOG ===",
+      `Generated: ${new Date().toLocaleString("en-US", { hour12: false })}`,
+      `Total entries: ${rows.length}`,
+      ...(ctxLine ? [ctxLine] : []),
+      "",
+      header,
+      "-".repeat(130),
+      ...rows.map(actionLogTxtRow),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `stream-log-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          Order Log
+        </div>
+        <div className="flex items-center gap-2">
+          {structuredLogEntries.length > 0 && (
+            <button
+              onClick={handleDownloadCsv}
+              className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-sky-400/80 hover:bg-white/10 hover:text-sky-200 transition-colors"
+              title="Download detailed CSV log (sigma, zap%, hold time, filters)"
+            >
+              CSV
+            </button>
+          )}
+          {rows.length > 0 && (
+            <button
+              onClick={handleDownload}
+              className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-widest text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition-colors"
+              title="Download log as text file"
+            >
+              TXT
+            </button>
+          )}
+          <div className="text-[10px] font-mono uppercase text-zinc-500">
+            {intn(rows.length)}
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full table-fixed text-xs font-mono">
+          <thead className="sticky top-0 z-10 bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            <tr>
+              <th className="w-[9%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-zinc-400">Time</th>
+              <th className="w-[8%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-zinc-200">Ticker</th>
+              <th className="w-[7%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-sky-300/70">Bench</th>
+              <th className="w-[8%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-violet-300/80">Side</th>
+              <th className="w-[10%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-emerald-300/80">Action</th>
+              <th className="w-[9%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-violet-300">σ</th>
+              <th className="w-[11%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-teal-300/80">Since / Hold</th>
+              <th className="w-[10%] text-right px-2 py-2.5 whitespace-nowrap font-normal text-sky-400/80">Threshold</th>
+              <th className="w-[13%] text-left px-2 py-2.5 whitespace-nowrap font-normal text-amber-400/80">Filters</th>
+              <th className="text-left px-2 py-2.5 font-normal text-zinc-400">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const isAdd = row.kind === "ADD";
+              const isClose = row.kind === "CLOSE";
+              const addNum = isAdd && row.sequence != null ? row.sequence - 1 : null;
+              const hasDelay = isAdd && (row.delayRequiredMs ?? 0) > 0;
+              const delayOk = !hasDelay || (row.sinceLastMs != null && row.sinceLastMs >= (row.delayRequiredMs ?? 0));
+              const sinceCell = isAdd
+                ? (() => {
+                    if (row.sinceLastMs == null) return { text: "—", sub: "", cls: "text-zinc-600" };
+                    const elapsed = fmtDuration(row.sinceLastMs);
+                    const reqMin = row.delayRequiredMs != null ? Math.floor(row.delayRequiredMs / 60_000) : 0;
+                    const sub = reqMin > 0 ? `req ${reqMin}m` : "no delay";
+                    const cls = reqMin === 0 ? "text-zinc-500" : delayOk ? "text-emerald-400" : "text-amber-400";
+                    return { text: elapsed, sub, cls };
+                  })()
+                : isClose
+                  ? { text: row.holdMs != null ? fmtDuration(row.holdMs) : "—", sub: "held", cls: "text-teal-400" }
+                  : { text: "—", sub: "", cls: "text-zinc-600" };
+              return (
+                <tr
+                  key={row.id}
+                  onClick={() => onTickerClick?.(row.ticker)}
+                  className={clsx(
+                    "transition-colors",
+                    i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                    onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+                  )}
+                >
+                  <td className="px-2 py-2.5 text-zinc-500 whitespace-nowrap tabular-nums">{formatActionLogTime(row.at)}</td>
+                  <td className="px-2 py-2.5 text-zinc-100 font-semibold whitespace-nowrap">{row.ticker}</td>
+                  <td className="px-2 py-2.5 text-zinc-500 whitespace-nowrap">{row.benchmark}</td>
+                  <td className="px-2 py-2.5 whitespace-nowrap"><SideBadge side={row.side} /></td>
+                  <td className="px-2 py-2.5 whitespace-nowrap">
+                    <span className={clsx(
+                      "inline-flex rounded-md px-2 py-0.5 text-[10px] font-mono font-bold uppercase border tracking-wide",
+                      isClose
+                        ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                        : isAdd
+                          ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+                          : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                    )}>
+                      {isAdd && addNum != null ? `ADD #${addNum}` : isClose && row.entryCount != null && row.entryCount > 1 ? `CLOSE ×${row.entryCount}` : row.kind}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2.5 text-right tabular-nums text-violet-300 whitespace-nowrap">{num(row.deviation, 4)}</td>
+                  <td className="px-2 py-2.5 text-right whitespace-nowrap tabular-nums">
+                    {sinceCell.text !== "—" ? (
+                      <span className="flex flex-col items-end leading-tight gap-px">
+                        <span className={sinceCell.cls}>{sinceCell.text}</span>
+                        {sinceCell.sub ? <span className="text-[9px] text-zinc-600">{sinceCell.sub}</span> : null}
+                      </span>
+                    ) : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className="px-2 py-2.5 text-right tabular-nums text-sky-400 whitespace-nowrap">
+                    {isAdd && row.addThreshold != null ? `${row.addThreshold.toFixed(3)}σ` : <span className="text-zinc-700">—</span>}
+                  </td>
+                  <td className="px-2 py-2.5 text-amber-600/80 max-w-[200px] truncate text-[10px]" title={row.filtersOk}>{row.filtersOk || <span className="text-zinc-700">—</span>}</td>
+                  <td className="px-2 py-2.5 text-zinc-500 w-full max-w-[200px] truncate" title={row.reason}>{row.reason ?? "—"}</td>
+                </tr>
+              );
+            })}
+            {!rows.length && (
+              <tr>
+                <td colSpan={10} className="p-8 text-center text-xs font-mono text-zinc-500">
+                  No STREAM actions recorded for today yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+});
+
+function SideBadge({ side }: { side: "Long" | "Short" }) {
+  const colorClass = side === "Long"
+    ? "bg-[#6ee7b7]/10 text-[#6ee7b7] border-[#6ee7b7]/20"
+    : "border-[rgba(243,166,178,0.22)] bg-[rgba(243,166,178,0.10)] text-[#f3a6b2]";
+
+  return (
+    <span className={clsx("px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold uppercase tracking-wider whitespace-nowrap", colorClass)}>
+      {side}
+    </span>
+  );
+}
+
+function StreamStatusBadge({ status }: { status: StreamDecisionRow["status"] | "PENDING_ENTRY" | "OPEN" | "EXIT_BLOCKED" | "CLOSED" | "PRINT_PENDING" }) {
+  const isGreenStatus = status === "ENTRY_READY" || status === "OPEN";
+  const className =
+    isGreenStatus
+      ? ""
+      : status === "PENDING_ENTRY"
+        ? "border-white/10 bg-white/[0.04] text-zinc-400"
+      : status === "BLOCKED_SPREAD"
+        ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+        : status === "BLOCKED_EDGE"
+          ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+        : status === "PRINT_PENDING"
+          ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+        : status === "EXIT_BLOCKED"
+          ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
+          : "border-white/10 bg-white/[0.04] text-zinc-300";
+
+  return (
+    <span
+      className={clsx("inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border", className)}
+      style={isGreenStatus ? {
+        color: STREAM_READY_GREEN,
+        backgroundColor: STREAM_READY_GREEN_SOFT,
+        borderColor: STREAM_READY_GREEN_BORDER,
+      } : undefined}
+    >
+      {status.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+const STREAM_ICON_BUTTON =
+  "scanner-eye-button inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-zinc-300 transition-colors hover:bg-white/[0.08] group";
+
+function LockToggleIcon({ open, className }: { open: boolean; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {open ? (
+        <>
+          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+        </>
+      ) : (
+        <>
+          <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function fmt2(v: number | null | undefined): string {
+  return v == null ? "—" : v.toFixed(2);
+}
+function fmt3(v: number | null | undefined): string {
+  return v == null ? "—" : v.toFixed(3);
+}
+function fmtPct(v: number | null | undefined): string {
+  return v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+function fmtMs(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+function SimEventBadge({ event, betaMode }: { event: string; betaMode: boolean }) {
+  const base = "inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase tracking-wider";
+  const color =
+    event === "ENTRY" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
+    event === "ADD"   ? "bg-sky-500/20 text-sky-300 border border-sky-500/30" :
+    event === "EXIT" || event === "EXIT_PRINT" || event === "CLOSE_ALL" ?
+      "bg-rose-500/20 text-rose-300 border border-rose-500/30" :
+      "bg-zinc-500/20 text-zinc-400 border border-zinc-500/30";
+  return (
+    <span className={clsx(base, color)}>
+      {betaMode && <span className="mr-1 opacity-60">β</span>}
+      {event}
+    </span>
+  );
+}
+
+function computeStreamExitPnl(entries: ReturnType<typeof useStreamLogEntries>, exitEntry: ReturnType<typeof useStreamLogEntries>[number]): number | null {
+  const isLong = exitEntry.side === "Long";
+  const exitPricePct = isLong ? exitEntry.bidPct : exitEntry.askPct;
+  if (exitPricePct == null) return null;
+
+  let totalPnl = 0;
+  let foundAny = false;
+  const exitIdx = entries.indexOf(exitEntry);
+
+  for (let i = exitIdx - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.ticker !== exitEntry.ticker) continue;
+    if (e.event === "EXIT" || e.event === "EXIT_PRINT" || e.event === "CLOSE_ALL") break;
+    if ((e.event === "ENTRY" || e.event === "ADD") && e.notionalUsd != null) {
+      const entryPricePct = isLong ? e.askPct : e.bidPct;
+      if (entryPricePct == null) continue;
+      const entryFactor = 1 + entryPricePct / 100;
+      const exitFactor = 1 + exitPricePct / 100;
+      if (entryFactor <= 0 || exitFactor <= 0) continue;
+      const returnFrac = isLong ? exitFactor / entryFactor - 1 : entryFactor / exitFactor - 1;
+      totalPnl += e.notionalUsd * returnFrac;
+      foundAny = true;
+    }
+  }
+
+  return foundAny ? totalPnl : null;
+}
+
+export function StreamSimLog() {
+  const entries = useStreamLogEntries();
+  const reversed = useMemo(() => [...entries].reverse(), [entries]);
+
+  function fmtDate(ts: number): string {
+    const d = new Date(ts);
+    return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function buildDecisionContext(e: (typeof entries)[number]): string {
+    return [
+      `session=${e.session ?? "-"}`,
+      `band=${e.ruleBand ?? "-"}`,
+      `class=${e.signalClass ?? "-"}`,
+      `mode=${e.ratingMode ?? "-"}`,
+      `type=${e.ratingType ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildGateContext(e: (typeof entries)[number], tickPct: number | null, benchPct: number | null): string {
+    return [
+      `tick=${fmtPct(tickPct)}`,
+      `bench=${fmtPct(benchPct)}`,
+      `edge=${e.netEdge != null ? e.netEdge.toFixed(3) : "-"}`,
+      `spread=${e.spread != null ? e.spread.toFixed(3) : "-"}`,
+      `hold>=${e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "-"}`,
+      `qualified=${e.qualifiedAtStr ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildScaleContext(e: (typeof entries)[number]): string {
+    return [
+      `seq=${e.sequence}`,
+      `entryσ=${fmt2(e.entrySignal)}`,
+      `add@=${fmt2(e.addThreshold)}`,
+      `step=${fmt2(e.dilutionStep)}`,
+      `max=${e.maxAdds ?? "-"}`,
+    ].join(" | ");
+  }
+
+  function buildExecContext(e: (typeof entries)[number]): string {
+    return [
+      `exit=${e.exitMode}`,
+      `hedge=${e.hedgeMode}`,
+      `scale=${e.scaleMode}`,
+      `usd=${e.notionalUsd != null ? e.notionalUsd.toFixed(0) : "-"}`,
+      `beta=${e.betaMode ? "on" : "off"}`,
+    ].join(" | ");
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Simulation Log</span>
+          <span className="text-[10px] font-mono text-zinc-600">{entries.length} entries</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => downloadStreamLog(entries)}
+          className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+        >
+          ↓ CSV
+        </button>
+      </div>
+
+      <style jsx global>{`
+        .stream-log-table th, .stream-log-table td { padding: 3px 5px !important; }
+      `}</style>
+      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <table className="stream-log-table min-w-[2280px] w-full text-[10px] font-mono">
+          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/80 text-zinc-500 backdrop-blur-xl">
+            <tr>
+              <th className="text-left text-violet-400">Date</th>
+              <th className="text-left">Time</th>
+              <th className="text-left text-orange-400" title="Unique intent ID — same ID twice = duplication bug">IntentID</th>
+              <th className="text-right text-rose-400" title="Signal drop/recovery (ремонт) count before dispatch">Bnc</th>
+              <th className="text-left text-zinc-500" title="Latch origin: new/hist/primed/cont">Orig</th>
+              <th className="text-left">Event</th>
+              <th className="text-left text-amber-300" title="Hedge leg">Hdg</th>
+              <th className="text-left">Ticker</th>
+              <th className="text-left">Bench</th>
+              <th className="text-left">Side</th>
+              <th className="text-left text-cyan-300">DecisionCtx</th>
+              <th className="text-right text-violet-400">σZap</th>
+              <th className="text-right text-violet-300">ZAPL</th>
+              <th className="text-right text-violet-300">ZAPS</th>
+              <th className="text-right text-rose-300" title="Opposite-side σ at EXIT — cover trigger value">ExitσAbs</th>
+              <th className="text-right">Tick%</th>
+              <th className="text-right">Bench%</th>
+              <th className="text-right text-sky-400">Corr</th>
+              <th className="text-right text-sky-400">Beta</th>
+              <th className="text-right text-sky-300">σHist</th>
+              <th className="text-right text-amber-400">Rating</th>
+              <th className="text-right text-amber-300">Total</th>
+              <th className="text-right">Hold</th>
+              <th className="text-right">MinHold</th>
+              <th className="text-left text-sky-300">GateCtx</th>
+              <th className="text-left text-fuchsia-300">ScaleCtx</th>
+              <th className="text-left text-emerald-300">ExecCtx</th>
+              <th className="text-left">Filters</th>
+              <th className="text-left">Reason</th>
+              <th className="text-right text-emerald-400">P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reversed.map((e) => {
+              const isBeta = e.betaMode;
+              const isFailed = e.status === "FAILED";
+              const isExit = e.event === "EXIT" || e.event === "EXIT_PRINT" || e.event === "CLOSE_ALL";
+              const rowCls = clsx(
+                "border-t border-white/[0.04] transition-colors hover:bg-white/[0.025]",
+                isBeta && "opacity-80",
+                isFailed && "opacity-40 line-through"
+              );
+              const tickPct = e.side === "Long" ? e.askPct : e.bidPct;
+              const benchPct = e.side === "Long" ? e.benchAskPct : e.benchBidPct;
+              const pnl = isExit ? computeStreamExitPnl(entries, e) : null;
+              const decisionCtx = buildDecisionContext(e);
+              const gateCtx = buildGateContext(e, tickPct, benchPct);
+              const scaleCtx = buildScaleContext(e);
+              const execCtx = buildExecContext(e);
+              const intentIdShort = e.intentId ? e.intentId.slice(-8) : "—";
+              const bounces = e.latchBounces ?? 0;
+              return (
+                <tr key={e.seq} className={rowCls}>
+                  <td className="text-zinc-600 whitespace-nowrap">{fmtDate(e.ts)}</td>
+                  <td className="text-zinc-500 whitespace-nowrap">{e.timeStr}</td>
+                  <td className="text-orange-300/80 whitespace-nowrap font-mono text-[9px]" title={e.intentId ?? ""}>{intentIdShort}</td>
+                  <td className={clsx("text-right tabular-nums font-semibold", bounces > 0 ? "text-rose-400" : "text-zinc-700")}>{bounces > 0 ? bounces : "·"}</td>
+                  <td className={clsx("text-[9px]", e.latchOrigin === "hist" ? "text-amber-400" : e.latchOrigin === "primed" ? "text-sky-400" : "text-zinc-600")}>{e.latchOrigin ?? "—"}</td>
+                  <td><SimEventBadge event={e.event} betaMode={isBeta} /></td>
+                  <td className="text-center">{e.isHedge ? <span className="text-amber-400 text-[9px] font-bold">H</span> : <span className="text-zinc-700">·</span>}</td>
+                  <td className="text-zinc-100 font-semibold">{e.ticker}</td>
+                  <td className="text-zinc-400">{e.benchmark}</td>
+                  <td><SideBadge side={e.side} /></td>
+                  <td className="text-cyan-200 max-w-[220px] truncate" title={decisionCtx}>{decisionCtx}</td>
+                  <td className="text-right tabular-nums text-violet-300">{fmt2(e.sigmaZap)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapLsigma)}</td>
+                  <td className="text-right tabular-nums text-violet-200">{fmt2(e.zapSsigma)}</td>
+                  <td className={clsx("text-right tabular-nums", isExit && e.exitSigmaAbs != null ? "text-rose-300 font-semibold" : "text-zinc-700")}>{isExit && e.exitSigmaAbs != null ? e.exitSigmaAbs.toFixed(2) : "·"}</td>
+                  <td className={clsx("text-right tabular-nums", tickPct != null && tickPct < 0 ? "text-rose-300" : "text-emerald-300")}>{fmtPct(tickPct)}</td>
+                  <td className={clsx("text-right tabular-nums", benchPct != null && benchPct < 0 ? "text-rose-200" : "text-emerald-200")}>{fmtPct(benchPct)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{fmt2(e.corr)}</td>
+                  <td className="text-right tabular-nums text-sky-300">{fmt2(e.beta)}</td>
+                  <td className="text-right tabular-nums text-sky-200">{fmt2(e.stockSigma)}</td>
+                  <td className="text-right tabular-nums text-amber-300">{e.rating != null ? e.rating.toFixed(1) : "—"}</td>
+                  <td className="text-right tabular-nums text-amber-200">{e.ratingTotal ?? "—"}</td>
+                  <td className="text-right tabular-nums text-zinc-400">{fmtMs(e.holdMs)}</td>
+                  <td className="text-right tabular-nums text-zinc-500">{e.minHoldMinutes != null ? `${e.minHoldMinutes}m` : "—"}</td>
+                  <td className="text-sky-200 max-w-[220px] truncate" title={gateCtx}>{gateCtx}</td>
+                  <td className="text-fuchsia-200 max-w-[220px] truncate" title={scaleCtx}>{scaleCtx}</td>
+                  <td className="text-emerald-200 max-w-[220px] truncate" title={execCtx}>{execCtx}</td>
+                  <td className="text-zinc-500 max-w-[160px] truncate">{e.filtersOk || "—"}</td>
+                  <td className="text-zinc-500 max-w-[180px] truncate">{e.reason}</td>
+                  <td className={clsx(
+                    "px-2.5 py-1.5 text-right tabular-nums font-semibold",
+                    pnl != null && pnl > 0 ? "text-emerald-300" : pnl != null && pnl < 0 ? "text-rose-300" : "text-zinc-600"
+                  )}>
+                    {pnl != null ? (pnl >= 0 ? "+" : "") + pnl.toFixed(0) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+            {!entries.length && (
+              <tr>
+                <td colSpan={30} className="px-4 py-10 text-center text-zinc-600">
+                  No entries yet. Enable AUTO (or BETA mode) and let STREAM run.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** Default slot. Day Two renders this same view and passes its own — see activeTickerStrategy. */
+const ACTIVE_TICKER_STRATEGY = "opendoor" as const;
+
+export default function OpenDoorStreamView({
+  activeTickerStrategy = ACTIVE_TICKER_STRATEGY,
+  tab,
+  streamSignalsCount,
+  streamAutoEnabled,
+  streamSessionStartedAt,
+  streamSessionStoppedAt,
+  streamSentOrdersCount,
+  onSetAutoEnabled,
+  manualExecutionBusy,
+  onSubmitManualOrders,
+  onCaptureTickerPoint,
+  onCaptureTickerPointDelayed,
+  onClearTickerPoint,
+  onTogglePanicOff,
+  onStartAutomation,
+  onStopAutomation,
+  onClearExecutionQueue,
+  onResetAutomationState,
+  onDismissActivePositions,
+  onForceRefresh,
+  listModeLabel,
+  automationConfig,
+  onAutomationConfigChange,
+  accentActiveSoftClass,
+  accentActiveTextClass,
+  viewMode = "stream",
+  automationLaunchEnabled = true,
+  entryCutoffActive = true,
+  hideAutomationButtons = false,
+}: ArbitrageStreamViewProps) {
+  const [manualTickers, setManualTickers] = useState("");
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [automationStartLocked, setAutomationStartLocked] = useState(false);
+  const streamUpdatedAt = useStreamUpdatedAt();
+  const updatedLabel = streamUpdatedAt ? new Date(streamUpdatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
+  const streamActionLog = useStreamActionLogRows();
+  const streamOrderIntents = useStreamOrderIntentRows();
+  const streamOrderIntentMeta = useStreamOrderIntentMeta();
+  const executionSnapshot = useStreamExecutionSnapshot();
+  const streamPositions = useStreamPositionRows();
+  const activeDecisionRows = useStreamActiveDecisionRows();
+  // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
+  const activeSelection = useActiveTickerSelection(activeTickerStrategy);
+  // Clicking a row anywhere on this page makes that ticker active, the way clicking a row in
+  // Arbitrage Sonar does. The tables get a callback rather than the strategy key: they have no
+  // business knowing which strategy they belong to.
+  const onTickerClick = useCallback(
+    (ticker: string) => setActiveTicker(activeTickerStrategy, ticker),
+    []
+  );
+  const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
+  const activeStreamRow = useMemo(
+    () => activeDecisionRows.find((row) => row.ticker === activeSelection.ticker) ?? null,
+    [activeDecisionRows, activeSelection.ticker]
+  );
+  const activeCardStats = useMemo(() => {
+    const f = activeSnapshot.fields ?? {};
+    const pick = (key: string) => {
+      const v = (f as any)[key];
+      return v == null || String(v).trim() === "" ? "-" : String(v);
+    };
+    return [
+      { label: "Exchange", value: pick("Exchange") },
+      { label: "Bench", value: activeStreamRow?.benchmark ?? pick("Bench") },
+      { label: "Beta", value: pick("Beta") },
+      { label: "Sig", value: activeStreamRow?.signal != null ? activeStreamRow.signal.toFixed(2) : pick("Sig") },
+      { label: "Side", value: activeStreamRow?.side ?? "-" },
+      { label: "Status", value: activeStreamRow?.status ?? "-", accent: true },
+      { label: "Spread", value: activeStreamRow?.spread != null ? activeStreamRow.spread.toFixed(2) : pick("SpreadBid%") },
+      { label: "Report", value: activeStreamRow?.report ?? "-" },
+    ];
+  }, [activeSnapshot.fields, activeStreamRow]);
+
+  const streamPositionMeta = useStreamPositionMeta();
+  const bookSnapshotState = useStreamBookSnapshotState();
+  const mainWindowSnapshotState = useStreamMainWindowSnapshotState();
+  const bookSnapshot = bookSnapshotState.snapshot;
+  const mainWindowSnapshot = mainWindowSnapshotState.snapshot;
+  const queuedIntentsCount = streamOrderIntentMeta.queuedCount;
+  const boundWindow = executionSnapshot?.boundWindow ?? null;
+  const executionQueueCount = executionSnapshot?.queue?.length ?? 0;
+  const executionCurrent = executionSnapshot?.current ?? null;
+  const panicOff = executionSnapshot?.panicOff ?? false;
+  // Both windows must be bound before anything can be sent: the order window takes the hotkeys,
+  // the main window is what the P&L panel reads. Either one missing means no orders leave.
+  const windowsBound = Boolean(executionSnapshot?.boundWindow?.isBound && executionSnapshot?.mainWindow?.isBound);
+  const tickerPoint = boundWindow?.tickerPoint ?? null;
+  const delayRangeLabel = automationConfig.queueDelayMinSeconds > 0 || automationConfig.queueDelayMaxSeconds > 0
+    ? `${num(automationConfig.queueDelayMinSeconds, 0)}-${num(automationConfig.queueDelayMaxSeconds, 0)}s`
+    : "OFF";
+  const bestBid = bookSnapshot?.bestBid ?? null;
+  const bestAsk = bookSnapshot?.bestAsk ?? null;
+  const bookSpread = bestBid != null && bestAsk != null ? Math.max(0, bestAsk - bestBid) : null;
+  const topBid = bookSnapshot?.bidLevels?.[0] ?? null;
+  const topAsk = bookSnapshot?.askLevels?.[0] ?? null;
+  const strategyModeEnabled = automationConfig.strategyModeEnabled;
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const startCutoffMinutes = timeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  const entryWindowClosed = entryCutoffActive && nowMinutes >= startCutoffMinutes;
+  const isAutoView = viewMode === "auto";
+  const isStreamAutoTab = viewMode === "stream-auto-tab";
+  const showAutomationWorkspace = isAutoView || (isStreamAutoTab && (tab === "analytics" || tab === "episodes"));
+  const automationRunning = streamAutoEnabled && strategyModeEnabled && !panicOff;
+  const automationControlAllowed = automationLaunchEnabled && showAutomationWorkspace;
+  const decisionStore = useStreamStores().decision;
+  const streamDecisionIds = useStreamDecisionIds();
+  const streamDecisionVersion = useStreamDecisionVersion();
+  const streamDecisionRowsSnapshot = useMemo(
+    () => streamDecisionIds
+      .map((id) => decisionStore.getRow(id))
+      .filter((row): row is NonNullable<typeof row> => row !== null),
+    [streamDecisionIds, streamDecisionVersion]
+  );
+  const activeTickers = useMemo(
+    () => new Set(activeDecisionRows.map((row) => row.ticker)),
+    [activeDecisionRows]
+  );
+  const activeTableRows = useMemo(() => {
+    const nowMs = Date.now();
+    const positionByTicker = new Map(streamPositions.map((row) => [row.ticker, row]));
+    return activeDecisionRows.map((row) => {
+      const position = positionByTicker.get(row.ticker);
+      return {
+        ...row,
+        entrySignal: position?.entrySignal ?? null,
+        addBaseSignal: position?.lastScaleSignal ?? position?.entrySignal ?? null,
+        confirmedAddSignal: position?.confirmedAddSigned ?? null,
+        nextAddTrigger: nextAddTriggerForPosition(position, automationConfig),
+        addState: addStateForPosition(position, row, automationConfig, nowMs),
+      };
+    });
+  }, [activeDecisionRows, automationConfig, streamPositions]);
+  const signalDecisionIds = useMemo(
+    () => streamDecisionIds.filter((id) => !activeTickers.has(id)),
+    [activeTickers, streamDecisionIds]
+  );
+  const entryReadyCount = useMemo(
+    () => signalDecisionIds.reduce((count, id) => {
+      return decisionStore.getRow(id)?.status === "ENTRY_READY" ? count + 1 : count;
+    }, 0),
+    [streamDecisionVersion, signalDecisionIds]
+  );
+  const openCount = streamPositionMeta.openCount;
+  // Split of the same open set, so OPEN LONG + OPEN SHORT always equals OPEN POSITIONS.
+  const openLongCount = streamPositionMeta.openLongCount;
+  const openShortCount = streamPositionMeta.openShortCount;
+
+  /**
+   * The two position states that are neither counted as open nor finished, and today's actions
+   * broken out by kind. All derived from state already on screen — nothing new is fetched.
+   *
+   * PENDING ENTRY is the gap between SENT ORDERS and OPEN POSITIONS: the order went out and the
+   * fill has not come back. A number that sits there is the first sign the desk is not filling.
+   */
+  const positionPhaseCounts = useMemo(() => ({
+    pendingEntry: streamPositions.filter((p) => p.status === "PENDING_ENTRY").length,
+    printPending: streamPositions.filter((p) => p.status === "PRINT_PENDING").length,
+  }), [streamPositions]);
+
+  const actionLogCounts = useMemo(() => ({
+    entries: streamActionLog.filter((r) => r.kind === "ENTRY").length,
+    adds: streamActionLog.filter((r) => r.kind === "ADD").length,
+    exits: streamActionLog.filter((r) => r.kind === "CLOSE").length,
+  }), [streamActionLog]);
+  const maxOpenPositions = Math.max(1, automationConfig.maxOpenPositions ?? 1);
+  const openCapReached = openCount >= maxOpenPositions;
+  const entryCapBlockingNewOrders =
+    automationRunning &&
+    openCapReached &&
+    entryReadyCount > 0 &&
+    queuedIntentsCount === 0;
+  // See ArbitrageStreamView's own copy of this block for why it exists: cutoff is the one
+  // dispatch-blocking reason this panel had no counter or banner for.
+  const cutoffMinutesNow = parseTimeToMinutes(automationConfig.startCutoffTime, 9 * 60 + 20);
+  const sessionStartMinutesNow = automationConfig.preStartTime
+    ? parseTimeToMinutes(automationConfig.preStartTime, 0)
+    : null;
+  const pastCutoffNow = isPastSessionCutoff(currentMinutesLocal(), cutoffMinutesNow, sessionStartMinutesNow);
+  const cutoffBlockingNewOrders =
+    automationRunning &&
+    pastCutoffNow &&
+    entryReadyCount > 0 &&
+    queuedIntentsCount === 0;
+  const exitBlockedCount = streamPositionMeta.exitBlockedCount;
+  const closedCount = streamPositionMeta.closedCount;
+  const blockedEdgeCount = useMemo(
+    () => signalDecisionIds.reduce((count, id) => {
+      return decisionStore.getRow(id)?.status === "BLOCKED_EDGE" ? count + 1 : count;
+    }, 0),
+    [streamDecisionVersion, signalDecisionIds]
+  );
+  const runtimeLabel = useMemo(
+    () => formatRuntime(streamSessionStartedAt, streamSessionStoppedAt),
+    [streamSessionStartedAt, streamSessionStoppedAt, updatedLabel]
+  );
+
+  const setAutomationRunning = async (nextRunning: boolean) => {
+    if (!automationControlAllowed) return;
+    if (automationStartLocked && nextRunning) return;
+    if (nextRunning === automationRunning) return;
+
+    if (!nextRunning) {
+      try {
+        // Per-strategy stop, not panic-off. panic-off belongs to the SHARED queue: raising it
+        // here stopped every strategy on the machine, and since each engine's autoEnabled
+        // includes `!panicOff`, the others went silent while still mounted and connected.
+        if (onStopAutomation) await onStopAutomation();
+        else await onTogglePanicOff(true);
+      } finally {
+        try {
+          // This strategy's pending orders only — the queue is shared.
+          await onClearExecutionQueue({ thisStrategyOnly: true });
+        } catch {
+          // queue cleanup is best-effort; local stop still must happen
+        }
+        if (strategyModeEnabled) {
+          onAutomationConfigChange({ strategyModeEnabled: false });
+        }
+        if (streamAutoEnabled) {
+          onSetAutoEnabled(false);
+        }
+        onResetAutomationState();
+      }
+      return;
+    }
+
+    onResetAutomationState();
+    if (onStartAutomation) {
+      await onStartAutomation();
+    } else {
+      await onTogglePanicOff(false);
+    }
+    if (!strategyModeEnabled) {
+      onAutomationConfigChange({ strategyModeEnabled: true });
+    }
+    if (!streamAutoEnabled) {
+      onSetAutoEnabled(true);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await onForceRefresh();
+  };
+
+  const toggleAutomationRun = async () => {
+    await setAutomationRunning(!automationRunning);
+  };
+
+  const submitManual = async (action: StreamManualOrderAction) => {
+    try {
+      setManualError(null);
+      await onSubmitManualOrders(manualTickers, action);
+    } catch (error: any) {
+      setManualError(error?.message ?? String(error));
+    }
+  };
+
+  if (tab === "analytics" || (isStreamAutoTab && tab === "episodes")) {
+    if (showAutomationWorkspace) {
+      return (
+        <div className="space-y-3">
+          {!hideAutomationButtons && (
+            <div className="flex items-center gap-2">
+              {automationControlAllowed ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAutomationStartLocked((prev) => !prev)}
+                    className={STREAM_ICON_BUTTON}
+                    title={automationStartLocked ? "Unlock auto start" : "Lock auto start"}
+                    aria-label={automationStartLocked ? "Unlock auto start" : "Lock auto start"}
+                  >
+                    <LockToggleIcon
+                      open={automationStartLocked}
+                      className="text-zinc-300 group-hover:text-white transition-colors"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void toggleAutomationRun()}
+                    disabled={automationStartLocked && !automationRunning}
+                    className={clsx(
+                      "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                      automationRunning
+                        ? "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                        : accentActiveSoftClass,
+                      automationStartLocked && !automationRunning && "cursor-not-allowed opacity-40"
+                    )}
+                  >
+                    {automationRunning ? "STOP AUTO" : automationStartLocked ? "START LOCKED" : "START AUTO"}
+                  </button>
+                </>
+              ) : (
+                <span className="inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500">
+                  AUTO LOCKED
+                </span>
+              )}
+            </div>
+          )}
+          {entryCapBlockingNewOrders ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-amber-200">
+                Entry Cap Reached
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-amber-100/90">
+                AUTO is running, but new entries are paused because open positions reached the limit:
+                {" "}
+                {intn(openCount)}/{intn(maxOpenPositions)}.
+              </div>
+            </div>
+          ) : null}
+          {cutoffBlockingNewOrders ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+              <div className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-amber-200">
+                Past Cutoff — No New Entries
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-amber-100/90">
+                AUTO is running and {intn(entryReadyCount)} signal{entryReadyCount === 1 ? " is" : "s are"} ENTRY
+                READY, but CUTOFF ({automationConfig.startCutoffTime}) has passed — no new positions open until
+                START is re-armed. Existing positions still add and exit normally. Push CUTOFF later if you meant
+                to keep entering.
+              </div>
+            </div>
+          ) : null}
+          <MainWindowBookSplitCard
+            mainWindowBound={executionSnapshot?.mainWindow ?? null}
+            mainWindowSnapshot={mainWindowSnapshot}
+            executionMessage={executionCurrent?.message}
+            bookSnapshot={bookSnapshot}
+          />
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <div className={clsx("grid grid-cols-1 auto-rows-fr gap-3 sm:grid-cols-2 xl:grid-cols-4", STREAM_PANEL_HEIGHT)}>
+              {/* Four rows of three, grouped by what the numbers are ABOUT rather than by when they
+                  were added: an order's life, then the book, then the session, then what is stuck.
+                  Colour follows the same grouping — green/red for direction, amber/rose for the
+                  things that want attention, sky for what is in flight. */}
+
+              {/* 1 — the life of an order, left to right in the order it happens */}
+              <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+              <MetricCard label="SENT ORDERS" value={intn(streamSentOrdersCount)} valueClassName="text-sky-300" />
+              <MetricCard label="PENDING ENTRY" value={intn(positionPhaseCounts.pendingEntry)} valueClassName="text-amber-300" />
+              <MetricCard label="CLOSED" value={intn(closedCount)} valueClassName="text-teal-300" />
+
+              {/* 2 — the book */}
+              <MetricCard label="OPEN POSITIONS" value={intn(openCount)} valueClassName="text-violet-300" />
+              <MetricCard label="OPEN LONG" value={intn(openLongCount)} valueClassName="text-emerald-300" />
+              <MetricCard label="OPEN SHORT" value={intn(openShortCount)} valueClassName="text-rose-300" />
+              <MetricCard label="PRINT PENDING" value={intn(positionPhaseCounts.printPending)} valueClassName="text-indigo-300" />
+
+              {/* 3 — the session */}
+              <MetricCard label="RUN TIME" value={runtimeLabel} valueClassName="text-zinc-300" />
+              <MetricCard
+                label="OPEN CAP"
+                value={`${intn(openCount)}/${intn(maxOpenPositions)}`}
+                valueClassName={openCapReached ? "text-amber-200" : "text-zinc-300"}
+              />
+              <MetricCard label="LIST MODE" value={listModeLabel} valueClassName="text-indigo-300" />
+              <MetricCard label="SIGNALS" value={intn(streamSignalsCount)} valueClassName="text-sky-300" />
+
+              {/* 4 — what actually happened today, from the order log */}
+              <MetricCard label="ENTRIES" value={intn(actionLogCounts.entries)} valueClassName="text-emerald-300" />
+              <MetricCard label="ADDS" value={intn(actionLogCounts.adds)} valueClassName="text-sky-300" />
+              <MetricCard label="EXITS" value={intn(actionLogCounts.exits)} valueClassName="text-teal-300" />
+              <MetricCard label="EXEC QUEUE" value={intn(executionQueueCount)} valueClassName="text-violet-300" />
+
+              {/* 5 — what is not flowing */}
+              <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
+              <MetricCard label="BLOCKED EDGE" value={intn(blockedEdgeCount)} valueClassName="text-amber-200" />
+              <MetricCard label="EXIT BLOCKED" value={intn(exitBlockedCount)} valueClassName="text-rose-300" />
+              {/* Whether the bridge can reach TradingApp at all. It belongs in this row because an
+                  unbound terminal is the loudest possible "nothing is flowing": every other number
+                  here keeps counting normally while not one order can leave. */}
+              <MetricCard
+                label="TRADINGAPP"
+                value={panicOff ? "PANIC" : windowsBound ? "BOUND" : "NO WINDOW"}
+                valueClassName={panicOff ? "text-rose-300" : windowsBound ? "text-emerald-300" : "text-amber-200"}
+              />
+            </div>
+            <StreamActionLogTable rows={streamActionLog} onTickerClick={onTickerClick} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <StreamDecisionTable
+              title="ACTIVE"
+              rows={activeTableRows}
+              emptyMessage="No active STREAM situations yet."
+              onDismissTicker={onDismissActivePositions ? (ticker) => onDismissActivePositions([ticker]) : undefined}
+              onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
+              onTickerClick={onTickerClick}
+            />
+            <StreamSignalsDecisionTable
+              title="SIGNALS"
+              rowIds={signalDecisionIds}
+              emptyMessage="No filtered signals waiting in STREAM."
+              onTickerClick={onTickerClick}
+            />
+          </div>
+          <StreamSimLog />
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="FILTERED SIGNALS" value={intn(streamSignalsCount)} />
+        <MetricCard label="LIST MODE" value={listModeLabel} />
+        <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+        <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
+        <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
+        <MetricCard label="BOOK SPREAD" value={num(bookSpread, 2)} valueClassName="text-sky-300" />
+      </div>
+    );
+  }
+
+  if (tab === "episodes" && !isStreamAutoTab) {
+    if (isAutoView) {
+      return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />
+            <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
+            <MetricCard label="BOOK SPREAD" value={num(bookSpread, 2)} valueClassName="text-sky-300" />
+            <MetricCard label="TOP BID SIZE" value={intn(topBid?.size ?? null)} />
+            <MetricCard label="TOP ASK SIZE" value={intn(topAsk?.size ?? null)} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <BookLevelsCard label="BID LEVELS" levels={bookSnapshot?.bidLevels ?? []} accentClass="text-emerald-300" />
+            <BookLevelsCard label="ASK LEVELS" levels={bookSnapshot?.askLevels ?? []} accentClass="text-rose-200" />
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Book Snapshot</div>
+            <div className="mt-2 text-[11px] font-mono text-zinc-400">
+              {bookSnapshot?.windowTitle || "No Market Maker book window bound."}
+            </div>
+            <div className="mt-1 text-[11px] font-mono text-zinc-500">
+              Captured {bookSnapshot?.capturedAtUtc ?? "-"}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return <StreamSimLog />;
+  }
+
+  return (
+    <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <MetricCard label={isAutoView ? "ACTIVE SIGNALS" : "SONAR SIGNALS"} value={intn(streamSignalsCount)} />
+          <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+          <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
+          <MetricCard label="AUTO MODE" value={streamAutoEnabled ? "ON" : "OFF"} valueClassName={streamAutoEnabled ? "text-emerald-300" : "text-zinc-400"} />
+          <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />
+          <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
+      </div>
+
+      {/* Active ticker, shared with Sonar and Scanner. The selection itself is owned by the Sonar
+          and read from its per-strategy localStorage key, so "active" means the same ticker on
+          every surface without inventing a second selection UI here. */}
+      {activeSelection.ticker && (
+        <ActiveTickerCard
+          ticker={activeSelection.ticker}
+          stats={activeCardStats}
+          loading={activeSnapshot.loading}
+          error={activeSnapshot.error}
+          accentTextClass={accentActiveTextClass}
+        />
+      )}
+
+      <div className="scanner-panel-surface rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{isAutoView ? "AUTO ENGINE | SONAR automation workspace" : "STREAM ENGINE | filtered SONAR signals"}</div>
+          {automationControlAllowed ? (
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <button
+                type="button"
+                onClick={() => void setAutomationRunning(!(strategyModeEnabled && streamAutoEnabled && !panicOff))}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  strategyModeEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                SONAR MODE {strategyModeEnabled ? "ON" : "OFF"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void setAutomationRunning(!(streamAutoEnabled && strategyModeEnabled && !panicOff))}
+                className={clsx(
+                  "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
+                  streamAutoEnabled ? accentActiveSoftClass : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                AUTO {streamAutoEnabled ? "ON" : "OFF"}
+              </button>
+            </div>
+          ) : (
+            <div className="inline-flex h-7 items-center justify-center rounded-lg border border-white/10 px-3 text-[10px] font-mono font-bold uppercase text-zinc-500">
+              AUTO PAGE ONLY
+            </div>
+          )}
+        </div>
+        <div className="mt-2 text-[11px] font-mono text-zinc-500">
+          {strategyModeEnabled
+            ? `SONAR mode watches live SONAR situations, enters after MINHOLD minutes, scales by STEP up to MAXADD, exits below ${num(automationConfig.endSignalThreshold, 2)} in ACTIVE, and cuts off (Ctrl+Q then Ctrl+O) at ${automationConfig.startCutoffTime}.`
+            : "SONAR mode is off. AUTO keeps using the legacy STREAM intent builder."}
+        </div>
+        {isAutoView && (
+          <div className="mt-3">
+            <MainWindowBookSplitCard
+              mainWindowBound={executionSnapshot?.mainWindow ?? null}
+              mainWindowSnapshot={mainWindowSnapshot}
+              executionMessage={executionCurrent?.message}
+              bookSnapshot={bookSnapshot}
+            />
+          </div>
+        )}
+        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-4">
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Target Window</div>
+                <div className={clsx("mt-1 text-sm font-mono", boundWindow?.isBound ? "text-emerald-300" : "text-amber-200")}>
+                  {boundWindow?.isBound ? "DETECTED" : "NOT FOUND"}
+                </div>
+                <div className="mt-1 text-[11px] font-mono text-zinc-500 break-all">
+                  {boundWindow?.title || executionCurrent?.message || "Waiting for Market Maker Window."}
+                </div>
+                <div className="mt-1 text-[11px] font-mono text-zinc-500">
+                  {tickerPoint?.isSet
+                    ? `Ticker Pt ${tickerPoint.relativeX}, ${tickerPoint.relativeY}`
+                    : "Ticker point not captured | expected: Market Maker Window"}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                <button
+                  type="button"
+                  onClick={() => void onCaptureTickerPointDelayed(3000)}
+                  className={clsx("px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border", accentActiveSoftClass)}
+                >
+                  Capture 3s
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onCaptureTickerPoint()}
+                  className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                >
+                  Capture Now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onClearTickerPoint()}
+                  className="px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                >
+                  Clear Pt
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Execution Queue</div>
+            <div className="mt-1 text-sm font-mono text-zinc-200">{intn(executionQueueCount)}</div>
+            <div className="mt-1 text-[11px] font-mono text-zinc-500">
+              {executionCurrent
+                ? `${executionCurrent.ticker} | ${executionCurrent.status}${executionCurrent.appliedDelayMs ? ` | ${num(executionCurrent.appliedDelayMs / 1000, 2)}s` : ""}`
+                : `No active execution | delay ${delayRangeLabel}`}
+            </div>
+            {executionCurrent?.note && (
+              <div className="mt-1 text-[10px] font-mono text-amber-300">
+                {executionCurrent.note}
+              </div>
+            )}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Live Book</div>
+            <div className="mt-1 text-sm font-mono text-zinc-200">
+              {bestBid != null || bestAsk != null ? `${num(bestBid, 2)} x ${num(bestAsk, 2)}` : "No book snapshot"}
+            </div>
+            <div className="mt-1 text-[11px] font-mono text-zinc-500">
+              {topBid && topAsk
+                ? `${intn(topBid.size)} ${topBid.exchange} | ${intn(topAsk.size)} ${topAsk.exchange}`
+                : "Waiting for top-of-book"}
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Kill Switch</div>
+                <div className={clsx("mt-1 text-sm font-mono", panicOff ? "text-rose-300" : "text-emerald-300")}>
+                  {panicOff ? "PANIC OFF" : "ARMED"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void onTogglePanicOff(!panicOff)}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  panicOff ? "border-transparent text-zinc-400 hover:text-white hover:bg-white/5" : "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                )}
+              >
+                {panicOff ? "Resume" : "Panic Off"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Manual Orders</div>
+              <div className="mt-1 text-[11px] font-mono text-zinc-500">Enter one or more tickers separated by spaces.</div>
+            </div>
+            <div className="text-[11px] font-mono text-zinc-500">
+              Delay {delayRangeLabel}
+            </div>
+          </div>
+          <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
+            <input
+              type="text"
+              value={manualTickers}
+              onChange={(e) => setManualTickers(e.target.value.toUpperCase())}
+              placeholder="AAPL NVDA TSLA"
+              className="h-9 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-mono uppercase tracking-wide text-zinc-200 outline-none focus:border-white/20"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={manualExecutionBusy}
+                onClick={() => void submitManual("buy")}
+                className={clsx("px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border", accentActiveSoftClass, manualExecutionBusy && "opacity-60")}
+              >
+                Buy
+              </button>
+              <button
+                type="button"
+                disabled={manualExecutionBusy}
+                onClick={() => void submitManual("sell")}
+                className={clsx("px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5", manualExecutionBusy && "opacity-60")}
+              >
+                Sell
+              </button>
+              <button
+                type="button"
+                disabled={manualExecutionBusy}
+                onClick={() => void submitManual("cover")}
+                className={clsx("px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border border-transparent text-zinc-400 hover:text-white hover:bg-white/5", manualExecutionBusy && "opacity-60")}
+              >
+                Cover
+              </button>
+            </div>
+          </div>
+          <div className="mt-2 text-[11px] font-mono text-zinc-500">
+            {manualExecutionBusy
+              ? "Queueing manual orders..."
+              : manualError || "BUY uses long entry, SELL uses short entry, COVER uses active exit for the entered tickers."}
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Min Net Edge</div>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={automationConfig.minNetEdge}
+              onChange={(e) => onAutomationConfigChange({ minNetEdge: Math.max(0, Number(e.target.value) || 0) })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none focus:border-white/20"
+            />
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Max Open</div>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={automationConfig.maxOpenPositions}
+              onChange={(e) => onAutomationConfigChange({ maxOpenPositions: Math.max(1, Math.trunc(Number(e.target.value) || 1)) })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none focus:border-white/20"
+            />
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Delay Min Sec</div>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={automationConfig.queueDelayMinSeconds}
+              onChange={(e) => onAutomationConfigChange({ queueDelayMinSeconds: Math.max(0, Math.trunc(Number(e.target.value) || 0)) })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none focus:border-white/20"
+            />
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Delay Max Sec</div>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={automationConfig.queueDelayMaxSeconds}
+              onChange={(e) => onAutomationConfigChange({ queueDelayMaxSeconds: Math.max(0, Math.trunc(Number(e.target.value) || 0)) })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none focus:border-white/20"
+            />
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Blocked Edge</div>
+            <div className="mt-1 text-sm font-mono text-rose-300">{intn(blockedEdgeCount)}</div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Hedge Mode</div>
+            <select
+              value={automationConfig.hedgeMode}
+              onChange={(e) => onAutomationConfigChange({ hedgeMode: e.target.value as StreamAutomationConfig["hedgeMode"] })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
+            >
+              <option value="hedged">Hedged</option>
+              <option value="unhedged">Unhedged</option>
+            </select>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Scale Mode</div>
+            <select
+              value={automationConfig.scaleMode}
+              onChange={(e) => onAutomationConfigChange({ scaleMode: e.target.value as StreamAutomationConfig["scaleMode"] })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
+            >
+              <option value="single">Single</option>
+              <option value="scale_in">Scale In</option>
+            </select>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Exit Mode</div>
+            <select
+              value={automationConfig.exitMode}
+              onChange={(e) => onAutomationConfigChange({ exitMode: e.target.value as StreamAutomationConfig["exitMode"] })}
+              className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 text-sm font-mono text-zinc-200 outline-none"
+            >
+              <option value="normalize">Normalize</option>
+            </select>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">Cutoff</div>
+            {/* Read-only mirror of the CUTOFF stepper (toolbar DELAY/CUTOFF control) — that
+                stepper is the single source of truth (drives local startCutoffTime state, which
+                effectiveStreamAutomationConfig always uses regardless of any override). An
+                editable field here would write to the override only, which the engine ignores. */}
+            <div className="mt-1 h-8 w-full rounded-lg border border-white/10 bg-black/30 px-2 flex items-center text-sm font-mono text-zinc-200">
+              {automationConfig.startCutoffTime}
+            </div>
+          </div>
+          <label className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">No Spread Exit</div>
+              <div className="mt-1 text-xs font-mono text-zinc-400">Block bad exits when spread is hostile</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={automationConfig.noSpreadExit}
+              onChange={(e) => onAutomationConfigChange({ noSpreadExit: e.target.checked })}
+              className="h-4 w-4 rounded border-white/20 bg-black/30"
+            />
+          </label>
+
+          <label className={clsx("flex items-center justify-between gap-3 rounded-xl border p-3 cursor-pointer transition-colors",
+            automationConfig.betaMode
+              ? "border-amber-500/40 bg-amber-500/10"
+              : "border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04]"
+          )}>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400">β BETA MODE</span>
+                {automationConfig.betaMode && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">ACTIVE</span>
+                )}
+              </div>
+              <div className="mt-1 text-xs font-mono text-zinc-400">Simulate all trades — no real orders sent. All logic, queues and signals run normally.</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={automationConfig.betaMode ?? false}
+              onChange={(e) => onAutomationConfigChange({ betaMode: e.target.checked })}
+              className="h-4 w-4 rounded border-amber-500/40 bg-black/30 accent-amber-500"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <table className="min-w-[1280px] w-full text-xs font-mono">
+          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
+            <tr>
+              <th className="text-left p-2.5">Ticker</th>
+              <th className="text-left p-2.5">Bench</th>
+              <th className="text-left p-2.5">Side</th>
+              <th className="text-right p-2.5">Signal</th>
+              <th className="text-right p-2.5">Spread</th>
+              <th className="text-right p-2.5">Safe Px</th>
+              <th className="text-right p-2.5">Net Edge</th>
+              <th className="text-left p-2.5">Status</th>
+              <th className="text-left p-2.5">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {streamDecisionRowsSnapshot.map((row, i) => (
+              <tr key={`${row.ticker}|stream|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
+                <td className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.benchmark}</td>
+                <td className="p-2.5"><SideBadge side={row.side} /></td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.safePrice, 3)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</td>
+                <td className="p-2.5"><StreamStatusBadge status={row.status} /></td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.reason}</td>
+              </tr>
+            ))}
+            {!streamDecisionRowsSnapshot.length && (
+              <tr>
+                <td colSpan={9} className="p-8 text-center text-zinc-500">
+                  No STREAM candidates yet. Current STREAM filters are applied to live SONAR signals.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="scanner-panel-surface overflow-auto rounded-xl border border-white/[0.08] bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <table className="min-w-[1280px] w-full text-xs font-mono">
+          <thead className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#0a0a0a]/55 text-zinc-400 backdrop-blur-xl">
+            <tr>
+              <th className="text-left p-2.5">Ticker</th>
+              <th className="text-left p-2.5">Bench</th>
+              <th className="text-left p-2.5">Side</th>
+              <th className="text-left p-2.5">Intent</th>
+              <th className="text-left p-2.5">Price Ref</th>
+              <th className="text-left p-2.5">Queue</th>
+              <th className="text-left p-2.5">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {streamOrderIntents.map((row, i) => (
+              <tr key={row.id ?? `${row.ticker}|intent|${i}`} className={clsx("border-t border-white/5 transition-colors", i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent", "hover:bg-white/[0.03]")}>
+                <td className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.benchmark}</td>
+                <td className="p-2.5"><SideBadge side={row.side} /></td>
+                <td className="px-2 py-2.5 text-zinc-200">{row.intent}</td>
+                <td className="px-2 py-2.5 text-zinc-300">{row.priceRef}</td>
+                <td className="p-2.5">
+                  <span className={clsx(
+                    "inline-flex rounded-md px-2 py-1 text-[10px] font-mono font-bold uppercase border",
+                    row.status === "QUEUED"
+                      ? "border-sky-500/20 bg-sky-500/10 text-sky-300"
+                      : "border-rose-500/20 bg-rose-500/10 text-rose-300"
+                  )}>
+                    {row.status}
+                  </span>
+                </td>
+                <td className="px-2 py-2.5 text-zinc-400">{row.reason}</td>
+              </tr>
+            ))}
+            {!streamOrderIntents.length && (
+              <tr>
+                <td colSpan={7} className="p-8 text-center text-zinc-500">
+                  No order intents yet. When AUTO is enabled, STREAM will stage executable intents here.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

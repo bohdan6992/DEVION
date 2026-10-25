@@ -34,6 +34,10 @@ export type MorLaunchSonarLiveParams = {
   ignoreRatings: boolean;
   thresholdUnit: MorLaunchThresholdUnitName;
   filters: OpenDoorLiveFilters | null;
+  /** ITB/HARD (borrow status) — NOT part of `filters`, see MorLaunchSonarLiveParams.ExcludeItb's own
+   * doc comment on the bridge for why these two are checked separately, server-side. */
+  excludeItb: boolean;
+  excludeHard: boolean;
   source: string;
 };
 
@@ -69,6 +73,21 @@ export type MorLaunchSonarRow = {
   ask: number | null;
 };
 
+/**
+ * One row of signals/morlaunch/morlaunch_tickers.csv — flat and undirected, no side/move/gamma.
+ * The operator's own words (2026-10-23): "Тут немає шорт чи Лонг, просто відображай... список
+ * тікерів без умов, але фільтри повинні відчувати тікери" — just the ticker with its own
+ * rating/total/sigma/alpha, already narrowed server-side by the same toolbar filters the SHORT/LONG
+ * columns use (ADV20/SSR/ETF/CRAP/REP/country/exchange/sector/...).
+ */
+export type MorLaunchUniverseRow = {
+  ticker: string;
+  rating: number | null;
+  total: number | null;
+  sigma: number | null;
+  alpha: number | null;
+};
+
 export type MorLaunchSonarSnapshot = {
   /** True when the bridge's own fetch timed out (no live feed) — rows is empty, not "no matches". */
   timedOut: boolean;
@@ -90,6 +109,10 @@ export type MorLaunchSonarSnapshot = {
   items: unknown[];
   /** How many tickers the bridge looked at before choosing. */
   rawCount: number;
+  /** morlaunch_tickers.csv's own flat list, already narrowed by the toolbar's own generic filters —
+   * see MorLaunchUniverseRow's own doc comment. Empty, not missing, before the CSV publishes or
+   * when nothing currently passes the filters. */
+  universeRows: MorLaunchUniverseRow[];
 };
 
 export function toMorLaunchSonarLiveParams(args: {
@@ -103,6 +126,8 @@ export function toMorLaunchSonarLiveParams(args: {
   ignoreRatings: boolean;
   thresholdUnit: MorLaunchThresholdUnitName;
   filters: OpenDoorSonarFilterSource;
+  excludeItb: boolean;
+  excludeHard: boolean;
   source: string;
 }): MorLaunchSonarLiveParams {
   return {
@@ -116,6 +141,8 @@ export function toMorLaunchSonarLiveParams(args: {
     ignoreRatings: args.ignoreRatings,
     thresholdUnit: args.thresholdUnit,
     filters: toOpenDoorSonarFilters(args.filters),
+    excludeItb: args.excludeItb,
+    excludeHard: args.excludeHard,
     source: args.source,
   };
 }

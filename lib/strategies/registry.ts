@@ -454,10 +454,10 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
 
   // A second, unrelated way to run Morning Launch's thesis (operator's own, 2026-10-20): no tape, no
   // signal — a scheduled keystroke macro against TradingApp's own Basket feature (03:58 places
-  // resting limits on every ticker already in the basket, 04:02 cancels what's left unfilled). A
-  // fill is never auto-exited — the operator closes it by hand on purpose — so this exists purely so
-  // its P&L gets its own Caesar card. See MorLaunchBasketServerStrategy.cs's own header comment on
-  // the bridge for the full spec.
+  // resting limits on every ticker already in the basket, 04:01 cancels what's left unfilled —
+  // MOVED from 04:02, 2026-10-25). A fill is never auto-exited — the operator closes it by hand on
+  // purpose — so this exists purely so its P&L gets its own Caesar card. See
+  // MorLaunchBasketServerStrategy.cs's own header comment on the bridge for the full spec.
   //
   // NO SCANNER/SONAR/STREAM PAGE OF ITS OWN: there is no historical "which tickers were in the
   // basket on a past day" data to replay. nav/api/ratingClasses below deliberately point at
@@ -498,6 +498,88 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       dimension: "ENTRY",
       keys: ["basket0350"],
       labels: { basket0350: "03:50" },
+    },
+  },
+
+  // LAUNCH•EVENING basket — the evening twin of morlaunchbasket above (operator's own, 2026-10-24:
+  // "все те саме просто для іншого часу"): the same blind keystroke macro against TradingApp's Basket
+  // feature, only the clock moves to the 16:00 transition — 15:58 places resting limits on every
+  // ticker in the basket, 16:02 (Ctrl+Q) cancels what is left unfilled. A fill is never auto-exited.
+  // See LaunchEveningBasketServerStrategy.cs for the full spec.
+  //
+  // ASSIGN IT TO POST. It sends at 15:58, two minutes before POST's own 16:00 start; the bridge arms
+  // it early through CaesarPlanService.EarlyEnableFloorMinuteIdx["stream.launcheveningbasket"] (the
+  // same exception CLO Reversal/Continuum have), so no plan edit is needed beyond the POST assignment.
+  //
+  // NO PAGES OF ITS OWN: nav points at the evening strategy's pages (pages/launch-evening/*), as the morning basket's
+  // points at /mor-launch/*.
+  // storage gets its OWN distinct prefixes so filter/UI state never leaks into the morning basket.
+  //
+  // priority 2: every priority in this registry must be distinct (the runtime check at the bottom of
+  // this file enforces it); cosmetic in practice — EvaluateAsync never submits a StrategyIntent.
+  // holdsOvernight: true for the same reason as the morning basket — a manual close is not on any
+  // schedule the bridge knows, and POST ends at the 21:00 roll, so a still-open fill must not vanish
+  // into UNCLAIMED when the Caesar day rolls.
+  launcheveningbasket: {
+    key: "launcheveningbasket",
+    bridgeStrategyId: "stream.launcheveningbasket",
+    nav: {
+      // Clicking this strategy's icon in Caesar (CaesarSchedule links strategy.nav.stream) opens the evening STREAM page,
+      // the same way the morning basket opens /mor-launch/stream. The three pages exist now (pages/launch-evening/*).
+      stream: "/launch-evening/stream",
+      scanner: "/launch-evening/scanner",
+      sonar: "/launch-evening/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 15 * 60 + 58, toMinuteIdx: 16 * 60 + 3 },
+    priority: 2,
+    holdsOvernight: true,
+    overnightBadge: false,
+    api: { paperBase: "/api/paper/launchevening", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: {
+      scannerPrefix: "paper.launcheveningbasket",
+      sonarPrefix: "bridge.launcheveningbasket",
+      streamPrefix: "stream.launcheveningbasket",
+    },
+    ratingClasses: {
+      dimension: "ENTRY",
+      keys: ["basket1558"],
+      labels: { basket1558: "15:58" },
+    },
+  },
+
+  // Evening Launch — the morning strategy's twin with the clock moved to the 16:00 transition (operator,
+  // 2026-10-24: "все те саме просто для іншого часу"). SONAR ONLY so far, the same arrangement VWAP Bounce
+  // started with: there is no tape engine, paper scanner or server strategy behind it, so nothing here can
+  // send an order. The only live surface is components/sonar/LaunchEveningSonar.tsx, reading the bridge's
+  // /api/stream/sonar/launchevening/* endpoints, the ratings file signals/launchevening/
+  // launchevening_rolling_perf.json.gz and the flat list launchevening_tickers.csv.
+  //
+  // Pages: pages/launch-evening/{stream,scanner,sonar}.tsx. The Scanner's backtest/optimizer endpoints (/api/paper/launchevening/*)
+  // have no backend yet (no tape engine / paper controller), so that page opens but its episode tables stay empty.
+  //
+  // Window = the Sonar's signal window 15:50-16:20 (LaunchEveningTiming.Default), half-open. priority 1,
+  // below everything that can trade (this one cannot). holdsOvernight: true because any evening fill is
+  // closed by hand on a later session.
+  launchevening: {
+    key: "launchevening",
+    bridgeStrategyId: "stream.launchevening",
+    nav: {
+      stream: "/launch-evening/stream",
+      scanner: "/launch-evening/scanner",
+      sonar: "/launch-evening/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 15 * 60 + 50, toMinuteIdx: 16 * 60 + 21 },
+    priority: 1,
+    holdsOvernight: true,
+    overnightBadge: false,
+    api: { paperBase: "/api/paper/launchevening", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.launchevening", sonarPrefix: "bridge.launchevening", streamPrefix: "stream.launchevening" },
+    ratingClasses: {
+      dimension: "JUMP",
+      keys: ["eve1600"],
+      labels: { eve1600: "16:00" },
     },
   },
 

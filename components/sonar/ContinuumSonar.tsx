@@ -1861,8 +1861,8 @@ export default function ContinuumSonar() {
   // further down, ported 1-to-1 from ContinuumScanner.tsx's own pattern (AGENTS.md's spinner-input
   // standard). Naming/defaults match ContinuumScanner.tsx's own continuumMinDevAbsShort/Long/Max/
   // continuumMinGammaTotal exactly, so buildContinuumParams-equivalent below stays a byte-for-byte
-  // mirror of the Scanner's own request builder.
-  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(0.5);
+  // mirror of the Scanner's own request builder. 1.0 — raised from 0.5, 2026-10-24.
+  const [continuumMinDevAbsShort, setContinuumMinDevAbsShort] = useState(1.0);
   // Empty means "the same threshold as the short one" (optNumOrNull(...) ?? continuumMinDevAbsShort).
   const [continuumMinDevAbsLong, setContinuumMinDevAbsLong] = useState("");
   // Upper cap on |15:50 deviation|, either side; empty = no cap.

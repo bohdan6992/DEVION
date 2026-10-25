@@ -83,6 +83,24 @@ type ArbitrageStreamViewProps = {
   automationLaunchEnabled?: boolean;
   entryCutoffActive?: boolean;
   hideAutomationButtons?: boolean;
+  /**
+   * Replaces the EXECUTOR tab's own SIGNALS card with a flat, undirected ticker list instead of
+   * the real move-signal decision table — Morning Launch's own copy (2026-10-23, the operator's
+   * own instruction: "список тікерів повинен відображатися тут у стрімі", pointing at this exact
+   * card). `undefined`/omitted keeps every other strategy's existing SIGNALS table untouched;
+   * passing an array (even empty) swaps this card's body for StreamUniverseSignalsTable. Display
+   * only — never written to streamDecisionStore, so it cannot be read by automation's own
+   * ENTRY_READY/entryReadyCount logic the way a real decision row would be.
+   */
+  universeSignalsRows?: StreamUniverseSignalRow[];
+};
+
+export type StreamUniverseSignalRow = {
+  ticker: string;
+  rating: number | null;
+  total: number | null;
+  sigma: number | null;
+  alpha: number | null;
 };
 
 function BookLevelsCard({
@@ -797,6 +815,115 @@ const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
   );
 });
 
+/**
+ * Morning Launch's own SIGNALS card body: signals/morlaunch/morlaunch_tickers.csv's own flat list,
+ * already narrowed server-side by every toolbar filter — see MorLaunchStreamUniverseService. Same
+ * outer chrome as StreamSignalsDecisionTable so it drops into the same card slot unchanged; the
+ * inner columns are the universe's own (Rating/Total/Sigma/Alpha), not a move signal's, because
+ * there is no move signal here — the ticker itself is the signal (MorLaunchSonar.tsx's own UNIVERSE
+ * table carries the identical doc comment).
+ */
+type StreamUniverseSortKey = "ticker" | "rating" | "total" | "sigma" | "alpha";
+
+const StreamUniverseSignalsTable = memo(function StreamUniverseSignalsTable({
+  title,
+  rows,
+  emptyMessage,
+  onTickerClick,
+}: {
+  title: string;
+  rows: StreamUniverseSignalRow[];
+  emptyMessage: string;
+  onTickerClick?: (ticker: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<{ key: StreamUniverseSortKey; dir: 1 | -1 }>({ key: "ticker", dir: 1 });
+
+  const filteredSorted = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    const filtered = q ? rows.filter((r) => r.ticker.toUpperCase().includes(q)) : rows;
+    const { key, dir } = sort;
+    return [...filtered].sort((a, b) => {
+      if (key === "ticker") return dir * a.ticker.localeCompare(b.ticker);
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return dir * (av - bv);
+    });
+  }, [rows, query, sort]);
+
+  return (
+    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
+      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
+        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
+          {title}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value.toUpperCase())}
+            placeholder="FILTER TICKER"
+            className="h-6 w-28 rounded border border-white/10 bg-black/30 px-2 font-mono text-[10px] uppercase text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
+          />
+          <div className="text-[10px] font-mono uppercase text-zinc-500">
+            {intn(filteredSorted.length)}
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div>
+          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
+            {([
+              ["ticker", "Ticker", "text-left", "text-zinc-200"],
+              ["rating", "Rating", "text-right", "text-violet-300/80"],
+              ["total", "Total", "text-right", "text-sky-300/80"],
+              ["sigma", "Sigma", "text-right", "text-amber-300/80"],
+              ["alpha", "Alpha", "text-right", "text-emerald-300/80"],
+            ] as const).map(([key, label, align, tone]) => (
+              <div
+                key={key}
+                className={clsx("cursor-pointer select-none px-2 py-2.5 hover:text-zinc-100", align, tone)}
+                onClick={() => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : 1 }))}
+                title={`Sort by ${label}`}
+              >
+                {label} {sort.key === key ? (sort.dir === 1 ? "▲" : "▼") : ""}
+              </div>
+            ))}
+          </div>
+
+          {!filteredSorted.length ? (
+            <div className="p-8 text-center text-xs font-mono text-zinc-500">
+              {rows.length === 0 ? emptyMessage : "No tickers match the ticker search."}
+            </div>
+          ) : (
+            <div className="text-xs font-mono">
+              {filteredSorted.map((row, i) => (
+                <div
+                  key={row.ticker}
+                  onClick={() => onTickerClick?.(row.ticker)}
+                  className={clsx(
+                    "grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center border-t border-white/5 transition-colors",
+                    i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
+                    onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
+                  )}
+                >
+                  <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-300">{row.rating != null ? `${Math.round(row.rating * 100)}%` : "—"}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-400">{row.total ?? "—"}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-400">{row.sigma != null ? row.sigma.toFixed(2) : "—"}</div>
+                  <div className="px-2 py-2.5 text-right tabular-nums text-zinc-400">{row.alpha != null ? row.alpha.toFixed(2) : "—"}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || ms < 0) return "—";
   const s = Math.floor(ms / 1000);
@@ -1343,6 +1470,7 @@ export default function OpenDoorStreamView({
   automationLaunchEnabled = true,
   entryCutoffActive = true,
   hideAutomationButtons = false,
+  universeSignalsRows,
 }: ArbitrageStreamViewProps) {
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
@@ -1457,6 +1585,14 @@ export default function OpenDoorStreamView({
     }, 0),
     [streamDecisionVersion, signalDecisionIds]
   );
+  // Morning Launch's own SIGNALS/ENTRY READY metric cards (2026-10-23, the operator's own
+  // instruction after seeing both numbers on the same EXECUTOR tab: "Reconcile the two SIGNALS
+  // counts"): when universeSignalsRows is supplied there is no real move-signal decision store
+  // behind this card any more (see that prop's own doc comment), so showing the real engine's own
+  // candidate count here — a different, larger number — next to a universe table reading 0 read as
+  // a bug rather than two different things. Both metric cards fall back to the universe's own count.
+  const effectiveSignalsCount = universeSignalsRows ? universeSignalsRows.length : streamSignalsCount;
+  const effectiveEntryReadyCount = universeSignalsRows ? universeSignalsRows.length : entryReadyCount;
   const openCount = streamPositionMeta.openCount;
   // Split of the same open set, so OPEN LONG + OPEN SHORT always equals OPEN POSITIONS.
   const openLongCount = streamPositionMeta.openLongCount;
@@ -1651,7 +1787,7 @@ export default function OpenDoorStreamView({
                   things that want attention, sky for what is in flight. */}
 
               {/* 1 — the life of an order, left to right in the order it happens */}
-              <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+              <MetricCard label="ENTRY READY" value={intn(effectiveEntryReadyCount)} valueClassName={accentActiveTextClass} />
               <MetricCard label="SENT ORDERS" value={intn(streamSentOrdersCount)} valueClassName="text-sky-300" />
               <MetricCard label="PENDING ENTRY" value={intn(positionPhaseCounts.pendingEntry)} valueClassName="text-amber-300" />
               <MetricCard label="CLOSED" value={intn(closedCount)} valueClassName="text-teal-300" />
@@ -1670,7 +1806,7 @@ export default function OpenDoorStreamView({
                 valueClassName={openCapReached ? "text-amber-200" : "text-zinc-300"}
               />
               <MetricCard label="LIST MODE" value={listModeLabel} valueClassName="text-indigo-300" />
-              <MetricCard label="SIGNALS" value={intn(streamSignalsCount)} valueClassName="text-sky-300" />
+              <MetricCard label="SIGNALS" value={intn(effectiveSignalsCount)} valueClassName="text-sky-300" />
 
               {/* 4 — what actually happened today, from the order log */}
               <MetricCard label="ENTRIES" value={intn(actionLogCounts.entries)} valueClassName="text-emerald-300" />
@@ -1702,12 +1838,21 @@ export default function OpenDoorStreamView({
               onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
               onTickerClick={onTickerClick}
             />
-            <StreamSignalsDecisionTable
-              title="SIGNALS"
-              rowIds={signalDecisionIds}
-              emptyMessage="No filtered signals waiting in STREAM."
-              onTickerClick={onTickerClick}
-            />
+            {universeSignalsRows ? (
+              <StreamUniverseSignalsTable
+                title="SIGNALS"
+                rows={universeSignalsRows}
+                emptyMessage="No universe tickers pass the toolbar filters."
+                onTickerClick={onTickerClick}
+              />
+            ) : (
+              <StreamSignalsDecisionTable
+                title="SIGNALS"
+                rowIds={signalDecisionIds}
+                emptyMessage="No filtered signals waiting in STREAM."
+                onTickerClick={onTickerClick}
+              />
+            )}
           </div>
           <StreamSimLog />
         </div>
@@ -1716,9 +1861,9 @@ export default function OpenDoorStreamView({
 
     return (
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <MetricCard label="FILTERED SIGNALS" value={intn(streamSignalsCount)} />
+        <MetricCard label="FILTERED SIGNALS" value={intn(effectiveSignalsCount)} />
         <MetricCard label="LIST MODE" value={listModeLabel} />
-        <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+        <MetricCard label="ENTRY READY" value={intn(effectiveEntryReadyCount)} valueClassName={accentActiveTextClass} />
         <MetricCard label="QUEUED ORDERS" value={intn(queuedIntentsCount)} valueClassName="text-sky-300" />
         <MetricCard label="BEST ASK" value={num(bestAsk, 2)} valueClassName="text-rose-200" />
         <MetricCard label="BOOK SPREAD" value={num(bookSpread, 2)} valueClassName="text-sky-300" />
@@ -1760,8 +1905,8 @@ export default function OpenDoorStreamView({
   return (
     <div className="space-y-3">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <MetricCard label={isAutoView ? "ACTIVE SIGNALS" : "SONAR SIGNALS"} value={intn(streamSignalsCount)} />
-          <MetricCard label="ENTRY READY" value={intn(entryReadyCount)} valueClassName={accentActiveTextClass} />
+          <MetricCard label={isAutoView ? "ACTIVE SIGNALS" : "SONAR SIGNALS"} value={intn(effectiveSignalsCount)} />
+          <MetricCard label="ENTRY READY" value={intn(effectiveEntryReadyCount)} valueClassName={accentActiveTextClass} />
           <MetricCard label="OPEN POSITIONS" value={intn(openCount)} />
           <MetricCard label="AUTO MODE" value={streamAutoEnabled ? "ON" : "OFF"} valueClassName={streamAutoEnabled ? "text-emerald-300" : "text-zinc-400"} />
           <MetricCard label="BEST BID" value={num(bestBid, 2)} valueClassName="text-emerald-300" />

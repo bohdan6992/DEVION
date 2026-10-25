@@ -12,6 +12,7 @@ import {
   pushMorLaunchSonarLiveParams,
   toMorLaunchSonarLiveParams,
   type MorLaunchSonarRow,
+  type MorLaunchUniverseRow,
 } from "@/lib/sonar/morLaunchSnapshotClient";
 import { useUi } from "@/components/UiProvider";
 import { GlitchTitle } from "@/components/ui/GlitchTitle";
@@ -1860,14 +1861,22 @@ export default function MorLaunchSonar() {
   // every sibling Sonar's own dev box is how far a stack sits from yesterday's close, this one is how
   // far it travelled in a minute. Naming/defaults match MorLaunchScanner.tsx exactly so the two
   // toolbars cannot drift.
-  const [morLaunchMinDevAbsShort, setMorLaunchMinDevAbsShort] = useState(1.0);
-  // Empty means "the same threshold as the short one" (optNumOrNull(...) ?? morLaunchMinDevAbsShort).
-  const [morLaunchMinDevAbsLong, setMorLaunchMinDevAbsLong] = useState("");
-  // Upper cap on the size of the move, either side; empty = no cap.
-  const [morLaunchMinDevAbsMax, setMorLaunchMinDevAbsMax] = useState("");
-  // Sample-size floor on the ticker's own published gamma (MorLaunchGammaEntry.GammaN). 0 (or below)
-  // turns this off.
-  const [morLaunchMinGammaTotal, setMorLaunchMinGammaTotal] = useState(0);
+  // THE VIOLET %/σ/α/γ/τ/λ STRIP AND ITS FOUR SPINNER BOXES ARE RETIRED (operator, 2026-10-24: "LAUNCH•MORNING і
+  // LAUNCH•EVENING - не потребують фіолетового перемикача, очисти значення і зроби його неактивним сіруватим").
+  // They stay on screen only as a greyed, empty, unclickable strip. What the gate really uses is FIXED below and nothing
+  // can change it - not an older saved toolbar (localStorage), not an Auto Optimizer row: the unit is always %, there is
+  // no cap, no GammaN floor and NO FLAT FLOOR (operator, 2026-10-24: "прибери Поріг 0,7"). The only thing left that bounds a move
+  // is the ticker's published gamma, so keep ratings ON: with ratings IGNORED a zero floor passes every tick.
+  // The setters are no-ops so every existing call site (restore from localStorage, optimizer apply, spinners) keeps compiling.
+  const MOR_LAUNCH_FIXED_FLOOR_PCT = 0;
+  const morLaunchMinDevAbsShort: number = MOR_LAUNCH_FIXED_FLOOR_PCT;
+  const setMorLaunchMinDevAbsShort = (_v?: unknown): void => {};
+  const morLaunchMinDevAbsLong: string = "";
+  const setMorLaunchMinDevAbsLong = (_v?: unknown): void => {};
+  const morLaunchMinDevAbsMax: string = "";
+  const setMorLaunchMinDevAbsMax = (_v?: unknown): void => {};
+  const morLaunchMinGammaTotal: number = 0;
+  const setMorLaunchMinGammaTotal = (_v?: unknown): void => {};
   // Backtest/display escape hatch: drop the per-ticker gamma lookup (and the MinGammaTotal floor
   // riding on it) and show every ticker whose |signal dev| clears the flat floor/cap alone — same
   // escape hatch OpenDoor/Day Two's IgnoreRatings gives their toolbars.
@@ -1912,7 +1921,10 @@ export default function MorLaunchSonar() {
   // see the strategySlot's own comment, superseded now). Unlike that file this Sonar has no Signal
   // Dev table column to retint, only the single "Dev n.nn" span per card and the ratings detail
   // panel — both updated below via formatMorLaunchDev, the same helper name/shape as the Scanner's.
-  const [morLaunchUnitMode, setMorLaunchUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
+  // Retired with the strip above: the unit is always % (a cast, not an annotation, so TypeScript keeps the full union and
+  // the formatting helpers below still type-check).
+  const morLaunchUnitMode = "pct" as "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
+  const setMorLaunchUnitMode = (_v?: unknown): void => {};
 
   function formatMorLaunchDev(
     raw: number | null | undefined,
@@ -1947,6 +1959,19 @@ export default function MorLaunchSonar() {
   /** What MorLaunchSonarSnapshotService's MorLaunchLiveEngine call approved this poll — the push/fetch
    * effects live further down, since they need filter toolbar state and setError declared below. */
   const [morLaunchSonarRows, setMorLaunchSonarRows] = useState<MorLaunchSonarRow[]>([]);
+  /** signals/morlaunch/morlaunch_tickers.csv's own flat list, already filtered server-side — see
+   * MorLaunchUniverseRow's own doc comment. No side/move/gamma of its own, unlike morLaunchSonarRows. */
+  const [morLaunchUniverseRows, setMorLaunchUniverseRows] = useState<MorLaunchUniverseRow[]>([]);
+  // UNIVERSE table's own ticker search + column sort (2026-10-23, the operator's own instruction:
+  // drop SHORT/LONG entirely for this strategy, keep only the flat list, filterable by every column
+  // it shows). Rating/Total/Sigma/Alpha reuse the toolbar's OWN existing MINRATE/MINTOTAL/σ/α
+  // min-max inputs above (morLaunchMinRate/morLaunchMinTotal/minSigma/maxSigma/minAlpha/maxAlpha) —
+  // those already sit on this exact page and mean exactly these same four columns; a second,
+  // separate set of range inputs inside the table would just be a confusing duplicate.
+  const [universeTickerQuery, setUniverseTickerQuery] = useState("");
+  const [universeSort, setUniverseSort] = useState<{ key: "ticker" | "rating" | "total" | "sigma" | "alpha"; dir: 1 | -1 }>(
+    { key: "ticker", dir: 1 },
+  );
   // True only inside MorLaunchTiming.Default's 03:50-04:20 NY window. UNLIKE every sibling panel's
   // copy of this flag it does NOT mean the rows are empty — the bridge gate runs all day so this
   // panel stays readable — so the banner it drives says "informational, not actionable" rather than
@@ -3329,86 +3354,6 @@ export default function MorLaunchSonar() {
   };
 
 
-  /* =========================
-    Grouping (+ account sorting toggle + pins)
-  ========================= */
-  const benchBlocks: BenchBlock[] = useMemo(() => {
-    const bucketMap = new Map<
-      string,
-      { benchmark: string; betaKey: BetaKey; shorts: ArbitrageSignal[]; longs: ArbitrageSignal[] }
-    >();
-
-    const isPinned = (tk: string) => !!pinMap[tk]; // pinMap is Record
-
-    const cmpAccountThenTicker = makeCmpAccountThenTicker(accountNonEmptyFirst);
-
-    for (const s of items || []) {
-      const dir = getRenderableDirection(s);
-      if (dir !== "down" && dir !== "up") continue;
-
-      const tk = String(s.ticker ?? "").toUpperCase();
-      if (!tk) continue;
-
-      const benchmark = (s.benchmark || "UNKNOWN").toUpperCase();
-      const betaVal = getBetaValue(s);
-      const betaKey = parseBetaKey(betaVal);
-
-      const bucketId = `${benchmark}__${betaKey}`;
-      let b = bucketMap.get(bucketId);
-      if (!b) {
-        b = { benchmark, betaKey, shorts: [], longs: [] };
-        bucketMap.set(bucketId, b);
-      }
-
-      if (dir === "down") b.shorts.push(s);
-      else b.longs.push(s);
-    }
-
-    // Pinned rows first, then account-then-ticker order — the ABC/SIG/|ZAP|/RATE/BETA sort-key
-    // dropdown that used to pick the metric here was removed (2026-09-25, the operator's own
-    // instruction), so this is just the "alpha"/"pin" branch's own fallback, unconditionally.
-    const cmpSort = (a: ArbitrageSignal, b: ArbitrageSignal) => {
-      const ta = String(a.ticker ?? "").toUpperCase();
-      const tb = String(b.ticker ?? "").toUpperCase();
-
-      const pa = isPinned(ta) ? 1 : 0;
-      const pb = isPinned(tb) ? 1 : 0;
-      if (pa !== pb) return pb - pa;
-
-      return cmpAccountThenTicker(a, b);
-    };
-
-    // regroup to BenchBlock[]
-    const benchMap = new Map<string, BucketGroup[]>();
-
-    for (const [, b] of bucketMap.entries()) {
-      b.shorts.sort(cmpSort);
-      b.longs.sort(cmpSort);
-
-      const n = Math.max(b.shorts.length, b.longs.length);
-      const rows: RowPair[] = new Array(n);
-      for (let i = 0; i < n; i++) rows[i] = { short: b.shorts[i], long: b.longs[i] };
-
-      const group: BucketGroup = {
-        id: `${b.benchmark}__${b.betaKey}`,
-        benchmark: b.benchmark,
-        betaKey: b.betaKey,
-        rows,
-      };
-
-      const list = benchMap.get(b.benchmark) ?? [];
-      list.push(group);
-      benchMap.set(b.benchmark, list);
-    }
-
-    return Array.from(benchMap.entries())
-      .sort(([a], [b]) => sortBenchmarks(a, b))
-      .map(([benchmark, groups]) => ({
-        benchmark,
-        buckets: groups.sort((a, b) => betaOrder.indexOf(a.betaKey) - betaOrder.indexOf(b.betaKey)),
-      }));
-  }, [items, accountNonEmptyFirst, pinMap]);
-
   /**
    * The toolbar, to the bridge — same debounce/hydration-guard pattern the Arbitrage/PairFlux and
    * OpenDoor-family Sonar panels already use. MorLaunchSonarSnapshotService reuses the SAME
@@ -3436,6 +3381,8 @@ export default function MorLaunchSonar() {
           bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
           excludeReport, excludeETF, excludeCrap, filterReport, equityType,
         },
+        excludeItb,
+        excludeHard,
         source: "morLaunch-sonar",
       }));
     }, 600);
@@ -3448,6 +3395,7 @@ export default function MorLaunchSonar() {
     selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
     excludeReport, excludeETF, excludeCrap, filterReport, equityType,
+    excludeItb, excludeHard,
   ]);
 
   useEffect(() => {
@@ -3460,6 +3408,7 @@ export default function MorLaunchSonar() {
         return;
       }
       setMorLaunchSonarRows(value?.rows ?? []);
+      setMorLaunchUniverseRows(value?.universeRows ?? []);
       setMorLaunchInWindow(value?.inWindow ?? true);
       setMorLaunchNoSample(value?.noSampleCount ?? 0);
       // The bridge also sends the full rows those tickers (and the few its widgets read) are drawn
@@ -3489,135 +3438,45 @@ export default function MorLaunchSonar() {
     for (const s of allItems) map.set(String(s.ticker ?? "").toUpperCase().trim(), s);
     return map;
   }, [allItems]);
-  // ITB/HARD/CORR audit (2026-09-29): these three toggles built a `snapshot`/`sectorCorr` object
-  // that reached a `filtersRef` NOBODY ever read (see the dead-but-still-computed comment above),
-  // and separately were simply missing from the real push effect's `filters` object below — so on
-  // MorLaunch they were pure decoration, unlike Arbitrage (which pushes its whole snapshot wholesale
-  // and so genuinely gates on them server-side). No MorLaunchSonarRow field carries borrow status or
-  // corr-peer membership for a server-side gate to read even if the push included them, so — same
-  // reasoning as σ/α/γ above — this narrows morLaunchMatchedShort/Long client-side instead, joining
-  // back to the full-fidelity ArbitrageSignal row (itemsByTicker) for the borrow-status check and
-  // reading sectorCorr's own already-fetched excluded-ticker set directly.
-  const morLaunchStaticBoundsOk = useCallback((r: MorLaunchSonarRow) => {
+  // UNIVERSE table's own filter+sort (2026-10-23: SHORT/LONG and everything that only existed to
+  // support them — morLaunchStaticBoundsOk, morLaunchMatchedShort/Long, hasAny, the "no signals"
+  // empty-state apparatus, the dead benchBlocks/hedge JSX — are gone; see this file's own history
+  // for why those existed and why they are safe to remove: none had any OTHER consumer).
+  // Rating/Total/Sigma/Alpha reuse the toolbar's own existing morLaunchMinRate/morLaunchMinTotal/
+  // minSigma/maxSigma/minAlpha/maxAlpha state (the same four columns, already on this page).
+  const filteredSortedUniverseRows = useMemo(() => {
     const nSigma = optNumOrNull(minSigma), xSigma = optNumOrNull(maxSigma);
-    if ((nSigma != null || xSigma != null) && !passMinMax(r.sigma, nSigma, xSigma)) return false;
     const nAlpha = optNumOrNull(minAlpha), xAlpha = optNumOrNull(maxAlpha);
-    if ((nAlpha != null || xAlpha != null) && !passMinMax(r.alpha, nAlpha, xAlpha)) return false;
-    const nGamma = optNumOrNull(minGamma), xGamma = optNumOrNull(maxGamma);
-    if ((nGamma != null || xGamma != null) && !passMinMax(r.gamma, nGamma, xGamma)) return false;
-    const ticker = String(r.ticker ?? "").toUpperCase().trim();
-    if (excludeItb || excludeHard) {
-      const signal = itemsByTicker.get(ticker);
-      if (rowExcludedByBorrow(signal, excludeItb, excludeHard)) return false;
-    }
-    if (excludeCorr && sectorCorr.excluded.has(ticker)) return false;
-    return true;
-  }, [minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, excludeItb, excludeHard, itemsByTicker, excludeCorr, sectorCorr.excluded]);
-  const morLaunchMatchedShort = useMemo(
-    () => morLaunchSonarRows.filter((r) => r.side === "Short" && morLaunchStaticBoundsOk(r)),
-    [morLaunchSonarRows, morLaunchStaticBoundsOk]
-  );
-  const morLaunchMatchedLong = useMemo(
-    () => morLaunchSonarRows.filter((r) => r.side === "Long" && morLaunchStaticBoundsOk(r)),
-    [morLaunchSonarRows, morLaunchStaticBoundsOk]
-  );
-
-  const hedgeComputed = useMemo(() => computeHedgeByBench(allItems), [allItems]);
-  const hedgeByBench = hedgeComputed.byBench;
-  const pairMutualExclusion = hedgeComputed.exclusions;
-  // Also true from the backend rows directly: benchBlocks (the dead bucket grid) is still built
-  // from the client's own, now-vestigial filter chain, so relying on it alone could show the
-  // "filtered out" empty-state banner ABOVE a real, populated matched list from the bridge.
-  const hasAny = benchBlocks.some((b) => b.buckets.some((g) => g.rows.length > 0))
-    || morLaunchMatchedLong.length > 0 || morLaunchMatchedShort.length > 0;
-  const rawSignalCount = sonarRawCount;
-  const filteredOutSignalCount = Math.max(0, rawSignalCount - items.length);
-  const filteredOutByClientFilters = !loading && !error && !hasAny && rawSignalCount > 0;
-  const bridgeReturnedNoSignals = !loading && !error && !hasAny && rawSignalCount === 0;
-  const activeEmptyStateHints = useMemo(() => {
-    const hints: string[] = [];
-    const pushRangeHint = (label: string, mode: RangeFilterMode, min: string, max: string) => {
-      if (mode === "off" || (!min && !max)) return;
-      hints.push(`${label} ${min || "min"}..${max || "max"}`);
-    };
-    pushRangeHint(`PreMhVolNF`, rangeModes.PreMhVolNF, preMhVolNFMin, preMhVolNFMax);
-    pushRangeHint(`VolNFfromLstCls`, rangeModes.VolNFfromLstCls, volNFfromLstClsMin, volNFfromLstClsMax);
-    if (tickersFilterNorm) hints.push(`tickers ${tickersFilterNorm}`);
-    if (listMode === "ignore" && ignoreSet.size > 0) hints.push(`ignore ${ignoreSet.size}`);
-    if (listMode === "apply" && applySet.size > 0) hints.push(`apply ${applySet.size}`);
-    if (listMode === "pin" && Object.keys(pinMap).length > 0) hints.push(`pin ${Object.keys(pinMap).length}`);
-    if (activeMode === "onlyActive") hints.push("ACTIVE only");
-    if (activeMode === "onlyInactive") hints.push("INACTIVE only");
-    if (excludeDividend) hints.push("ex DIV");
-    if (excludeNews) hints.push("ex NEWS");
-    if (excludePTP) hints.push("ex PTP");
-    if (excludeSSR) hints.push("ex SSR");
-    if (excludeReport) hints.push("ex REPORT");
-    if (excludeETF) hints.push("ex ETF");
-    if (excludeCrap) hints.push("ex < $5");
-    if (excludeItb) hints.push("ex ITB");
-    if (excludeHard) hints.push("ex HARD-to-borrow");
-    if (excludeCorr) hints.push(`ex CORR peers ${sectorCorr.excluded.size}`);
-    if (includeUSA) hints.push("USA only");
-    if (includeChina) hints.push("CHINA only");
-    if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
-    if (exchangeEnabled !== "off" && selExchanges.size > 0) hints.push(`exchanges ${selExchanges.size}`);
-    if (sectorEnabled !== "off" && selSectors.size > 0) hints.push(`sectors ${selSectors.size}`);
-    if (equityType.trim()) hints.push(`equity ${equityType.trim()}`);
-    return hints.slice(0, 8);
-  }, [
-    activeMode,
-    applySet.size,
-    countryEnabled,
-    equityType,
-    exchangeEnabled,
-    excludeCrap,
-    excludeDividend,
-    excludeETF,
-    excludeNews,
-    excludePTP,
-    excludeReport,
-    excludeSSR,
-    excludeItb,
-    excludeHard,
-    excludeCorr,
-    sectorCorr.excluded,
-    ignoreSet.size,
-    includeChina,
-    includeUSA,
-    listMode,
-    pinMap,
-    preMhVolNFMax,
-    preMhVolNFMin,
-    rangeModes,
-    sectorEnabled,
-    selCountries,
-    selExchanges,
-    selSectors,
-    tickersFilterNorm,
-    volNFfromLstClsMax,
-    volNFfromLstClsMin,
-  ]);
-  const resetSonarUiState = useCallback(() => {
-    if (typeof window === "undefined") return;
-    try {
-      localStorage.removeItem(UI_STATE_LS_KEY);
-      localStorage.removeItem(SONAR_ACTIVE_PRESET_ID_LS_KEY);
-    } catch {}
-    window.location.reload();
-  }, []);
-
-  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
-  const toggleBucket = (id: string) => setExpandedMap((p) => ({ ...p, [id]: !p[id] }));
+    const query = universeTickerQuery.trim().toUpperCase();
+    const rows = morLaunchUniverseRows.filter((r) => {
+      if (query && !r.ticker.toUpperCase().includes(query)) return false;
+      if (morLaunchMinRate > 0 && (r.rating == null || r.rating < morLaunchMinRate)) return false;
+      if (morLaunchMinTotal > 0 && (r.total == null || r.total < morLaunchMinTotal)) return false;
+      if ((nSigma != null || xSigma != null) && !passMinMax(r.sigma, nSigma, xSigma)) return false;
+      if ((nAlpha != null || xAlpha != null) && !passMinMax(r.alpha, nAlpha, xAlpha)) return false;
+      // CORR's own exclusion set is computed from allItems — a pool scoped to whatever the old
+      // move-signal gate would have matched, not the full 761-ticker universe (sectorCorr's own
+      // data source was never widened when SHORT/LONG was removed). Still correctly excludes
+      // every ticker it DOES have an opinion on; a ticker outside that pool just reads "not
+      // flagged" rather than falsely excluded.
+      if (excludeCorr && sectorCorr.excluded.has(r.ticker.toUpperCase().trim())) return false;
+      return true;
+    });
+    const { key, dir } = universeSort;
+    return [...rows].sort((a, b) => {
+      if (key === "ticker") return dir * a.ticker.localeCompare(b.ticker);
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; // nulls sort last regardless of direction
+      if (bv == null) return -1;
+      return dir * (av - bv);
+    });
+  }, [morLaunchUniverseRows, universeTickerQuery, universeSort, morLaunchMinRate, morLaunchMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded]);
 
   const updatedLabel = updatedAt ? new Date(updatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
 
   const ignoreList = useMemo(() => sortedTickers(ignoreSet), [ignoreSet]);
   const applyList = useMemo(() => sortedTickers(applySet), [applySet]);
-
-  const classLabel = cls.toUpperCase() === "GLOBAL" ? "GLOB" : cls.toUpperCase();
-  const typeLabel = type.toUpperCase();
-  const modeLabel = mode.toUpperCase();
 
   const setModeIgnore = () => setListMode((m) => (m === "ignore" ? "off" : "ignore"));
   const setModeApply = () => setListMode((m) => (m === "apply" ? "off" : "apply"));
@@ -3806,7 +3665,7 @@ export default function MorLaunchSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="MORNING LAUNCH SONAR"
+          scannerShellTitle="LAUNCH•MORNING•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}
@@ -4331,174 +4190,35 @@ export default function MorLaunchSonar() {
                   retint, so formatMorLaunchDev instead retints the single "Dev n.nn" span per card and
                   the ratings detail panel's own Gamma/Alpha/Sigma/ATR/Lambda rows — same helper name/
                   shape as the Scanner's own, just two display surfaces instead of one. */}
-              <div className={`${FILTER_GROUP_BASE} ${FILTER_GROUP_TONES.zap.group}`}>
-                {/* %/σ/α/γ/τ — what the "Dev n.nn" span and the ratings detail panel are shown IN,
-                    and (via thresholdUnit on the push effect above) what the server-side gate itself
-                    scales SHORT/LONG/MAX by — mirrors MorLaunchScanner.tsx's own strip 1-to-1. */}
-                {([
-                  // α/γ/λ are LOCKED while ratings are ignored: they scale by a PUBLISHED per-ticker
-                  // constant, nothing publishes one yet, and MorLaunchGate.Check rejects every row
-                  // under them. %, σ and τ are measured off the row and work today. Locked, not
-                  // hidden — AGENTS.md's Unit/ZAP Toggle Standard.
-                  { key: "pct", label: "%", title: "Raw percentage points of the one-minute move (default)", disabled: false },
-                  { key: "sigma", label: "σ", title: "Divided by each ticker's own sigma, measured off the row", disabled: false },
-                  { key: "alpha", label: "α", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                  { key: "gamma", label: "γ", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                  { key: "atr", label: "τ", title: "Divided by each ticker's own CURRENT live ATR14% reading — measured off the row, not a published constant", disabled: false },
-                  { key: "lambda", label: "λ", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                ] as const).map((u) => {
-                  const on = morLaunchUnitMode === u.key;
-                  return (
-                    <button
-                      key={u.key}
-                      type="button"
-                      disabled={u.disabled}
-                      onClick={() => !u.disabled && setMorLaunchUnitMode(u.key)}
-                      title={u.title}
-                      className={clsx(
-                        FILTER_PILL,
-                        u.disabled
-                          ? "bg-transparent border-transparent text-violet-300/25 cursor-not-allowed"
-                          : on ? FILTER_GROUP_TONES.zap.on : FILTER_GROUP_TONES.zap.off
-                      )}
-                    >
-                      <span className="leading-none" style={{ textTransform: "none" }}>{u.label}</span>
-                    </button>
-                  );
-                })}
-
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Flat floor on the ONE-MINUTE MOVE inside 03:50-04:20 for a POSITIVE (up) move, which is taken SHORT. Coral = short.">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsShort}
-                    onChange={(e) => setMorLaunchMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase short-side floor"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease short-side floor"
-                    >
-                      ▼
-                    </button>
+              <div
+                className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
+                title="Inactive. This strategy does not use the %/σ/α/γ/τ/λ switch or the floor/cap boxes: the unit is always %, there is no flat floor, and the only bound on a move is the published gamma."
+              >
+                {(["%", "σ", "α", "γ", "τ", "λ"] as const).map((g) => (
+                  <span
+                    key={g}
+                    className={clsx(
+                      "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold leading-none cursor-not-allowed",
+                      g === "%" ? "bg-white/[0.06] text-zinc-400" : "text-zinc-600"
+                    )}
+                    style={{ textTransform: "none" }}
+                  >
+                    {g}
+                  </span>
+                ))}
+                {(["short", "long", "max", "n"] as const).map((ph) => (
+                  <div key={ph} className="relative w-[78px] rounded-md border border-white/10">
+                    <input
+                      type="text"
+                      value=""
+                      readOnly
+                      disabled
+                      placeholder={ph}
+                      aria-label={`${ph} (inactive)`}
+                      className="w-full h-7 bg-black/20 border-0 rounded-md px-2 text-center text-[11px] text-zinc-600 placeholder-zinc-700 cursor-not-allowed focus:outline-none"
+                    />
                   </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Flat floor on the ONE-MINUTE MOVE inside 03:50-04:20 for a NEGATIVE (down) move, which is taken LONG. Empty = the same threshold as the short one. Mint = long.">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsLong}
-                    onChange={(e) => setMorLaunchMinDevAbsLong(e.target.value)}
-                    placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? morLaunchMinDevAbsShort;
-                        return String(Math.max(0, +(cur + 0.1).toFixed(4)));
-                      })}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase long-side floor"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? morLaunchMinDevAbsShort;
-                        return String(Math.max(0, +(cur - 0.1).toFixed(4)));
-                      })}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease long-side floor"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on the one-minute move, either side (empty = none): a bigger print is an anomalous outlier and is not taken. Silver = the ceiling.">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsMax}
-                    onChange={(e) => setMorLaunchMinDevAbsMax(e.target.value)}
-                    placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpMorLaunchMinDevAbsMax(0.1)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase max cap"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpMorLaunchMinDevAbsMax(-0.1)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease max cap"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    step={1}
-                    min={0}
-                    value={morLaunchMinGammaTotal}
-                    onChange={(e) => setMorLaunchMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinGammaTotal((v) => Math.max(0, v + 1))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase min gamma total"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinGammaTotal((v) => Math.max(0, v - 1))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease min gamma total"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
+                ))}
               </div>
             </>
           }
@@ -4955,282 +4675,99 @@ export default function MorLaunchSonar() {
           </div>
         )}
 
-        {!error && !hasAny && (
+        {!error && loading && morLaunchUniverseRows.length === 0 && (
           <div className="rounded-xl border border-white/5 bg-white/[0.01] p-8 text-center font-mono">
-            {loading ? (
-              <div className="text-sm tracking-widest text-zinc-500">SCANNING MARKETS...</div>
-            ) : filteredOutByClientFilters ? (
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <div className="text-sm tracking-widest text-amber-200">RAW SIGNALS FOUND, BUT FILTERED OUT</div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                    raw {rawSignalCount} | visible 0 | filtered {filteredOutSignalCount}
-                  </div>
-                </div>
-                <div className="mx-auto max-w-3xl text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                  Current class/type/mode still return data from the bridge, so the active SONAR UI filters or saved preset are hiding all rows.
-                </div>
-                {activeEmptyStateHints.length > 0 && (
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {activeEmptyStateHints.map((hint) => (
-                      <span
-                        key={hint}
-                        className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-amber-200"
-                      >
-                        {hint}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={resetSonarUiState}
-                    className="inline-flex h-7 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/[0.08] px-3 text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-rose-200 transition-colors hover:bg-rose-500/[0.14]"
-                  >
-                    Reset Saved Sonar State
-                  </button>
-                </div>
-              </div>
-            ) : bridgeReturnedNoSignals ? (
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <div className="text-sm tracking-widest text-zinc-400">BRIDGE RETURNED 0 SIGNALS FOR CURRENT QUERY</div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                    cls {classLabel} | mode {modeLabel} | type {typeLabel} | minRate {minRate} | minTotal {minTotal}
-                  </div>
-                </div>
-                {activeEmptyStateHints.length > 0 && (
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {activeEmptyStateHints.map((hint) => (
-                      <span
-                        key={hint}
-                        className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-zinc-400"
-                      >
-                        {hint}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="mx-auto max-w-3xl text-[11px] uppercase tracking-[0.16em] text-zinc-500">
-                  Try relaxing query filters first, especially ρ/β/σ and country toggles, then refresh.
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm tracking-widest text-zinc-500">NO SIGNALS DETECTED</div>
-            )}
+            <div className="text-sm tracking-widest text-zinc-500">SCANNING MARKETS...</div>
           </div>
         )}
 
         {!error && !loading && !morLaunchInWindow && (
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-center text-[10px] font-mono uppercase tracking-widest text-amber-400/80">
-            Outside the 03:50–04:20 NY window — rows below are informational, not actionable.
+            Outside the 03:50–04:20 NY window — the universe list below is informational, not actionable.
             {morLaunchNoSample > 0 ? ` ${morLaunchNoSample} ticker(s) have no previous-minute sample yet (warm-up).` : ""}
           </div>
         )}
 
-        {!error && !loading && (
-          <div className="grid grid-cols-2 gap-4">
-            {[
-              { dir: "down" as const, title: "SHORT", accent: "text-rose-400", border: "border-rose-500/20", rows: morLaunchMatchedShort },
-              { dir: "up" as const, title: "LONG", accent: "text-[#6ee7b7]", border: "border-emerald-500/20", rows: morLaunchMatchedLong },
-            ].map((col) => (
-              <div key={col.dir} className={clsx("rounded-2xl border bg-[#0a0a0a]/40 p-3", col.border)}>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className={clsx("text-xs font-mono font-bold uppercase tracking-widest", col.accent)}>{col.title}</span>
-                  <span className="text-[10px] font-mono text-zinc-500">{col.rows.length} match{col.rows.length === 1 ? "" : "es"}</span>
-                </div>
-                {col.rows.length === 0 ? (
-                  <div className="py-6 text-center text-[11px] font-mono uppercase tracking-widest text-zinc-600">
-                    {morLaunchInWindow ? "No tickers pass current MorLaunch gate" : "Outside signal window"}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {col.rows.map((r) => {
-                      const s = itemsByTicker.get(r.ticker.toUpperCase().trim());
-                      return (
-                        <div
-                          key={r.ticker}
-                          onClick={() => onTickerClick(r.ticker)}
-                          className={clsx(
-                            "flex items-center justify-between rounded-lg border border-white/5 bg-black/20 px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors",
-                            normalizeTicker(activeTicker || "") === normalizeTicker(r.ticker) && "border-white/20 bg-white/[0.06]"
-                          )}
-                        >
-                          <div className="flex items-baseline gap-2">
-                            <span className="font-mono text-sm font-bold text-zinc-100">{r.ticker}</span>
-                            {(() => {
-                              const rep = String((s as any)?.Report ?? (s as any)?.report ?? (s as any)?.meta?.Report ?? "").trim();
-                              return rep && rep.toUpperCase() !== "NO"
-                                ? <span className="font-mono text-[10px] text-pink-400">REP {rep}</span>
-                                : null;
-                            })()}
-                          </div>
-                          <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400">
-                            {/* "Move", not "Dev": this number is a one-minute DELTA, and the tooltip
-                                carries where it came from and where it landed, because a move without
-                                its endpoints cannot be checked against the tape afterwards. */}
-                            {r.signalDev != null && (
-                              <span
-                                title={`One-minute move inside 03:50-04:20: ${r.fromDev != null ? `${r.fromDev.toFixed(2)}% at ${String(Math.floor(r.fromMinuteIdx / 60)).padStart(2, "0")}:${String(r.fromMinuteIdx % 60).padStart(2, "0")}` : "?"} → ${r.lastDev != null ? `${r.lastDev.toFixed(2)}%` : "?"}${r.entryDev != null ? ` · fill ${r.entryDev.toFixed(2)}%` : ""}. Positive is taken SHORT, negative LONG.`}
-                              >
-                                Move {formatMorLaunchDev(r.signalDev, r.gamma, r.sigma, r.alpha, r.atr14Pct, r.lambda)}
-                              </span>
-                            )}
-                            {r.gamma != null && <span className={col.accent}>γ {r.gamma.toFixed(2)}×{r.gammaN}</span>}
-                            {r.winRate != null && <span className={col.accent}>{Math.round(r.winRate * 100)}%×{r.total}</span>}
-                            {r.alpha != null && <span>α {r.alpha.toFixed(2)}</span>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+        {/*
+          UNIVERSE — signals/morlaunch/morlaunch_tickers.csv's own flat list, now the whole panel
+          (2026-10-23, the operator's own instruction: "Прибери ці шорти і лонги у цій стратегії
+          вони не потрібні. Просто аідвантажуй список тікерів і дай можливість фільтрувати їх за
+          усіма колонками" — drop SHORT/LONG entirely, just load the ticker list, filterable by
+          every column). Rating/Total/Sigma/Alpha reuse the toolbar's own existing MINRATE/MINTOTAL/
+          σ/α min-max inputs above (the same four columns, already on this page) rather than a second,
+          duplicate set of range inputs; ticker search and column-header sort are the only genuinely
+          new controls. The bridge already narrowed the raw list by every OTHER toolbar filter
+          (ADV20/SSR/ETF/CRAP/REP/country/exchange/sector/...) via LiveRowFilter before it ever
+          reached the browser — see MorLaunchSonarSnapshotService.BuildUniverseRowsAsync.
+        */}
+        {!error && (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-[#0a0a0a]/40 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-mono font-bold uppercase tracking-widest text-zinc-300">Universe</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={universeTickerQuery}
+                  onChange={(e) => setUniverseTickerQuery(e.target.value.toUpperCase())}
+                  placeholder="FILTER TICKER"
+                  className="h-7 w-32 rounded-lg border border-white/10 bg-black/30 px-2 font-mono text-[11px] uppercase text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-white/30"
+                />
+                <span className="text-[10px] font-mono text-zinc-500">
+                  {filteredSortedUniverseRows.length} of {morLaunchUniverseRows.length} ticker{morLaunchUniverseRows.length === 1 ? "" : "s"}
+                </span>
               </div>
-            ))}
-          </div>
-        )}
-
-        {false && !error && hasAny && (
-          <div className="space-y-3">
-            {(() => {
-              const visible = new Set(benchBlocks.map((b) => b.benchmark));
-              const activePairs = pairMutualExclusion.filter((p) => p.active && visible.has(p.aBench) && visible.has(p.bBench));
-              if (!activePairs.length) return null;
-
-              return (
-                <div className={`px-3 py-2 rounded-lg border ${"accent-panel-soft"}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
-                    <span className={`text-[10px] font-mono uppercase tracking-widest ${accentTextClass}`}>
-                      QQQ/SPY/IWM Mutual Exclusion
-                    </span>
-                    <div className={`h-px flex-1 bg-gradient-to-r from-transparent via-current to-transparent ${accentTextClass}`} />
-                  </div>
-                  <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
-                    {activePairs.map((p) => {
-                      const dirArrow = p.favorDir === "buy" ? "^" : p.favorDir === "sell" ? "v" : "-";
-                      const dirClass =
-                        p.favorDir === "buy" ? accentTextClass : p.favorDir === "sell" ? "text-rose-400" : "text-zinc-400";
-                      const tickerLabel = p.favorTicker ?? "-";
-
-                      return (
-                        <div key={p.key} className="px-2 py-1 rounded border border-white/10 bg-black/20 text-[10px] font-mono uppercase tracking-wide">
-                          <span className="text-zinc-300">{p.key}</span>
-                          <span className="mx-1 text-zinc-600">r=</span>
-                          <span className="text-zinc-200">{fmtNum(p.ratio, 2)}</span>
-                          <span className="mx-2 text-zinc-600">|</span>
-                          <span className="text-zinc-400">Excl Sum {fmtBp0(p.cancelA)}</span>
-                          <span className="mx-2 text-zinc-600">|</span>
-                          <span className={dirClass}>Sum {fmtBp0(p.favorSum)} {dirArrow} {tickerLabel}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {benchBlocks.map((bench) => {
-              return (
-                <div
-                  key={bench.benchmark}
-                  className="flex min-w-0 flex-col self-start"
-                >
-                  <HedgeHeaderMinimal bench={bench.benchmark} info={hedgeByBench.get(bench.benchmark) ?? null} />
-
-                  <div className="px-4 pb-3">
-                    <div className="h-px bg-white/5" />
-                  </div>
-
-                  <div className="space-y-6">
-                    {bench.buckets.map((g) => {
-                      const isExpanded = !!expandedMap[g.id];
-                      const rowsToShow = isExpanded ? g.rows.length : Math.min(10, g.rows.length);
-
-                      return (
-                        <div key={g.id} className="border border-white/5 bg-[#0a0a0a]/40 rounded-xl overflow-hidden">
-                          <div className="grid grid-cols-[20px_1fr_20px] items-center gap-2 px-3 py-2 border-b border-white/5 bg-[#0a0a0a]/40">
-                            <div className="flex h-5 w-5 items-center justify-center text-rose-400/90">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(251,113,133,0.2)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 9.5 1.75 3h8.5L6 9.5Z" />
-                              </svg>
-                            </div>
-                            <div className="text-center text-xs font-mono font-medium text-zinc-400 uppercase tracking-wide">
-                              {betaLabels[g.betaKey]}
-                            </div>
-                            <div className="flex h-5 w-5 items-center justify-center text-[#6ee7b7]">
-                              <svg
-                                aria-hidden="true"
-                                viewBox="0 0 12 12"
-                                className="h-3.5 w-3.5 drop-shadow-[0_0_6px_rgba(110,231,183,0.22)]"
-                                fill="currentColor"
-                              >
-                                <path d="M6 2.5 10.25 9h-8.5L6 2.5Z" />
-                              </svg>
-                            </div>
-                          </div>
-
-                          <div className="p-2 grid grid-cols-2 gap-2">
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.short)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`S-${s.ticker}`}
-                                  s={s}
-                                  side="short"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
-
-                            <div className="flex flex-col gap-2">
-                              {(g.rows
-                                .slice(0, rowsToShow)
-                                .map((r) => r.long)
-                                .filter(Boolean) as ArbitrageSignal[]
-                              ).map((s) => (
-                                <SignalCard
-                                  key={`L-${s.ticker}`}
-                                  s={s}
-                                  side="long"
-                                  onClick={onTickerClick}
-                                  activeTicker={activeTicker}
-                                  flashClass={flashClass}
-                                  pinColor={pinMap[s.ticker] ?? null}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                          {g.rows.length > 10 && (
-                            <button
-                              onClick={() => toggleBucket(g.id)}
-                              className="w-full py-2 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 border-t border-white/5 bg-white/[0.01] hover:bg-white/[0.03] transition-colors"
-                            >
-                              {isExpanded ? "SHOW LESS" : `SHOW ALL (${g.rows.length})`}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
             </div>
+            {filteredSortedUniverseRows.length === 0 ? (
+              <div className="py-6 text-center text-[11px] font-mono uppercase tracking-widest text-zinc-600">
+                {morLaunchUniverseRows.length === 0 ? "No universe tickers pass the toolbar filters" : "No tickers match the ticker search"}
+              </div>
+            ) : (
+              <div className="max-h-[70vh] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-white/[0.06] bg-[#0a0a0a]/95 text-left font-mono text-[11px] uppercase tracking-widest text-zinc-500">
+                      {([
+                        ["ticker", "Ticker"],
+                        ["rating", "Rating"],
+                        ["total", "Total"],
+                        ["sigma", "Sigma"],
+                        ["alpha", "Alpha"],
+                      ] as const).map(([key, label]) => (
+                        <th
+                          key={key}
+                          className="cursor-pointer select-none px-3 py-2 hover:text-zinc-300"
+                          onClick={() => setUniverseSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : 1 }))}
+                          title={`Sort by ${label}`}
+                        >
+                          {label} {universeSort.key === key ? (universeSort.dir === 1 ? "▲" : "▼") : ""}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSortedUniverseRows.map((r) => (
+                      <tr
+                        key={r.ticker}
+                        onClick={() => onTickerClick(r.ticker)}
+                        className={clsx(
+                          "cursor-pointer border-b border-white/[0.03] font-mono text-[12px] hover:bg-white/5 transition-colors",
+                          normalizeTicker(activeTicker || "") === normalizeTicker(r.ticker) && "bg-white/[0.06]"
+                        )}
+                      >
+                        <td className="px-3 py-1.5 font-bold text-zinc-100">{r.ticker}</td>
+                        <td className="px-3 py-1.5 text-zinc-300">{r.rating != null ? `${Math.round(r.rating * 100)}%` : "—"}</td>
+                        <td className="px-3 py-1.5 text-zinc-400">{r.total ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-zinc-400">{r.sigma != null ? r.sigma.toFixed(2) : "—"}</td>
+                        <td className="px-3 py-1.5 text-zinc-400">{r.alpha != null ? r.alpha.toFixed(2) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
+
         <style jsx global>{`
           input.center-spin[type="number"] {
             -moz-appearance: textfield;

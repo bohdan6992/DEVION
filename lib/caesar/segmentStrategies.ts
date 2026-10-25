@@ -18,11 +18,12 @@ import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
  * bug then recurred for OPG under OPEN. One explicit list, one import on each side, settles both.
  *
  * PRE shows everything genuinely active on it, hedges included; OPEN shows only the OPG family;
- * INTRA shows nothing; POST shows only CLO (and its own hedge).
+ * INTRA shows nothing; POST shows CLO (and its own hedge) plus LAUNCH•EVENING's basket (its
+ * 15:58 send is armed early by CaesarPlanService.EarlyEnableFloorMinuteIdx, like CLO's own).
  */
 export const SEGMENT_STRATEGY_KEYS: Partial<Record<string, readonly string[]>> = {
   pre: ["arbitrage", "morlaunch", "morlaunchbasket", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
   open: ["opgreversal", "opgcontinuum", "opgfade", "opgride"],
   intra: [],
-  post: ["reversal", "continuum", CLO_HEDGE_KEY],
+  post: ["reversal", "continuum", "launcheveningbasket", CLO_HEDGE_KEY],
 };

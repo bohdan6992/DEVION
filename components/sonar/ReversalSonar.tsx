@@ -1861,8 +1861,8 @@ export default function ReversalSonar() {
   // further down, ported 1-to-1 from ReversalScanner.tsx's own pattern (AGENTS.md's spinner-input
   // standard). Naming/defaults match ReversalScanner.tsx's own reversalMinDevAbsShort/Long/Max/
   // reversalMinGammaTotal exactly, so buildReversalParams-equivalent below stays a byte-for-byte
-  // mirror of the Scanner's own request builder.
-  const [reversalMinDevAbsShort, setReversalMinDevAbsShort] = useState(0.5);
+  // mirror of the Scanner's own request builder. 1.0 — raised from 0.5, 2026-10-24.
+  const [reversalMinDevAbsShort, setReversalMinDevAbsShort] = useState(1.0);
   // Empty means "the same threshold as the short one" (optNumOrNull(...) ?? reversalMinDevAbsShort).
   const [reversalMinDevAbsLong, setReversalMinDevAbsLong] = useState("");
   // Upper cap on |15:50 deviation|, either side; empty = no cap.

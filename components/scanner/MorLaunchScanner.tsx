@@ -17,7 +17,8 @@ import { SHARED_FILTER_PRESET_API_KIND, SHARED_FILTER_PRESET_FIELDS, isSharedFil
 import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, getSharedFilterLocalPreset, listSharedFilterLocalPresets, saveSharedFilterLocalPreset } from "../../lib/presets/sharedFilterLocalPresets";
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
-import { pushMorLaunchStreamLiveParams, toMorLaunchStreamLiveParams } from "../../lib/morLaunch/liveParamsClient";
+import { fetchMorLaunchStreamUniverse, pushMorLaunchStreamLiveParams, toMorLaunchStreamLiveParams, type MorLaunchStreamUniverseRow } from "../../lib/morLaunch/liveParamsClient";
+import { subscribeSharedPoll } from "../../lib/caesar/sharedPoll";
 import OpenDoorStreamView from "../stream/OpenDoorStream";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
@@ -748,17 +749,22 @@ export default function MorLaunchScanner({
   // one is how far it travelled in a minute.
   // MinDevAbsShort gates a POSITIVE (up, so Short) move, defaulting to 1.0 — the operator's own floor
   // for this pattern ("Рух від 1%"), a plain number, never empty.
-  const [morLaunchMinDevAbsShort, setMorLaunchMinDevAbsShort] = useState(1.0);
-  // MinDevAbsLong gates a NEGATIVE (down, so Long) move. String, like ArbitrageScanner's startAbsNeg,
-  // so it can be left empty — empty means "the same threshold as the short one" (optNumOrNull(...) ??
-  // morLaunchMinDevAbsShort), mirroring startAbsNeg's own fallback UX exactly.
-  const [morLaunchMinDevAbsLong, setMorLaunchMinDevAbsLong] = useState("");
-  // Upper cap on the size of the move, either side — beyond it the print is an anomalous outlier and is
-  // NOT taken. String, like ArbitrageScanner's startAbsMax; empty = no cap.
-  const [morLaunchMinDevAbsMax, setMorLaunchMinDevAbsMax] = useState("");
-  // Sample-size floor on the ticker's own published gamma (MorLaunchGammaEntry.GammaN) — same spirit
-  // as OpenDoorGate.TryGetRatedBin's minTotalGate. 0 (or below) turns this off.
-  const [morLaunchMinGammaTotal, setMorLaunchMinGammaTotal] = useState(0);
+  // THE VIOLET %/σ/α/γ/τ/λ STRIP AND ITS FOUR SPINNER BOXES ARE RETIRED (operator, 2026-10-24: "LAUNCH•MORNING і
+  // LAUNCH•EVENING - не потребують фіолетового перемикача, очисти значення і зроби його неактивним сіруватим").
+  // They stay on screen only as a greyed, empty, unclickable strip. What the gate really uses is FIXED below and nothing
+  // can change it - not an older saved toolbar (localStorage), not an Auto Optimizer row: the unit is always %, there is
+  // no cap, no GammaN floor and NO FLAT FLOOR (operator, 2026-10-24: "прибери Поріг 0,7"). The only thing left that bounds a move
+  // is the ticker's published gamma, so keep ratings ON: with ratings IGNORED a zero floor passes every tick.
+  // The setters are no-ops so every existing call site (restore from localStorage, optimizer apply, spinners) keeps compiling.
+  const MOR_LAUNCH_FIXED_FLOOR_PCT = 0;
+  const morLaunchMinDevAbsShort: number = MOR_LAUNCH_FIXED_FLOOR_PCT;
+  const setMorLaunchMinDevAbsShort = (_v?: unknown): void => {};
+  const morLaunchMinDevAbsLong: string = "";
+  const setMorLaunchMinDevAbsLong = (_v?: unknown): void => {};
+  const morLaunchMinDevAbsMax: string = "";
+  const setMorLaunchMinDevAbsMax = (_v?: unknown): void => {};
+  const morLaunchMinGammaTotal: number = 0;
+  const setMorLaunchMinGammaTotal = (_v?: unknown): void => {};
   // Floor on the matched (class, sign) cell's own published win_rate/total — Arbitrage's MINRATE/
   // MINTOTAL, mirrored onto MorLaunch's own rating cell (morLaunch_rolling_perf's win_rate/total, NOT
   // GammaN — see MorLaunchGate.cs). Own separate pills (see below), not the black ρ/β/σ-style range
@@ -818,7 +824,10 @@ export default function MorLaunchScanner({
   // λ     — divided by the ticker's own published lambda (r.lambda) — added 2026-09-27. Like σ, a
   //         published per-ticker CONSTANT (MorLaunch.ipynb's compute_lambda: sample std of the raw
   //         ENTRY-checkpoint Stack% reading), not sign-matched the way α is.
-  const [morLaunchUnitMode, setMorLaunchUnitMode] = useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
+  // Retired with the strip above: the unit is always % (a cast, not an annotation, so TypeScript keeps the full union and
+  // the formatting helpers below still type-check).
+  const morLaunchUnitMode = "pct" as "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
+  const setMorLaunchUnitMode = (_v?: unknown): void => {};
 
   /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
    * are now enforced in server-side (see morLaunchUnitMode's own comment), so what's typed into the
@@ -2572,6 +2581,8 @@ export default function MorLaunchScanner({
         priceMode,
         filters: streamFilterConfig,
         multiModes: { countries: countryEnabled, exchanges: exchangeEnabled, sectors: sectorEnabled },
+        excludeItb,
+        excludeHard,
         source: "morLaunch-scanner",
       }));
     }, 600);
@@ -2579,7 +2590,7 @@ export default function MorLaunchScanner({
   }, [
     morLaunchExitClass, morLaunchMinDevAbsShort, morLaunchMinDevAbsLong, morLaunchMinDevAbsMax,
     morLaunchMinGammaTotal, morLaunchMinRate, morLaunchMinTotal, morLaunchUnitMode, morLaunchIgnoreRatings,
-    priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled,
+    priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled, excludeItb, excludeHard,
   ]);
 
 
@@ -2626,6 +2637,51 @@ export default function MorLaunchScanner({
     [episodesRows, activeRows]
   );
   const sectorCorr = useSectorCorrExclusion(corrSeedRows, excludeCorr, corrThreshold, reportSessionForRow);
+
+  // EXECUTOR tab's own SIGNALS card (2026-10-23, the operator's own instruction: "Такий самий
+  // механізм зроби для стріма, щоб у сигналах відображався лише список відфільтрованих тікерів" —
+  // then, pointed at this exact card: "список тікерів повинен відображатися тут у стрімі"). Same
+  // mechanism as MorLaunchSonar.tsx's own UNIVERSE table, fed from the Stream toolbar's own saved
+  // params instead of the Sonar panel's; passed into OpenDoorStreamView's universeSignalsRows prop,
+  // which swaps the SIGNALS card's body in place of the real move-signal decision table — see that
+  // prop's own doc comment for why this stays read-only and never touches MorLaunchServerStrategy's
+  // own dispatch params. Ticker search + column sort are owned by StreamUniverseSignalsTable itself
+  // (OpenDoorStream.tsx), the same way MorLaunchSonar.tsx owns its own UNIVERSE table's; only the
+  // toolbar-driven narrowing (MINRATE/MINTOTAL/σ/α/CORR) happens here.
+  const [streamUniverseRows, setStreamUniverseRows] = useState<MorLaunchStreamUniverseRow[]>([]);
+
+  useEffect(() => {
+    if (primaryPanel !== "stream") return;
+    let alive = true;
+    const unsubscribe = subscribeSharedPoll("stream-morlaunch-universe", fetchMorLaunchStreamUniverse, 6_000, (value, err) => {
+      if (!alive || err) return;
+      setStreamUniverseRows(value ?? []);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [primaryPanel]);
+
+  const streamUniversePassMinMax = useCallback((val: number | null, min: number | null, max: number | null) => {
+    if ((min != null || max != null) && val == null) return false;
+    if (min != null && val != null && val < min) return false;
+    if (max != null && val != null && val > max) return false;
+    return true;
+  }, []);
+
+  const filteredStreamUniverseRows = useMemo(() => {
+    const nSigma = optNumOrNull(minSigma), xSigma = optNumOrNull(maxSigma);
+    const nAlpha = optNumOrNull(minAlpha), xAlpha = optNumOrNull(maxAlpha);
+    return streamUniverseRows.filter((r) => {
+      if (morLaunchMinRate > 0 && (r.rating == null || r.rating < morLaunchMinRate)) return false;
+      if (morLaunchMinTotal > 0 && (r.total == null || r.total < morLaunchMinTotal)) return false;
+      if ((nSigma != null || xSigma != null) && !streamUniversePassMinMax(r.sigma, nSigma, xSigma)) return false;
+      if ((nAlpha != null || xAlpha != null) && !streamUniversePassMinMax(r.alpha, nAlpha, xAlpha)) return false;
+      if (excludeCorr && sectorCorr.excluded.has(r.ticker.toUpperCase().trim())) return false;
+      return true;
+    });
+  }, [streamUniverseRows, morLaunchMinRate, morLaunchMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded, streamUniversePassMinMax]);
 
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
     strategyModeEnabled: streamAutomationConfigOverride?.strategyModeEnabled ?? false,
@@ -5700,12 +5756,12 @@ export default function MorLaunchScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "MORNING LAUNCH STREAM")
+    ? (headerTitleOverride ?? "LAUNCH•MORNING•STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "MORNING LAUNCH STREAM"
-        : "MORNING LAUNCH SCANNER";
+        ? "LAUNCH•MORNING•STREAM"
+        : "LAUNCH•MORNING•SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -6412,174 +6468,35 @@ export default function MorLaunchScanner({
                   POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
                   startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
                   first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
-              <div className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-violet-500/20 bg-violet-500/[0.06]">
-                {([
-                  // MEASURED units are read off the row being judged, so they work with no published
-                  // ratings file. PUBLISHED ones have nothing to scale by until a notebook ships one,
-                  // and MorLaunchGate.Check rejects every row under them — so they are LOCKED rather
-                  // than offered as a pill that silently empties the screen. See that method's own
-                  // measured-vs-published comment.
-                  { key: "pct", label: "%", title: "Raw percentage points of the one-minute move (default)", disabled: false },
-                  { key: "sigma", label: "σ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own sigma, resolved per ticker server-side. The unit this strategy's out-of-sample result was validated in.", disabled: false },
-                  { key: "alpha", label: "α", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                  { key: "gamma", label: "γ", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                  { key: "atr", label: "τ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own CURRENT ATR14% reading — measured off the row, not a published constant", disabled: false },
-                  { key: "lambda", label: "λ", title: MOR_LAUNCH_UNIT_LOCK_NOTE, disabled: morLaunchIgnoreRatings },
-                ] as const).map((u) => {
-                  const on = morLaunchUnitMode === u.key;
-                  return (
-                    <button
-                      key={u.key}
-                      type="button"
-                      disabled={u.disabled}
-                      onClick={() => !u.disabled && setMorLaunchUnitMode(u.key)}
-                      title={u.title}
-                      className={clsx(
-                        "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all gap-1",
-                        u.disabled
-                          ? "bg-transparent border-transparent text-violet-300/25 cursor-not-allowed"
-                          : on
-                            ? "bg-violet-500 text-white border-transparent shadow-[0_0_16px_rgba(139,92,246,0.36)]"
-                            : "bg-transparent border-transparent text-violet-300/70 hover:bg-violet-500/10 hover:text-violet-200"
-                      )}
-                    >
-                      <span className="leading-none" style={{ textTransform: "none" }}>{u.label}</span>
-                    </button>
-                  );
-                })}
-
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on the ONE-MINUTE MOVE inside 3:50-4:20 for a POSITIVE (up) move, which is taken SHORT, entered in ${morLaunchThresholdUnitLabel}. Coral = short.`}>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsShort}
-                    onChange={(e) => setMorLaunchMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase short-side floor"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease short-side floor"
-                    >
-                      ▼
-                    </button>
+              <div
+                className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
+                title="Inactive. This strategy does not use the %/σ/α/γ/τ/λ switch or the floor/cap boxes: the unit is always %, there is no flat floor, and the only bound on a move is the published gamma."
+              >
+                {(["%", "σ", "α", "γ", "τ", "λ"] as const).map((g) => (
+                  <span
+                    key={g}
+                    className={clsx(
+                      "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold leading-none cursor-not-allowed",
+                      g === "%" ? "bg-white/[0.06] text-zinc-400" : "text-zinc-600"
+                    )}
+                    style={{ textTransform: "none" }}
+                  >
+                    {g}
+                  </span>
+                ))}
+                {(["short", "long", "max", "n"] as const).map((ph) => (
+                  <div key={ph} className="relative w-[78px] rounded-md border border-white/10">
+                    <input
+                      type="text"
+                      value=""
+                      readOnly
+                      disabled
+                      placeholder={ph}
+                      aria-label={`${ph} (inactive)`}
+                      className="w-full h-7 bg-black/20 border-0 rounded-md px-2 text-center text-[11px] text-zinc-600 placeholder-zinc-700 cursor-not-allowed focus:outline-none"
+                    />
                   </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on the ONE-MINUTE MOVE inside 3:50-4:20 for a NEGATIVE (down) move, which is taken LONG, entered in ${morLaunchThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsLong}
-                    onChange={(e) => setMorLaunchMinDevAbsLong(e.target.value)}
-                    placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? morLaunchMinDevAbsShort;
-                        return String(Math.max(0, +(cur + 0.1).toFixed(4)));
-                      })}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase long-side floor"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinDevAbsLong((prev) => {
-                        const cur = optNumOrNull(prev) ?? morLaunchMinDevAbsShort;
-                        return String(Math.max(0, +(cur - 0.1).toFixed(4)));
-                      })}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease long-side floor"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on the one-minute move, either side (empty = none), entered in ${morLaunchThresholdUnitLabel}: a bigger print is an anomalous outlier and is not taken. Silver = the ceiling.`}>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step={0.1}
-                    min={0}
-                    value={morLaunchMinDevAbsMax}
-                    onChange={(e) => setMorLaunchMinDevAbsMax(e.target.value)}
-                    placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpMorLaunchMinDevAbsMax(0.1)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase max cap"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => bumpMorLaunchMinDevAbsMax(-0.1)}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease max cap"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    step={1}
-                    min={0}
-                    value={morLaunchMinGammaTotal}
-                    onChange={(e) => setMorLaunchMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
-                  />
-                  <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinGammaTotal((v) => Math.max(0, v + 1))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase min gamma total"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setMorLaunchMinGammaTotal((v) => Math.max(0, v - 1))}
-                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
-                      aria-label="Decrease min gamma total"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </div>
+                ))}
               </div>
               </>
             }
@@ -6869,6 +6786,7 @@ export default function MorLaunchScanner({
             automationLaunchEnabled={streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab"}
             entryCutoffActive={streamSignalClass === "ark"}
             hideAutomationButtons
+            universeSignalsRows={filteredStreamUniverseRows}
           />
         )}
 

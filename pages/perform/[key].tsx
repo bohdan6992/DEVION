@@ -36,6 +36,7 @@ const STRATEGY_CATALOG: Record<string, { title: string; description?: string; ic
   rLine: { title: "R-Line", description: "Робота з лініями ризику/рівнями R.", icon: "📏" },
   intraDance: { title: "Intra Dance", description: "Інтра-рухи та “танець” усередині дня.", icon: "🩰" },
   morLaunch: { title: "Morning Launch", description: "Різкий рух 03:50-04:20 проти напрямку, вихід гепом.", icon: "🌅" },
+  launchEvening: { title: "Evening Launch", description: "Різкий рух 15:50-16:20 проти напрямку (Sonar).", icon: "🌆" },
   coupleDating: { title: "Couple Dating", description: "Парні залежності: SPY/QQQ, XLF/SPY тощо.", icon: "💞" },
   volumeArrival: { title: "Volume Arrival", description: "Прихід об’єму і реакція ціни.", icon: "📊" },
   latePrint: { title: "Late Print", description: "Пізні принти та after-effects.", icon: "🕯️" },

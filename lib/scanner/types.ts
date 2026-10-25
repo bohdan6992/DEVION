@@ -632,6 +632,8 @@ export type OPGRideAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
 // Morning Launch's own copy — identical shape (see PaperMorLaunchController.cs).
 export type MorLaunchAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+// Evening Launch's own copy - identical shape (the evening scanner has no paper controller yet; see LaunchEveningScanner.tsx).
+export type LaunchEveningAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
 // PullBack's own copy — identical shape (see PaperPullBackController.cs).
 export type PullBackAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;

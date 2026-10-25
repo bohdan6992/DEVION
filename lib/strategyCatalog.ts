@@ -38,12 +38,19 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // "morLaunch" so it lowercases to the registry/bridge key "morlaunch" the way every other live
   // strategy's does (see lib/caesar/schedule.ts's own note on that convention).
   { key: "morLaunch", name: "Morning Launch", icon: "🌅", description: "Різкий рух 03:50-04:20 беремо в протилежну сторону, вихід гепом на 9:30." },
+  // Evening twin of the entry above (operator, 2026-10-24): the same Sonar with the clock moved to 15:50-16:20. Sonar only so
+  // far - no scanner/stream/server strategy. Key lowercases to the registry/bridge key "launchevening".
+  { key: "launchEvening", name: "Evening Launch", icon: "🌆", description: "Різкий рух 15:50-16:20 беремо в протилежну сторону. Поки що лише Sonar." },
   // A second, unrelated way to run Morning Launch's thesis (operator's own, 2026-10-20): no tape,
   // no signal — a scheduled keystroke macro against TradingApp's own Basket feature (03:58 places
-  // resting limits on everything in the basket, 04:02 cancels what's left). A fill is never
-  // auto-exited; the card exists purely to show its own P&L. See
+  // resting limits on everything in the basket, 04:01 cancels what's left — MOVED from 04:02,
+  // 2026-10-25). A fill is never auto-exited; the card exists purely to show its own P&L. See
   // MorLaunchBasketServerStrategy.cs's own header comment on the bridge for the full spec.
-  { key: "morLaunchBasket", name: "Launch•Morning", icon: "🧺", description: "Лімітки на весь баскет о 3:58, скасування о 4:02 — ловимо різкий рух 3:59-4:00. Вихід ручний." },
+  { key: "morLaunchBasket", name: "Launch•Morning", icon: "🧺", description: "Лімітки на весь баскет о 3:58, скасування о 4:01 — ловимо різкий рух 3:59-4:00. Вихід ручний." },
+  // The evening twin of the entry above (operator's own, 2026-10-24): the same basket macro, only the
+  // clock moves to the 16:00 transition (15:58 limits, 16:02 Ctrl+Q cancel). Key lowercases to the
+  // registry/bridge key "launcheveningbasket". See LaunchEveningBasketServerStrategy.cs.
+  { key: "launchEveningBasket", name: "Launch•Evening", icon: "🌇", description: "Лімітки на весь баскет о 15:58, скасування о 16:02 — ловимо різкий рух 15:59-16:00. Вихід ручний." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },

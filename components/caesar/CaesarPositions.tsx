@@ -329,6 +329,7 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   [CLO_HEDGE_KEY]: "HEDGE•CLO",
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",
   morlaunchbasket: "LAUNCH•MORNING",
+  launcheveningbasket: "LAUNCH•EVENING",
 };
 
 function strategyDisplayLabel(key: string): string {
@@ -774,10 +775,10 @@ export default function CaesarPositions({
       const inst = instances.find((i) => i.key === key);
       if (!inst) return [];
 
-      // Hedges and MorLaunchBasket have no settle checkpoint of their own (a hedge is pressed
-      // whenever its own balancing strategy needs it, not on a fixed clock; MorLaunchBasket's own
-      // exit is manual) — always their own LIVE total, regardless of which segment tab they sit on.
-      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket") {
+      // Hedges and the two Launch baskets have no settle checkpoint of their own (a hedge is pressed
+      // whenever its own balancing strategy needs it, not on a fixed clock; a basket's own exit is
+      // manual) — always their own LIVE total, regardless of which segment tab they sit on.
+      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket" || key === "launcheveningbasket") {
         const live = view.perStrategy.get(key);
         return live ? [[key, live]] : [];
       }
