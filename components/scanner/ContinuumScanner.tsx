@@ -5289,22 +5289,16 @@ export default function ContinuumScanner({
     const count = Math.trunc(row.entryCount ?? 1);
     return Number.isFinite(count) && count > 0 ? count : 1;
   };
-  const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
-    pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
-  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
-  const episodeTickerStreamflowUsd = (row: PaperArbClosedDto) => {
+  // NOT episodeHasHedgeLeg/x2-per-row — see ReversalScanner.tsx's own identical fix (2026-10-26,
+  // the operator's own report: "кнопка HEDGED хеджить кожен тікер, а я хочу щоб ми хеджили лише
+  // різницю"). Continuum's HEDGED mode is the same single-TQQQ-row-per-day model as Reversal's own
+  // (TapeContinuumEngine.BuildHedgeRowAsync) — not Arbitrage's per-position beta-weighted bench
+  // leg, whose doubling logic was copied here unadapted when this toggle was added.
+  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row);
+  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
     const baseNotional = row.positionNotionalUsd ?? 0;
     if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
     return baseNotional * episodeEntryCount(row);
-  };
-  const episodeBenchStreamflowUsd = (row: PaperArbClosedDto) => {
-    if (!episodeHasHedgeLeg(row)) return 0;
-    const tickerFlow = episodeTickerStreamflowUsd(row);
-    if (!Number.isFinite(tickerFlow) || tickerFlow <= 0) return 0;
-    return tickerFlow * Math.abs(row.beta ?? 0);
-  };
-  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
-    return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
     // Server-computed, 2026-09-23 (PaperContinuumController.BuildAnalyticsSummary) — the operator's

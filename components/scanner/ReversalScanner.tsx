@@ -5380,22 +5380,25 @@ export default function ReversalScanner({
     const count = Math.trunc(row.entryCount ?? 1);
     return Number.isFinite(count) && count > 0 ? count : 1;
   };
-  const episodeHasHedgeLeg = (row: PaperArbClosedDto) =>
-    pnlMode === "Hedged" && Number.isFinite(row.beta ?? NaN) && Math.abs(row.beta ?? 0) > 0;
-  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row) * (episodeHasHedgeLeg(row) ? 2 : 1);
-  const episodeTickerStreamflowUsd = (row: PaperArbClosedDto) => {
+  // NOT episodeHasHedgeLeg/x2-per-row (2026-10-26, the operator's own report: "кнопка HEDGED
+  // хеджить кожен тікер, а я хочу щоб ми хеджили лише різницю"). That per-row-beta doubling is
+  // Arbitrage's own HEDGED model — every Arbitrage position genuinely trades its own paired bench
+  // leg, sized by that ticker's own beta — copied here byte-for-byte when this toggle was first
+  // added to Reversal (2026-10-24) without noticing the two strategies hedge completely
+  // differently. Reversal has no bench leg and no per-ticker beta hedge at all: HEDGED mode adds
+  // exactly ONE extra TQQQ row to the day (TapeReversalEngine.BuildHedgeRowAsync, sized off the
+  // day's own long/short excess ÷ TQQQ's 3x leverage, rounded up) — already a real row in
+  // filteredEpisodes once that fix landed, counted the same as any other row below. The beta field
+  // this used to key off is still populated on every Reversal row (TapeStaticMeta.EnrichFrom pulls
+  // a ticker's own published beta regardless of strategy), so with the Arbitrage logic left in
+  // place, EVERY row read as "has a hedge leg" the moment HEDGED was on — not just the TQQQ one —
+  // doubling every single trade's own count and streamflow (TRADES reading exactly 2x SITUATIONS,
+  // confirmed live, not just the hedge row's own effect).
+  const episodeTradeCount = (row: PaperArbClosedDto) => episodeEntryCount(row);
+  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
     const baseNotional = row.positionNotionalUsd ?? 0;
     if (!Number.isFinite(baseNotional) || baseNotional <= 0) return 0;
     return baseNotional * episodeEntryCount(row);
-  };
-  const episodeBenchStreamflowUsd = (row: PaperArbClosedDto) => {
-    if (!episodeHasHedgeLeg(row)) return 0;
-    const tickerFlow = episodeTickerStreamflowUsd(row);
-    if (!Number.isFinite(tickerFlow) || tickerFlow <= 0) return 0;
-    return tickerFlow * Math.abs(row.beta ?? 0);
-  };
-  const episodeStreamflowUsd = (row: PaperArbClosedDto) => {
-    return episodeTickerStreamflowUsd(row) + episodeBenchStreamflowUsd(row);
   };
   const analyticsSummary = useMemo(() => {
     // Server-computed, 2026-09-23 (PaperReversalController.BuildAnalyticsSummary) — the operator's
