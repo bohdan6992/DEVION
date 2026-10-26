@@ -1471,6 +1471,7 @@ export default function OpenRideScanner({
     ticker: string;
     benchTicker?: string | null;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4401,6 +4402,7 @@ export default function OpenRideScanner({
           ticker: String(r?.ticker ?? ""),
           benchTicker: r?.benchTicker ?? null,
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: (isLong ? r?.startAskPct : r?.startBidPct) ?? null,
@@ -8294,6 +8296,7 @@ export default function OpenRideScanner({
                       <th className="text-left p-2.5">Side</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
                       <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5">Exit Date</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Fill</th>
                       <th className="text-right p-2.5">Exit Fill</th>
                       <th className="text-right p-2.5">Move (pts)</th>
@@ -8324,6 +8327,7 @@ export default function OpenRideScanner({
                         <td className={clsx("p-2.5 font-bold", r.side === "Long" ? "text-[#6ee7b7]" : "text-rose-400")}>{r.side}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.dateNy || "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
@@ -8351,7 +8355,7 @@ export default function OpenRideScanner({
                     ))}
                     {!openDoorSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={11} className="p-8 text-center text-zinc-500">
+                        <td colSpan={12} className="p-8 text-center text-zinc-500">
                           {openDoorSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

@@ -20,7 +20,7 @@ export default function ContinuumStreamPage() {
     <OpenDoorStreamPageContainer
       lsKeyPrefix={STRATEGY.storage.streamPrefix}
       strategyPriority={STRATEGY.priority}
-      headerTitle="CONTINUUM STREAM"
+      headerTitle="CLO•CONTINUUM•STREAM"
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}

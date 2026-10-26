@@ -19,7 +19,7 @@ export default function OPGContinuumStreamPage() {
     <OpenDoorStreamPageContainer
       lsKeyPrefix={STRATEGY.storage.streamPrefix}
       strategyPriority={STRATEGY.priority}
-      headerTitle="OPG•CONTINUUM STREAM"
+      headerTitle="OPG•CONTINUUM•STREAM"
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}

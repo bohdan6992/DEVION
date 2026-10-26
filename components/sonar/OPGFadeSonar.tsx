@@ -3799,7 +3799,7 @@ export default function OPGFadeSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="OPG•FADE SONAR"
+          scannerShellTitle="OPG•FADE•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}

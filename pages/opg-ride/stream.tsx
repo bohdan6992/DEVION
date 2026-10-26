@@ -21,7 +21,7 @@ export default function OPGRideStreamPage() {
     <OpenDoorStreamPageContainer
       lsKeyPrefix={STRATEGY.storage.streamPrefix}
       strategyPriority={STRATEGY.priority}
-      headerTitle="OPG•RIDE STREAM"
+      headerTitle="OPG•RIDE•STREAM"
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}

@@ -1339,6 +1339,7 @@ export default function VWAPBounceScanner({
   type VWAPBouncePaperClosed = {
     ticker: string;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4350,6 +4351,7 @@ export default function VWAPBounceScanner({
         return {
           ticker: String(r?.ticker ?? ""),
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: r?.lstPrcLstClsPct ?? null,
@@ -8658,6 +8660,7 @@ export default function VWAPBounceScanner({
                       <th className="text-left p-2.5">Side</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
                       <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5">Exit Date</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Exit Stack%</th>
                       <th className="text-right p-2.5">Move (%)</th>
@@ -8685,6 +8688,7 @@ export default function VWAPBounceScanner({
                             actual order is VWAPBounce's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
                         <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.dateNy || "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
@@ -8707,7 +8711,7 @@ export default function VWAPBounceScanner({
                     ))}
                     {!vwapBounceSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={13} className="p-8 text-center text-zinc-500">
+                        <td colSpan={14} className="p-8 text-center text-zinc-500">
                           {vwapBounceSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

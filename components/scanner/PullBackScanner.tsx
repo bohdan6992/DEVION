@@ -1499,6 +1499,7 @@ export default function PullBackScanner({
   type PullBackPaperClosed = {
     ticker: string;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4500,6 +4501,7 @@ export default function PullBackScanner({
         return {
           ticker: String(r?.ticker ?? ""),
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: r?.lstPrcLstClsPct ?? null,
@@ -4613,6 +4615,11 @@ export default function PullBackScanner({
     { key: "exitTime", label: "Exit Time", align: "right",
       sort: (r) => r.exitMinuteIdx, render: (r) => minuteIdxToClockLabel(r.exitMinuteIdx),
       cellClass: () => "text-zinc-300" },
+    { key: "exitDate", label: "Exit Date", align: "right",
+      title: "The NY trading date this row's 09:30 exit belongs to.",
+      sort: (r) => r.dateNy ?? "",
+      render: (r) => r.dateNy || "—",
+      cellClass: () => "text-zinc-500" },
 
     { key: "entryStack", label: "Entry Stack%", align: "right", divider: true,
       sort: (r) => r.entryStack ?? null, render: (r) => num(r.entryStack ?? null, 3),

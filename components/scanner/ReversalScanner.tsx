@@ -1478,6 +1478,7 @@ export default function ReversalScanner({
   type ReversalPaperClosed = {
     ticker: string;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4425,6 +4426,14 @@ export default function ReversalScanner({
     const useSigBinFilter = ratingMode === "BINS" && metric === "SigmaZap";
     const episodeBinRule = ratingRules.find((r) => r.band === ratingBandFromSession(session)) ?? { minRate: 0, minTotal: 0 };
     return episodesRows.filter((r) => {
+      // The HEDGED toggle's own synthetic TQQQ row (TapeReversalEngine.BuildHedgeRowAsync) is
+      // bookkeeping for the day's own long/short imbalance, not a trading candidate — every gate
+      // below (rating bins, zap delta, top-window, sigma/alpha/gamma ranges, CORR/ITB/HARD/report)
+      // is built to judge whether a TICKER is a good signal, which has no meaning for a row that
+      // isn't one. TQQQ's own real static profile (no gamma/alpha published for this strategy,
+      // genuinely an ETF) failed nearly every one of these, silently dropping the hedge row's P&L
+      // from HEDGED mode even once the server started computing and sending it (2026-10-26).
+      if (pnlMode === "Hedged" && String(r.ticker ?? "").toUpperCase() === "TQQQ") return true;
       if (!listModeAllowsTicker(r.ticker)) return false;
       if (tq && !String(r.ticker ?? "").toUpperCase().includes(tq)) return false;
       if (qSide) {
@@ -4494,7 +4503,7 @@ export default function ReversalScanner({
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, pnlMode]);
 
   // The SNAPSHOT table predates the shared row shape and reads Reversal's own field names, so
   // translate once here rather than in every cell. No bid/ask crossing and no bench leg: entry and
@@ -4507,6 +4516,7 @@ export default function ReversalScanner({
         return {
           ticker: String(r?.ticker ?? ""),
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: r?.lstPrcLstClsPct ?? null,
@@ -5716,12 +5726,12 @@ export default function ReversalScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "CLO•REVERSAL STREAM")
+    ? (headerTitleOverride ?? "CLO•REVERSAL•STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "CLO•REVERSAL STREAM"
-        : "CLO•REVERSAL SCANNER";
+        ? "CLO•REVERSAL•STREAM"
+        : "CLO•REVERSAL•SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -8875,6 +8885,7 @@ export default function ReversalScanner({
                       <th className="text-left p-2.5">Side</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
                       <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5">Exit Date</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Exit Stack%</th>
                       <th className="text-right p-2.5">Move (pts)</th>
@@ -8899,6 +8910,7 @@ export default function ReversalScanner({
                             actual internal search-target minute stays 16:01, this is display-only. */}
                         <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">16:00</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.dateNy || "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
@@ -8918,7 +8930,7 @@ export default function ReversalScanner({
                     ))}
                     {!reversalSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-zinc-500">
+                        <td colSpan={11} className="p-8 text-center text-zinc-500">
                           {reversalSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

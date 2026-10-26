@@ -616,7 +616,7 @@ function useAccountPnlByTicker() {
         const ticker = (p.ticker ?? "").trim().toUpperCase();
         if (!ticker) continue;
         const openPnl = p.isFlat ? 0 : p.openPnL ?? 0;
-        // Realised SINCE TODAY'S OWN 16:00 roll, not TradingApp's own raw running total — the exact
+        // Realised SINCE TODAY'S OWN 21:00 roll, not TradingApp's own raw running total — the exact
         // same subtraction CaesarPositions.tsx's own snapshot already applies to the strategy cards
         // above. Without this, this table's own Total P&L was reading a different, larger number
         // than the card it sits right under for the same ticker (the operator's own report,

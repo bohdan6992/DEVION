@@ -3800,7 +3800,7 @@ export default function ReversalSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="CLO•REVERSAL SONAR"
+          scannerShellTitle="CLO•REVERSAL•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}

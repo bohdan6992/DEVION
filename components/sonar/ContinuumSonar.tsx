@@ -3800,7 +3800,7 @@ export default function ContinuumSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="CLO•CONTINUUM SONAR"
+          scannerShellTitle="CLO•CONTINUUM•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}

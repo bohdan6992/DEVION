@@ -3799,7 +3799,7 @@ export default function OPGRideSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="OPG•RIDE SONAR"
+          scannerShellTitle="OPG•RIDE•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}

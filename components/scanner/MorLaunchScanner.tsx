@@ -1484,6 +1484,7 @@ export default function MorLaunchScanner({
   type MorLaunchPaperClosed = {
     ticker: string;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4546,6 +4547,7 @@ export default function MorLaunchScanner({
         return {
           ticker: String(r?.ticker ?? ""),
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: r?.lstPrcLstClsPct ?? null,
@@ -8772,6 +8774,7 @@ export default function MorLaunchScanner({
                       <th className="text-left p-2.5">Side</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
                       <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5">Exit Date</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Exit Stack%</th>
                       <th className="text-right p-2.5">Move (pts)</th>
@@ -8800,6 +8803,7 @@ export default function MorLaunchScanner({
                             the right minute; only this literal lied. */}
                         <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">{minuteIdxToClockLabel(r.entryMinuteIdx)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.dateNy || "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
@@ -8819,7 +8823,7 @@ export default function MorLaunchScanner({
                     ))}
                     {!morLaunchSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-zinc-500">
+                        <td colSpan={11} className="p-8 text-center text-zinc-500">
                           {morLaunchSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

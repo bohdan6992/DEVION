@@ -3799,7 +3799,7 @@ export default function OPGReversalSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="OPG•REVERSAL SONAR"
+          scannerShellTitle="OPG•REVERSAL•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}

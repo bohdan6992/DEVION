@@ -341,7 +341,7 @@ export default function CaesarPositions({
   colorByInstanceId, hoveredStrategyKey, onHoverStrategy,
 }: CaesarPositionsProps) {
   const [rawSnapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
-  /** TradingApp's per-ticker ClosedPnL as it stood when today began (16:00) - see the day-baseline route. */
+  /** TradingApp's per-ticker ClosedPnL as it stood when today began (21:00) - see the day-baseline route. */
   const [dayBaseline, setDayBaseline] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -391,8 +391,8 @@ export default function CaesarPositions({
   // ---- today's starting line ---------------------------------------------------------------------
   //
   // TradingApp's ClosedPnL is a running per-ticker total that knows nothing about Caesar's day, so
-  // at 16:05 it still holds the session that just ended. The bridge snapshots it when the day rolls
-  // (16:00 NY) and the page shows what was realised SINCE: live minus that baseline. Polled slowly —
+  // at 21:05 it still holds the session that just ended. The bridge snapshots it when the day rolls
+  // (21:00 NY) and the page shows what was realised SINCE: live minus that baseline. Polled slowly —
   // it changes once a day; the poll only exists so a page left open across the roll picks it up.
   useEffect(() => {
     let alive2 = true;

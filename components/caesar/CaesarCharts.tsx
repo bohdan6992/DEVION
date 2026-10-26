@@ -1749,13 +1749,40 @@ export default function CaesarCharts({
   const H = 384;
   const PAD_L = 42;
   const PAD_R = 54;
-  const PAD_T = 24;
+  // 40, not 24 (MOVED 2026-10-26, alongside the x()/y() fix below and the wrapping div's own
+  // className — the operator's own report: "Цей графік іноді обрізається... допомагає клік по
+  // загальному і потім по проміжку"). This chart used to reserve top clearance for the
+  // absolutely-positioned figcaption via a `pt-6` CSS padding on the <svg>'s own wrapper div,
+  // stacked on top of this PAD_T — except that padding shrank the <svg>'s real rendered CSS height
+  // below H (384), so viewBox and the actual box silently disagreed and the browser's own
+  // preserveAspectRatio="xMidYMid meet" fallback (no explicit attribute was ever set) uniformly
+  // rescaled the whole chart to fit, including every margin computed in this file's own coordinate
+  // space. Dropping `pt-6` (see that div's own className) makes the <svg> truly fill the figure at
+  // exactly H CSS pixels — no mismatch, no implicit rescale — and PAD_T alone now has to cover what
+  // the removed padding used to, so it is widened to the same 40 every sibling chart in this file
+  // already reserves for its own absolutely-positioned caption (see e.g. SETTLE BREAKDOWN's own
+  // PAD_T). A real but minor defect — NOT the reported one; see x()'s own doc comment for that.
+  const PAD_T = 40;
   const PAD_B = 38;
   const from = fromMin ?? 0;
   const to = toMin ?? 1440;
   const span = Math.max(1, to - from);
 
-  const x = useCallback((min: number) => PAD_L + ((min - from) / span) * (W - PAD_L - PAD_R), [from, span]);
+  // THE REPORTED BUG (2026-10-26): `W` is read inside this closure but was missing from its own
+  // dependency array below. useCallback does not re-create the function when a value it merely
+  // CLOSES OVER changes — only when a listed dependency does — so once this had memoized with
+  // whatever W was on an early render (often still the 1100 fallback, before useMeasuredWidth's
+  // ResizeObserver had delivered its first real measurement), it kept computing every tick, the NOW
+  // marker and the line's own end-mark against that STALE width forever, even after the <svg>'s own
+  // viewBox (read fresh every render, never memoized) moved on to the real one. Verified live
+  // (Playwright against a running instance): viewBox read "0 0 600.65 384" while this function's own
+  // x(09:30) still answered 1046 — a tick positioned at x=1046 inside a 600-wide box, invisible
+  // because the figure's own overflow-hidden cut it, not because anything was actually drawn wrong.
+  // `from`/`span` DO change on their own (picking a different segment), which is exactly why
+  // reselecting one "fixed" it — that forced this useCallback to recompute, and by then
+  // useMeasuredWidth had long since caught up to the real width, so the NEW memo finally captured a
+  // correct W. W now sits in the dependency list where it always needed to.
+  const x = useCallback((min: number) => PAD_L + ((min - from) / span) * (W - PAD_L - PAD_R), [from, span, W]);
   const y = useCallback((count: number) => H - PAD_B - (count / maxCount) * (H - PAD_T - PAD_B), [maxCount]);
 
   /** Hour ticks inside the segment, thinned so labels never collide. */
@@ -2015,7 +2042,7 @@ export default function CaesarCharts({
                 {totalEntered} total
               </span>
             </div>
-            <div className="relative h-full pt-6">
+            <div className="relative h-full">
               <svg
                 ref={plotRef}
                 viewBox={`0 0 ${W} ${H}`}

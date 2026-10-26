@@ -1463,6 +1463,7 @@ export default function OPGFadeScanner({
   type OPGFadePaperClosed = {
     ticker: string;
     side: "Long" | "Short";
+    dateNy?: string | null;
     entryMinuteIdx: number;
     exitMinuteIdx: number;
     entryStack?: number | null;
@@ -4477,6 +4478,7 @@ export default function OPGFadeScanner({
         return {
           ticker: String(r?.ticker ?? ""),
           side: isLong ? "Long" : "Short",
+          dateNy: r?.dateNy ?? null,
           entryMinuteIdx: Number(r?.startMinuteIdx),
           exitMinuteIdx: Number(r?.endMinuteIdx),
           entryStack: r?.lstPrcLstClsPct ?? null,
@@ -5691,12 +5693,12 @@ export default function OPGFadeScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "OPG•FADE STREAM")
+    ? (headerTitleOverride ?? "OPG•FADE•STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "OPG•FADE STREAM"
-        : "OPG•FADE SCANNER";
+        ? "OPG•FADE•STREAM"
+        : "OPG•FADE•SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -8836,6 +8838,7 @@ export default function OPGFadeScanner({
                       <th className="text-left p-2.5">Side</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Time</th>
                       <th className="text-right p-2.5">Exit Time</th>
+                      <th className="text-right p-2.5">Exit Date</th>
                       <th className="text-right p-2.5 border-l border-white/10">Entry Stack%</th>
                       <th className="text-right p-2.5">Exit Stack%</th>
                       <th className="text-right p-2.5">Move (pts)</th>
@@ -8860,6 +8863,7 @@ export default function OPGFadeScanner({
                             actual order is OPGFade's own 'enters at the open' type, filling at 9:30 regardless of when sent; this is display-only. */}
                         <td className="p-2.5 text-right tabular-nums text-zinc-300 border-l border-white/10">09:30</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{minuteIdxToClockLabel(r.exitMinuteIdx)}</td>
+                        <td className="p-2.5 text-right tabular-nums text-zinc-500">{r.dateNy || "—"}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200 border-l border-white/10">{num(r.entryStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-200">{num(r.exitStack ?? null, 3)}</td>
                         <td className="p-2.5 text-right tabular-nums text-zinc-300">{num(r.move ?? null, 3)}</td>
@@ -8879,7 +8883,7 @@ export default function OPGFadeScanner({
                     ))}
                     {!opgFadeSnapshotStats.rows.length && (
                       <tr>
-                        <td colSpan={10} className="p-8 text-center text-zinc-500">
+                        <td colSpan={11} className="p-8 text-center text-zinc-500">
                           {opgFadeSnapshotLoading ? "Building tape replay…" : "No realized trades for this date range/gates."}
                         </td>
                       </tr>

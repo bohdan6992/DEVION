@@ -21,7 +21,7 @@ export default function OPGFadeStreamPage() {
     <OpenDoorStreamPageContainer
       lsKeyPrefix={STRATEGY.storage.streamPrefix}
       strategyPriority={STRATEGY.priority}
-      headerTitle="OPG•FADE STREAM"
+      headerTitle="OPG•FADE•STREAM"
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}

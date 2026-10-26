@@ -21,7 +21,7 @@ export default function ReversalStreamPage() {
     <OpenDoorStreamPageContainer
       lsKeyPrefix={STRATEGY.storage.streamPrefix}
       strategyPriority={STRATEGY.priority}
-      headerTitle="REVERSAL STREAM"
+      headerTitle="CLO•REVERSAL•STREAM"
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}
