@@ -944,8 +944,16 @@ function LinesChart({
       >
         <defs>
           <linearGradient id={`${uid}-fill`} x1="0" y1="0" x2="0" y2="1">
+            {/* Fades to the card's OWN surface colour at full opacity, not to transparent (2026-10-26,
+                the operator's own report: "суцільної заливки не повинно бути - лише напівпрозорий
+                градієнт"). The card itself is bg-[#0a0a0a]/60 — translucent — so a bottom stop that
+                faded to 0 let whatever sits behind the page (its own blurred, coloured background
+                shapes) show through the nearly-invisible tail of the gradient, which read as a solid
+                block in an unrelated colour rather than the glow quietly fading to nothing. Ending on
+                SURFACE at full alpha means the fade is relative to THIS card's own dark surface,
+                regardless of what the page behind it happens to look like. */}
             <stop offset="0%" stopColor="rgba(212,175,55,0.30)" />
-            <stop offset="100%" stopColor="rgba(212,175,55,0.02)" />
+            <stop offset="100%" stopColor={SURFACE} stopOpacity={1} />
           </linearGradient>
           <filter id={`${uid}-glow`} x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="2" result="blur" />
