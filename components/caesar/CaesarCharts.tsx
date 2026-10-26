@@ -231,6 +231,54 @@ function roundedPolyline(points: readonly [number, number][], radius: number): s
   return d;
 }
 
+/**
+ * `totalPts`, with an interpolated {value: 0} point inserted at every sign change — exact unit
+ * (min, value) space, before any pixel conversion. A crossing counts as the POSITIVE side (its own
+ * value is literally 0, which passes `value >= 0`), so it lands as both the closing point of the
+ * run it ends and the opening point of the run it starts — see `positiveRuns`' own doc comment for
+ * why that single convention is what makes both ends line up with no special-casing.
+ */
+function withZeroCrossings(pts: readonly ValuePoint[]): ValuePoint[] {
+  const out: ValuePoint[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    out.push(pts[i]);
+    if (i < pts.length - 1) {
+      const a = pts[i], b = pts[i + 1];
+      if ((a.value >= 0) !== (b.value >= 0)) {
+        const t = a.value / (a.value - b.value);
+        out.push({ min: a.min + t * (b.min - a.min), value: 0 });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Splits a (min, value) series, already carrying `withZeroCrossings`' own interpolated boundaries,
+ * into runs that never cross zero — the PNL OVER TIME area fill's own bug, found live (2026-10-26,
+ * the operator's own report: "графік іноді має неправильні і дивні заливки"): the gold fill used to
+ * be ONE path closing the whole day's own first/last point straight down to the zero baseline, which
+ * is exactly right when the total never goes negative but self-intersects the moment it does — the
+ * TOP boundary (the real data, now below zero) crosses the BOTTOM boundary (the flat zero line) of
+ * the very same closed shape, and SVG's fill-rule then cancels out the area near every such
+ * crossing, reproduced in isolation off this exact algorithm as alternating filled "plateaus" with
+ * hard gaps between them wherever the total merely touched zero — not a data problem, a path-closing
+ * one. Each run returned here stays entirely on one side of zero, so closing IT straight down to the
+ * baseline can never self-intersect; the caller fills only the >=0 runs (a drawdown is still drawn
+ * by the line itself, just not shaded — the gold gradient means "accumulated", which a negative
+ * stretch is not).
+ */
+function positiveRuns(ptsWithCrossings: readonly ValuePoint[]): ValuePoint[][] {
+  const runs: ValuePoint[][] = [];
+  let current: ValuePoint[] = [];
+  for (const p of ptsWithCrossings) {
+    if (p.value >= 0) current.push(p);
+    else if (current.length > 0) { runs.push(current); current = []; }
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
+}
+
 // =========================================================================================
 // DONUT GEOMETRY
 // =========================================================================================
@@ -866,9 +914,16 @@ function LinesChart({
 
   const total = series.find((s) => !s.dashed) ?? null;
   const totalPts = total ? inRange(total) : [];
-  const totalAreaD = totalPts.length > 0
-    ? `${roundedPolyline(totalPts.map((p): [number, number] => [x(p.min), y(p.value)]), 4)} L ${x(totalPts[totalPts.length - 1].min)} ${y(0)} L ${x(totalPts[0].min)} ${y(0)} Z`
-    : "";
+  // One closed subpath per positive run — see positiveRuns' own doc comment for the self-
+  // intersecting-fill bug this replaces (found live, 2026-10-26).
+  const totalAreaD = positiveRuns(withZeroCrossings(totalPts))
+    .map((run) => {
+      const pix = run.map((p): [number, number] => [x(p.min), y(p.value)]);
+      const lastX = pix[pix.length - 1][0];
+      const firstX = pix[0][0];
+      return `${roundedPolyline(pix, 4)} L ${lastX} ${y(0)} L ${firstX} ${y(0)} Z`;
+    })
+    .join(" ");
 
   return (
     <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
