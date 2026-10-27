@@ -20,10 +20,16 @@ import { apiUrl } from "./api";
 export type EffectiveStreamRules = {
   entryStopMinutes: number | null;
   sessionStartMinutes: number | null;
+  /** True exactly when the two numbers above come from an ACTIVE Caesar segment assignment, not
+   *  this strategy's own standalone saved times reflected back unchanged — see
+   *  StreamRules.CaesarOwnsClock's own doc comment. Lets the divergence marker (and the "push into
+   *  Caesar" edit it offers) tell "Caesar is overriding this right now" apart from "the saved value
+   *  just differs from what is typed," which read identically as bare numbers. */
+  caesarOwnsClock: boolean;
 };
 
 type RulesResponse = {
-  rules?: { entryStopMinutes?: number; sessionStartMinutes?: number | null };
+  rules?: { entryStopMinutes?: number; sessionStartMinutes?: number | null; caesarOwnsClock?: boolean };
 };
 
 const POLL_MS = 30_000;
@@ -48,6 +54,7 @@ export function useEffectiveStreamRules(rulesPath: string | null): EffectiveStre
       setRules(r ? {
         entryStopMinutes: typeof r.entryStopMinutes === "number" ? r.entryStopMinutes : null,
         sessionStartMinutes: typeof r.sessionStartMinutes === "number" ? r.sessionStartMinutes : null,
+        caesarOwnsClock: r.caesarOwnsClock === true,
       } : null);
     } catch {
       // Display only; the next poll tries again.
@@ -61,4 +68,37 @@ export function useEffectiveStreamRules(rulesPath: string | null): EffectiveStre
   }, [refresh]);
 
   return rules;
+}
+
+/**
+ * Pushes a START ("start") or ENTRY STOP/CUTOFF ("stop") edit into whichever Caesar segment
+ * assignment currently governs `strategyId` — the operator's own instruction, 2026-10-27: "я хочу
+ * щоб це поле переходило і в цезар". Narrows only THAT strategy's own assignment (never the
+ * segment's shared boundary — see CaesarPlanAssignment.FromMinuteIdx's own doc comment on the
+ * bridge), so call this ALONGSIDE the toolbar's own standalone save, never instead of it: the
+ * standalone value is still what the strategy obeys the moment no segment is active.
+ *
+ * Returns false (nothing applied) on any failure, AND whenever the strategy has no currently-active
+ * assignment to narrow — both are silent, expected states a caller does not need to surface as an
+ * error (the standalone save above already went through either way).
+ */
+export async function pushCaesarAssignmentWindow(
+  edge: "start" | "stop",
+  strategyId: string,
+  minutes: number,
+): Promise<boolean> {
+  try {
+    const path = edge === "start"
+      ? "/api/stream/caesar/plan/assignment-start"
+      : "/api/stream/caesar/plan/assignment-stop";
+    const res = await fetch(apiUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strategyId, minutes }),
+    });
+    const json = (await res.json().catch(() => null)) as { ok?: boolean; applied?: boolean } | null;
+    return res.ok && json?.applied === true;
+  } catch {
+    return false;
+  }
 }

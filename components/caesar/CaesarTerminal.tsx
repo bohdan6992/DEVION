@@ -119,10 +119,20 @@ export default function CaesarTerminal({ segment }: CaesarTerminalProps) {
     [intents],
   );
 
-  const shown = useMemo(
-    () => (filter ? intents.filter((i) => i.strategyId === filter) : intents),
-    [intents, filter],
-  );
+  // Oldest first — but NOT the array's own order. A record that keeps repeating is mutated in
+  // place on the bridge (ServerStrategyRunner.Record: RepeatCount++, LastAtUtc moves) rather than
+  // re-appended, so it stays parked at its FIRST-occurrence position while its own visible
+  // timestamp (lastAtUtc, below) keeps advancing — a long-running collapsed row can end up sitting
+  // ABOVE rows whose timestamp is actually later. Sorting by each row's own last-known instant
+  // (lastAtUtc === atUtc when it has never repeated) is what actually makes the feed read
+  // top-to-bottom in time order. Operator-reported, 2026-10-27: a pasted log with "06:02:03
+  // ...×3 since 04:05:01" sitting above a plain "05:04:00" entry.
+  const shown = useMemo(() => {
+    const base = filter ? intents.filter((i) => i.strategyId === filter) : intents;
+    return [...base].sort(
+      (a, b) => new Date(a.lastAtUtc).getTime() - new Date(b.lastAtUtc).getTime(),
+    );
+  }, [intents, filter]);
 
   // Stick to the bottom while following, the way a terminal does.
   useEffect(() => {

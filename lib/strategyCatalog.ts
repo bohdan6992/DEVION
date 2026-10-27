@@ -51,6 +51,13 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // clock moves to the 16:00 transition (15:58 limits, 16:02 Ctrl+Q cancel). Key lowercases to the
   // registry/bridge key "launcheveningbasket". See LaunchEveningBasketServerStrategy.cs.
   { key: "launchEveningBasket", name: "Launch•Evening", icon: "🌇", description: "Лімітки на весь баскет о 15:58, скасування о 16:02 — ловимо різкий рух 15:59-16:00. Вихід ручний." },
+  // New strategy (operator, 2026-10-27): weekday signal is the SAME filtered universe mechanism
+  // every LAUNCH-family member uses, but the per-ticker rating is read straight off Arbitrage's own
+  // published file under its PRE class (LimiterSonarLiveParamsService/LimiterSonarSnapshotService),
+  // not a strategy-of-its-own notebook file. Sonar only so far — no entry/exit logic defined yet, so
+  // Scanner/Stream have no backtest or live dispatch behind them. Key lowercases to the registry/
+  // bridge key "limiter".
+  { key: "limiter", name: "Limiter", icon: "🚧", description: "Список тікерів, відфільтрований як у LAUNCH-групі; рейтинг — PRE-клас з файлу арбітража. Поки що лише Sonar." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },

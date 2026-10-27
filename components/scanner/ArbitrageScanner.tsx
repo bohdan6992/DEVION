@@ -6308,6 +6308,7 @@ export default function ArbitrageScanner({
         <ExecutionSettingsPanel
           scheduledStart={scheduledStartStatus}
           effectiveStreamRules={effectiveStreamRules}
+          caesarStrategyId="stream.arbitrage"
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}

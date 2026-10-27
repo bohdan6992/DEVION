@@ -583,6 +583,42 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // LIMITER (operator, 2026-10-27): "Сигнали так само як в LAUNCH групі - список тікерів які
+  // пройшли фільтри, але для цієї стратегії рейтинги беруться із файлу арбітража". Same shape as
+  // launchevening below (SONAR ONLY so far — no tape engine, paper scanner or server strategy, so
+  // nothing here can send an order; Scanner/Stream pages exist but have no backend behind them
+  // yet), except the universe/filter window spans the full session like Arbitrage's own (PRE-POST),
+  // not a narrow morning/evening slice, and ratings are read directly off ARBITRAGE's own published
+  // file under its PRE class (LimiterSonarLiveParamsService/LimiterSonarSnapshotService on the
+  // bridge — the same "second strategy rides Arbitrage's ratings with its own toolbar" mechanism
+  // PairFlux's bucket grid already uses) rather than a strategy-of-its-own notebook file that does
+  // not exist. ratingClasses below therefore has exactly ONE key, "pre" — there is no other class to
+  // pick, by design, not a placeholder waiting to be filled in.
+  //
+  // priority 6: below morlaunch (5), above nothing that matters since EvaluateAsync has nothing to
+  // submit yet (no entry/exit logic defined — operator's own answer, 2026-10-27: "ще не відомо").
+  limiter: {
+    key: "limiter",
+    bridgeStrategyId: "stream.limiter",
+    nav: {
+      stream: "/limiter/stream",
+      scanner: "/limiter/scanner",
+      sonar: "/limiter/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
+    priority: 6,
+    holdsOvernight: true,
+    overnightBadge: false,
+    api: { paperBase: "/api/paper/limiter", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.limiter", sonarPrefix: "bridge.limiter", streamPrefix: "stream.limiter" },
+    ratingClasses: {
+      dimension: "SESSION",
+      keys: ["pre"],
+      labels: { pre: "PRE" },
+    },
+  },
+
   // PullBack: fade a stack that stands too far from yesterday's close in the early pre-market. Spec is
   // the operator's own OriON-strategies/notebooks/PullBack.ipynb, which has been RUN over 65 sessions -
   // the bridge side is a port of its scan_day, not an independent design.

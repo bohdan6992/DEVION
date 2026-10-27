@@ -8,7 +8,16 @@ import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArb
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
 import type { DirectionBalanceState } from "../../../../lib/arbitrage/directionBalanceClient";
 import type { ScheduledStartStatus } from "../../../../lib/scanner/useScheduledStartArm";
-import type { EffectiveStreamRules } from "../../../../lib/scanner/useEffectiveStreamRules";
+import { pushCaesarAssignmentWindow, type EffectiveStreamRules } from "../../../../lib/scanner/useEffectiveStreamRules";
+
+/** "HH:MM" -> plain minute-of-day, same parsing TimePill's own h/m split uses. */
+function hhmmToMinutes(value: string): number | null {
+  const [hRaw, mRaw] = value.split(":");
+  const h = Number(hRaw);
+  const m = Number(mRaw);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
 
 /**
  * THESE FOUR GROUPS DESCRIBE THE BACKTEST'S ARITHMETIC, NOT THE LIVE ORDER.
@@ -134,6 +143,11 @@ export type ExecutionSettingsPanelProps = {
    * steppers then show only what they always did, with no divergence marker.
    */
   effectiveStreamRules?: EffectiveStreamRules | null;
+  /** Bridge strategy id ("stream.arbitrage", "stream.pairflux") — required for the START/ENTRY
+   *  STOP/CUTOFF steppers to also push into Caesar's own assignment window while it owns the clock
+   *  (effectiveStreamRules.caesarOwnsClock). Omit for a strategy with no such push endpoint; the
+   *  steppers still save standalone as before, just never attempt the extra push. */
+  caesarStrategyId?: string;
   filters: ScannerFilterBag;
   tab: TabKey;
   isStreamOnlyShell: boolean;
@@ -227,7 +241,7 @@ function BalanceRatioInput({ value, onChange, disabled }: { value: number; onCha
  * Same arrow-column pattern as every other spinner here (hover/focus only, flush right).
  */
 function TimePill({
-  title, ariaLabel, color, value, fallbackHour, onChange, effectiveMinutes,
+  title, ariaLabel, color, value, fallbackHour, onChange, effectiveMinutes, caesarOwnsClock,
 }: {
   title: string;
   ariaLabel: string;
@@ -244,6 +258,11 @@ function TimePill({
    * SAVED, this is only ever a truth-telling overlay on top of it.
    */
   effectiveMinutes?: number | null;
+  /** True iff effectiveMinutes above is an ACTIVE Caesar override, not just this strategy's own
+   *  saved value reflected back (see EffectiveStreamRules.caesarOwnsClock). Only changes the
+   *  marker's own wording — a stale-save divergence and a live Caesar override look identical as
+   *  bare numbers but call for different explanations. */
+  caesarOwnsClock?: boolean;
 }) {
   const [hRaw, mRaw] = value.split(":");
   const h = hRaw ?? fallbackHour;
@@ -268,7 +287,11 @@ function TimePill({
       {diverges && effClock && (
         <div
           className="absolute -top-1.5 -right-1 z-10 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-bold text-black"
-          title={`Caesar is actually enforcing ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} for this right now — the segment this strategy is assigned to owns the clock, not this stepper. Edit here only changes what is SAVED for when no segment is active.`}
+          title={
+            caesarOwnsClock
+              ? `Caesar is actually enforcing ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} for this right now — the segment this strategy is assigned to owns the clock, not this stepper. Editing here now pushes straight into that assignment too, so the two stay in sync.`
+              : `The bridge has ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} SAVED for this — not Caesar, no segment currently owns this strategy's clock. This stepper just has not caught up with it (an edit from another tab/session, or one that has not round-tripped yet). Editing here overwrites it.`
+          }
         >
           !
         </div>
@@ -532,6 +555,7 @@ export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
 export default function ExecutionSettingsPanel({
   scheduledStart,
   effectiveStreamRules,
+  caesarStrategyId,
   filters,
   tab,
   isStreamOnlyShell,
@@ -1005,9 +1029,14 @@ export default function ExecutionSettingsPanel({
       value={preStartTime}
       fallbackHour="21"
       effectiveMinutes={effectiveStreamRules?.sessionStartMinutes}
+      caesarOwnsClock={effectiveStreamRules?.caesarOwnsClock}
       onChange={(next) => {
         setPreStartTime(next);
         onStreamAutomationConfigChange?.({ preStartTime: next });
+        if (caesarStrategyId && effectiveStreamRules?.caesarOwnsClock) {
+          const minutes = hhmmToMinutes(next);
+          if (minutes !== null) void pushCaesarAssignmentWindow("start", caesarStrategyId, minutes);
+        }
       }}
     />
 
@@ -1018,9 +1047,14 @@ export default function ExecutionSettingsPanel({
       value={entryStopValue}
       fallbackHour="09"
       effectiveMinutes={effectiveStreamRules?.entryStopMinutes}
+      caesarOwnsClock={effectiveStreamRules?.caesarOwnsClock}
       onChange={(next) => {
         setEntryStopTime(next);
         onStreamAutomationConfigChange?.({ entryStopTime: next });
+        if (caesarStrategyId && effectiveStreamRules?.caesarOwnsClock) {
+          const minutes = hhmmToMinutes(next);
+          if (minutes !== null) void pushCaesarAssignmentWindow("stop", caesarStrategyId, minutes);
+        }
       }}
     />
 
@@ -1031,9 +1065,14 @@ export default function ExecutionSettingsPanel({
       value={startCutoffTime}
       fallbackHour="09"
       effectiveMinutes={effectiveStreamRules?.entryStopMinutes}
+      caesarOwnsClock={effectiveStreamRules?.caesarOwnsClock}
       onChange={(next) => {
         setStartCutoffTime(next);
         onStreamAutomationConfigChange?.({ startCutoffTime: next });
+        if (caesarStrategyId && effectiveStreamRules?.caesarOwnsClock) {
+          const minutes = hhmmToMinutes(next);
+          if (minutes !== null) void pushCaesarAssignmentWindow("stop", caesarStrategyId, minutes);
+        }
       }}
     />
 

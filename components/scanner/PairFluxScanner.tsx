@@ -6096,6 +6096,7 @@ export default function PairFluxScanner({
         <ExecutionSettingsPanel
           scheduledStart={scheduledStartStatus}
           effectiveStreamRules={effectiveStreamRules}
+          caesarStrategyId="stream.pairflux"
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}
