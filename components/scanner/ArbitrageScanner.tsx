@@ -46,6 +46,7 @@ import {
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { useScheduledStartArm } from "../../lib/scanner/useScheduledStartArm";
+import { useEffectiveStreamRules } from "../../lib/scanner/useEffectiveStreamRules";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
@@ -2675,6 +2676,10 @@ export default function ArbitrageScanner({
     startNyTime: preStartTime,
     cutoffNyTime: startCutoffTime,
   });
+  // What the bridge is ACTUALLY enforcing right now — see that hook's own doc comment for why this
+  // can disagree with the START/ENTRY STOP/CUTOFF steppers above the moment Caesar owns this
+  // strategy (operator's own report, 2026-10-26: "арбітраж продовжує працювати після 9").
+  const effectiveStreamRules = useEffectiveStreamRules("/api/stream/arbitrage/rules");
   const streamExecutionSnapshot = useStreamExecutionSnapshot();
   const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
@@ -6302,6 +6307,7 @@ export default function ArbitrageScanner({
         <div className="flex flex-col gap-3">
         <ExecutionSettingsPanel
           scheduledStart={scheduledStartStatus}
+          effectiveStreamRules={effectiveStreamRules}
           filters={scannerFilters}
           tab={tab}
           isStreamOnlyShell={isStreamOnlyShell}

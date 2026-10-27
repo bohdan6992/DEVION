@@ -8,6 +8,7 @@ import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArb
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
 import type { DirectionBalanceState } from "../../../../lib/arbitrage/directionBalanceClient";
 import type { ScheduledStartStatus } from "../../../../lib/scanner/useScheduledStartArm";
+import type { EffectiveStreamRules } from "../../../../lib/scanner/useEffectiveStreamRules";
 
 /**
  * THESE FOUR GROUPS DESCRIBE THE BACKTEST'S ARITHMETIC, NOT THE LIVE ORDER.
@@ -126,6 +127,13 @@ export type SaveModeControl = {
 export type ExecutionSettingsPanelProps = {
   /** What the bridge holds for this strategy's scheduled START; shown beside the START stepper. */
   scheduledStart?: ScheduledStartStatus | null;
+  /**
+   * What the engine is ACTUALLY enforcing for START/ENTRY STOP/CUTOFF right now — may disagree
+   * with the steppers below the moment Caesar owns this strategy (see that hook's own doc
+   * comment). Undefined/null: nothing fetched yet, or this strategy has no such endpoint — the
+   * steppers then show only what they always did, with no divergence marker.
+   */
+  effectiveStreamRules?: EffectiveStreamRules | null;
   filters: ScannerFilterBag;
   tab: TabKey;
   isStreamOnlyShell: boolean;
@@ -219,7 +227,7 @@ function BalanceRatioInput({ value, onChange, disabled }: { value: number; onCha
  * Same arrow-column pattern as every other spinner here (hover/focus only, flush right).
  */
 function TimePill({
-  title, ariaLabel, color, value, fallbackHour, onChange,
+  title, ariaLabel, color, value, fallbackHour, onChange, effectiveMinutes,
 }: {
   title: string;
   ariaLabel: string;
@@ -227,6 +235,15 @@ function TimePill({
   value: string;
   fallbackHour: string;
   onChange: (next: string) => void;
+  /**
+   * What the engine is ACTUALLY enforcing for this field right now, in minute-of-day — undefined/
+   * null when unknown (no fetch yet, or this strategy has none). Differs from the typed value the
+   * instant Caesar owns the strategy and its segment ends somewhere else (2026-10-26, the
+   * operator's own report — see useEffectiveStreamRules' own doc comment). Shown as a small
+   * divergence marker rather than replacing the editable value: the typed value is still what gets
+   * SAVED, this is only ever a truth-telling overlay on top of it.
+   */
+  effectiveMinutes?: number | null;
 }) {
   const [hRaw, mRaw] = value.split(":");
   const h = hRaw ?? fallbackHour;
@@ -240,8 +257,22 @@ function TimePill({
   const hNum = Number(h);
   const mNum = Number(m);
 
+  const typedMinutes = hNum * 60 + mNum;
+  const effClock = typeof effectiveMinutes === "number"
+    ? { h: Math.floor((((effectiveMinutes % 1440) + 1440) % 1440) / 60), m: (((effectiveMinutes % 1440) + 1440) % 1440) % 60 }
+    : null;
+  const diverges = effClock !== null && effectiveMinutes !== typedMinutes;
+
   return (
-    <div className="flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title={title}>
+    <div className="relative flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title={title}>
+      {diverges && effClock && (
+        <div
+          className="absolute -top-1.5 -right-1 z-10 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-bold text-black"
+          title={`Caesar is actually enforcing ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} for this right now — the segment this strategy is assigned to owns the clock, not this stepper. Edit here only changes what is SAVED for when no segment is active.`}
+        >
+          !
+        </div>
+      )}
       <div className="group relative h-8 w-8 overflow-hidden rounded-md">
         <input
           type="number" inputMode="numeric" min={0} max={23} step={1}
@@ -500,6 +531,7 @@ export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
 
 export default function ExecutionSettingsPanel({
   scheduledStart,
+  effectiveStreamRules,
   filters,
   tab,
   isStreamOnlyShell,
@@ -972,6 +1004,7 @@ export default function ExecutionSettingsPanel({
       color={SCANNER_MINT_HEX}
       value={preStartTime}
       fallbackHour="21"
+      effectiveMinutes={effectiveStreamRules?.sessionStartMinutes}
       onChange={(next) => {
         setPreStartTime(next);
         onStreamAutomationConfigChange?.({ preStartTime: next });
@@ -984,6 +1017,7 @@ export default function ExecutionSettingsPanel({
       color={IDENTITY_YELLOW_HEX}
       value={entryStopValue}
       fallbackHour="09"
+      effectiveMinutes={effectiveStreamRules?.entryStopMinutes}
       onChange={(next) => {
         setEntryStopTime(next);
         onStreamAutomationConfigChange?.({ entryStopTime: next });
@@ -996,6 +1030,7 @@ export default function ExecutionSettingsPanel({
       color={SCANNER_CORAL_HEX}
       value={startCutoffTime}
       fallbackHour="09"
+      effectiveMinutes={effectiveStreamRules?.entryStopMinutes}
       onChange={(next) => {
         setStartCutoffTime(next);
         onStreamAutomationConfigChange?.({ startCutoffTime: next });
