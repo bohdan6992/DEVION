@@ -248,13 +248,42 @@ export function parseReportDateAffectsSession(value: any, session?: ReportSessio
   // null = decide from the text (AMC/BMO token or an HH:MM); set explicitly by the compact form.
   let afterCloseOverride: boolean | null = null;
 
-  // Bulk of the live feed uses a separator-less DDMMHHMM stamp — "29070800" is 29/07 08:00 and
+  // A NEWER compact stamp the feed also sends — 12 digits, MM DD YYYY HH MM (US month-day order,
+  // WITH a 4-digit year) — e.g. "102820260700" is 10/28/2026 07:00. Found live, 2026-10-29:
+  // sampling the current feed turned up 26 distinct values in this exact shape (over HALF of every
+  // non-"NO" row that day), none of which the 8-digit regex below can match (it requires EXACTLY 8
+  // digits) — IsoRe/the slash regex further down both require a separator too, and this has none —
+  // so every one of these silently read as "no report" via the boolean fallback. Checked first: the
+  // two lengths (12 vs 8 digits) are mutually exclusive, so order against the legacy branch below
+  // does not matter for correctness, but this is the feed's current dominant shape. The year is
+  // parsed but never used in the verdict: the question is only ever "does month+day fall on today
+  // or the previous trading day", which needs no year at all.
+  const compactWithYear = /^(\d{2})(\d{2})(\d{4})(\d{2})(\d{2})$/.exec(raw);
+  if (compactWithYear) {
+    const mo = Number(compactWithYear[1]);
+    const d = Number(compactWithYear[2]);
+    const hh = Number(compactWithYear[4]);
+    const mi = Number(compactWithYear[5]);
+    if (d < 1 || d > 31 || mo < 1 || mo > 12 || hh > 23 || mi > 59) return null;
+    day = d;
+    month = mo;
+    afterCloseOverride = hh * 60 + mi >= MARKET_CLOSE_MINUTE;
+    const anchor = session ?? getNewYorkReportSessionYmd();
+    if (afterCloseOverride) {
+      const prev = getNewYorkPrevTradingMonthDay(anchor);
+      return month === prev.month && day === prev.day;
+    }
+    return month === anchor.month && day === anchor.day;
+  }
+
+  // Bulk of the OLDER live feed used a separator-less DDMMHHMM stamp - "29070800" is 29/07 08:00 and
   // "28071600" is 28/07 16:00. It carries no AMC/BMO token and no colon, so every other branch
   // here misses it and the report silently reads as "none".
   // The feed drops the day's leading zero, so the same stamp arrives as 7 digits for the 1st-9th
   // of a month ("7081610" = 07/08 16:10). Requiring exactly 8 made every such report parse as no
-  // date at all, fall through to the boolean fallback, and read as "no report" — silently blind
-  // on roughly a third of the days in each month.
+  // date at all, fall through to the boolean fallback, and read as "no report" - silently blind
+  // on roughly a third of the days in each month. Guarded implicitly by compactWithYear above: a
+  // 12-digit input can never have length 7 or 8, so it can never reach this branch at all.
   const compactRaw = /^\d{7,8}$/.test(raw) ? raw.padStart(8, "0") : raw;
   const compact = /^(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(compactRaw);
   if (compact) {
@@ -274,27 +303,42 @@ export function parseReportDateAffectsSession(value: any, session?: ReportSessio
     return month === anchor.month && day === anchor.day;
   }
 
-  const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
-  if (iso) {
-    month = Number(iso[2]);
-    day = Number(iso[3]);
+  // MM/DD/YYYY, unambiguous because the year pins which side is the month - checked BEFORE the
+  // day-first slash regex further down. Found live alongside the 12-digit stamp above, 2026-10-29:
+  // "10/27/2026 AMC" / "10/28/2026 BMO". The day-first regex below assumes day-first ("28/07 AMC",
+  // the original no-year feed shape) and only flips to month-first when the right-hand number is
+  // too large to be a month - which happened to produce the right answer for both of those two live
+  // examples purely because the DAY in each was > 12, not because the logic is actually correct: a
+  // report dated the 1st-12th of the month (e.g. "10/05/2026" meaning October 5th) would flip the
+  // other way and silently misread as day=10, month=5 (May 10th).
+  const usSlash = /\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/.exec(raw);
+  if (usSlash) {
+    month = Number(usSlash[1]);
+    day = Number(usSlash[2]);
   } else {
-    const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
-    if (slash) {
-      const left = Number(slash[2]);
-      const right = Number(slash[3]);
-      // Live data is day-first ("28/07 AMC"). Flip to month-first only when the right-hand number
-      // is too large to be a month.
-      day = left;
-      month = right;
-      if (left <= 12 && right > 12) {
-        month = left;
-        day = right;
+    const iso = /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/.exec(raw);
+    if (iso) {
+      month = Number(iso[2]);
+      day = Number(iso[3]);
+    } else {
+      const slash = /(^|\D)(\d{1,2})[./-](\d{1,2})(?=\D|$)/.exec(raw);
+      if (slash) {
+        const left = Number(slash[2]);
+        const right = Number(slash[3]);
+        // Live data is day-first ("28/07 AMC"). Flip to month-first only when the right-hand number
+        // is too large to be a month.
+        day = left;
+        month = right;
+        if (left <= 12 && right > 12) {
+          month = left;
+          day = right;
+        }
       }
     }
   }
 
   if (month == null || day == null) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
 
   if (afterCloseOverride ?? isAfterCloseRelease(raw)) {
     // An after-close release belongs to the next trading day, so it is relevant today only when

@@ -58,11 +58,14 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // Scanner/Stream have no backtest or live dispatch behind them. Key lowercases to the registry/
   // bridge key "limiter".
   { key: "limiter", name: "Limiter", icon: "🚧", description: "Список тікерів, відфільтрований як у LAUNCH-групі; рейтинг — PRE-клас з файлу арбітража. Поки що лише Sonar." },
-  // LIMITER's own basket macro (operator, 2026-10-28): unlike the two basket strategies above,
-  // this one repeats HOURLY (21:01-09:00, Ctrl+Q cancel first each cycle, jittered +/-5 min, 04:00
-  // shifted to 04:05-04:10 to stay clear of Launch•Morning's own 03:58-04:01). Key lowercases to
-  // the registry/bridge key "limiterbasket". See LimiterBasketServerStrategy.cs.
-  { key: "limiterBasket", name: "Limiter•Basket", icon: "⏰", description: "Щогодини (21:01-9:00, джиттер ±5хв): Ctrl+Q, потім лімітки на відфільтрований список. Вихід ручний." },
+  // LIMITER's own basket macro (operator, 2026-10-28, corrected same day: hourly -> every 30 min,
+  // plus ticker-reservation priority over ARK): unlike the two basket strategies above, this one
+  // repeats every HALF HOUR (21:01-09:00, Ctrl+Q cancel first each cycle, jittered +/-5 min, 04:00
+  // shifted to 04:05-04:10 to stay clear of Launch•Morning's own 03:58-04:01). During the ARK band
+  // (04:00-09:30) a ticker this strategy has a resting limit on is off-limits to every other
+  // strategy — LIMITER has top priority on its own list there. Key lowercases to the registry/
+  // bridge key "limiterbasket". See LimiterBasketServerStrategy.cs.
+  { key: "limiterBasket", name: "Limiter•Basket", icon: "⏰", description: "Щопівгодини (21:01-9:00, джиттер ±5хв): Ctrl+Q, потім лімітки на відфільтрований список — пріоритетний на ARK. Вихід ручний." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },

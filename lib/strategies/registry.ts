@@ -619,15 +619,18 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
-  // LIMITER Basket — an HOURLY basket macro, not a once-a-day one like morlaunchbasket/
-  // launcheveningbasket above: every hour, 21:01-09:00 NY, Ctrl+Q cancel FIRST (undoing the
-  // PREVIOUS hour's own still-resting limits), then clear+paste that hour's own filtered list
-  // (limiter's own Sonar universe — Arbitrage signals, PRE class) and the same six basket hotkeys.
-  // Each hour's own send time is jittered +/-5 min, except 04:00 — shifted to 04:05-04:10 so it
-  // never collides with morlaunchbasket's own 03:58-04:01 window on the SAME physical Basket
-  // Window. See LimiterBasketServerStrategy.cs's own header comment for the full spec (operator's
-  // own, 2026-10-28). A fill is never auto-exited — the operator closes it by hand, same as the
-  // two daily basket strategies.
+  // LIMITER Basket — a HALF-HOURLY basket macro (hourly until 2026-10-28, corrected same day), not
+  // a once-a-day one like morlaunchbasket/launcheveningbasket above: every 30 min, 21:01-09:00 NY,
+  // Ctrl+Q cancel FIRST (undoing the PREVIOUS cycle's own still-resting limits), then clear+paste
+  // that cycle's own filtered list (limiter's own Sonar universe — Arbitrage signals, PRE class)
+  // and the same six basket hotkeys. Each cycle's own send time is jittered +/-5 min, except 04:00
+  // — shifted to 04:05-04:10 so it never collides with morlaunchbasket's own 03:58-04:01 window on
+  // the SAME physical Basket Window. During the ARK band (04:00-09:30) a ticker this strategy has a
+  // resting limit on is off-limits to every other strategy (ArbitrageServerStrategy consults
+  // ILimiterReservedTickers before proposing a fresh entry) — LIMITER has top priority there. See
+  // LimiterBasketServerStrategy.cs's own header comment for the full spec (operator's own,
+  // 2026-10-28). A fill is never auto-exited — the operator closes it by hand, same as the two
+  // daily basket strategies.
   //
   // NO PAGES OF ITS OWN: nav points at limiter's own pages (pages/limiter/*), same "basket macro
   // borrows its parent strategy's pages" pattern morlaunchbasket/launcheveningbasket already use.
@@ -660,8 +663,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
     ratingClasses: {
       dimension: "ENTRY",
-      keys: ["hourly"],
-      labels: { hourly: "HOURLY" },
+      keys: ["halfhourly"],
+      labels: { halfhourly: "30 MIN" },
     },
   },
 

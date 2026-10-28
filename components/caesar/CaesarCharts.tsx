@@ -30,7 +30,6 @@
  */
 
 import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
-import { PRE_CHECKPOINT_BRIDGE_IDS, OPG_CHECKPOINT_BRIDGE_IDS } from "@/lib/caesar/checkpoints";
 import { SERIES, OTHER, OVERNIGHT_SERIES, MAX_SERIES, buildColorByInstance } from "@/lib/caesar/colors";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -141,7 +140,12 @@ type BridgePosition = {
   entryDispatched: boolean;
 };
 
-type BridgePositionsResponse = { ok: boolean; positions: BridgePosition[] };
+/** Ticker -> strategy id(s) that closed it today — see ServerPositionTracker.GetClosedOwners.
+ * Outlives the position itself in bridgePositions, so it is the only way to still attribute a
+ * ticker that has already closed and been pruned (see coneRows' own use of it). */
+type ClosedOwners = Record<string, string[]>;
+
+type BridgePositionsResponse = { ok: boolean; positions: BridgePosition[]; closedOwners?: ClosedOwners };
 
 /** One entry moment — see ServerStrategyRunner's EntryLogRecord. */
 type EntryLogEntry = { atUtc: string; side: string; ticker: string };
@@ -638,50 +642,144 @@ function RadarChart({
 }
 
 // =========================================================================================
-// SETTLE BREAKDOWN — one grouped pair of bars per strategy: CLOSED BY its own checkpoint (solid)
-// vs CLOSED AFTER it (outlined), the same split CaesarPositions.tsx's own cards already print as
-// small text under two of them (2026-10-23, the operator's own instruction — option 1 of the five
-// offered). A categorical x-axis (one slot per strategy), not time — the one chart in this file
-// that is not a time series, because the question it answers ("how much of each strategy's own
-// closed total came in before vs after its own settle clock") is a snapshot, not a trend.
+// EFFICIENCY CONES — replaces ENTRY TIME ARC (2026-10-29, the operator's own instruction:
+// "конічна діаграма яка буде показувати ККД стратегій. Визначай по об'єму в позиціях по BP і
+// результату трейдів ... без легенди просто кольорами стратегій" — a conical/funnel diagram
+// showing each strategy's own efficiency, judged by BP position volume and trade result, no
+// legend, pure strategy colour). STANDING UPRIGHT (2026-10-29, the operator's own follow-up
+// correction — the first cut ran the cones sideways off the right edge; this redraws them the
+// way the operator's own PowerPoint reference actually looks): base on the floor, apex up, the
+// tallest cone filling the full plot height and every other cone scaled relative to IT, not to
+// an abstract axis maximum.
+//
+// GEOMETRY. One cone per strategy, each in its own SLOT along the floor, apex pointing up:
+//   - SLOT width is 1/6 of the chart, same whether there is one assigned strategy or six — never
+//     a share of the full chart width (2026-10-29, the operator's own correction: a single
+//     assigned strategy used to stretch its own cone edge to edge, reading as a flat wedge
+//     instead of a cone — "не роби один широкий на всю ширину"). Only past six strategies does
+//     the slot shrink, to width/n, so every cone still fits — "якщо назначених стратегій більше
+//     - роби тонші"; the row of slots is centred in the chart either way.
+//   - base WIDTH within its own slot reads that strategy's own BP volume RELATIVE TO the most
+//     voluminous strategy on screen (same "biggest reaches the cap, the rest scale against it"
+//     idiom height already uses) — a loud strategy's cone fills its slot, a quiet one's is slim
+//     within it, but never past the slot's own 1/6 cap. A small fixed gap separates neighbours
+//     so they read as distinct solids, not one fused ridge.
+//   - apex HEIGHT = ККД itself, max(result, 0) / volume, scaled so the single most efficient
+//     strategy on screen reaches the very top of the plot and everything else is relative to
+//     IT (the operator's own words: "найвищий займає всю висоту вікна, решта масштабується під
+//     нього") — unaffected by slot count, always the chart's own full height. A strategy that
+//     lost money or has no volume at all still draws — as the shortest visible sliver — never
+//     disappears outright, same "still there, just not loud" rule every other chart here follows.
+// Each cone is built as a real volumetric SOLID, not a flat triangle: a horizontal gradient
+// across its own width (bright near the left third, the strategy's own colour past centre,
+// darkened at the right edge — one consistent light source, like the operator's reference) for
+// the glossy curved-surface look, plus its own elliptical base cap (drawn once behind the body,
+// once in front of it after the body's own bottom edge, so only the base's own FRONT rim shows
+// in front of the cone — the standard "cone sitting on its own disk" trick) for the 3D footing.
+// No labels, no axis, no legend, no hover — colour (colorByInstance, the same stable palette
+// every other panel uses) is the only identity, exactly as asked.
+//
+// DATA. Volume is per-ticker PEAK |positionBp| ever observed this session (peakBpByTicker, a ref
+// fed by the same account poll that already drives the donut — see its own doc comment), summed
+// across every ticker a strategy touched today whether that ticker is still open (ownersByTicker)
+// or already closed and pruned from bridgePositions (closedOwners, the bridge's own memory of who
+// closed it — 2026-10-29, the operator's own correction: "не лише по активних а й по закритих",
+// not just active, closed trades too). No per-trade notional exists anywhere on the live pipe, so
+// this is the best honest proxy available without a new backend endpoint: a position's own peak
+// size while it was open, not a sum of every add/trim along the way.
 // =========================================================================================
 
-function SettleBreakdownChart({
+type ConeRow = { key: string; color: string; volumeBp: number; result: number };
+
+/** #rrggbb -> [r,g,b], or null for anything else (rgba(...), a bad value, …) — shade() below falls
+ * back to the original string untouched rather than guess at those. */
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Mixes a hex colour toward white (amount > 0) or black (amount < 0), amount in [-1, 1] — the
+ * cone's own gradient fill (one face brighter, the opposite face richer), not a generic colour
+ * utility. */
+function shade(hex: string, amount: number): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return hex;
+  const mix = (c: number) => Math.max(0, Math.min(255, amount >= 0 ? c + (255 - c) * amount : c + c * amount));
+  const [r, g, b] = rgb.map(mix);
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
+
+function EfficiencyConeChart({
   rows,
-  hoverKey,
-  onHover,
   title,
   meta,
   heightPx = 384,
   heightClass = "h-[384px]",
 }: {
-  rows: { key: string; color: string; ready: boolean; checkpointLabel: string; byCheckpoint: number; afterCheckpoint: number }[];
-  hoverKey: string | null;
-  onHover: (key: string | null) => void;
+  rows: ConeRow[];
   title?: string;
   meta?: string;
   heightPx?: number;
   heightClass?: string;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const uid = useId().replace(/:/g, "");
   const width = useMeasuredWidth(svgRef, 1100);
   const height = heightPx;
-  const PAD_L = 46;
-  const PAD_R = 16;
-  const PAD_T = 36;
-  const PAD_B = 30;
-  const plotW = width - PAD_L - PAD_R;
+  const PAD_T = 20;
+  const PAD_B = 18;
+  const GAP = 10;
+  const MIN_LEN = 18;
+  const MIN_WIDTH = 16;
   const plotH = height - PAD_T - PAD_B;
 
-  const maxAbs = Math.max(1, ...rows.flatMap((r) => [Math.abs(r.byCheckpoint), Math.abs(r.afterCheckpoint)]));
-  const yZero = PAD_T + plotH / 2;
-  const yFor = (v: number) => yZero - (v / maxAbs) * (plotH / 2);
-  const yTicks = [maxAbs, 0, -maxAbs];
+  const sorted = useMemo(() => [...rows].sort((a, b) => b.volumeBp - a.volumeBp), [rows]);
 
-  const n = Math.max(1, rows.length);
-  const groupW = plotW / n;
-  const barW = Math.max(8, Math.min(36, groupW * 0.3));
-  const barGap = 4;
+  const cones = useMemo(() => {
+    const maxVolume = Math.max(1e-9, ...sorted.map((r) => Math.max(0, r.volumeBp)));
+    const efficiencies = sorted.map((r) => (r.volumeBp > 0 ? Math.max(0, r.result) / r.volumeBp : 0));
+    const maxEff = Math.max(1e-9, ...efficiencies);
+    const n = Math.max(1, sorted.length);
+    const yBase = height - PAD_B;
+
+    // A SLOT, not a share of the chart (2026-10-29, the operator's own correction — one assigned
+    // strategy used to stretch its own cone across the full width, reading as a flat wedge rather
+    // than a cone; see this function's own header comment). Standard slot = 1/6 of the chart, same
+    // for one strategy or six; past six it shrinks to width/n so every cone still fits — "якщо
+    // назначених стратегій більше - роби тонші" — height keeps using the full plot range either
+    // way, untouched by how many slots there are.
+    const slotWidth = width / Math.max(6, n);
+    const rowWidth = slotWidth * n;
+    const xOffset = (width - rowWidth) / 2;
+
+    return sorted.map((r, i) => {
+      // Width WITHIN the slot still reads volume, the same "biggest reaches the cap, the rest
+      // scale relative to it" idiom height already uses against maxEff — just capped at the slot
+      // now instead of free to swallow the whole chart.
+      const volShare = Math.max(0, r.volumeBp) / maxVolume;
+      const baseWidth = Math.max(MIN_WIDTH, volShare * (slotWidth - GAP));
+      const xCenter = xOffset + slotWidth * (i + 0.5);
+      // The single most efficient strategy reaches PAD_T exactly (full plot height); every other
+      // cone is relative to IT, not to an abstract fixed scale — the operator's own instruction.
+      const len = MIN_LEN + (efficiencies[i] / maxEff) * (plotH - MIN_LEN);
+      const yApex = yBase - len;
+      const ry = Math.max(3, Math.min(baseWidth * 0.16, 10));
+      return {
+        key: r.key,
+        color: r.color,
+        gradientId: `${uid}-cone-${i}`,
+        xCenter,
+        xLeft: xCenter - baseWidth / 2,
+        xRight: xCenter + baseWidth / 2,
+        baseWidth,
+        yApex,
+        yBase,
+        ry,
+      };
+    });
+  }, [sorted, width, plotH, height, uid]);
 
   return (
     <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
@@ -696,84 +794,61 @@ function SettleBreakdownChart({
         viewBox={`0 0 ${width} ${height}`}
         className="block h-full w-full"
         role="img"
-        aria-label="Closed by checkpoint versus closed after checkpoint, per strategy"
+        aria-label="Each strategy's own efficiency cone — base width is BP volume, height is result per unit of volume, the tallest cone filling the chart"
       >
-        {yTicks.map((t, i) => (
-          <g key={i}>
-            <line x1={PAD_L} x2={width - PAD_R} y1={yFor(t)} y2={yFor(t)} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-            <text x={PAD_L - 8} y={yFor(t) + 3} textAnchor="end" fontSize={AXIS_TICK_FONT_SIZE} fill={AXIS_TICK_FILL} fontFamily="ui-monospace, monospace">
-              {t >= 0 ? "+" : ""}{t.toFixed(0)}
-            </text>
-          </g>
-        ))}
-        <line x1={PAD_L} x2={width - PAD_R} y1={yZero} y2={yZero} stroke="rgba(255,255,255,0.15)" />
-
-        {rows.length === 0 ? (
+        {cones.length === 0 ? (
           <text x={width / 2} y={height / 2} textAnchor="middle" fill="rgba(255,255,255,0.32)" fontSize={11} fontFamily="ui-monospace, monospace">
-            NOTHING SETTLED YET
+            NOTHING ACTIVE
           </text>
         ) : (
-          rows.map((r, i) => {
-            const gx = PAD_L + groupW * i + groupW / 2;
-            const on = hoverKey === r.key;
-            const dim = hoverKey != null && !on;
-            const byY = yFor(r.byCheckpoint);
-            const afterY = yFor(r.afterCheckpoint);
-            return (
-              <g
-                key={r.key}
-                opacity={dim ? 0.4 : 1}
-                style={{ transition: "opacity 140ms ease", cursor: "pointer" }}
-                onMouseEnter={() => onHover(r.key)}
-                onMouseLeave={() => onHover(null)}
-              >
-                <rect
-                  x={gx - barGap / 2 - barW}
-                  y={Math.min(yZero, byY)}
-                  width={barW}
-                  height={Math.max(0.5, Math.abs(yZero - byY))}
-                  rx={3}
-                  fill={r.color}
-                  fillOpacity={0.85}
+          <>
+            <defs>
+              {/* One gradient per cone, ACROSS its own width (userSpaceOnUse: every cone sits at a
+                  different x) — a single consistent light source from the upper-left, bright near
+                  the left third, the strategy's own colour past centre, darkened at the right edge:
+                  the glossy curved-surface read the operator's own reference has. */}
+              {cones.map((c) => (
+                <linearGradient key={c.gradientId} id={c.gradientId} gradientUnits="userSpaceOnUse" x1={c.xLeft} y1={0} x2={c.xRight} y2={0}>
+                  <stop offset="0%" stopColor={shade(c.color, 0.45)} />
+                  <stop offset="35%" stopColor={shade(c.color, 0.12)} />
+                  <stop offset="68%" stopColor={c.color} />
+                  <stop offset="100%" stopColor={shade(c.color, -0.4)} />
+                </linearGradient>
+              ))}
+            </defs>
+            {cones.map((c) => (
+              <g key={c.key}>
+                {/* Base disk, drawn whole first — the cone body below covers its own back half,
+                    leaving only the FRONT rim showing past the body's bottom edge. */}
+                <ellipse
+                  cx={c.xCenter} cy={c.yBase} rx={c.baseWidth / 2} ry={c.ry}
+                  fill={shade(c.color, -0.25)} fillOpacity={0.9}
+                  stroke={shade(c.color, -0.5)} strokeOpacity={0.6} strokeWidth={1}
                 />
-                <rect
-                  x={gx + barGap / 2}
-                  y={Math.min(yZero, afterY)}
-                  width={barW}
-                  height={Math.max(0.5, Math.abs(yZero - afterY))}
-                  rx={3}
-                  fill={r.color}
-                  fillOpacity={0.22}
-                  stroke={r.color}
+                <polygon
+                  points={`${c.xCenter},${c.yApex} ${c.xLeft},${c.yBase} ${c.xRight},${c.yBase}`}
+                  fill={`url(#${c.gradientId})`}
+                  fillOpacity={0.96}
+                  stroke={shade(c.color, -0.3)}
+                  strokeOpacity={0.55}
                   strokeWidth={1}
+                  strokeLinejoin="round"
                 />
-                <text
-                  x={gx}
-                  y={height - 10}
-                  textAnchor="middle"
-                  fontSize={9}
-                  fill={on ? r.color : "rgba(255,255,255,0.5)"}
-                  fontFamily="ui-monospace, monospace"
-                  letterSpacing="0.3"
-                >
-                  {r.key.toUpperCase()}
-                </text>
-                {!r.ready && (
-                  <text x={gx} y={PAD_T - 10} textAnchor="middle" fontSize={8} fill="rgba(251,191,36,0.75)" fontFamily="ui-monospace, monospace">
-                    pending
-                  </text>
-                )}
-                <title>
-                  {`${r.key.toUpperCase()}: by ${r.checkpointLabel} ${r.byCheckpoint >= 0 ? "+" : ""}${r.byCheckpoint.toFixed(2)}, after ${r.checkpointLabel} ${r.afterCheckpoint >= 0 ? "+" : ""}${r.afterCheckpoint.toFixed(2)}${r.ready ? "" : " (checkpoint has not fired yet today)"}`}
-                </title>
+                {/* The base disk's own front rim, retraced on top so it reads crisp against the
+                    body instead of being swallowed by the polygon's own bottom edge. */}
+                <path
+                  d={`M ${c.xLeft} ${c.yBase} A ${c.baseWidth / 2} ${c.ry} 0 0 0 ${c.xRight} ${c.yBase}`}
+                  fill="none" stroke={shade(c.color, -0.35)} strokeOpacity={0.5} strokeWidth={1}
+                />
               </g>
-            );
-          })
+            ))}
+          </>
         )}
       </svg>
     </div>
   );
 }
+
 
 // =========================================================================================
 // MULTI-SERIES LINE CHART — shared by the PnL-over-time and average-trade charts. Total is always
@@ -1355,6 +1430,12 @@ export default function CaesarCharts({
   const [accountActiveCount, setAccountActiveCount] = useState<number | null>(null);
   const [accountPositions, setAccountPositions] = useState<AccountPosition[]>([]);
   const [bridgePositions, setBridgePositions] = useState<BridgePosition[]>([]);
+  const [closedOwners, setClosedOwners] = useState<ClosedOwners>({});
+  /** Peak |BP| ever observed per ticker this session — see coneRows' own header comment for why a
+   * closed position's volume has to be remembered this way instead of read off a field that does
+   * not exist anywhere on the live pipe. Never reset mid-mount; a reload starts it fresh, same
+   * "since this tab opened" scope every ref-based accumulator in this file already has. */
+  const peakBpByTicker = useRef<Map<string, number>>(new Map());
   const [bridgeEntries, setBridgeEntries] = useState<Record<string, EntryLogEntry[]>>({});
   const [pnlPoints, setPnlPoints] = useState<PnlSamplePoint[]>([]);
   const [hoverMin, setHoverMin] = useState<number | null>(null);
@@ -1381,6 +1462,13 @@ export default function CaesarCharts({
       setAccountPositions(active);
       setAccountActiveCount(active.length);
       // Errors leave the last confirmed account count in place, same as before.
+      for (const p of active) {
+        const ticker = (p.ticker ?? "").trim().toUpperCase();
+        if (!ticker) continue;
+        const bp = Math.abs(p.positionBp ?? p.PositionBp ?? 0);
+        const seen = peakBpByTicker.current.get(ticker) ?? 0;
+        if (bp > seen) peakBpByTicker.current.set(ticker, bp);
+      }
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -1396,6 +1484,33 @@ export default function CaesarCharts({
     const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, 2000, (value, err) => {
       if (!alive) return;
       if (!err && value) setBridgePositions(value);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  /**
+   * Ticker -> strategy id(s) that closed it today — rides CaesarPositions' own "bridge-closed-owners"
+   * poll key (same endpoint, same shape, same reason that component uses a SEPARATE key from
+   * "bridge-all-positions": subscribeSharedPoll only runs the first subscriber's own fetcher for a
+   * given key, and "bridge-all-positions" is shared with CaesarBridgeDecisions/CaesarPositions as
+   * plain BridgePosition[] — changing what it resolves to would break both of them). Needed so a
+   * ticker's own volume can still be attributed to a strategy once it has fully closed and dropped
+   * out of bridgePositions — see coneRows' own header comment.
+   */
+  useEffect(() => {
+    let alive = true;
+    // Matches CaesarPositions' own fetchClosedOwners exactly — subscribeSharedPoll only ever runs
+    // the FIRST subscriber's fetcher for a key, so whichever of the two mounts first decides what
+    // every other subscriber of "bridge-closed-owners" actually receives; a differently-shaped
+    // fetcher here would read CaesarPositions' own { closedOwners, prunes } object as if it were
+    // the bare map, or vice versa, depending on mount order.
+    const fetchClosedOwners = () =>
+      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
+        .then((res) => res.json() as Promise<BridgePositionsResponse & { prunes?: unknown[] }>)
+        .then((body) => ({ closedOwners: body.closedOwners ?? {}, prunes: body.prunes ?? [] }));
+    const unsubscribe = subscribeSharedPoll("bridge-closed-owners", fetchClosedOwners, 2000, (value, err) => {
+      if (!alive) return;
+      if (!err && value) setClosedOwners(value.closedOwners);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -1429,32 +1544,6 @@ export default function CaesarCharts({
       if (!err && value) setPnlPoints(value);
     });
     return () => { alive = false; unsubscribe(); };
-  }, []);
-
-  // SETTLE BREAKDOWN — feeds the "closed by checkpoint / after checkpoint" chart below. Same two
-  // shared-poll keys CaesarPositions.tsx's own cards already use ("bridge-pnl-breakdown-pre"/"-opg"),
-  // so this never runs a second independent poll of the same endpoint.
-  const [preBreakdown, setPreBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
-  const [opgBreakdown, setOpgBreakdown] = useState<{ ready: boolean; perStrategy: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>({ ready: false, perStrategy: {} });
-  useEffect(() => {
-    let aliveP = true;
-    const fetchPre = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=pre"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>);
-    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-pre", fetchPre, 6_000, (body, err) => {
-      if (aliveP && !err && body) setPreBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
-    });
-    return () => { aliveP = false; unsubscribe(); };
-  }, []);
-  useEffect(() => {
-    let aliveO = true;
-    const fetchOpg = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/pnl-breakdown?checkpoint=opg"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<{ ok: boolean; ready?: boolean; perStrategy?: Record<string, { closedByCheckpoint: number; closedAfterCheckpoint: number }> }>);
-    const unsubscribe = subscribeSharedPoll("bridge-pnl-breakdown-opg", fetchOpg, 6_000, (body, err) => {
-      if (aliveO && !err && body) setOpgBreakdown({ ready: body.ready === true, perStrategy: body.perStrategy ?? {} });
-    });
-    return () => { aliveO = false; unsubscribe(); };
   }, []);
 
   // The parent's STABLE, registry-ordered map (see CaesarChartsProps.colorByInstanceId's own doc
@@ -1774,34 +1863,50 @@ export default function CaesarCharts({
   }, [instances, colorByInstance, cleanPnlPoints, series, activeSeries, bridgeEntries, fromMin, toMin]);
 
   /**
-   * SETTLE BREAKDOWN — one of the five options the operator picked from (2026-10-23): per strategy,
-   * how much of today's CLOSED total was already settled by that strategy's own checkpoint (09:35
-   * for the PRE family, 10:35 for OPG) versus closed AFTER it — the same split CaesarPositions.tsx's
-   * own cards already print as small text under two of them, given its own chart here instead of
-   * staying buried in a footnote. Only a strategy classified into one of the two checkpoint families
-   * (PRE_CHECKPOINT_BRIDGE_IDS/OPG_CHECKPOINT_BRIDGE_IDS) and currently shown in this segment is
-   * included — the same "nothing to add if it was not named" rule the cards already follow.
+   * EFFICIENCY CONES — replaces ENTRY TIME ARC, which replaced SETTLE BREAKDOWN (2026-10-29, the
+   * operator's own instruction — see EfficiencyConeChart's own header comment for the full
+   * rationale). Scoped to `assignedKeys` (the segment's own plan row, `row.enabled` —
+   * "назначені і увімкнені"), not the full `instances` list CaesarSchedule.tsx hands this
+   * component: `instances` deliberately ALSO carries overnight carryovers (e.g. Reversal/
+   * Continuum still shown under PRE though their own plan assignment is POST) so the donut/PNL
+   * lines can still attribute their still-open book — correct for those, wrong here, where the
+   * operator wants ONLY strategies this segment actually schedules. null (allDay) means "don't
+   * filter", same fallback the PNL OVER TIME/AVERAGE TRADE tooltips already use for the same prop.
    */
-  const settleRows = useMemo(() => {
-    return instances.flatMap((inst) => {
-      const family = PRE_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)
-        ? { breakdown: preBreakdown, label: "09:35" }
-        : OPG_CHECKPOINT_BRIDGE_IDS.has(inst.instanceId)
-          ? { breakdown: opgBreakdown, label: "10:35" }
-          : null;
-      if (!family) return [];
-      const b = family.breakdown.perStrategy[inst.instanceId];
-      if (!b) return [];
-      return [{
-        key: inst.key,
-        color: colorByInstance.get(inst.instanceId) ?? OTHER,
-        ready: family.breakdown.ready,
-        checkpointLabel: family.label,
-        byCheckpoint: b.closedByCheckpoint,
-        afterCheckpoint: b.closedAfterCheckpoint,
-      }];
-    });
-  }, [instances, colorByInstance, preBreakdown, opgBreakdown]);
+  const coneInstances = useMemo(
+    () => (assignedKeys == null ? instances : instances.filter((inst) => assignedKeys.has(inst.key))),
+    [instances, assignedKeys],
+  );
+  const coneRows = useMemo<ConeRow[]>(() => {
+    // Volume: every ticker this strategy has touched today, open OR closed, not just what is
+    // still open right now (the operator's own correction, 2026-10-29 — "не лише по активних а й
+    // по закритих"). Per ticker: peakBpByTicker's own peak |BP| ever observed while it was open
+    // this session (accountPositions alone forgets this the instant a position goes flat), owner
+    // resolved from ownersByTicker (currently open) first, falling back to closedOwners (the
+    // bridge's own memory of who closed a ticker already pruned from bridgePositions) — union of
+    // the two tells volume apart by strategy for a ticker in either state.
+    const tickers = new Set<string>([...ownersByTicker.keys(), ...Object.keys(closedOwners)]);
+    const volumeByKey = new Map<string, number>();
+    for (const ticker of tickers) {
+      const bp = peakBpByTicker.current.get(ticker) ?? 0;
+      if (bp === 0) continue;
+      const owners = ownersByTicker.get(ticker)?.length ? ownersByTicker.get(ticker)! : (closedOwners[ticker] ?? []);
+      for (const key of owners) {
+        volumeByKey.set(key, (volumeByKey.get(key) ?? 0) + bp);
+      }
+    }
+
+    // Result: today's own latest cumulative total (open + closed together), the exact same
+    // number PNL OVER TIME's own Total line ends on right now.
+    const latest = cleanPnlPoints.length > 0 ? cleanPnlPoints[cleanPnlPoints.length - 1] : null;
+
+    return coneInstances.map((inst) => ({
+      key: inst.key,
+      color: colorByInstance.get(inst.instanceId) ?? OTHER,
+      volumeBp: volumeByKey.get(inst.key) ?? 0,
+      result: latest?.perStrategy[inst.instanceId]?.total ?? 0,
+    }));
+  }, [coneInstances, colorByInstance, accountPositions, ownersByTicker, closedOwners, cleanPnlPoints]);
 
   // ---- the time scale ------------------------------------------------------------------------
   // W measured off the svg itself (useMeasuredWidth — see its own doc comment); H is simply the
@@ -2293,13 +2398,11 @@ export default function CaesarCharts({
             </div>
           </figure>
 
-          {/* ---------- SETTLE BREAKDOWN ---------- */}
-          <SettleBreakdownChart
-            rows={settleRows}
-            hoverKey={hoverKey}
-            onHover={setHoverKey}
-            title="SETTLE BREAKDOWN"
-            meta="solid=by checkpoint, outline=after"
+          {/* ---------- EFFICIENCY CONES ---------- */}
+          <EfficiencyConeChart
+            rows={coneRows}
+            title="EFFICIENCY"
+            meta="band=volume · length=ККД"
             heightPx={384}
             heightClass="h-[384px]"
           />

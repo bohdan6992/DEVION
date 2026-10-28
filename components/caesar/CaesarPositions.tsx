@@ -776,10 +776,12 @@ export default function CaesarPositions({
       const inst = instances.find((i) => i.key === key);
       if (!inst) return [];
 
-      // Hedges and the two Launch baskets have no settle checkpoint of their own (a hedge is pressed
+      // Hedges and the basket strategies have no settle checkpoint of their own (a hedge is pressed
       // whenever its own balancing strategy needs it, not on a fixed clock; a basket's own exit is
-      // manual) — always their own LIVE total, regardless of which segment tab they sit on.
-      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket" || key === "launcheveningbasket") {
+      // manual) — always their own LIVE total, regardless of which segment tab they sit on. LIMITER
+      // Basket (2026-10-28) is the same shape as the two Launch baskets here: no fixed settle
+      // moment, fills close only when the operator does it by hand.
+      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket" || key === "launcheveningbasket" || key === "limiterbasket") {
         const live = view.perStrategy.get(key);
         return live ? [[key, live]] : [];
       }
