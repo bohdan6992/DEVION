@@ -58,6 +58,11 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // Scanner/Stream have no backtest or live dispatch behind them. Key lowercases to the registry/
   // bridge key "limiter".
   { key: "limiter", name: "Limiter", icon: "🚧", description: "Список тікерів, відфільтрований як у LAUNCH-групі; рейтинг — PRE-клас з файлу арбітража. Поки що лише Sonar." },
+  // LIMITER's own basket macro (operator, 2026-10-28): unlike the two basket strategies above,
+  // this one repeats HOURLY (21:01-09:00, Ctrl+Q cancel first each cycle, jittered +/-5 min, 04:00
+  // shifted to 04:05-04:10 to stay clear of Launch•Morning's own 03:58-04:01). Key lowercases to
+  // the registry/bridge key "limiterbasket". See LimiterBasketServerStrategy.cs.
+  { key: "limiterBasket", name: "Limiter•Basket", icon: "⏰", description: "Щогодини (21:01-9:00, джиттер ±5хв): Ctrl+Q, потім лімітки на відфільтрований список. Вихід ручний." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },

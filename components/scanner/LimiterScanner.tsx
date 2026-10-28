@@ -31,7 +31,7 @@ import { fetchLimiterStreamUniverse, pushLimiterStreamLiveParams, toLimiterStrea
 import { fetchLimiterRatingsSnapshot, pushLimiterRatingsLiveParams } from "../../lib/sonar/limiterRatingsClient";
 import { toArbitrageSonarLiveParams } from "../../lib/sonar/arbitrageSnapshotClient";
 import type { SonarExactFilterSnapshot as ArbitrageFullFilterSnapshot } from "../sonar/ArbitrageSonar";
-import { subscribeSharedPoll } from "../../lib/caesar/sharedPoll";
+import { subscribeSharedPoll, forceSharedPollNow } from "../../lib/caesar/sharedPoll";
 import OpenDoorStreamView from "../stream/OpenDoorStream";
 import { useStreamExecutionSnapshot } from "../stream/streamExecutionStore";
 import { useStreamPositionMeta } from "../stream/streamPositionStore";
@@ -2663,6 +2663,29 @@ export default function LimiterScanner({
   // toolbar-driven narrowing (MINRATE/MINTOTAL/σ/α/CORR) happens here.
   const [streamUniverseRows, setStreamUniverseRows] = useState<LimiterStreamUniverseRow[]>([]);
 
+  // Hoisted (not inline inside the poll effect below) so the push effect above can also call it
+  // via forceSharedPollNow right after a successful push, without redefining the same mapping.
+  // fetchLimiterRatingsSnapshot's own rows (Arbitrage's own per-ticker rate/total/zapSigma, PRE
+  // class) translated to LimiterStreamUniverseRow's shape — same {ticker, rating, total, sigma,
+  // alpha} fields fetchLimiterStreamUniverse's dead endpoint would have returned, so
+  // filteredStreamUniverseRows below (MINRATE/MINTOTAL/σ/α/CORR) and OpenDoorStream's
+  // StreamUniverseSignalsTable need no changes. alpha has no Arbitrage-schema equivalent (see
+  // LimiterSonar.tsx's own toLimiterUniverseRow comment) — left null.
+  const fetchUniverse = useCallback(
+    () =>
+      fetchLimiterRatingsSnapshot().then((snap) => ({
+        timedOut: snap.timedOut,
+        rows: (snap.rows ?? []).map((r): LimiterStreamUniverseRow => ({
+          ticker: r.ticker,
+          rating: r.rate,
+          total: r.total,
+          sigma: r.zapSigma,
+          alpha: null,
+        })),
+      })),
+    []
+  );
+
   /**
    * The SIGNALS card's own ADV20...IMBEXCH15:55 grid and ITB/HARD/DIV/NEWS/PTP/SSR/ETF/CRAP/REP/
    * CORR/country/exchange/sector toggles, pushed through the SAME real conversion LimiterSonar.tsx
@@ -2688,7 +2711,15 @@ export default function LimiterScanner({
         return (min == null && max == null) ? { min: null, max: null } : { min, max };
       };
       const snapshot: ArbitrageFullFilterSnapshot = {
-        cls: "pre", type: "any", mode: "all", ratingMode: "SESSION",
+        // `mode` here is cosmetic — toArbitrageSonarLiveParams below never reads s.mode, so this
+        // never reaches the bridge. The REAL fix for "UNIVERSE should show every ticker" lives
+        // server-side, in ArbitrageSonarSnapshotService.GetSnapshotCoreAsync, which now derives ITS
+        // OWN Mode from IgnoreRatings directly instead of hardcoding "all" (that hardcode ran a live
+        // sigma gate — ShortSigmaOk||LongSigmaOk — unconditionally, silently re-narrowing the
+        // universe IgnoreRatings was supposed to fully reopen; see that file's own comment,
+        // 2026-10-27). Kept here matching IgnoreRatings anyway so this object reads truthfully even
+        // though it is not load-bearing.
+        cls: "pre", type: "any", mode: limiterIgnoreRatings ? "off" : "all", ratingMode: "SESSION",
         ignoreRatings: limiterIgnoreRatings, minRate: limiterMinRate, minTotal: limiterMinTotal,
         tickersFilterNorm: "",
         listMode, topMode: false, topSigmaOn: false, topBenchOn: false, topTimeOn: false,
@@ -2731,7 +2762,11 @@ export default function LimiterScanner({
         corrMin: "", corrMax: "", betaMin: "", betaMax: "", sigmaMin: "", sigmaMax: "",
         zapMode: "off", zapShowAbs: 0, zapSilverAbs: 0, zapGoldAbs: 0,
       };
-      void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-scanner-stream" }));
+      void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-scanner-stream" }))
+        // Don't wait out the rest of the 6s poll interval to see a toolbar edit reflected — the
+        // bridge already has the new params by the time this resolves, so the SIGNALS card can
+        // catch up right away instead of up to 6s later (operator's own instruction, 2026-10-28).
+        .then(() => forceSharedPollNow("stream-limiter-universe", fetchUniverse));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
@@ -2754,23 +2789,6 @@ export default function LimiterScanner({
   useEffect(() => {
     if (primaryPanel !== "stream") return;
     let alive = true;
-    // fetchLimiterRatingsSnapshot's own rows (Arbitrage's own per-ticker rate/total/zapSigma, PRE
-    // class) translated to LimiterStreamUniverseRow's shape — same {ticker, rating, total, sigma,
-    // alpha} fields fetchLimiterStreamUniverse's dead endpoint would have returned, so
-    // filteredStreamUniverseRows below (MINRATE/MINTOTAL/σ/α/CORR) and OpenDoorStream's
-    // StreamUniverseSignalsTable need no changes. alpha has no Arbitrage-schema equivalent (see
-    // LimiterSonar.tsx's own toLimiterUniverseRow comment) — left null.
-    const fetchUniverse = () =>
-      fetchLimiterRatingsSnapshot().then((snap) => ({
-        timedOut: snap.timedOut,
-        rows: (snap.rows ?? []).map((r): LimiterStreamUniverseRow => ({
-          ticker: r.ticker,
-          rating: r.rate,
-          total: r.total,
-          sigma: r.zapSigma,
-          alpha: null,
-        })),
-      }));
     const unsubscribe = subscribeSharedPoll("stream-limiter-universe", fetchUniverse, 6_000, (value, err) => {
       if (!alive || err) return;
       setStreamUniverseRows(value?.rows ?? []);
@@ -2779,7 +2797,7 @@ export default function LimiterScanner({
       alive = false;
       unsubscribe();
     };
-  }, [primaryPanel]);
+  }, [primaryPanel, fetchUniverse]);
 
   const streamUniversePassMinMax = useCallback((val: number | null, min: number | null, max: number | null) => {
     if ((min != null || max != null) && val == null) return false;

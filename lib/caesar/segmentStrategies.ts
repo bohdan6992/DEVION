@@ -22,7 +22,7 @@ import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
  * 15:58 send is armed early by CaesarPlanService.EarlyEnableFloorMinuteIdx, like CLO's own).
  */
 export const SEGMENT_STRATEGY_KEYS: Partial<Record<string, readonly string[]>> = {
-  pre: ["arbitrage", "morlaunch", "morlaunchbasket", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
+  pre: ["arbitrage", "morlaunch", "morlaunchbasket", "limiterbasket", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
   open: ["opgreversal", "opgcontinuum", "opgfade", "opgride"],
   intra: [],
   post: ["reversal", "continuum", "launcheveningbasket", CLO_HEDGE_KEY],

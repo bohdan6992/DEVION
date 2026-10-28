@@ -6,7 +6,7 @@ import Link from "next/link";
 import clsx from "clsx";
 
 
-import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { subscribeSharedPoll, forceSharedPollNow } from "@/lib/caesar/sharedPoll";
 import {
   type LimiterSonarRow,
   type LimiterUniverseRow,
@@ -1831,6 +1831,37 @@ const LIMITER_EXIT_CLASSES = [
 ] as const;
 
 /**
+ * UNIVERSE table dynamic columns (operator's own instruction, 2026-10-28): pick a filter from the
+ * ADV20...IMBEXCH15:55 min/max grid above, and the column for that exact field appears in the
+ * table, with its own live value per ticker, sortable by clicking the header. "Picking" a field IS
+ * giving it a min or max — a field with neither stays out of the table, same as it stays out of the
+ * filter.
+ *
+ * sonarMode here is SHARED_FILTER_PRESET_FIELDS' own key (also the `bounds` dictionary key the push
+ * effect above already sends under, e.g. "ADV20") — reusing it rather than inventing a second label
+ * set keeps the column header, the grid's own box label, and the bound actually being enforced
+ * impossible to drift apart. getter reads that SAME field off the raw ArbitrageSignal row — the
+ * exact per-field functions (numADV20, numVWAP, ...) the grid's own min/max comparisons already use
+ * elsewhere, not a second, parallel field-reading path. corr/beta/sigma are deliberately absent:
+ * those live in a separate range-input row, not the ADV20...IMBEXCH grid this feature is scoped to.
+ */
+const GRID_COLUMN_GETTERS: Partial<Record<string, (row: ArbitrageSignal) => number | null>> = {
+  ADV20: numADV20, ADV20NF: numADV20NF, ADV90: numADV90, ADV90NF: numADV90NF,
+  AvPreMhv: numAvPreMh, RoundLot: numRoundLot, VWAP: numVWAP, SpreadBidPct: numSpreadBidPct,
+  LstPrcL: numLstPrcL, LstCls: numLastClose, YCls: numYCls, TCls: numTCls,
+  ClsToClsPct: numClsToClsPct, Lo: numLo, LstClsNewsCnt: numLstClsNewsCnt,
+  MarketCapM: numMarketCapM, PreMhVolNF: numPreMktVolNF, VolNFfromLstCls: numVolNFfromLstCls,
+  AvPostMhVol90NF: numAvPostMhVol90NF, AvPreMhVol90NF: numAvPreMhVol90NF,
+  AvPreMhValue20NF: numAvPreMhValue20NF, AvPreMhValue90NF: numAvPreMhValue90NF,
+  AvgDailyValue20: numAvgDailyValue20, AvgDailyValue90: numAvgDailyValue90,
+  Volatility20: numVolatility20, Volatility90: numVolatility90,
+  PreMhMDV20NF: numPreMhMDV20NF, PreMhMDV90NF: numPreMhMDV90NF, VolRel: numVolRel,
+  PreMhBidLstPrcPct: numPreMhBidLstPrcPct, PreMhLoLstPrcPct: numPreMhLoLstPrcPct,
+  PreMhHiLstClsPct: numPreMhHiLstClsPct, PreMhLoLstClsPct: numPreMhLoLstClsPct,
+  LstPrcLstClsPct: numLstPrcLstClsPctSafe, ImbExch925: numImbExch925, ImbExch1555: numImbExch1555,
+};
+
+/**
  * SonarSignalRow (Arbitrage's own per-ticker row, already filtered + rated under whichever
  * SignalsClass the toolbar requested — "pre" by default here) translated into LimiterSonarRow, so
  * every render/sort/filter site below written against LimiterSonarRow keeps working unchanged. Field
@@ -2038,7 +2069,9 @@ export default function LimiterSonar() {
   // those already sit on this exact page and mean exactly these same four columns; a second,
   // separate set of range inputs inside the table would just be a confusing duplicate.
   const [universeTickerQuery, setUniverseTickerQuery] = useState("");
-  const [universeSort, setUniverseSort] = useState<{ key: "ticker" | "rating" | "total" | "sigma" | "alpha"; dir: 1 | -1 }>(
+  // `key` also accepts a GRID_COLUMN_GETTERS key (e.g. "ADV20") once that field has an active
+  // min/max bound — see the UNIVERSE table's own render for how those dynamic columns are built.
+  const [universeSort, setUniverseSort] = useState<{ key: "ticker" | "rating" | "total" | "sigma" | "alpha" | string; dir: 1 | -1 }>(
     { key: "ticker", dir: 1 },
   );
   // True only inside LimiterTiming.Default's 15:50-16:20 NY window. UNLIKE every sibling panel's
@@ -2619,6 +2652,11 @@ export default function LimiterSonar() {
         if (s?.ratingMode === "SESSION" || s?.ratingMode === "BIN" || s?.ratingMode === "BINS") setRatingMode(s.ratingMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
+        // UNIVERSE pill — see the save effect's own comment on why this is separate from minRate/
+        // minTotal above.
+        if (typeof s?.limiterIgnoreRatings === "boolean") setLimiterIgnoreRatings(s.limiterIgnoreRatings);
+        if (typeof s?.limiterMinRate === "number") setLimiterMinRate(s.limiterMinRate);
+        if (typeof s?.limiterMinTotal === "number") setLimiterMinTotal(s.limiterMinTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
         if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
         if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
@@ -2805,6 +2843,11 @@ export default function LimiterSonar() {
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
           topMode, topSigmaOn, topBenchOn, topTimeOn,
 
+          // UNIVERSE pill — never persisted before 2026-10-27 (operator-reported: lost on every
+          // reload). Distinct from the generic minRate/minTotal above, which belong to a different
+          // toolbar.
+          limiterIgnoreRatings, limiterMinRate, limiterMinTotal,
+
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
           excludeItb, excludeHard, excludeCorr, corrThresholdInput,
@@ -2861,6 +2904,7 @@ export default function LimiterSonar() {
     cls, type, mode, listMode, bpCls,
     activeMode,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
+    limiterIgnoreRatings, limiterMinRate, limiterMinTotal,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
     excludeItb, excludeHard, excludeCorr, corrThresholdInput,
     includeUSA, includeChina,
@@ -3441,10 +3485,17 @@ export default function LimiterSonar() {
       // ArbitrageSonarLiveParams["filters"] (this effect's own bug until 2026-10-27 — operator
       // caught it live: "перевір чи працюють ці фільтри") skips that translation entirely, so the
       // backend receives field names it does not recognise and silently applies none of them.
+      // `mode` here is cosmetic — toArbitrageSonarLiveParams below never reads s.mode, so this never
+      // reaches the bridge. The REAL fix for "UNIVERSE should show every ticker" lives server-side,
+      // in ArbitrageSonarSnapshotService.GetSnapshotCoreAsync, which now derives ITS OWN Mode from
+      // IgnoreRatings directly instead of hardcoding "all" (that hardcode ran a live sigma gate —
+      // ShortSigmaOk||LongSigmaOk — unconditionally, silently re-narrowing the universe IgnoreRatings
+      // was supposed to fully reopen; see that file's own comment, 2026-10-27). Kept here matching
+      // IgnoreRatings anyway so this object reads truthfully even though it is not load-bearing.
       const snapshot: ArbitrageFullFilterSnapshot = {
         cls: "pre",
         type: "any",
-        mode: "all",
+        mode: limiterIgnoreRatings ? "off" : "all",
         ratingMode: "SESSION",
         ignoreRatings: limiterIgnoreRatings,
         minRate: limiterMinRate,
@@ -3460,7 +3511,11 @@ export default function LimiterSonar() {
         corrMin: "", corrMax: "", betaMin: "", betaMax: "", sigmaMin: "", sigmaMax: "",
         zapMode: "off", zapShowAbs: 0, zapSilverAbs: 0, zapGoldAbs: 0,
       };
-      void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-sonar" }));
+      void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-sonar" }))
+        // Don't wait out the rest of the 6s poll interval to see a toolbar edit reflected — the
+        // bridge already has the new params by the time this resolves, so the list can catch up
+        // right away instead of up to 6s later (operator's own instruction, 2026-10-28).
+        .then(() => forceSharedPollNow("sonar-limiter-snapshot", fetchLimiterRatingsSnapshot));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
@@ -3522,6 +3577,27 @@ export default function LimiterSonar() {
   // for why those existed and why they are safe to remove: none had any OTHER consumer).
   // Rating/Total/Sigma/Alpha reuse the toolbar's own existing limiterMinRate/limiterMinTotal/
   // minSigma/maxSigma/minAlpha/maxAlpha state (the same four columns, already on this page).
+  /** ticker -> its raw signal row, for the UNIVERSE table's own dynamic grid columns (GRID_COLUMN_
+   * GETTERS) to read ADV20/VWAP/etc off — allItems already carries every field those getters need. */
+  const allItemsByTicker = useMemo(() => {
+    const m = new Map<string, ArbitrageSignal>();
+    for (const it of allItems) m.set(normalizeTicker(it.ticker ?? "") ?? "", it);
+    return m;
+  }, [allItems]);
+
+  /** Which ADV20...IMBEXCH15:55 grid fields currently have an active min or max — "picking" one IS
+   * giving it a bound (operator's own instruction, 2026-10-28). Reuses `bounds` as-is: same object
+   * the push effect above already sends, so a column only ever appears for a filter genuinely being
+   * enforced. */
+  const activeGridColumns = useMemo(
+    () =>
+      SHARED_FILTER_PRESET_FIELDS.filter((f) => {
+        const b = (bounds as Record<string, { min: number | null; max: number | null }>)[f.sonarMode];
+        return b != null && (b.min != null || b.max != null) && GRID_COLUMN_GETTERS[f.sonarMode] != null;
+      }),
+    [bounds]
+  );
+
   const filteredSortedUniverseRows = useMemo(() => {
     const nSigma = optNumOrNull(minSigma), xSigma = optNumOrNull(maxSigma);
     const nAlpha = optNumOrNull(minAlpha), xAlpha = optNumOrNull(maxAlpha);
@@ -3547,15 +3623,25 @@ export default function LimiterSonar() {
       return true;
     });
     const { key, dir } = universeSort;
+    const gridGetter = GRID_COLUMN_GETTERS[key];
     return [...rows].sort((a, b) => {
       if (key === "ticker") return dir * a.ticker.localeCompare(b.ticker);
-      const av = a[key], bv = b[key];
+      let av: number | null, bv: number | null;
+      if (gridGetter) {
+        const ra = allItemsByTicker.get(normalizeTicker(a.ticker) ?? "");
+        const rb = allItemsByTicker.get(normalizeTicker(b.ticker) ?? "");
+        av = ra ? gridGetter(ra) : null;
+        bv = rb ? gridGetter(rb) : null;
+      } else {
+        av = (a as unknown as Record<string, number | null>)[key] ?? null;
+        bv = (b as unknown as Record<string, number | null>)[key] ?? null;
+      }
       if (av == null && bv == null) return 0;
       if (av == null) return 1; // nulls sort last regardless of direction
       if (bv == null) return -1;
       return dir * (av - bv);
     });
-  }, [limiterUniverseRows, universeTickerQuery, universeSort, limiterIgnoreRatings, limiterMinRate, limiterMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded]);
+  }, [limiterUniverseRows, universeTickerQuery, universeSort, limiterIgnoreRatings, limiterMinRate, limiterMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded, allItemsByTicker]);
 
   const updatedLabel = updatedAt ? new Date(updatedAt).toLocaleTimeString("en-US", { hour12: false }) : null;
 
@@ -4824,25 +4910,50 @@ export default function LimiterSonar() {
                           {label} {universeSort.key === key ? (universeSort.dir === 1 ? "▲" : "▼") : ""}
                         </th>
                       ))}
+                      {/* One column per ADV20...IMBEXCH15:55 field that currently has an active
+                          min or max — "picking" a filter from that grid is what adds its own
+                          column here (operator's own instruction, 2026-10-28). */}
+                      {activeGridColumns.map((f) => (
+                        <th
+                          key={f.sonarMode}
+                          className="cursor-pointer select-none px-3 py-2 hover:text-zinc-300"
+                          onClick={() => setUniverseSort((s) => ({ key: f.sonarMode, dir: s.key === f.sonarMode ? (s.dir === 1 ? -1 : 1) : 1 }))}
+                          title={`Sort by ${f.sonarMode}`}
+                        >
+                          {f.sonarMode} {universeSort.key === f.sonarMode ? (universeSort.dir === 1 ? "▲" : "▼") : ""}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredSortedUniverseRows.map((r) => (
-                      <tr
-                        key={r.ticker}
-                        onClick={() => onTickerClick(r.ticker)}
-                        className={clsx(
-                          "cursor-pointer border-b border-white/[0.03] font-mono text-[12px] hover:bg-white/5 transition-colors",
-                          normalizeTicker(activeTicker || "") === normalizeTicker(r.ticker) && "bg-white/[0.06]"
-                        )}
-                      >
-                        <td className="px-3 py-1.5 font-bold text-zinc-100">{r.ticker}</td>
-                        <td className="px-3 py-1.5 text-zinc-300">{r.rating != null ? `${Math.round(r.rating * 100)}%` : "—"}</td>
-                        <td className="px-3 py-1.5 text-zinc-400">{r.total ?? "—"}</td>
-                        <td className="px-3 py-1.5 text-zinc-400">{r.sigma != null ? r.sigma.toFixed(2) : "—"}</td>
-                        <td className="px-3 py-1.5 text-zinc-400">{r.alpha != null ? r.alpha.toFixed(2) : "—"}</td>
-                      </tr>
-                    ))}
+                    {filteredSortedUniverseRows.map((r) => {
+                      const raw = allItemsByTicker.get(normalizeTicker(r.ticker) ?? "");
+                      return (
+                        <tr
+                          key={r.ticker}
+                          onClick={() => onTickerClick(r.ticker)}
+                          className={clsx(
+                            "cursor-pointer border-b border-white/[0.03] font-mono text-[12px] hover:bg-white/5 transition-colors",
+                            normalizeTicker(activeTicker || "") === normalizeTicker(r.ticker) && "bg-white/[0.06]"
+                          )}
+                        >
+                          <td className="px-3 py-1.5 font-bold text-zinc-100">{r.ticker}</td>
+                          <td className="px-3 py-1.5 text-zinc-300">{r.rating != null ? `${Math.round(r.rating * 100)}%` : "—"}</td>
+                          <td className="px-3 py-1.5 text-zinc-400">{r.total ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-zinc-400">{r.sigma != null ? r.sigma.toFixed(2) : "—"}</td>
+                          <td className="px-3 py-1.5 text-zinc-400">{r.alpha != null ? r.alpha.toFixed(2) : "—"}</td>
+                          {activeGridColumns.map((f) => {
+                            const getter = GRID_COLUMN_GETTERS[f.sonarMode];
+                            const v = getter && raw ? getter(raw) : null;
+                            return (
+                              <td key={f.sonarMode} className="px-3 py-1.5 text-zinc-400">
+                                {v != null ? (Number.isInteger(v) ? v : v.toFixed(2)) : "—"}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -114,3 +114,16 @@ export function subscribeSharedPoll<T>(
     }
   };
 }
+
+/**
+ * Runs one extra tick for `key` right now, instead of waiting out the rest of its interval —
+ * for the moment the operator just changed something THIS tab pushed (a toolbar save) and wants
+ * the list it drives to catch up immediately rather than up to `intervalMs` later. Reuses `tick`
+ * itself, so the same inFlight guard applies: a tick already in progress is not duplicated, this
+ * one is simply skipped (the in-progress one will carry the fresh value anyway). A safe no-op if
+ * nothing is currently subscribed to `key` — tick() always writes to the channel caller and
+ * callee agree on by name, polling or not.
+ */
+export function forceSharedPollNow<T>(key: string, fetcher: Fetcher<T>): void {
+  void tick(key, fetcher);
+}

@@ -330,6 +330,7 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",
   morlaunchbasket: "LAUNCH•MORNING",
   launcheveningbasket: "LAUNCH•EVENING",
+  limiterbasket: "LIMITER•BASKET",
 };
 
 function strategyDisplayLabel(key: string): string {

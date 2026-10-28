@@ -619,6 +619,52 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // LIMITER Basket — an HOURLY basket macro, not a once-a-day one like morlaunchbasket/
+  // launcheveningbasket above: every hour, 21:01-09:00 NY, Ctrl+Q cancel FIRST (undoing the
+  // PREVIOUS hour's own still-resting limits), then clear+paste that hour's own filtered list
+  // (limiter's own Sonar universe — Arbitrage signals, PRE class) and the same six basket hotkeys.
+  // Each hour's own send time is jittered +/-5 min, except 04:00 — shifted to 04:05-04:10 so it
+  // never collides with morlaunchbasket's own 03:58-04:01 window on the SAME physical Basket
+  // Window. See LimiterBasketServerStrategy.cs's own header comment for the full spec (operator's
+  // own, 2026-10-28). A fill is never auto-exited — the operator closes it by hand, same as the
+  // two daily basket strategies.
+  //
+  // NO PAGES OF ITS OWN: nav points at limiter's own pages (pages/limiter/*), same "basket macro
+  // borrows its parent strategy's pages" pattern morlaunchbasket/launcheveningbasket already use.
+  // storage gets its OWN distinct prefixes so filter/UI state never leaks into limiter's own Sonar.
+  //
+  // priority 7: every priority in this registry must be distinct (the runtime check at the bottom
+  // of this file enforces it); cosmetic in practice — EvaluateAsync never submits a StrategyIntent.
+  // holdsOvernight: true for the same reason the two daily basket strategies set it — a manual
+  // close is not on any schedule the bridge knows, and a still-open fill must not vanish into
+  // UNCLAIMED when the Caesar day rolls at 21:00.
+  limiterbasket: {
+    key: "limiterbasket",
+    bridgeStrategyId: "stream.limiterbasket",
+    nav: {
+      stream: "/limiter/stream",
+      scanner: "/limiter/scanner",
+      sonar: "/limiter/sonar",
+    },
+    // 21:01 .. 09:00 — matches LimiterBasketServerStrategy.WindowFromMinuteIdx/WindowToMinuteIdx exactly.
+    tradingWindow: { fromMinuteIdx: -179, toMinuteIdx: 9 * 60 },
+    priority: 7,
+    holdsOvernight: true,
+    overnightBadge: false,
+    api: { paperBase: "/api/paper/limiter", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: {
+      scannerPrefix: "paper.limiterbasket",
+      sonarPrefix: "bridge.limiterbasket",
+      streamPrefix: "stream.limiterbasket",
+    },
+    ratingClasses: {
+      dimension: "ENTRY",
+      keys: ["hourly"],
+      labels: { hourly: "HOURLY" },
+    },
+  },
+
   // PullBack: fade a stack that stands too far from yesterday's close in the early pre-market. Spec is
   // the operator's own OriON-strategies/notebooks/PullBack.ipynb, which has been RUN over 65 sessions -
   // the bridge side is a port of its scan_day, not an independent design.
