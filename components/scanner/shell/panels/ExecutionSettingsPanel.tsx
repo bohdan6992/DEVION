@@ -251,17 +251,19 @@ function TimePill({
   onChange: (next: string) => void;
   /**
    * What the engine is ACTUALLY enforcing for this field right now, in minute-of-day — undefined/
-   * null when unknown (no fetch yet, or this strategy has none). Differs from the typed value the
-   * instant Caesar owns the strategy and its segment ends somewhere else (2026-10-26, the
-   * operator's own report — see useEffectiveStreamRules' own doc comment). Shown as a small
-   * divergence marker rather than replacing the editable value: the typed value is still what gets
-   * SAVED, this is only ever a truth-telling overlay on top of it.
+   * null when unknown (no fetch yet, or this strategy has none). Differs from the typed value only
+   * when the bridge's own saved copy has not caught up with an edit yet (2026-10-26, the
+   * operator's own report — see useEffectiveStreamRules' own doc comment). Caesar reads START/
+   * ENTRY STOP/CUTOFF off these SAME fields rather than substituting its own numbers (2026-10-29,
+   * the operator's own correction — ArbitrageLiveParamsService.ToStreamRules' own "CAESAR OWNS THE
+   * STRATEGY, NOT THE CLOCK" comment), so a Caesar assignment on its own no longer causes a
+   * divergence here. Shown as a small marker rather than replacing the editable value: the typed
+   * value is still what gets SAVED, this is only ever a truth-telling overlay on top of it.
    */
   effectiveMinutes?: number | null;
-  /** True iff effectiveMinutes above is an ACTIVE Caesar override, not just this strategy's own
-   *  saved value reflected back (see EffectiveStreamRules.caesarOwnsClock). Only changes the
-   *  marker's own wording — a stale-save divergence and a live Caesar override look identical as
-   *  bare numbers but call for different explanations. */
+  /** True iff Caesar currently has this strategy actively assigned to a segment — changes only the
+   *  marker's own wording (it still reads these same fields, not different ones of its own), never
+   *  whether the marker shows. */
   caesarOwnsClock?: boolean;
 }) {
   const [hRaw, mRaw] = value.split(":");
@@ -288,9 +290,11 @@ function TimePill({
         <div
           className="absolute -top-1.5 -right-1 z-10 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-bold text-black"
           title={
-            caesarOwnsClock
-              ? `Caesar is actually enforcing ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} for this right now — the segment this strategy is assigned to owns the clock, not this stepper. Editing here now pushes straight into that assignment too, so the two stay in sync.`
-              : `The bridge has ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} SAVED for this — not Caesar, no segment currently owns this strategy's clock. This stepper just has not caught up with it (an edit from another tab/session, or one that has not round-tripped yet). Editing here overwrites it.`
+            `The bridge has ${String(effClock.h).padStart(2, "0")}:${String(effClock.m).padStart(2, "0")} SAVED for this — this stepper just has not caught up with it (an edit from another tab/session, or one that has not round-tripped yet). Editing here overwrites it.${
+              caesarOwnsClock
+                ? " Caesar currently has this strategy assigned and running, but reads START/ENTRY STOP/CUTOFF from these same fields — it is not substituting its own numbers (2026-10-29)."
+                : ""
+            }`
           }
         >
           !
@@ -1064,7 +1068,19 @@ export default function ExecutionSettingsPanel({
       color={SCANNER_CORAL_HEX}
       value={startCutoffTime}
       fallbackHour="09"
-      effectiveMinutes={effectiveStreamRules?.entryStopMinutes}
+      // entryStopMinutes is CUTOFF's own effective number ONLY while ENTRY STOP is left unset — the
+      // backend's own fallback rule (ArbitrageLiveParamsService.ToStreamRules: "Entries stop at
+      // entryStopTime when it is set, otherwise at the close time"), true whether or not Caesar
+      // currently has this strategy assigned — Caesar reads this same fallback off these same
+      // fields rather than substituting its own numbers (2026-10-29, the operator's own
+      // correction). The moment ENTRY STOP carries its own value — a normal, documented standalone
+      // setup, see ENTRY STOP's own tooltip ("set it earlier... to give the dispatch queue time to
+      // flush") — entryStopMinutes reflects ENTRY STOP, not CUTOFF, and comparing CUTOFF against it
+      // is comparing it against someone else's number: a permanent false "diverges" badge on CUTOFF
+      // for as long as ENTRY STOP stays earlier (found live, 2026-10-29, the operator's own
+      // report). No backend field answers "what is CUTOFF itself actually enforcing" in that case,
+      // so there is nothing honest to compare against — omitted, not guessed at.
+      effectiveMinutes={effectiveStreamAutomationConfig.entryStopTime ? undefined : effectiveStreamRules?.entryStopMinutes}
       caesarOwnsClock={effectiveStreamRules?.caesarOwnsClock}
       onChange={(next) => {
         setStartCutoffTime(next);
