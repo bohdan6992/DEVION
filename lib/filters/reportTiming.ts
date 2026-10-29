@@ -215,19 +215,35 @@ export function rowReportAffectsSession(row: any, session?: ReportSessionDay | n
 }
 
 /**
- * The FILTER's verdict: `rowReportAffectsSession`, except that a row with no report marker and no
- * precomputed flag at all is `null` (unknown) instead of `false` (does not report).
+ * The FILTER's verdict: like `rowReportAffectsSession`, except UNKNOWN stays `null` instead of
+ * collapsing to `false` — not just for a missing marker, but also for a non-empty one that is
+ * neither a parsable date nor a recognised boolean spelling (a feed shape nobody has written a
+ * branch for yet, or corrupted data). `rowReportAffectsSession` itself must keep returning a plain
+ * boolean for its OWN callers (display helpers that need "yes/no", never "unknown") — this function
+ * recomputes independently rather than delegating to it, so this distinction is not lost on the way.
  *
  * Every filter that reads the report must reject `null` whichever way it is set — "unknown" is not
  * "definitely not reporting", and treating it so is how an exclude-REP toggle let rows through that
  * the bridge (`ReportTiming.Classify`) had dropped. The tape writes "NO" when there is nothing, so
- * a truly empty field is missing data, not an answer.
+ * a truly empty field is missing data, not an answer. Found 2026-10-29: a non-empty but unparsable
+ * marker ("???", or any future shape not yet covered) used to fall through `rowReportAffectsSession`
+ * all the way to its own `flag === true` default, reading as `false` ("definitely not reporting")
+ * instead of staying unknown — exactly backwards for a filter, and the C# twin had the identical gap
+ * (`ReportTiming.Classify`, fixed the same way, same day).
  */
 export function rowReportClassification(row: any, session?: ReportSessionDay | null): boolean | null {
   const raw = pickReportValue(row);
   const hasFlag = readLooseBool(row?._reportBool) != null || readLooseBool(row?.hasReport ?? row?.HasReport) != null;
   if ((raw == null || String(raw).trim() === "") && !hasFlag) return null;
-  return rowReportAffectsSession(row, session);
+
+  const byDate = parseReportDateAffectsSession(raw, session);
+  if (byDate != null) return byDate;
+
+  const byBool = readLooseBool(raw);
+  if (byBool != null) return byBool;
+
+  const flag = readLooseBool(row?._reportBool) ?? readLooseBool(row?.hasReport ?? row?.HasReport);
+  return flag; // null stays null here - unknown, not "no"
 }
 
 /**
@@ -258,7 +274,16 @@ export function parseReportDateAffectsSession(value: any, session?: ReportSessio
   // does not matter for correctness, but this is the feed's current dominant shape. The year is
   // parsed but never used in the verdict: the question is only ever "does month+day fall on today
   // or the previous trading day", which needs no year at all.
-  const compactWithYear = /^(\d{2})(\d{2})(\d{4})(\d{2})(\d{2})$/.exec(raw);
+  //
+  // MONTH's leading zero is dropped the SAME way DAY's is in the 8-digit stamp below (whichever
+  // field comes first in the stamp loses it for a single-digit value) - a January-September report
+  // then arrives as 11 digits, e.g. "92820260700" for "09/28/2026 07:00". Not yet seen live (found
+  // 2026-10-29, October - MM=10 never triggers this), but the SAME feed quirk the 8-digit case
+  // already proves is real, so padding it defensively here rather than waiting to get burned by it
+  // in January. Guarded by the regex match below: an 11-digit raw value that is NOT secretly this
+  // stamp simply fails to match too and falls through.
+  const compactWithYearRaw = /^\d{11}$/.test(raw) ? "0" + raw : raw;
+  const compactWithYear = /^(\d{2})(\d{2})(\d{4})(\d{2})(\d{2})$/.exec(compactWithYearRaw);
   if (compactWithYear) {
     const mo = Number(compactWithYear[1]);
     const d = Number(compactWithYear[2]);
