@@ -13,7 +13,7 @@
 //
 // The offset between them is exactly DAY_START_HOUR * 60 - 1440 = -180.
 
-import { STRATEGY_CATALOG, STRATEGY_BY_KEY } from "@/lib/strategyCatalog";
+import { STRATEGY_CATALOG, STRATEGY_BY_KEY, currentStrategyKey } from "@/lib/strategyCatalog";
 import { LIVE_STRATEGY_LIST } from "@/lib/strategies/registry";
 import {
   IDENTITY_LAVENDER_HEX,
@@ -372,7 +372,10 @@ function sanitizeAssignments(raw: unknown): CaesarAssignment[] {
   const out: CaesarAssignment[] = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
-    const key = String((item as any).strategyKey ?? "");
+    // A RENAMED strategy is translated, not dropped: the check below cannot tell "this strategy is
+    // gone" from "this strategy is called something else now", and getting that wrong silently
+    // deletes the row from the schedule. See RENAMED_STRATEGY_KEYS.
+    const key = currentStrategyKey(String((item as any).strategyKey ?? ""));
     // Drop strategies that have since left the catalog, and collapse duplicates — a segment holds
     // at most one row per strategy so priority stays unambiguous.
     if (!key || !CAESAR_STRATEGY_BY_KEY[key] || seen.has(key)) continue;

@@ -132,6 +132,13 @@ export type ArbitrageServerSonarFilters = {
   zapShowAbs: number;
   /** Separate threshold for NEGATIVE deviations (a Long entry); null = the same as zapShowAbs. */
   zapShowAbsNeg: number | null;
+  /**
+   * Upper end of the deviation range, same unit as zapMode — a name standing further out than this
+   * is DROPPED from the list, not tinted (SonarFilterConfig.ZapMaxAbs on the bridge). null = no cap.
+   * Deliberately NOT the Sonar's own zapSilverAbs, which is a client-side highlight that defaults to
+   * 2.0 and has never been sent anywhere; only LIMITER's toolbar fills this in today.
+   */
+  zapMaxAbs: number | null;
 };
 
 const upper = (values?: Iterable<string> | null): string[] =>
@@ -265,6 +272,7 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
       f.zapMode === "off" ? "Off" : "Sigma",
     zapShowAbs: num(f.zapShowAbs) ?? 0,
     zapShowAbsNeg: num(f.zapShowAbsNeg),
+    zapMaxAbs: num(f.zapMaxAbs),
   };
 }
 

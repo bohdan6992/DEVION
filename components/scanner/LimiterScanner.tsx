@@ -18,6 +18,7 @@ import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, get
 import type { PresetDto } from "../../types/presets";
 import type { ArbitrageFilterConfigV1 } from "../../lib/filters/arbitrageFilterConfigV1";
 import { fetchLimiterStreamUniverse, pushLimiterStreamLiveParams, toLimiterStreamLiveParams, type LimiterStreamUniverseRow } from "../../lib/limiter/liveParamsClient";
+import { getSpreadometerLiveParams, pushSpreadometerLiveParams } from "../../lib/spreadometer/liveParamsClient";
 // The SIGNALS card's REAL source — lib/limiter/liveParamsClient's own fetchLimiterStreamUniverse
 // hits /api/stream/limiter/universe, which nothing on the bridge answers (that whole client is the
 // renamed copy of LaunchEvening's own stateful one-minute-move gate — see LimiterSonar.tsx's own
@@ -759,24 +760,23 @@ export default function LimiterScanner({
   // gamma for (class, sign) — see LimiterGate.cs. Note what is gated here is a DELTA, not a level:
   // every sibling scanner's own "deviation" box is how far a stack sits from yesterday's close, this
   // one is how far it travelled in a minute.
-  // MinDevAbsShort gates a POSITIVE (up, so Short) move, defaulting to 1.0 — the operator's own floor
-  // for this pattern ("Рух від 1%"), a plain number, never empty.
-  // THE VIOLET %/σ/α/γ/τ/λ STRIP AND ITS FOUR SPINNER BOXES ARE RETIRED (operator, 2026-10-24: "LIMITER і
-  // LIMITER - не потребують фіолетового перемикача, очисти значення і зроби його неактивним сіруватим").
-  // They stay on screen only as a greyed, empty, unclickable strip. What the gate really uses is FIXED below and nothing
-  // can change it - not an older saved toolbar (localStorage), not an Auto Optimizer row: the unit is always %, there is
-  // no cap, no GammaN floor and NO FLAT FLOOR (operator, 2026-10-24: "прибери Поріг 0,7"). The only thing left that bounds a move
-  // is the ticker's published gamma, so keep ratings ON: with ratings IGNORED a zero floor passes every tick.
-  // The setters are no-ops so every existing call site (restore from localStorage, optimizer apply, spinners) keeps compiling.
-  const LIMITER_FIXED_FLOOR_PCT = 0;
-  const limiterMinDevAbsShort: number = LIMITER_FIXED_FLOOR_PCT;
-  const setLimiterMinDevAbsShort = (_v?: unknown): void => {};
-  const limiterMinDevAbsLong: string = "";
-  const setLimiterMinDevAbsLong = (_v?: unknown): void => {};
-  const limiterMinDevAbsMax: string = "";
-  const setLimiterMinDevAbsMax = (_v?: unknown): void => {};
-  const limiterMinGammaTotal: number = 0;
-  const setLimiterMinGammaTotal = (_v?: unknown): void => {};
+  // MinDevAbsShort gates a POSITIVE (up, so Short) move — a plain number, never empty (see the default
+  // below: 0, i.e. no floor, not the 1.0 this pattern originally shipped with).
+  // THE VIOLET %/σ/α/γ/τ/λ STRIP AND ITS FOUR SPINNER BOXES ARE BACK (operator, 2026-10-30: "поверни
+  // ці перемикачі на лімітер, тут була фіолетова група"). They were retired on 2026-10-24 ("LIMITER і
+  // LIMITER - не потребують фіолетового перемикача, очисти значення і зроби його неактивним сіруватим"
+  // + "прибери Поріг 0,7") by freezing these four values as consts with no-op setters, which also cut
+  // localStorage restore and Auto Optimizer apply off from them. They are ordinary state again, so all
+  // three paths are live again as well.
+  // DEFAULTS ARE THE RETIRED VALUES, NOT THE PRE-RETIREMENT ONES: floor 0, no long override, no cap,
+  // no GammaN floor — exactly what the gate has been running on since 10-24. Restoring the CONTROL must
+  // not silently restore the old 0.7/1.0 floor underneath it; whoever wants a floor now types one in.
+  // With the floor at 0 the only thing bounding a move is still the ticker's published gamma, so ratings
+  // must stay ON (RATE, not UNIVERSE) — a zero floor with ratings ignored passes every tick.
+  const [limiterMinDevAbsShort, setLimiterMinDevAbsShort] = useState(0);
+  const [limiterMinDevAbsLong, setLimiterMinDevAbsLong] = useState("");
+  const [limiterMinDevAbsMax, setLimiterMinDevAbsMax] = useState("");
+  const [limiterMinGammaTotal, setLimiterMinGammaTotal] = useState(0);
   // Floor on the matched (class, sign) cell's own published win_rate/total — Arbitrage's MINRATE/
   // MINTOTAL, mirrored onto Limiter's own rating cell (limiter_rolling_perf's win_rate/total, NOT
   // GammaN — see LimiterGate.cs). Own separate pills (see below), not the black ρ/β/σ-style range
@@ -794,6 +794,22 @@ export default function LimiterScanner({
   // per-(class, sign) gamma lookup is meaningful from day one (the morning twin ships ON only because its file did not
   // exist when it was built). The RATE/UNIVERSE button is the control for it.
   const [limiterIgnoreRatings, setLimiterIgnoreRatings] = useState(false);
+
+  // THE DEVIATION RANGE that used to live here (zapMode/zapShowAbs, an ARBITRAGE-benchmark gate) was
+  // retired 2026-11-01 — the operator's own instruction: it filtered by Arbitrage's own zapS/zapL,
+  // not by LIMITER's raw LstPrcLstClsΔ% at all. See the LstPrcLstClsΔ% range control further down
+  // (reuses minLstPrcLstClsPct/maxLstPrcLstClsPct, already in this file's own filter bag) and
+  // LimiterSonar.tsx's own matching removal — same shared toolbar file, both had to change together.
+  //
+  // %/σ UNIT TOGGLE on that same control (2026-11-02, the operator's own instruction — "зроби цей
+  // перемикач фіолетовим і додай перемикач між відсотками і значеннями поділеними на сігму"):
+  // switches which bridge-side bound key the typed min/max target, not a client-side rescale of the
+  // typed digits (no single flat number can be converted across every ticker's own, different,
+  // sigma). σ divides the raw move by the SAME r.sigma the black σ range box already reads
+  // (LiveRowFilter.ReadBoundValue's own special case for "LstPrcLstClsPctSigma" — NOT
+  // limiterUnitMode above, a different control over a different pair of fields).
+  const [lstPrcLstClsUnit, setLstPrcLstClsUnit] = useState<"pct" | "sigma">("pct");
+
   // Bumped by applyLimiterAutoOptimizerRow once a result has landed in state, so the run that
   // follows always sees the FRESH values — mirrors ArbitrageScanner's own autoRunTick exactly.
   const [autoRunTick, setAutoRunTick] = useState(0);
@@ -836,10 +852,11 @@ export default function LimiterScanner({
   // λ     — divided by the ticker's own published lambda (r.lambda) — added 2026-09-27. Like σ, a
   //         published per-ticker CONSTANT (Limiter.ipynb's compute_lambda: sample std of the raw
   //         ENTRY-checkpoint Stack% reading), not sign-matched the way α is.
-  // Retired with the strip above: the unit is always % (a cast, not an annotation, so TypeScript keeps the full union and
-  // the formatting helpers below still type-check).
-  const limiterUnitMode = "pct" as "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
-  const setLimiterUnitMode = (_v?: unknown): void => {};
+  // Live again with the strip above (2026-10-30) — between 10-24 and then this was frozen to "pct"
+  // with a no-op setter. Explicit union on the state so the six pills, localStorage restore and the
+  // Auto Optimizer all keep type-checking against the same set.
+  const [limiterUnitMode, setLimiterUnitMode] =
+    useState<"pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda">("pct");
 
   /** Formats the Signal Dev column under the selected unit — the SAME unit MinDevAbsShort/Long/Max
    * are now enforced in server-side (see limiterUnitMode's own comment), so what's typed into the
@@ -1690,6 +1707,10 @@ export default function LimiterScanner({
         if (typeof s.limiterMinTotal === "number") setLimiterMinTotal(s.limiterMinTotal);
         if (s.limiterUnitMode === "pct" || s.limiterUnitMode === "sigma" || s.limiterUnitMode === "alpha" || s.limiterUnitMode === "gamma" || s.limiterUnitMode === "atr" || s.limiterUnitMode === "lambda") setLimiterUnitMode(s.limiterUnitMode);
         if (typeof s.limiterIgnoreRatings === "boolean") setLimiterIgnoreRatings(s.limiterIgnoreRatings);
+        // The deviation range's own restore used to live here (signalsZapMode etc, retired
+        // 2026-11-01) — minLstPrcLstClsPct/maxLstPrcLstClsPct, which replaced it, already restore
+        // generically with every other bound (applyStr(s.minLstPrcLstClsPct, ...) below).
+        if (s.lstPrcLstClsUnit === "pct" || s.lstPrcLstClsUnit === "sigma") setLstPrcLstClsUnit(s.lstPrcLstClsUnit);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -2094,6 +2115,7 @@ export default function LimiterScanner({
       maxPreMhLoLstClsPct,
       minLstPrcLstClsPct,
       maxLstPrcLstClsPct,
+      lstPrcLstClsUnit,
       minImbExch925,
       maxImbExch925,
       minImbExch1555,
@@ -2141,7 +2163,7 @@ export default function LimiterScanner({
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
       limiterExitClass, limiterMinDevAbsShort, limiterMinDevAbsLong, limiterMinDevAbsMax, limiterMinGammaTotal,
-      limiterMinRate, limiterMinTotal, limiterUnitMode, limiterIgnoreRatings,
+      limiterMinRate, limiterMinTotal, limiterUnitMode, limiterIgnoreRatings, lstPrcLstClsUnit,
     ]
   );
 
@@ -2606,6 +2628,36 @@ export default function LimiterScanner({
     priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled, excludeItb, excludeHard,
   ]);
 
+  // SPREADOMETER's own two live knobs (2026-11-01, the operator's own instruction): PERIOD (minutes,
+  // step 5 — how often the half-hour basket cycle actually repeats, was a fixed 30) and MAX BPUSED
+  // (how much BP a ticker may already carry before the basket stops offering it again, was a
+  // hardcoded 4000). A REAL endpoint, unlike the dead-code push above — see
+  // SpreadometerLiveParamsService.cs/SpreadometerServerStrategy.cs.
+  const [spreadometerPeriodMinutes, setSpreadometerPeriodMinutes] = useState(30);
+  const [spreadometerMaxBpUsed, setSpreadometerMaxBpUsed] = useState(4000);
+  const spreadometerParamsHydratedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getSpreadometerLiveParams().then((p) => {
+      if (cancelled) return;
+      setSpreadometerPeriodMinutes(p.periodMinutes);
+      setSpreadometerMaxBpUsed(p.maxBpUsed);
+      spreadometerParamsHydratedRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!spreadometerParamsHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void pushSpreadometerLiveParams({
+        periodMinutes: spreadometerPeriodMinutes,
+        maxBpUsed: spreadometerMaxBpUsed,
+      });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [spreadometerPeriodMinutes, spreadometerMaxBpUsed]);
 
   // Which session a row's report marker is judged against. The marker carries only day/month, so
   // it only means anything relative to a date: for the Scanner that is the tape day the row came
@@ -2752,6 +2804,17 @@ export default function LimiterScanner({
           PreMhMDV20NF: mm(minPreMhMDV20NF, maxPreMhMDV20NF),
           PreMhMDV90NF: mm(minPreMhMDV90NF, maxPreMhMDV90NF),
           VolRel: mm(minVolRel, maxVolRel),
+          // LIMITER's own real gate (2026-11-01, replaced the zapMode/zapShowAbs block below, which
+          // filtered on Arbitrage's own benchmark-relative deviation, not on LIMITER's raw move at
+          // all — the operator's own instruction). Signed, one range covers both directions. The
+          // %/σ pill (lstPrcLstClsUnit) picks WHICH bound key carries the typed numbers — never
+          // both at once, so a stale % bound can't linger once the operator switches to σ (this
+          // whole `bounds` object is sent fresh on every push, nothing here merges with the bridge's
+          // previous state). LstPrcLstClsPctSigma is computed bridge-side (LiveRowFilter's own
+          // ReadBoundValue) as the raw move divided by the row's own published Sigma.
+          ...(lstPrcLstClsUnit === "sigma"
+            ? { LstPrcLstClsPctSigma: mm(minLstPrcLstClsPct, maxLstPrcLstClsPct) }
+            : { LstPrcLstClsPct: mm(minLstPrcLstClsPct, maxLstPrcLstClsPct) }),
         },
         excludeDividend, excludeNews: excludeHasNews, excludePTP, excludeSSR,
         excludeReport: excludeHasReport, excludeETF, excludeCrap, excludeItb, excludeHard,
@@ -2760,7 +2823,9 @@ export default function LimiterScanner({
         selExchanges, exchangeEnabled, selSectors, sectorEnabled,
         filterReport: excludeHasReport ? "NO" : "ALL", equityType: "",
         corrMin: "", corrMax: "", betaMin: "", betaMax: "", sigmaMin: "", sigmaMax: "",
-        zapMode: "off", zapShowAbs: 0, zapSilverAbs: 0, zapGoldAbs: 0,
+        // Retired 2026-11-01 — LstPrcLstClsPct above is LIMITER's own real gate now.
+        zapMode: "off", zapShowAbs: 0, zapShowAbsNeg: null, zapMaxAbs: null,
+        zapSilverAbs: 0, zapGoldAbs: 0,
       };
       void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-scanner-stream" }))
         // Don't wait out the rest of the 6s poll interval to see a toolbar edit reflected — the
@@ -2771,6 +2836,7 @@ export default function LimiterScanner({
     return () => window.clearTimeout(timer);
   }, [
     primaryPanel, limiterIgnoreRatings, limiterMinRate, limiterMinTotal, listMode, ignoreTickersText, tickersText, benchTickersText,
+    minLstPrcLstClsPct, maxLstPrcLstClsPct, lstPrcLstClsUnit,
     minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
     minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread,
     minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
@@ -5899,12 +5965,12 @@ export default function LimiterScanner({
     autoEnabled: streamAutoEnabled,
   }), [streamEntryReadyCount, streamPositionMeta.openCount, streamSignalMeta.totalCount, streamAutoEnabled]);
   const scannerShellTitle = isStreamOnlyShell
-    ? (headerTitleOverride ?? "LIMITER•STREAM")
+    ? (headerTitleOverride ?? "SPREADOMETER•STREAM")
     : headerTitleOverride
       ? headerTitleOverride
       : primaryPanel === "stream"
-        ? "LIMITER•STREAM"
-        : "LIMITER•SCANNER";
+        ? "SPREADOMETER•STREAM"
+        : "SPREADOMETER•SCANNER";
   const headerBadgeValues = isStreamOnlyShell
     ? (headerBadgeValuesOverride ?? ["EXECUTION", "FILTERED", streamAutoEnabled ? "AUTO ON" : "AUTO OFF"])
     : [classLabel, modeLabel, typeLabel];
@@ -6523,6 +6589,87 @@ export default function LimiterScanner({
           filteredEpisodes={filteredEpisodes}
           downloadEpisodesLog={downloadEpisodesLog}
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
+          dilutionSupported={false}
+          extraControls={(
+            <>
+              <div
+                className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20"
+                title="PERIOD — how often the basket cycle repeats (cancel last cycle's own list, paste a fresh one), in minutes. Was a fixed 30; step 5."
+              >
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PERIOD</span>
+                <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={5}
+                    step={5}
+                    value={spreadometerPeriodMinutes}
+                    onChange={(e) => setSpreadometerPeriodMinutes(Math.max(5, Math.round((Number(e.target.value) || 5) / 5) * 5))}
+                    className="center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all text-teal-300"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setSpreadometerPeriodMinutes((v) => v + 5)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase period minutes"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setSpreadometerPeriodMinutes((v) => Math.max(5, v - 5))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease period minutes"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                <span className="flex h-7 items-center pr-2 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MIN</span>
+              </div>
+
+              <div
+                className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20"
+                title="MAX BPUSED — a ticker already carrying more than this much BP in the account is left out of the next basket paste, so the same name never gets a second limit on top of a fill it already took. Was a hardcoded 4000."
+              >
+                <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MAX BPUSED</span>
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    step={500}
+                    value={spreadometerMaxBpUsed}
+                    onChange={(e) => setSpreadometerMaxBpUsed(Math.max(0, Number(e.target.value) || 0))}
+                    className="center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all text-rose-300"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setSpreadometerMaxBpUsed((v) => v + 500)}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase max BPUSED"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setSpreadometerMaxBpUsed((v) => Math.max(0, v - 500))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease max BPUSED"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         />
 
           {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
@@ -6596,50 +6743,100 @@ export default function LimiterScanner({
                   ZAP row position 1-to-1 (FilterFlagsRow renders strategySlot BEFORE sortSlot and
                   zapSlot AFTER it; the user's own reference screenshot confirmed this belongs after
                   ABC, not before it). */}
-              {/* One continuous pill group, styled 1-to-1 off LimiterScout's own ScoutUnitBar (the
-                  user's own reference — "зроби як на скауті"): a single rounded-xl violet-bordered
-                  strip (not FILTER_GROUP_TONES.zap's separate boxed groups), pills with a solid
-                  violet fill + glow when active (`bg-violet-500 ... shadow-[0_0_16px_rgba(139,92,246,
-                  0.36)]`) rather than just a tinted border. Just the %/σ/α/γ threshold-unit toggle
-                  now (see limiterUnitMode's own comment — NOT display-only: sent to the bridge as
-                  `thresholdUnit` and resolved PER TICKER inside LimiterGate.Check, so the coral/
-                  mint/silver boxes right after this strip are ENTERED in whichever unit is active
-                  here). The old GAMMA/RAW (Γ/Ø) gate-mode toggle that used to sit after it was
-                  removed (the user's own call, 2026-09-23 — "не потрібні"): the gate always reads
-                  the ticker's own published gamma now, see buildLimiterParams's own `ignoreRatings:
-                  false`. The four color-coded spinner boxes after this strip are unchanged in
-                  POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
-                  startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
-                  first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
+              {/* LstPrcLstClsΔ% RANGE (replaced the ARBITRAGE-benchmark zap gate here, 2026-11-01 —
+                  the operator's own instruction: this group was filtering by zapS/zapL, Arbitrage's
+                  own deviation off ITS benchmark, not by LIMITER's own raw print-vs-yesterday's-close
+                  move at all). Plain [lower, upper] on the SIGNED LstPrcLstClsΔ% value — one range
+                  covers both a down move and an up move, so there is no separate short/long floor.
+                  Violet strip + bare %/σ pills, 2026-11-02 (the operator's own instruction — see
+                  lstPrcLstClsUnit's own comment above): the Unit/ZAP Toggle Standard's own group
+                  (FILTER_GROUP_BASE/FILTER_PILL/FILTER_GROUP_TONES.zap), the same classes the old
+                  Arbitrage-benchmark pills here used before 2026-11-01. Reuses
+                  minLstPrcLstClsPct/maxLstPrcLstClsPct — state this page already had for the
+                  backtest's own bounds (SharedMinMaxPanel) — now ALSO carried into the live bounds
+                  object above, which is the one real gap this closes: the backtest already filtered
+                  on it, the live basket never did. */}
               <div
-                className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
-                title="Inactive. This strategy does not use the %/σ/α/γ/τ/λ switch or the floor/cap boxes: the unit is always %, there is no flat floor, and the only bound on a move is the published gamma."
+                className={clsx(FILTER_GROUP_BASE, FILTER_GROUP_TONES.zap.group)}
+                title="LstPrcLstClsΔ% — the raw move off yesterday's close. A ticker outside [lower, upper] is dropped from the list (and so never reaches the basket), not just highlighted. Either box empty = that side is unbounded."
               >
-                {(["%", "σ", "α", "γ", "τ", "λ"] as const).map((g) => (
-                  <span
-                    key={g}
-                    className={clsx(
-                      "inline-flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold leading-none cursor-not-allowed",
-                      g === "%" ? "bg-white/[0.06] text-zinc-400" : "text-zinc-600"
-                    )}
-                    style={{ textTransform: "none" }}
+                {([
+                  { key: "pct", label: "%", title: "Range in PERCENT — the raw move off yesterday's close." },
+                  { key: "sigma", label: "σ", title: "Range in SIGMAS — the raw move divided by the ticker's own published sigma (the same σ the black MINSIGMA/MAXSIGMA box reads)." },
+                ] as const).map((u) => (
+                  <button
+                    key={u.key}
+                    type="button"
+                    onClick={() => setLstPrcLstClsUnit(u.key)}
+                    title={u.title}
+                    className={clsx(FILTER_PILL, "gap-1", lstPrcLstClsUnit === u.key ? FILTER_GROUP_TONES.zap.on : FILTER_GROUP_TONES.zap.off)}
                   >
-                    {g}
-                  </span>
+                    <span className="leading-none" style={{ textTransform: "none" }}>{u.label}</span>
+                  </button>
                 ))}
-                {(["short", "long", "max", "n"] as const).map((ph) => (
-                  <div key={ph} className="relative w-[78px] rounded-md border border-white/10">
-                    <input
-                      type="text"
-                      value=""
-                      readOnly
-                      disabled
-                      placeholder={ph}
-                      aria-label={`${ph} (inactive)`}
-                      className="w-full h-7 bg-black/20 border-0 rounded-md px-2 text-center text-[11px] text-zinc-600 placeholder-zinc-700 cursor-not-allowed focus:outline-none"
-                    />
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={0.1}
+                    value={minLstPrcLstClsPct}
+                    onChange={(e) => setMinLstPrcLstClsPct(e.target.value)}
+                    placeholder="min"
+                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-cyan-300 placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMinLstPrcLstClsPct((v) => String(+((optNumOrNull(v) ?? 0) + 0.1).toFixed(2)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase lower bound"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMinLstPrcLstClsPct((v) => String(+((optNumOrNull(v) ?? 0) - 0.1).toFixed(2)))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease lower bound"
+                    >
+                      ▼
+                    </button>
                   </div>
-                ))}
+                </div>
+                <span className="flex h-7 items-center text-[10px] font-mono text-violet-300/50">—</span>
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={0.1}
+                    value={maxLstPrcLstClsPct}
+                    onChange={(e) => setMaxLstPrcLstClsPct(e.target.value)}
+                    placeholder="max"
+                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-amber-300 placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMaxLstPrcLstClsPct((v) => String(+((optNumOrNull(v) ?? 0) + 0.1).toFixed(2)))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase upper bound"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMaxLstPrcLstClsPct((v) => String(+((optNumOrNull(v) ?? 0) - 0.1).toFixed(2)))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease upper bound"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
               </div>
               </>
             }

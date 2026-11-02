@@ -48,6 +48,11 @@ const PRICE_MODE_LIVE_TITLE =
 const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
   clsx("flex h-7 items-center rounded-lg bg-black/20", extra, isStreamOnlyShell && "opacity-50");
 
+/** Strategy has no add/dilution ladder at all (e.g. SPREADOMETR's blind one-shot basket) — the
+ * DILUTED/UNDILUTED toggle and its three steppers grey out unconditionally, never just by mode. */
+const DILUTION_UNSUPPORTED_TITLE =
+  "This strategy has no add/dilution ladder — it never scales into a position, so there is nothing for DILUTED, STEP, MAXADD or DELAY to control.";
+
 /**
  * A two-option toggle pair (ACTIVE/PASSIVE, HEDGED/RAWONLY, PRINT/BIDASK, USD/TIER,
  * UNDILUTED/DILUTED): whichever side is active shows its full label and a fixed colour by
@@ -59,10 +64,12 @@ function TwoTonePairButtons<T extends string>({
   options,
   active,
   onSelect,
+  disabled = false,
 }: {
   options: readonly [{ key: T; label: string }, { key: T; label: string }];
   active: T;
   onSelect: (key: T) => void;
+  disabled?: boolean;
 }) {
   return (
     <>
@@ -72,9 +79,10 @@ function TwoTonePairButtons<T extends string>({
           <button
             key={m.key}
             type="button"
+            disabled={disabled}
             onClick={() => onSelect(m.key)}
             className={clsx(
-              "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+              "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border disabled:opacity-40 disabled:cursor-not-allowed",
               isActive
                 ? i === 0
                   ? "twotone-gold"
@@ -175,6 +183,22 @@ export type ExecutionSettingsPanelProps = {
    * step is flat percentage points - then the control renders exactly as before.
    */
   dilutionStepUnitLabel?: string;
+  /**
+   * False for a strategy with no add/dilution ladder at all (SPREADOMETR's blind one-shot basket —
+   * it never scales into anything, so DILUTED/UNDILUTED and its three steppers describe a mechanism
+   * that does not exist for it). Greys the whole group out unconditionally, not just by mode, unlike
+   * the per-field `dilutionMode !== "Diluted"` disable every other strategy already has. Defaults to
+   * true so every existing caller renders exactly as before.
+   */
+  dilutionSupported?: boolean;
+  /**
+   * Strategy-specific controls, rendered right after the LOG download button and BEFORE
+   * START/ENTRY STOP/CUTOFF — those three stay the row's own rightmost edge regardless of what
+   * this slot holds (the operator's own instruction, 2026-11-01: time pickers belong on the right).
+   * A plain slot (SPREADOMETER's own PERIOD/MAX BPUSED inputs), so a shared panel never has to know
+   * about a concept only one strategy has.
+   */
+  extraControls?: React.ReactNode;
 };
 
 function BalanceRatioInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
@@ -575,6 +599,8 @@ export default function ExecutionSettingsPanel({
   downloadStreamFilterPassLog,
   priceModeAffectsLive = false,
   dilutionStepUnitLabel,
+  dilutionSupported = true,
+  extraControls,
 }: ExecutionSettingsPanelProps) {
   const {
     addDelayMinutes,
@@ -603,6 +629,10 @@ export default function ExecutionSettingsPanel({
   // ENTRY defaults to CUTOFF when unset — that is the original single-time behaviour, and it keeps
   // the field showing a real value instead of a blank the user has to guess at.
   const entryStopValue = effectiveStreamAutomationConfig.entryStopTime || startCutoffTime;
+
+  // Strategy-level lock (see dilutionSupported's own doc comment), not the per-field one below —
+  // this one never lifts just because DILUTED happens to be selected.
+  const dilutionFieldsDisabled = !dilutionSupported || dilutionMode !== "Diluted";
 
   return (
 <GlassCard className="order-2 p-3">
@@ -699,7 +729,10 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+    <div
+      className={clsx("flex h-7 items-center gap-0.5 rounded-lg bg-black/20", !dilutionSupported && "opacity-50")}
+      title={dilutionSupported ? undefined : DILUTION_UNSUPPORTED_TITLE}
+    >
       <TwoTonePairButtons
         options={[
           { key: "Diluted", label: "DILUTED" },
@@ -707,15 +740,18 @@ export default function ExecutionSettingsPanel({
         ] as const}
         active={dilutionMode}
         onSelect={(key) => applyDilutionMode(key as PaperArbDilutionMode)}
+        disabled={!dilutionSupported}
       />
     </div>
 
 
     <div
-      className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20"
-      title={dilutionStepUnitLabel
-        ? `STEP — how far apart each add rung sits, in ${dilutionStepUnitLabel} — the unit the threshold strip is set to. Resolved per ticker server-side, exactly like the entry floor.`
-        : "STEP — how far apart each add rung sits, in the dilution ladder's own unit."}
+      className={clsx("flex h-7 items-center justify-center px-1 rounded-lg bg-black/20", !dilutionSupported && "opacity-50")}
+      title={!dilutionSupported
+        ? DILUTION_UNSUPPORTED_TITLE
+        : dilutionStepUnitLabel
+          ? `STEP — how far apart each add rung sits, in ${dilutionStepUnitLabel} — the unit the threshold strip is set to. Resolved per ticker server-side, exactly like the entry floor.`
+          : "STEP — how far apart each add rung sits, in the dilution ladder's own unit."}
     >
       {dilutionStepUnitLabel ? (
         <span className="pl-1.5 pr-0.5 text-[10px] font-mono font-bold leading-none text-amber-300/60" style={{ textTransform: "none" }}>
@@ -730,7 +766,7 @@ export default function ExecutionSettingsPanel({
           step={0.1}
           value={formatDilutionStepValue(dilutionStep)}
           onChange={(e) => applyDilutionStep(Number(e.target.value))}
-          disabled={dilutionMode !== "Diluted"}
+          disabled={dilutionFieldsDisabled}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
             "text-amber-300"
@@ -741,7 +777,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, 1))}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Increase dilution step"
           >
@@ -751,7 +787,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyDilutionStep(stepDilutionStepValue(dilutionStep, -1))}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Decrease dilution step"
           >
@@ -771,7 +807,7 @@ export default function ExecutionSettingsPanel({
           step={1}
           value={maxAdds}
           onChange={(e) => applyMaxAdds(Number(e.target.value))}
-          disabled={dilutionMode !== "Diluted"}
+          disabled={dilutionFieldsDisabled}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
             "text-sky-300"
@@ -782,7 +818,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyMaxAdds(maxAdds + 1)}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Increase max additions"
           >
@@ -792,7 +828,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyMaxAdds(maxAdds - 1)}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Decrease max additions"
           >
@@ -812,7 +848,7 @@ export default function ExecutionSettingsPanel({
           step={1}
           value={addDelayMinutes}
           onChange={(e) => applyAddDelayMinutes(Number(e.target.value))}
-          disabled={dilutionMode !== "Diluted"}
+          disabled={dilutionFieldsDisabled}
           className={clsx(
             "center-spin h-7 w-full bg-transparent border-0 !pl-2 !pr-4 text-[10px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none transition-all disabled:opacity-40",
             "text-violet-300"
@@ -823,7 +859,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyAddDelayMinutes(addDelayMinutes + 1)}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Increase add delay minutes"
           >
@@ -833,7 +869,7 @@ export default function ExecutionSettingsPanel({
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => applyAddDelayMinutes(addDelayMinutes - 1)}
-            disabled={dilutionMode !== "Diluted"}
+            disabled={dilutionFieldsDisabled}
             className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
             aria-label="Decrease add delay minutes"
           >
@@ -1025,6 +1061,8 @@ export default function ExecutionSettingsPanel({
         ↓ LOG
       </button>
     )}
+
+    {extraControls}
 
     <TimePill
       title="START: position-taking begins at this time, for every class (classes only select ratings, they impose no time window of their own). START later than CUTOFF means an overnight session: start tonight, stop tomorrow morning."

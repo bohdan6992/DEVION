@@ -1536,6 +1536,14 @@ export type SonarExactFilterSnapshot = {
   zapShowAbsNeg?: number | null;
   zapSilverAbs: number;
   zapGoldAbs: number;
+  /**
+   * Upper end of the deviation range — a name standing further out is REMOVED from the list by the
+   * bridge (SonarFilterConfig.ZapMaxAbs), not merely tinted. Separate from zapSilverAbs above, which
+   * is this page's own silver "too stretched" highlight: that one is client-side only, defaults to
+   * 2.0 and is never sent, so wiring it to the server cap would have started deleting rows here
+   * without anyone asking. Optional and absent on this page; LIMITER's own Sonar fills it in.
+   */
+  zapMaxAbs?: number | null;
 };
 
 const PIN_DOT_CLASS: Record<PinColor, string> = {

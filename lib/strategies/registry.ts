@@ -600,10 +600,13 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   limiter: {
     key: "limiter",
     bridgeStrategyId: "stream.limiter",
+    // Shares spreadometer's own pages (pages/spreadometer/*, renamed from pages/limiter/* 2026-11-01
+    // alongside the displayed title) — see that entry's own comment for why they are not the same
+    // strategy despite the shared route.
     nav: {
-      stream: "/limiter/stream",
-      scanner: "/limiter/scanner",
-      sonar: "/limiter/sonar",
+      stream: "/spreadometer/stream",
+      scanner: "/spreadometer/scanner",
+      sonar: "/spreadometer/sonar",
     },
     tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
     priority: 6,
@@ -619,7 +622,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
-  // LIMITER Basket — a HALF-HOURLY basket macro (hourly until 2026-10-28, corrected same day), not
+  // SPREADOMETER (LIMITER BASKET until 2026-10-30) — a HALF-HOURLY basket macro (hourly until 2026-10-28, corrected same day), not
   // a once-a-day one like morlaunchbasket/launcheveningbasket above: every 30 min, 21:01-09:00 NY,
   // Ctrl+Q cancel FIRST (undoing the PREVIOUS cycle's own still-resting limits), then clear+paste
   // that cycle's own filtered list (limiter's own Sonar universe — Arbitrage signals, PRE class)
@@ -628,11 +631,13 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   // the SAME physical Basket Window. During the ARK band (04:00-09:30) a ticker this strategy has a
   // resting limit on is off-limits to every other strategy (ArbitrageServerStrategy consults
   // ILimiterReservedTickers before proposing a fresh entry) — LIMITER has top priority there. See
-  // LimiterBasketServerStrategy.cs's own header comment for the full spec (operator's own,
+  // SpreadometerServerStrategy.cs's own header comment for the full spec (operator's own,
   // 2026-10-28). A fill is never auto-exited — the operator closes it by hand, same as the two
   // daily basket strategies.
   //
-  // NO PAGES OF ITS OWN: nav points at limiter's own pages (pages/limiter/*), same "basket macro
+  // NO PAGES OF ITS OWN: nav points at pages/spreadometer/* (renamed from pages/limiter/*,
+  // 2026-11-01 — the operator's own instruction: "Зміни назву на фронтенді і в посиланнях", the
+  // route/title had stayed on the old name after the 2026-10-30 rename below), same "basket macro
   // borrows its parent strategy's pages" pattern morlaunchbasket/launcheveningbasket already use.
   // storage gets its OWN distinct prefixes so filter/UI state never leaks into limiter's own Sonar.
   //
@@ -641,15 +646,15 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   // holdsOvernight: true for the same reason the two daily basket strategies set it — a manual
   // close is not on any schedule the bridge knows, and a still-open fill must not vanish into
   // UNCLAIMED when the Caesar day rolls at 21:00.
-  limiterbasket: {
-    key: "limiterbasket",
-    bridgeStrategyId: "stream.limiterbasket",
+  spreadometer: {
+    key: "spreadometer",
+    bridgeStrategyId: "stream.spreadometer",
     nav: {
-      stream: "/limiter/stream",
-      scanner: "/limiter/scanner",
-      sonar: "/limiter/sonar",
+      stream: "/spreadometer/stream",
+      scanner: "/spreadometer/scanner",
+      sonar: "/spreadometer/sonar",
     },
-    // 21:01 .. 09:00 — matches LimiterBasketServerStrategy.WindowFromMinuteIdx/WindowToMinuteIdx exactly.
+    // 21:01 .. 09:00 — matches SpreadometerServerStrategy.WindowFromMinuteIdx/WindowToMinuteIdx exactly.
     tradingWindow: { fromMinuteIdx: -179, toMinuteIdx: 9 * 60 },
     priority: 7,
     holdsOvernight: true,
@@ -657,9 +662,9 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     api: { paperBase: "/api/paper/limiter", signalsBase: "/api/arbitrage" },
     streamEngine: "bridge",
     storage: {
-      scannerPrefix: "paper.limiterbasket",
-      sonarPrefix: "bridge.limiterbasket",
-      streamPrefix: "stream.limiterbasket",
+      scannerPrefix: "paper.spreadometer",
+      sonarPrefix: "bridge.spreadometer",
+      streamPrefix: "stream.spreadometer",
     },
     ratingClasses: {
       dimension: "ENTRY",

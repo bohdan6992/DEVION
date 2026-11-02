@@ -58,14 +58,21 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   // Scanner/Stream have no backtest or live dispatch behind them. Key lowercases to the registry/
   // bridge key "limiter".
   { key: "limiter", name: "Limiter", icon: "🚧", description: "Список тікерів, відфільтрований як у LAUNCH-групі; рейтинг — PRE-клас з файлу арбітража. Поки що лише Sonar." },
-  // LIMITER's own basket macro (operator, 2026-10-28, corrected same day: hourly -> every 30 min,
-  // plus ticker-reservation priority over ARK): unlike the two basket strategies above, this one
-  // repeats every HALF HOUR (21:01-09:00, Ctrl+Q cancel first each cycle, jittered +/-5 min, 04:00
-  // shifted to 04:05-04:10 to stay clear of Launch•Morning's own 03:58-04:01). During the ARK band
-  // (04:00-09:30) a ticker this strategy has a resting limit on is off-limits to every other
-  // strategy — LIMITER has top priority on its own list there. Key lowercases to the registry/
-  // bridge key "limiterbasket". See LimiterBasketServerStrategy.cs.
-  { key: "limiterBasket", name: "Limiter•Basket", icon: "⏰", description: "Щопівгодини (21:01-9:00, джиттер ±5хв): Ctrl+Q, потім лімітки на відфільтрований список — пріоритетний на ARK. Вихід ручний." },
+  // SPREADOMETER — named LIMITER•BASKET until the operator renamed it on 2026-10-30; the strategy,
+  // its macro and its window are unchanged. The old id lives on in two places on purpose: the
+  // bridge translates it on load (StrategyIdMigrations) and RENAMED_STRATEGY_KEYS below does the
+  // same for a Caesar plan saved in this browser, so neither a saved plan nor a saved on/off flag
+  // is lost. Note it is NOT the "limiter" entry above — that one is the Sonar/universe surface and
+  // keeps its own name.
+  //
+  // What it does (operator, 2026-10-28, corrected same day: hourly -> every 30 min, plus
+  // ticker-reservation priority over ARK): unlike the two basket strategies above, this one repeats
+  // every HALF HOUR (21:01-09:00, Ctrl+Q cancel first each cycle, jittered +/-5 min, 04:00 shifted
+  // to 04:05-04:10 to stay clear of Launch•Morning's own 03:58-04:01). During the ARK band
+  // (04:00-09:30) a ticker it has a resting limit on is off-limits to every other strategy — it has
+  // top priority on its own list there. Key lowercases to the registry/bridge key "spreadometer".
+  // See SpreadometerServerStrategy.cs.
+  { key: "spreadometer", name: "Spreadometer", icon: "⏱️", description: "Щопівгодини (21:01-9:00, джиттер ±5хв): Ctrl+Q, потім лімітки на відфільтрований список — пріоритетний на ARK. Вихід ручний." },
   { key: "coupleDating", name: "Couple Dating", icon: "💞", description: "Парні залежності (SPY/QQQ тощо)." },
   { key: "volumeArrival", name: "Volume Arrival", icon: "📊", description: "Аномальний об’єм як тригер." },
   { key: "latePrint", name: "Late Print", icon: "🕯️", description: "Пізні принти та поведінка ціни." },
@@ -76,3 +83,27 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
 export const STRATEGY_BY_KEY = Object.fromEntries(
   STRATEGY_CATALOG.map((s) => [s.key, s])
 ) as Record<string, StrategyMeta>;
+
+/**
+ * Catalog keys that have been RENAMED: old key -> current key.
+ *
+ * A catalog key is what a saved Caesar plan stores its rows under (CAESAR_PLAN_LS_KEY, in THIS
+ * browser's localStorage — the bridge only holds the enabled flag, the assignments are pushed from
+ * here). sanitizeCaesarPlan drops a row whose key is no longer in the catalog, which is right for a
+ * strategy that genuinely left and quietly wrong for one that was merely renamed: the row would
+ * disappear from the schedule, and the next push would delete the assignment on the bridge too. So
+ * renames are translated on load instead, and the plan rewrites itself into the new spelling.
+ *
+ * The bridge keeps its own twin of this for the ids it persists — see StrategyIdMigrations.cs.
+ * Entries are kept forever: a browser that has not been opened since before the rename still has
+ * the old plan in its localStorage.
+ */
+export const RENAMED_STRATEGY_KEYS: Record<string, string> = {
+  // LIMITER•BASKET -> Spreadometer (the operator's own rename, 2026-10-30).
+  limiterBasket: "spreadometer",
+};
+
+/** The catalog key this one is known by today; unknown and already-current keys pass through. */
+export function currentStrategyKey(key: string): string {
+  return RENAMED_STRATEGY_KEYS[key] ?? key;
+}

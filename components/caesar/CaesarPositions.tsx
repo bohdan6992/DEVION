@@ -330,7 +330,7 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",
   morlaunchbasket: "LAUNCH•MORNING",
   launcheveningbasket: "LAUNCH•EVENING",
-  limiterbasket: "LIMITER•BASKET",
+  spreadometer: "SPREADOMETER",
 };
 
 function strategyDisplayLabel(key: string): string {
@@ -781,7 +781,7 @@ export default function CaesarPositions({
       // manual) — always their own LIVE total, regardless of which segment tab they sit on. LIMITER
       // Basket (2026-10-28) is the same shape as the two Launch baskets here: no fixed settle
       // moment, fills close only when the operator does it by hand.
-      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket" || key === "launcheveningbasket" || key === "limiterbasket") {
+      if (key === CLO_HEDGE_KEY || key === ARBITRAGE_HEDGE_KEY || key === "morlaunchbasket" || key === "launcheveningbasket" || key === "spreadometer") {
         const live = view.perStrategy.get(key);
         return live ? [[key, live]] : [];
       }

@@ -5,6 +5,6 @@ const LimiterSonar = dynamic(
   { ssr: false }
 );
 
-export default function LimiterSonarPage() {
+export default function SpreadometerSonarPage() {
   return <LimiterSonar />;
 }

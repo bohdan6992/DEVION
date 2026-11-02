@@ -5,6 +5,6 @@ const LimiterScanner = dynamic(
   { ssr: false }
 );
 
-export default function LimiterScannerPage() {
+export default function SpreadometerScannerPage() {
   return <LimiterScanner />;
 }
