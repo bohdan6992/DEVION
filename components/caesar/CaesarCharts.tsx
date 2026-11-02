@@ -31,6 +31,7 @@
 
 import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
 import { SERIES, OTHER, OVERNIGHT_SERIES, MAX_SERIES, buildColorByInstance } from "@/lib/caesar/colors";
+import { STRATEGY_CATALOG } from "@/lib/strategyCatalog";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
@@ -659,11 +660,12 @@ function RadarChart({
 //     instead of a cone — "не роби один широкий на всю ширину"). Only past six strategies does
 //     the slot shrink, to width/n, so every cone still fits — "якщо назначених стратегій більше
 //     - роби тонші"; the row of slots is centred in the chart either way.
-//   - base WIDTH within its own slot reads that strategy's own BP volume RELATIVE TO the most
-//     voluminous strategy on screen (same "biggest reaches the cap, the rest scale against it"
-//     idiom height already uses) — a loud strategy's cone fills its slot, a quiet one's is slim
-//     within it, but never past the slot's own 1/6 cap. A small fixed gap separates neighbours
-//     so they read as distinct solids, not one fused ridge.
+//   - base WIDTH is the SAME for every cone — fills its own slot, minus a small fixed gap to the
+//     next one (2026-11-02, the operator's own correction: width used to also read that
+//     strategy's own BP volume relative to the loudest one on screen, which read as "several
+//     strategies active but the cones look odd" the moment volumes differed a lot — "всі мають
+//     бути однакової ширини, регулюється лише висота", all must be the same width, only height is
+//     regulated). Volume is no longer drawn at all; it lives in the hover tooltip only, below.
 //   - apex HEIGHT = ККД itself, max(result, 0) / volume, scaled so the single most efficient
 //     strategy on screen reaches the very top of the plot and everything else is relative to
 //     IT (the operator's own words: "найвищий займає всю висоту вікна, решта масштабується під
@@ -676,8 +678,12 @@ function RadarChart({
 // the glossy curved-surface look, plus its own elliptical base cap (drawn once behind the body,
 // once in front of it after the body's own bottom edge, so only the base's own FRONT rim shows
 // in front of the cone — the standard "cone sitting on its own disk" trick) for the 3D footing.
-// No labels, no axis, no legend, no hover — colour (colorByInstance, the same stable palette
-// every other panel uses) is the only identity, exactly as asked.
+// No labels, no axis, no legend — colour (colorByInstance, the same stable palette every other
+// panel uses) is the only standing identity. HOVER (2026-11-02, the operator's own instruction —
+// "додай інформацію при наведенні") reveals the rest: a floating tooltip (same shell LinesChart's
+// own hover readout uses) with the strategy's catalog name, BP volume, result and ККД, plus the
+// SAME hoverKey/onHover state Donut/RadarChart/LinesChart already share on this page, so hovering
+// a cone dims every OTHER chart's reading of a different strategy too, and vice versa.
 //
 // DATA. Volume is per-ticker PEAK |positionBp| ever observed this session (peakBpByTicker, a ref
 // fed by the same account poll that already drives the donut — see its own doc comment), summed
@@ -690,6 +696,16 @@ function RadarChart({
 // =========================================================================================
 
 type ConeRow = { key: string; color: string; volumeBp: number; result: number };
+
+/**
+ * The name a strategy is shown under everywhere else (CLO•Reversal, OPG•Continuum, Day Two…),
+ * looked up from the catalog — same case-insensitive match CaesarRunners.tsx's own catalogLabel
+ * uses, duplicated locally rather than imported cross-component for one four-line lookup.
+ */
+function catalogLabel(key: string): string {
+  const name = STRATEGY_CATALOG.find((s) => s.key.toLowerCase() === key.toLowerCase())?.name ?? key;
+  return name.toUpperCase();
+}
 
 /** #rrggbb -> [r,g,b], or null for anything else (rgba(...), a bad value, …) — shade() below falls
  * back to the original string untouched rather than guess at those. */
@@ -717,12 +733,19 @@ function EfficiencyConeChart({
   meta,
   heightPx = 384,
   heightClass = "h-[384px]",
+  hoverKey = null,
+  onHover,
 }: {
   rows: ConeRow[];
   title?: string;
   meta?: string;
   heightPx?: number;
   heightClass?: string;
+  /** Shared with the donut/radar/arrivals line (hoverKey/onHover is the SAME state CaesarCharts
+   * already threads through those) — hovering a cone highlights the same strategy everywhere else
+   * on the page, and vice versa. */
+  hoverKey?: string | null;
+  onHover?: (key: string | null) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const uid = useId().replace(/:/g, "");
@@ -738,7 +761,6 @@ function EfficiencyConeChart({
   const sorted = useMemo(() => [...rows].sort((a, b) => b.volumeBp - a.volumeBp), [rows]);
 
   const cones = useMemo(() => {
-    const maxVolume = Math.max(1e-9, ...sorted.map((r) => Math.max(0, r.volumeBp)));
     const efficiencies = sorted.map((r) => (r.volumeBp > 0 ? Math.max(0, r.result) / r.volumeBp : 0));
     const maxEff = Math.max(1e-9, ...efficiencies);
     const n = Math.max(1, sorted.length);
@@ -753,19 +775,18 @@ function EfficiencyConeChart({
     const slotWidth = width / Math.max(6, n);
     const rowWidth = slotWidth * n;
     const xOffset = (width - rowWidth) / 2;
+    // SAME width for every cone (2026-11-02, the operator's own correction — see this function's
+    // own header comment). Fills the slot, minus the gap to the next one; volume no longer scales
+    // this at all, it only reaches the hover tooltip below.
+    const baseWidth = Math.max(MIN_WIDTH, slotWidth - GAP);
+    const ry = Math.max(3, Math.min(baseWidth * 0.16, 10));
 
     return sorted.map((r, i) => {
-      // Width WITHIN the slot still reads volume, the same "biggest reaches the cap, the rest
-      // scale relative to it" idiom height already uses against maxEff — just capped at the slot
-      // now instead of free to swallow the whole chart.
-      const volShare = Math.max(0, r.volumeBp) / maxVolume;
-      const baseWidth = Math.max(MIN_WIDTH, volShare * (slotWidth - GAP));
       const xCenter = xOffset + slotWidth * (i + 0.5);
       // The single most efficient strategy reaches PAD_T exactly (full plot height); every other
       // cone is relative to IT, not to an abstract fixed scale — the operator's own instruction.
       const len = MIN_LEN + (efficiencies[i] / maxEff) * (plotH - MIN_LEN);
       const yApex = yBase - len;
-      const ry = Math.max(3, Math.min(baseWidth * 0.16, 10));
       return {
         key: r.key,
         color: r.color,
@@ -777,9 +798,15 @@ function EfficiencyConeChart({
         yApex,
         yBase,
         ry,
+        volumeBp: r.volumeBp,
+        result: r.result,
+        efficiency: efficiencies[i],
       };
     });
   }, [sorted, width, plotH, height, uid]);
+
+  const hovered = hoverKey != null ? cones.find((c) => c.key === hoverKey) ?? null : null;
+  const hoverPct = hovered && width > 0 ? (hovered.xCenter / width) * 100 : 50;
 
   return (
     <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
@@ -794,7 +821,7 @@ function EfficiencyConeChart({
         viewBox={`0 0 ${width} ${height}`}
         className="block h-full w-full"
         role="img"
-        aria-label="Each strategy's own efficiency cone — base width is BP volume, height is result per unit of volume, the tallest cone filling the chart"
+        aria-label="Each strategy's own efficiency cone — same width for every cone, height is result per unit of BP volume, the tallest cone filling the chart"
       >
         {cones.length === 0 ? (
           <text x={width / 2} y={height / 2} textAnchor="middle" fill="rgba(255,255,255,0.32)" fontSize={11} fontFamily="ui-monospace, monospace">
@@ -816,35 +843,81 @@ function EfficiencyConeChart({
                 </linearGradient>
               ))}
             </defs>
-            {cones.map((c) => (
-              <g key={c.key}>
-                {/* Base disk, drawn whole first — the cone body below covers its own back half,
-                    leaving only the FRONT rim showing past the body's bottom edge. */}
-                <ellipse
-                  cx={c.xCenter} cy={c.yBase} rx={c.baseWidth / 2} ry={c.ry}
-                  fill={shade(c.color, -0.25)} fillOpacity={0.9}
-                  stroke={shade(c.color, -0.5)} strokeOpacity={0.6} strokeWidth={1}
-                />
-                <polygon
-                  points={`${c.xCenter},${c.yApex} ${c.xLeft},${c.yBase} ${c.xRight},${c.yBase}`}
-                  fill={`url(#${c.gradientId})`}
-                  fillOpacity={0.96}
-                  stroke={shade(c.color, -0.3)}
-                  strokeOpacity={0.55}
-                  strokeWidth={1}
-                  strokeLinejoin="round"
-                />
-                {/* The base disk's own front rim, retraced on top so it reads crisp against the
-                    body instead of being swallowed by the polygon's own bottom edge. */}
-                <path
-                  d={`M ${c.xLeft} ${c.yBase} A ${c.baseWidth / 2} ${c.ry} 0 0 0 ${c.xRight} ${c.yBase}`}
-                  fill="none" stroke={shade(c.color, -0.35)} strokeOpacity={0.5} strokeWidth={1}
-                />
-              </g>
-            ))}
+            {cones.map((c) => {
+              const on = hoverKey === c.key;
+              const dim = hoverKey != null && !on;
+              return (
+                <g
+                  key={c.key}
+                  opacity={dim ? 0.35 : 1}
+                  style={{ transition: "opacity 140ms ease", cursor: "pointer" }}
+                  onMouseEnter={() => onHover?.(c.key)}
+                  onMouseLeave={() => onHover?.(null)}
+                >
+                  {/* Base disk, drawn whole first — the cone body below covers its own back half,
+                      leaving only the FRONT rim showing past the body's bottom edge. */}
+                  <ellipse
+                    cx={c.xCenter} cy={c.yBase} rx={c.baseWidth / 2} ry={c.ry}
+                    fill={shade(c.color, -0.25)} fillOpacity={0.9}
+                    stroke={shade(c.color, -0.5)} strokeOpacity={0.6} strokeWidth={1}
+                  />
+                  <polygon
+                    points={`${c.xCenter},${c.yApex} ${c.xLeft},${c.yBase} ${c.xRight},${c.yBase}`}
+                    fill={`url(#${c.gradientId})`}
+                    fillOpacity={0.96}
+                    stroke={shade(c.color, on ? 0.2 : -0.3)}
+                    strokeOpacity={on ? 0.9 : 0.55}
+                    strokeWidth={on ? 2 : 1}
+                    strokeLinejoin="round"
+                  >
+                    {/* Native fallback tooltip, same info as the floating box below — covers the
+                        instant before the floating box's own effect paints and any context (e.g.
+                        a screen reader) that does not render it at all. */}
+                    <title>{`${catalogLabel(c.key)} — ${intnLike(c.volumeBp)} BP · ${c.result >= 0 ? "+" : ""}${c.result.toFixed(2)} · ККД ${c.efficiency.toFixed(4)}/BP`}</title>
+                  </polygon>
+                  {/* The base disk's own front rim, retraced on top so it reads crisp against the
+                      body instead of being swallowed by the polygon's own bottom edge. */}
+                  <path
+                    d={`M ${c.xLeft} ${c.yBase} A ${c.baseWidth / 2} ${c.ry} 0 0 0 ${c.xRight} ${c.yBase}`}
+                    fill="none" stroke={shade(c.color, -0.35)} strokeOpacity={0.5} strokeWidth={1}
+                  />
+                </g>
+              );
+            })}
           </>
         )}
       </svg>
+
+      {/* Floating readout, same shell as LinesChart/LongShortHistogram's own hover tooltip —
+          positioned over the hovered cone's own x, flipping to its left past the chart's middle
+          so it never runs off the right edge. */}
+      {hovered && (
+        <div
+          className="caesar-chart-tooltip pointer-events-none absolute top-8 z-10 min-w-[150px] rounded-lg border border-white/10 bg-[#0a0a0a]/95 px-3 py-2 shadow-lg backdrop-blur-xl"
+          style={{ left: `${hoverPct}%`, transform: hoverPct > 58 ? "translateX(calc(-100% - 10px))" : "translateX(10px)" }}
+        >
+          <div className="font-mono text-[11px] font-bold uppercase tracking-wide" style={{ color: hovered.color }}>
+            {catalogLabel(hovered.key)}
+          </div>
+          <div className="mt-1 flex items-center gap-2 font-mono text-[12px]">
+            <span className="text-zinc-500">VOLUME</span>
+            <span className="ml-auto tabular-nums text-zinc-200">{intnLike(hovered.volumeBp)} BP</span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 font-mono text-[12px]">
+            <span className="text-zinc-500">RESULT</span>
+            <span
+              className="ml-auto font-bold tabular-nums"
+              style={{ color: hovered.result >= 0 ? "rgba(110,231,183,0.95)" : SOFT_LOSS_SOLID }}
+            >
+              {hovered.result >= 0 ? "+" : ""}{hovered.result.toFixed(2)}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 font-mono text-[12px]">
+            <span className="text-zinc-500">ККД</span>
+            <span className="ml-auto tabular-nums text-zinc-200">{hovered.efficiency.toFixed(4)}/BP</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2402,9 +2475,11 @@ export default function CaesarCharts({
           <EfficiencyConeChart
             rows={coneRows}
             title="EFFICIENCY"
-            meta="band=volume · length=ККД"
+            meta="height=ККД · hover for volume/result"
             heightPx={384}
             heightClass="h-[384px]"
+            hoverKey={hoverKey}
+            onHover={setHoverKey}
           />
 
           {/* ---------- LONGS / SHORTS SENT ---------- */}
