@@ -6,7 +6,6 @@ import { clampInt, formatDilutionStepValue, formatScannerSizeValue, normalizeSca
 import type { ScannerFilterBag } from "../../../../lib/scanner/filterState";
 import type { PaperArbCloseMode, PaperArbDilutionMode, PaperArbPnlMode, PaperArbPriceMode, PaperArbSizingMode, TabKey } from "../../../../lib/scanner/types";
 import type { StreamAutomationConfig } from "../../../stream/streamEngine";
-import type { DirectionBalanceState } from "../../../../lib/arbitrage/directionBalanceClient";
 import type { ScheduledStartStatus } from "../../../../lib/scanner/useScheduledStartArm";
 import { pushCaesarAssignmentWindow, type EffectiveStreamRules } from "../../../../lib/scanner/useEffectiveStreamRules";
 
@@ -104,37 +103,10 @@ function TwoTonePairButtons<T extends string>({
  * downloads. Identical for every strategy.
  */
 /**
- * The direction auto-balance switch (Arbitrage only). The bridge decides; this is the switch, the
- * trigger ratio, and the bridge's report of what it has done.
- */
-export type DirectionBalanceControl = {
-  enabled: boolean;
-  /** Majority : minority BP that counts as skewed - 2 means twice the notional on one side. */
-  ratio: number;
-  onToggle: () => void;
-  onRatio: (value: number) => void;
-  /**
-   * Absolute trigger in BP; 0 = off. When above 0 it replaces the ratio rule: any difference of at
-   * least this much between the two sides is a skew (15 against 14 included), and the book counts as
-   * balanced only once the difference is back under it. See DirectionBalanceSettings.MinGapBp.
-   */
-  minGapBp: number;
-  onMinGapBp: (value: number) => void;
-  /**
-   * HEDGED mode: on a skew, send real QQQ orders (buy/sell) to close the BP gap directly instead of
-   * lowering the starved side's entry threshold. Only matters while `enabled` is true, and only
-   * takes effect at that episode's OWN trigger — flipping it mid-episode changes nothing until the
-   * next one (see the bridge's own DirectionBalancer doc comment).
-   */
-  hedged: boolean;
-  onToggleHedged: () => void;
-  status: DirectionBalanceState | null;
-};
-
-/**
  * SAVE mode (Arbitrage only): the operator's own hourly maintenance switch on the bridge. See
- * SaveModeButton's own doc comment for the mechanism. Independent of BALANCE/HEDGED above — SAVE
- * never touches QQQ or a threshold, so there is nothing for the two switches to collide over.
+ * SaveModeButton's own doc comment for the mechanism. The direction hedge this used to sit next to
+ * (BALANCE/HEDGED/RATIO/GAP) moved to Caesar, 2026-11-05 — see
+ * components/caesar/useSegmentDirectionBalance.ts.
  */
 export type SaveModeControl = {
   enabled: boolean;
@@ -200,64 +172,6 @@ export type ExecutionSettingsPanelProps = {
    */
   extraControls?: React.ReactNode;
 };
-
-function BalanceRatioInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
-  const [text, setText] = React.useState(String(value));
-
-  React.useEffect(() => {
-    if (Number(text.replace(",", ".")) !== value) setText(String(value));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
-  const commit = (raw: string) => {
-    const n = Number(raw.replace(",", "."));
-    if (Number.isFinite(n) && n >= 1.1) onChange(n);
-  };
-  const bump = (dir: 1 | -1) => {
-    const next = Math.max(1.1, +((Number.isFinite(value) ? value : 2) + dir * 0.5).toFixed(2));
-    setText(String(next));
-    onChange(next);
-  };
-
-  return (
-    <div className="group relative h-8 w-11 overflow-hidden rounded-md">
-      <input
-        type="number"
-        inputMode="decimal"
-        min={1.1}
-        step={0.5}
-        value={text}
-        disabled={disabled}
-        onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
-        onBlur={() => setText(String(value))}
-        aria-label="Balance trigger ratio"
-        className="center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99] disabled:opacity-40 accent-text"
-      />
-      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => bump(1)}
-          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-          aria-label="Increase balance trigger ratio"
-        >
-          ▲
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => bump(-1)}
-          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-          aria-label="Decrease balance trigger ratio"
-        >
-          ▼
-        </button>
-      </div>
-    </div>
-  );
-}
 
 /**
  * One HH:MM control: two spinner inputs (hour, minute) in a single h-7 pill, no caption - the
@@ -357,80 +271,6 @@ function TimePill({
   );
 }
 
-function BalanceGapInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled: boolean }) {
-  const [text, setText] = React.useState(String(value));
-
-  React.useEffect(() => {
-    if (Number(text.replace(",", ".")) !== value) setText(String(value));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
-  const commit = (raw: string) => {
-    const n = Number(raw.replace(",", "."));
-    if (Number.isFinite(n) && n >= 0) onChange(n);
-  };
-  const bump = (dir: 1 | -1) => {
-    const next = Math.max(0, (Number.isFinite(value) ? value : 0) + dir * 500);
-    setText(String(next));
-    onChange(next);
-  };
-
-  return (
-    <div className="group relative h-8 w-14 overflow-hidden rounded-md">
-      <input
-        type="number"
-        inputMode="numeric"
-        min={0}
-        step={500}
-        value={text}
-        disabled={disabled}
-        onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
-        onBlur={() => setText(String(value))}
-        aria-label="Balance minimum gap in BP"
-        className="center-spin w-full h-8 bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99] disabled:opacity-40 accent-text"
-      />
-      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => bump(1)}
-          className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-          aria-label="Increase balance minimum gap"
-        >
-          ▲
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => bump(-1)}
-          className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
-          aria-label="Decrease balance minimum gap"
-        >
-          ▼
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const fmtAdj = (v: number) => (v > 0 ? `−${(+v.toFixed(2)).toString()}` : "0");
-const fmtBp = (v: number) => Math.round(v).toLocaleString("en-US");
-
-function balanceTitle(status: DirectionBalanceState | null, hedged: boolean): string {
-  const base = hedged
-    ? "AUTO BALANCE — HEDGED. Every 10 minutes the bridge sums its own open positions' BPUsed by side (not a position count — a ticker scaled into several times weighs more than a single-shot one). If one side's BP holds at least 10,000 and outnumbers the other's by the trigger ratio, the bridge sends real QQQ orders — SELL when longs are the majority, BUY when shorts are — one order per 1,000 BP of the gap. The book is then re-checked EVERY MINUTE and the hedge is grown (never partially unwound) if the gap grows, until the smaller side reaches 90% of the larger one — then the whole hedge is unwound with the opposite order, the same count, and 10-minute trigger checks resume. Switching it off (or a new trading day) unwinds an open hedge the same way. An episode's mode is fixed at its own trigger; flipping this switch mid-episode only changes the NEXT one."
-    : "AUTO BALANCE. Every 10 minutes the bridge sums its own open positions' BPUsed by side (not a position count — a ticker scaled into several times weighs more than a single-shot one). If one side's BP holds at least 10,000 and outnumbers the other's by the trigger ratio (e.g. 14,000 : 6,000 at ratio 2), the entry threshold of the SIDE THAT IS SHORT OF BP is lowered by 0.1 (in the current ZAP unit). From then on the book is re-checked EVERY MINUTE and the threshold keeps coming down by 0.1 (never below 0.2) until the smaller side has reached 90% of the larger one. Then both thresholds go back to the toolbar values and the 10-minute trigger checks resume. The toolbar thresholds themselves are never rewritten; switching it off takes every lowering away.";
-  if (!status) return base;
-  const next = status.nextCheckUtc ? new Date(status.nextCheckUtc).toLocaleTimeString() : "-";
-  const phase = status.phase === "balancing" ? "BALANCING (checked every minute)" : "watching (trigger check every 10 min)";
-  const action = status.hedgedEpisode
-    ? `QQQ hedge: ${status.hedgeOrdersOut} order(s) open${status.hedgeSide ? ` (manufacturing ${status.hedgeSide})` : ""}.`
-    : `Short threshold ${fmtAdj(status.shortAdjust)}, long threshold ${fmtAdj(status.longAdjust)}.`;
-  return `${base}\n\nNow: ${phase}. ${action} Last check saw ${fmtBp(status.lastLongsBp)} long / ${fmtBp(status.lastShortsBp)} short BP: ${status.lastAction || "-"}${status.lastReason ? ` (${status.lastReason})` : ""}. Next check ${next}.`;
-}
-
 /** "in 3h 12m" / "in 42m" from an ISO instant; empty when it is not in the future. */
 function untilLabel(iso: string): string {
   const ms = Date.parse(iso) - Date.now();
@@ -455,110 +295,19 @@ function scheduledStartTitle(status: ScheduledStartStatus | null | undefined): s
 }
 
 /**
- * The BALANCE/HEDGED mode pair, the RATIO box and the state chip. Not part of the toolbar card any
- * more: the Arbitrage page renders it in the header row opposite the auto-start buttons (crosshair,
- * book, lock, START AUTO), right-aligned - see ArbitrageScanner. Same pill styling as before, one
- * h-7 row.
+ * SAVE, in the Arbitrage header row (ArbitrageScanner). Every hour on the bridge: Ctrl+Q cancels any
+ * limit still unfilled (real for PRINT mode's limit entries, a no-op the rest of the time — sent
+ * anyway since the switch does not know which mode is live), then any position still awaiting its
+ * fill is forgotten so the ordinary entry path re-sends it next tick if it is still signalling.
  *
- * BALANCE and HEDGED are mutually exclusive MODES of one switch, not two independent toggles — at
- * most one is ever active (`directionBalance.enabled` is true for either; `.hedged` picks which).
- * Pressing the currently active one turns the whole thing off; pressing the other one switches
- * straight to it. Both buttons stay clickable regardless of the current state — see
- * ArbitrageScanner's own `toggleBalanceMode`/`toggleHedgedMode` for the exact rule.
- */
-export function DirectionBalanceControls({ directionBalance }: { directionBalance: DirectionBalanceControl }) {
-  const title = balanceTitle(directionBalance.status, directionBalance.hedged);
-  const hedgeLive = directionBalance.status?.hedgedEpisode ?? false;
-  const balanceActive = directionBalance.enabled && !directionBalance.hedged;
-  const hedgedActive = directionBalance.enabled && directionBalance.hedged;
-  return (
-    <>
-      <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={title}>
-        <button
-          type="button"
-          aria-pressed={balanceActive}
-          onClick={directionBalance.onToggle}
-          title="On a skew, lower the starved side's own entry threshold. Press again to turn it off."
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            balanceActive
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          BALANCE
-        </button>
-        {/* The OTHER mode of the same switch, not a second switch of its own — clicking it while
-            BALANCE is active switches straight to HEDGED (and back again switches straight back);
-            clicking whichever one is currently active turns everything off. An episode's mode is
-            fixed at its own trigger (see DirectionBalancer's own doc comment), so the CHIP below
-            keeps showing whatever mode the CURRENT episode actually started in, even for a moment
-            after this button itself has already moved on to the next one. */}
-        <button
-          type="button"
-          aria-pressed={hedgedActive}
-          onClick={directionBalance.onToggleHedged}
-          title="On a skew, send real QQQ buy/sell orders to close the BP gap directly instead of lowering a threshold. Takes effect at the next episode's own trigger. Press again to turn it off."
-          className={clsx(
-            "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-            hedgedActive
-              ? "accent-soft"
-              : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-          )}
-        >
-          HEDGED
-        </button>
-      </div>
-
-      <div
-        className={clsx("flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20", !directionBalance.enabled && "opacity-60")}
-        title="Trigger ratio: how many times more BP one side must hold than the other before the balance acts. 2 = twice the notional on one side."
-      >
-        <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
-        <BalanceRatioInput value={directionBalance.ratio} onChange={directionBalance.onRatio} disabled={!directionBalance.enabled} />
-        <span
-          className="flex h-8 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
-          title="MIN GAP (BP). 0 = off, the RATIO decides. Above 0 it replaces the ratio: any difference of at least this many BP between longs and shorts counts as a skew (15 against 14 included), and the balance works until the difference is back UNDER it - i.e. to ~0. HEDGED sends QQQ in whole orders of 1,000 BP, so use 1,000 or more there."
-        >
-          GAP
-        </span>
-        <BalanceGapInput value={directionBalance.minGapBp} onChange={directionBalance.onMinGapBp} disabled={!directionBalance.enabled} />
-        {directionBalance.enabled && (
-          <span
-            className="flex h-8 items-center gap-1.5 pr-2 text-[10px] font-mono tabular-nums select-none"
-            title={title}
-          >
-            {hedgeLive ? (
-              // HEDGED episode in force: the QQQ order count, coral/mint by direction (sell/short = coral, buy/long = mint — sign, not identity).
-              <span className={directionBalance.status?.hedgeSide === "short" ? "text-rose-400/80" : "text-emerald-400/80"}>
-                QQQ {directionBalance.status?.hedgeSide === "short" ? "−" : "+"}{directionBalance.status?.hedgeOrdersOut ?? 0}
-              </span>
-            ) : (
-              <>
-                <span className="text-emerald-400/80">S {directionBalance.status ? fmtAdj(directionBalance.status.shortAdjust) : "·"}</span>
-                <span className="text-rose-400/80">L {directionBalance.status ? fmtAdj(directionBalance.status.longAdjust) : "·"}</span>
-              </>
-            )}
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
-
-/**
- * SAVE, next to BALANCE/HEDGED/RATIO in the Arbitrage header row (ArbitrageScanner). Every hour on
- * the bridge: Ctrl+Q cancels any limit still unfilled (real for PRINT mode's limit entries, a no-op
- * the rest of the time — sent anyway since the switch does not know which mode is live), then any
- * position still awaiting its fill is forgotten so the ordinary entry path re-sends it next tick if
- * it is still signalling.
- *
- * Independent of BALANCE/HEDGED: SAVE never touches QQQ or a threshold, so the two switches may both
- * be on at once. Caesar-aware on the bridge — Ctrl+Q is global, so the hourly cycle stands itself
- * down for the hour whenever another strategy is also running, rather than cancel its orders too.
+ * The direction hedge this used to sit next to (BALANCE/HEDGED/RATIO/GAP) moved to Caesar's own
+ * control bar, 2026-11-05 — SAVE was always independent of it (never touched QQQ or a threshold) and
+ * is unaffected by the move. Caesar-aware on the bridge — Ctrl+Q is global, so the hourly cycle
+ * stands itself down for the hour whenever another strategy is also running, rather than cancel its
+ * orders too.
  */
 const SAVE_MODE_TITLE =
-  "SAVE MODE. Every hour, at a RANDOM minute 1-5 past the hour, a new draw every hour (e.g. 01:03, 02:05, 03:03 - never the bare :00): Ctrl+Q cancels any limit order still unfilled, then any position still awaiting its fill is forgotten so it is re-sent if still signalling. Independent of BALANCE/HEDGED (neither touches QQQ or a threshold) — stands down for the hour if another strategy is also running, since Ctrl+Q is global.";
+  "SAVE MODE. Every hour, at a RANDOM minute 1-5 past the hour, a new draw every hour (e.g. 01:03, 02:05, 03:03 - never the bare :00): Ctrl+Q cancels any limit order still unfilled, then any position still awaiting its fill is forgotten so it is re-sent if still signalling. Stands down for the hour if another strategy is also running, since Ctrl+Q is global.";
 
 export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
   return (

@@ -46,16 +46,10 @@ export type ArbitrageLiveParams = {
   filters: ArbitrageServerFilters | null;
   sonar: ArbitrageServerSonarFilters | null;
   /**
-   * The direction auto-balance switch. The bridge acts on it: every few minutes it sums the book's
-   * BPUsed by side (not a position count) and either lowers the entry threshold of the under-
-   * represented side (classic) or sends real QQQ hedge orders to close the gap directly (hedged).
-   * Null/disabled = it never touches a threshold or sends a hedge order.
-   */
-  autoBalance: { enabled: boolean; ratio: number; hedged: boolean; minGapBp: number } | null;
-  /**
    * SAVE mode: every hour, Ctrl+Q (cancels unfilled limits), then forgets whatever is still awaiting
-   * its fill so the ordinary entry path re-sends it if it is still signalling. Nothing to do with
-   * QQQ or autoBalance — independent of it, and the two may both be on at once.
+   * its fill so the ordinary entry path re-sends it if it is still signalling. The direction hedge
+   * (formerly autoBalance here) moved to Caesar, 2026-11-05 — see
+   * lib/caesar/segmentDirectionBalanceClient.ts. SAVE mode itself is unaffected.
    */
   saveMode: boolean;
   source: string;
@@ -139,6 +133,13 @@ export type ArbitrageServerSonarFilters = {
    * 2.0 and has never been sent anywhere; only LIMITER's toolbar fills this in today.
    */
   zapMaxAbs: number | null;
+  /** LIMITER's OWN gate — see SonarExactFilterSnapshot's own doc comment (ArbitrageSonar.tsx) and
+   * SonarFilterConfig.LstPrcLstClsMode (SonarSignalFilter.cs) for why this is a separate field group
+   * from zapMode/zapShowAbs above, not a reuse of it. */
+  lstPrcLstClsMode: "Off" | "Pct" | "Sigma";
+  lstPrcLstClsShowAbs: number;
+  lstPrcLstClsShowAbsNeg: number | null;
+  lstPrcLstClsMaxAbs: number | null;
 };
 
 const upper = (values?: Iterable<string> | null): string[] =>
@@ -273,6 +274,12 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
     zapShowAbs: num(f.zapShowAbs) ?? 0,
     zapShowAbsNeg: num(f.zapShowAbsNeg),
     zapMaxAbs: num(f.zapMaxAbs),
+    lstPrcLstClsMode:
+      f.lstPrcLstClsMode === "pct" ? "Pct" :
+      f.lstPrcLstClsMode === "sigma" ? "Sigma" : "Off",
+    lstPrcLstClsShowAbs: num(f.lstPrcLstClsShowAbs) ?? 0,
+    lstPrcLstClsShowAbsNeg: num(f.lstPrcLstClsShowAbsNeg),
+    lstPrcLstClsMaxAbs: num(f.lstPrcLstClsMaxAbs),
   };
 }
 
@@ -287,7 +294,6 @@ export function toArbitrageLiveParams(args: {
   signalsMinRate: number;
   signalsMinTotal: number;
   ignoreRatings?: boolean;
-  autoBalance?: { enabled: boolean; ratio: number; hedged?: boolean; minGapBp?: number } | null;
   saveMode?: boolean;
   source: string;
 }): ArbitrageLiveParams {
@@ -320,9 +326,6 @@ export function toArbitrageLiveParams(args: {
     // The page runs EITHER Sonar or the toolbar set, never both — the bridge expects the same.
     filters: args.sonar ? null : toArbitrageServerFilters(args.filters),
     sonar: args.sonar ? toArbitrageServerSonarFilters(args.sonar) : null,
-    autoBalance: args.autoBalance
-      ? { enabled: !!args.autoBalance.enabled, ratio: num(args.autoBalance.ratio) ?? 2, hedged: !!args.autoBalance.hedged, minGapBp: Math.max(0, num(args.autoBalance.minGapBp) ?? 0) }
-      : null,
     saveMode: !!args.saveMode,
     source: args.source,
   };

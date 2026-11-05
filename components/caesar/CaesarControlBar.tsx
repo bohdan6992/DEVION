@@ -10,7 +10,9 @@
  *   0. turn the engine on             — without it NOTHING ticks anywhere, not even preview
  *   1. bind the Market Maker window   — without it hotkeys go to whatever has focus
  *   2. start the schedule             — without it CaesarPlanService returns on its first line
- *   3. (reset the plan)               — the escape hatch, deliberately last and quietest
+ *
+ * (The reset-the-plan key that used to sit here is gone, 2026-11-05 — the operator's own
+ * instruction: unneeded.)
  *
  * Under the timeline is where that belongs — but OUTSIDE its frame, on the page itself: they act
  * on the plan rather than being part of it, and the two things you look at before pressing START
@@ -30,10 +32,12 @@
  * so it reads as the primary of a set rather than a different kind of control.
  */
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
+import clsx from "clsx";
 
 import { getBridgeBaseUrl } from "@/lib/bridgeBase";
 import { useMarketMakerWindow } from "./useMarketMakerWindow";
+import { useSegmentDirectionBalance } from "./useSegmentDirectionBalance";
 
 export type CaesarControlBarProps = {
   /** null until the bridge answers — the switch never claims a state it has not confirmed. */
@@ -45,7 +49,6 @@ export type CaesarControlBarProps = {
   scheduleBusy: boolean;
   scheduleError: boolean;
   onToggleSchedule: () => void;
-  onReset: () => void;
 };
 
 /**
@@ -90,13 +93,71 @@ function IconPower(p: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-/** Counter-clockwise arrow: put the plan back the way it started. */
-function IconReset(p: React.SVGProps<SVGSVGElement>) {
+/** A balance scale: the whole-PRE-segment direction hedge. */
+function IconScale(p: React.SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width={17} height={17} {...p}>
-      <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
-      <path d="M3 4.5V10h5.5" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width={16} height={16} {...p}>
+      <path d="M12 3v15" />
+      <path d="M7 6h10" />
+      <path d="M4 10l3-4 3 4" />
+      <path d="M14 10l3-4 3 4" />
+      <path d="M4 10a3 3 0 0 0 6 0" />
+      <path d="M14 10a3 3 0 0 0 6 0" />
+      <path d="M8 21h8" />
     </svg>
+  );
+}
+
+/** One labeled row inside the HEDGE panel — label + spinner in a single h-7 pill, Spinner Input
+ * Standard shape (one shared outer pill, label and input vertically centered together). */
+function HedgeFieldRow({ label, title, children }: { label: string; title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/20" title={title}>
+      <span className="flex h-7 w-14 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** The spinner box itself — Spinner Input Standard: transparent, centered mono digits, arrows flush
+ * right, hover/focus only, no colored fill (this control has no coral/mint/silver role split). */
+function HedgeNumberInput({
+  value, step, min, onChange,
+}: { value: number; step: number; min: number; onChange: (v: number) => void }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const n = Number(raw.replace(",", "."));
+    if (Number.isFinite(n) && n >= min) onChange(n);
+  };
+  const bump = (dir: 1 | -1) => {
+    const next = Math.max(min, +((Number.isFinite(value) ? value : min) + dir * step).toFixed(4));
+    setText(String(next));
+    onChange(next);
+  };
+
+  return (
+    <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+      <input
+        type="number"
+        inputMode="decimal"
+        min={min}
+        step={step}
+        value={text}
+        onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
+        onBlur={() => setText(String(value))}
+        aria-label="Hedge setting"
+        className="center-spin h-7 w-full bg-transparent border-0 !pl-1 !pr-4 text-[11px] text-zinc-200 font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+      />
+      <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bump(1)} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors" aria-label="Increase">▲</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bump(-1)} className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors" aria-label="Decrease">▼</button>
+      </div>
+    </div>
   );
 }
 
@@ -109,11 +170,31 @@ export default function CaesarControlBar({
   scheduleBusy,
   scheduleError,
   onToggleSchedule,
-  onReset,
 }: CaesarControlBarProps) {
   const mm = useMarketMakerWindow();
+  const hedge = useSegmentDirectionBalance();
   const running = scheduleEnabled === true;
   const engineOn = engineEnabled === true;
+
+  // The hedge key's own inline reveal — NOT a floating panel: clicking it grows the row itself to
+  // show the same pill group the old ArbitrageScanner.tsx toolbar used (segmented ON/OFF, RATIO/GAP
+  // boxes, S/L status), in place, same h-7 row (the operator's own explicit style reference,
+  // 2026-11-05).
+  const [hedgePanelOpen, setHedgePanelOpen] = useState(false);
+  const hedgePanelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hedgePanelOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (hedgePanelRef.current && !hedgePanelRef.current.contains(e.target as Node)) setHedgePanelOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") setHedgePanelOpen(false); };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [hedgePanelOpen]);
 
   /*
    * "Bridge down" with the bridge itself answering curl in 3ms, CORS clean, was traced to
@@ -129,7 +210,7 @@ export default function CaesarControlBar({
     /* No padding and no frame: standing on the page between two panels, the row aligns to their
        OUTER edge, which is what makes it read as a separate thing acting on the plan rather than a
        footer belonging to it. */
-    <div className="mt-3 flex items-center">
+    <div className="mt-3 flex items-center justify-between">
       {/* ---- the keys ---- */}
       <div className="flex items-center gap-2">
         {/*
@@ -215,16 +296,6 @@ export default function CaesarControlBar({
           )}
         </button>
 
-        <button
-          type="button"
-          onClick={onReset}
-          title="Reset the plan to its defaults. Edits are pushed to the bridge, so this changes what the schedule runs."
-          aria-label="Reset plan"
-          className={KEY + " w-10"}
-        >
-          <IconReset />
-        </button>
-
         {/*
           START. The one that lets the bridge act on the plan at all — CaesarPlanService.Apply
           returns immediately while this is off, so nothing starts and nothing stops, whatever the
@@ -276,6 +347,115 @@ export default function CaesarControlBar({
               : running
                 ? "Stop auto"
                 : "Start auto"}
+        </button>
+
+      </div>
+
+      {/*
+        HEDGE. The whole-PRE-segment QQQ direction hedge (operator's own instruction, 2026-11-05) —
+        moved here from ArbitrageScanner.tsx's own BALANCE/HEDGED/RATIO/GAP toolbar, now judging the
+        combined book of every ACTIVE PRE strategy instead of just Arbitrage's own.
+        PLACEMENT (operator's own instruction, 2026-11-05): the opposite side of the row's FULL
+        screen width, not just after the other keys — `justify-between` on the outer row puts this
+        group at the far right regardless of how wide the left cluster is.
+        REVEAL STYLE (operator's own instruction, 2026-11-05): NOT a floating popover — clicking the
+        icon grows this group INLINE, in place, into the exact pill style ArbitrageScanner.tsx's old
+        toolbar used (DirectionBalanceControls, before it moved here): one segmented switch pill,
+        then one RATIO/GAP/status pill, both h-7, `rounded-lg bg-black/20` — same shapes, just OFF/
+        HEDGE instead of BALANCE/HEDGED now that classic (threshold-lowering) mode is gone.
+      */}
+      <div ref={hedgePanelRef} className="flex items-center gap-2">
+        {hedgePanelOpen && (
+          <>
+            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+              <button
+                type="button"
+                aria-pressed={!hedge.enabled}
+                onClick={() => hedge.setEnabled(false)}
+                title="Hedge off."
+                className={clsx(
+                  "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  !hedge.enabled ? "accent-soft" : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                OFF
+              </button>
+              <button
+                type="button"
+                aria-pressed={hedge.enabled}
+                onClick={() => hedge.setEnabled(true)}
+                title="On a skew, send real QQQ buy/sell orders across the whole PRE segment's combined book to close the BP gap."
+                className={clsx(
+                  "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  hedge.enabled ? "accent-soft" : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                )}
+              >
+                HEDGE
+              </button>
+            </div>
+
+            <div
+              className={clsx("flex h-7 items-center gap-1 pl-2 pr-2 rounded-lg bg-black/20", !hedge.enabled && "opacity-60")}
+              title="Trigger ratio: how many times more BP one side must hold than the other before the hedge acts. 2 = twice the notional on one side."
+            >
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
+              <HedgeNumberInput value={hedge.ratio} step={0.5} min={1.1} onChange={hedge.setRatio} />
+              <span
+                className="flex h-7 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
+                title="MIN GAP (BP). 0 = off, RATIO decides. Above 0 it replaces the ratio rule: any difference of at least this many BP is a skew."
+              >
+                GAP
+              </span>
+              <HedgeNumberInput value={hedge.minGapBp} step={500} min={0} onChange={hedge.setMinGapBp} />
+              <span
+                className="flex h-7 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
+                title="How often the combined book is checked and, if skewed, re-hedged — in minutes."
+              >
+                PERIOD
+              </span>
+              <HedgeNumberInput value={hedge.checkIntervalMinutes} step={5} min={1} onChange={hedge.setCheckIntervalMinutes} />
+              {hedge.enabled && (
+                <span className="flex h-7 items-center gap-1.5 pl-2 text-[10px] font-mono tabular-nums select-none">
+                  {hedge.status?.hedgedEpisode ? (
+                    <span className={hedge.status.hedgeSide === "short" ? "text-rose-400/80" : "text-emerald-400/80"}>
+                      QQQ {hedge.status.hedgeSide === "short" ? "−" : "+"}{hedge.status.hedgeOrdersOut}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-emerald-400/80">S {hedge.status?.lastShortsBp ? Math.round(hedge.status.lastShortsBp).toLocaleString() : "·"}</span>
+                      <span className="text-rose-400/80">L {hedge.status?.lastLongsBp ? Math.round(hedge.status.lastLongsBp).toLocaleString() : "·"}</span>
+                    </>
+                  )}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => setHedgePanelOpen((v) => !v)}
+          title={
+            hedge.enabled
+              ? `HEDGE on — every ${hedge.checkIntervalMinutes}min, sums long/short BP across every active PRE strategy's combined book and sends real QQQ orders to close a skew of ratio ${hedge.ratio.toFixed(1)}:1${hedge.minGapBp > 0 ? ` or a gap of ${hedge.minGapBp.toLocaleString()} BP` : ""}. Click to show/hide settings.`
+              : "HEDGE off — click to show/hide settings."
+          }
+          aria-label="Toggle hedge settings"
+          aria-pressed={hedgePanelOpen}
+          className={KEY + " w-10"}
+          style={
+            hedge.enabled
+              ? { color: "#c4b5fd", backgroundColor: "rgba(196,181,253,0.10)", borderColor: "rgba(196,181,253,0.24)" }
+              : undefined
+          }
+        >
+          <IconScale />
+          {hedge.status?.hedgedEpisode && (
+            <span
+              className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-violet-400"
+              style={{ boxShadow: "0 0 6px rgba(196,181,253,0.9)" }}
+              title="A hedge episode is currently open"
+            />
+          )}
         </button>
       </div>
     </div>

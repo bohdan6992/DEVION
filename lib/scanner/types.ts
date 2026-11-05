@@ -630,11 +630,15 @@ export type OPGFadeAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 // OPG•Ride's own copy - identical shape (see PaperOPGRideController.cs).
 export type OPGRideAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
+// OPG•Rootation's own copy - identical shape (see PaperOPGRootationController.cs). OPG•Rootation
+// started as a mechanical clone of OPG•Reversal's own pipeline, 2026-11-04.
+export type OPGRootationAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
 // Morning Launch's own copy — identical shape (see PaperMorLaunchController.cs).
 export type MorLaunchAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 // Evening Launch's own copy - identical shape (the evening scanner has no paper controller yet; see LaunchEveningScanner.tsx).
 export type LaunchEveningAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
-// Limiter's own copy - identical shape (its scanner has no paper controller yet; see LimiterScanner.tsx).
+// Limiter's own copy - identical shape (its scanner has no paper controller yet; see SpreadometerScanner.tsx).
 export type LimiterAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
 // PullBack's own copy — identical shape (see PaperPullBackController.cs).

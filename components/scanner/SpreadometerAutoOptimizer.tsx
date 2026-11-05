@@ -6,30 +6,31 @@ import clsx from "clsx";
 import { TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
 import SpinnerInput from "../scout/SpinnerInput";
 import {
-  cancelLimiterAutoOptimizer,
-  loadLimiterAutoOptParameters,
-  pollLimiterAutoOptimizer,
-  startLimiterAutoOptimizer,
+  cancelSpreadometerAutoOptimizer,
+  loadSpreadometerAutoOptParameters,
+  pollSpreadometerAutoOptimizer,
+  startSpreadometerAutoOptimizer,
   sweepValues,
   type PaperLimiterRequestLike,
-  type LimiterAutoOptConstraint,
-  type LimiterAutoOptMetrics,
-  type LimiterAutoOptObjective,
-  type LimiterAutoOptParameter,
-  type LimiterAutoOptResult,
-  type LimiterAutoOptRow,
-  type LimiterAutoOptStartRequest,
-  type LimiterAutoOptUnit,
-} from "../../lib/scanner/limiterAutoOptimizer";
+  type SpreadometerAutoOptConstraint,
+  type SpreadometerAutoOptMetrics,
+  type SpreadometerAutoOptObjective,
+  type SpreadometerAutoOptParameter,
+  type SpreadometerAutoOptResult,
+  type SpreadometerAutoOptRow,
+  type SpreadometerAutoOptStartRequest,
+  type SpreadometerAutoOptUnit,
+} from "../../lib/scanner/spreadometerAutoOptimizer";
 
 /**
- * AUTO OPTIMIZER — the Limiter Scanner's counterpart to Arbitrage's own AutoOptimizer.tsx (see that
- * file's own header for the shared design this mirrors 1-to-1). The differences all come from
- * Limiter's own model, not from taste:
+ * AUTO OPTIMIZER — the Spreadometer Scanner's counterpart to Arbitrage's own AutoOptimizer.tsx (see
+ * that file's own header for the shared design this mirrors 1-to-1). File renamed from
+ * LimiterAutoOptimizer.tsx 2026-11-02, the operator's own instruction. The differences all come
+ * from this screen's own model, not from taste:
  *
  *   * No numeric END/EndAbs at all — the exit is the fixed, categorical ExitClass, which per an
  *     explicit user decision is NEVER swept or exposed here, so there is no END row and no
- *     CloseMode-inert logic anywhere in this file (Limiter's CloseMode is a confirmed no-op
+ *     CloseMode-inert logic anywhere in this file (CloseMode is a confirmed no-op
  *     regardless of ExitClass).
  *   * Three MIN DEV rows (short / long / max) instead of Arbitrage's four (start short / start long /
  *     start max / end).
@@ -51,7 +52,7 @@ const GROUP_HINT: Record<string, string> = {
   [TAPE_GROUP]: "the same ~34 min / max boxes as the toolbar: ADV, VWAP, spread, volumes, gaps, imbalances…",
 };
 
-const UNITS: Array<{ key: LimiterAutoOptUnit; label: string; title: string }> = [
+const UNITS: Array<{ key: SpreadometerAutoOptUnit; label: string; title: string }> = [
   { key: "pct", label: "%", title: "Raw Stack% points — MIN DEV entered as flat percentage points" },
   { key: "sigma", label: "σ", title: "MIN DEV entered as a multiple of each ticker's own published sigma" },
   { key: "alpha", label: "α", title: "MIN DEV entered as a multiple of each ticker's own published alpha, sign-matched" },
@@ -60,7 +61,7 @@ const UNITS: Array<{ key: LimiterAutoOptUnit; label: string; title: string }> = 
   { key: "lambda", label: "λ", title: "MIN DEV entered as a multiple of each ticker's own published lambda" },
 ];
 
-const OBJECTIVES: Array<{ key: LimiterAutoOptObjective; label: string; title: string }> = [
+const OBJECTIVES: Array<{ key: SpreadometerAutoOptObjective; label: string; title: string }> = [
   { key: "total", label: "TOTAL P&L", title: "Sum of P&L. Rewards trade count - MIN TRADES keeps it honest" },
   { key: "avg", label: "AVG / TRADE", title: "Average P&L per trade" },
   { key: "pf", label: "PROFIT FACTOR", title: "Gross profit / gross loss" },
@@ -81,15 +82,15 @@ type SweepRow = {
   includeOff: boolean;
 };
 
-export type LimiterAutoOptimizerCurrent = {
+export type SpreadometerAutoOptimizerCurrent = {
   minDevAbsShort: number;
   minDevAbsLong: string;
   minDevAbsMax: string;
   /** the ThresholdUnit pill the scanner is in */
-  unit: LimiterAutoOptUnit;
+  unit: SpreadometerAutoOptUnit;
 };
 
-export type LimiterAutoOptimizerProps = {
+export type SpreadometerAutoOptimizerProps = {
   open: boolean;
   onClose: () => void;
   /** e.g. `/api/paper/limiter` */
@@ -100,14 +101,14 @@ export type LimiterAutoOptimizerProps = {
   tradingDays: string[];
   initialFrom: string;
   initialTo: string;
-  current: LimiterAutoOptimizerCurrent;
+  current: SpreadometerAutoOptimizerCurrent;
   /** Page-side toggles the bridge cannot see: fixed for the search (ITB / HARD). */
   fixedToggles: { excludeItb: boolean; excludeHard: boolean };
   /**
    * Write a result into the toolbar. `searchedKeys` are the parameters this run was allowed to change;
    * `range` is the date range the run was over, so the page can show the same days.
    */
-  onApply: (row: LimiterAutoOptRow, searchedKeys: string[], range: { from: string; to: string }) => void;
+  onApply: (row: SpreadometerAutoOptRow, searchedKeys: string[], range: { from: string; to: string }) => void;
   /**
    * Rendered in the page instead of as a window over it: no overlay, no close button, always visible.
    * Selecting a result then applies it and the page below re-draws.
@@ -117,7 +118,7 @@ export type LimiterAutoOptimizerProps = {
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
-function defaultSweep(cur: LimiterAutoOptimizerCurrent): SweepRow[] {
+function defaultSweep(cur: SpreadometerAutoOptimizerCurrent): SweepRow[] {
   const short = cur.minDevAbsShort > 0 ? cur.minDevAbsShort : 0.5;
   const long = Number(cur.minDevAbsLong) > 0 ? Number(cur.minDevAbsLong) : short;
   const max = Number(cur.minDevAbsMax) > 0 ? Number(cur.minDevAbsMax) : short * 3;
@@ -158,7 +159,7 @@ function objectiveText(objective: string, v: number): string {
   }
 }
 
-function constraintText(c: LimiterAutoOptConstraint): string {
+function constraintText(c: SpreadometerAutoOptConstraint): string {
   if (c.min != null && c.max != null) return `${c.label} ${numText(c.min)} … ${numText(c.max)}`;
   if (c.min != null) return `${c.label} ≥ ${numText(c.min)}`;
   if (c.max != null) return `${c.label} ≤ ${numText(c.max)}`;
@@ -166,7 +167,7 @@ function constraintText(c: LimiterAutoOptConstraint): string {
 }
 
 /** test average per trade / train average per trade - the share of the edge that carried over. */
-function hold(row: LimiterAutoOptRow): number | null {
+function hold(row: SpreadometerAutoOptRow): number | null {
   if (!row.test || row.test.trades === 0 || row.train.trades === 0) return null;
   if (row.train.avgPnlUsd <= 0) return null;
   return row.test.avgPnlUsd / row.train.avgPnlUsd;
@@ -186,7 +187,7 @@ function Metric({ label, value, className, title }: { label: string; value: Reac
   );
 }
 
-function MetricsBlock({ m, prefix }: { m: LimiterAutoOptMetrics; prefix: string }) {
+function MetricsBlock({ m, prefix }: { m: SpreadometerAutoOptMetrics; prefix: string }) {
   return (
     <>
       <Metric label={`${prefix} trades`} value={m.trades.toLocaleString("en-US")} />
@@ -200,10 +201,10 @@ function MetricsBlock({ m, prefix }: { m: LimiterAutoOptMetrics; prefix: string 
 
 // =================================================================================================
 
-export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
+export default function SpreadometerAutoOptimizer(props: SpreadometerAutoOptimizerProps) {
   const { open, onClose, apiBase, buildBase, tradingDays, initialFrom, initialTo, current, onApply, inline = false, fixedToggles } = props;
 
-  const [objective, setObjective] = useState<LimiterAutoOptObjective>("total");
+  const [objective, setObjective] = useState<SpreadometerAutoOptObjective>("total");
   const [preset, setPreset] = useState<number | "custom">(20);
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
@@ -211,14 +212,14 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
   const [validate, setValidate] = useState(true);
   const [topResults, setTopResults] = useState(5);
 
-  const [catalog, setCatalog] = useState<LimiterAutoOptParameter[]>([]);
+  const [catalog, setCatalog] = useState<SpreadometerAutoOptParameter[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   /** Group switches: a switched-off group is left exactly as it is on the scanner. */
   const [groupOn, setGroupOn] = useState<Record<string, boolean>>({ [RATING_GROUP]: true, [TAPE_GROUP]: true });
   /** UNIT row: the ThresholdUnit pills to try (none ticked = keep the scanner's own unit). */
-  const [units, setUnits] = useState<Set<LimiterAutoOptUnit>>(new Set());
+  const [units, setUnits] = useState<Set<SpreadometerAutoOptUnit>>(new Set());
 
   const [sweepOn, setSweepOn] = useState(false);
   const [sweep, setSweep] = useState<SweepRow[]>(() => defaultSweep(current));
@@ -230,7 +231,7 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<LimiterAutoOptResult | null>(null);
+  const [result, setResult] = useState<SpreadometerAutoOptResult | null>(null);
   const [searchedKeys, setSearchedKeys] = useState<string[]>([]);
   const [appliedIndex, setAppliedIndex] = useState<number | null>(null);
   /** The days the current result was searched over - what selecting it shows. */
@@ -244,7 +245,7 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
   useEffect(() => {
     if (!open || catalog.length > 0) return;
     let alive = true;
-    loadLimiterAutoOptParameters(apiBase)
+    loadSpreadometerAutoOptParameters(apiBase)
       .then((list) => {
         if (!alive) return;
         setCatalog(list);
@@ -282,7 +283,7 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
   useEffect(() => stopPolling, [stopPolling]);
 
   const grouped = useMemo(() => {
-    const map = new Map<string, LimiterAutoOptParameter[]>();
+    const map = new Map<string, SpreadometerAutoOptParameter[]>();
     for (const p of catalog) {
       const list = map.get(p.group) ?? [];
       list.push(p);
@@ -298,7 +299,7 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
       return next;
     });
 
-  const toggleGroupParams = (params: LimiterAutoOptParameter[]) =>
+  const toggleGroupParams = (params: SpreadometerAutoOptParameter[]) =>
     setSelected((prev) => {
       const next = new Set(prev);
       const allOn = params.every((p) => next.has(p.key));
@@ -361,7 +362,7 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
         }
       : null;
 
-    const body: LimiterAutoOptStartRequest = {
+    const body: SpreadometerAutoOptStartRequest = {
       base: buildBase(from, to),
       objective,
       minTrades,
@@ -374,12 +375,12 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
     };
 
     try {
-      const id = await startLimiterAutoOptimizer(apiBase, body);
+      const id = await startSpreadometerAutoOptimizer(apiBase, body);
       setJobId(id);
       stopPolling();
       const tick = async () => {
         try {
-          const s = await pollLimiterAutoOptimizer(apiBase, id);
+          const s = await pollSpreadometerAutoOptimizer(apiBase, id);
           setProgress(s.progress);
           setMessage(s.message);
           if (s.status === "running") return;
@@ -404,13 +405,13 @@ export default function LimiterAutoOptimizer(props: LimiterAutoOptimizerProps) {
   }, [canRun, activeKeys, sweepOn, sweepRows, sweep, units, maxCombos, refineTop, buildBase, from, to, objective, minTrades, validate, topResults, fixedToggles.excludeItb, fixedToggles.excludeHard, apiBase, stopPolling]);
 
   const cancel = useCallback(async () => {
-    if (jobId) await cancelLimiterAutoOptimizer(apiBase, jobId);
+    if (jobId) await cancelSpreadometerAutoOptimizer(apiBase, jobId);
   }, [apiBase, jobId]);
 
   if (!inline && (!mounted || !open)) return null;
 
   const cell = "whitespace-nowrap";
-  const rows: Array<{ tag: string; row: LimiterAutoOptRow; isCurrent: boolean; index: number }> = [];
+  const rows: Array<{ tag: string; row: SpreadometerAutoOptRow; isCurrent: boolean; index: number }> = [];
   if (result) {
     rows.push({ tag: "CURRENT", row: result.current, isCurrent: true, index: -1 });
     result.results.forEach((row, i) => rows.push({ tag: `#${i + 1}`, row, isCurrent: false, index: i }));

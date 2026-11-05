@@ -9,15 +9,16 @@ import { getLiveStrategy } from "@/lib/strategies/registry";
 const STRATEGY = getLiveStrategy("spreadometer")!;
 
 // Same arrangement as pages/launch-evening/stream.tsx: the stream SHELL is shared
-// (OpenDoorStreamPageContainer), the scanner inside it is Limiter's own (LimiterScanner — the
-// component file keeps its original name; only the route and the displayed title renamed to
-// Spreadometer, 2026-11-01).
+// (OpenDoorStreamPageContainer), the scanner inside it is SpreadometerScanner (renamed from
+// LimiterScanner.tsx 2026-11-02, the operator's own instruction — the component still drives
+// Limiter's own paper/backtest engine underneath, which both the "limiter" and "spreadometer"
+// catalog entries share; see SpreadometerScanner.tsx's own header comment).
 const OpenDoorStreamPageContainer = dynamic(
   () => import("@/components/stream/OpenDoorStreamPageContainer"),
   { ssr: false }
 );
 
-const LimiterScanner = dynamic(() => import("@/components/scanner/LimiterScanner"), { ssr: false });
+const SpreadometerScanner = dynamic(() => import("@/components/scanner/SpreadometerScanner"), { ssr: false });
 
 export default function SpreadometerStreamPage() {
   return (
@@ -28,7 +29,7 @@ export default function SpreadometerStreamPage() {
       navStreamHref={STRATEGY.nav.stream}
       navScannerHref={STRATEGY.nav.scanner}
       navSonarHref={STRATEGY.nav.sonar}
-      ScannerComponent={LimiterScanner}
+      ScannerComponent={SpreadometerScanner}
     />
   );
 }

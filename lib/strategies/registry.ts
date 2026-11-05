@@ -410,6 +410,40 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
     },
   },
 
+  // OPG•Rootation: started 2026-11-04 as a mechanical clone of OPG•Reversal's own candidate-filter
+  // pipeline (OPGRootationGate/RatingsService/TapeOPGRootationEngine — same 9:20-9:25 deviation/gamma
+  // thesis, unchanged, own IgnoreRatings escape hatch) — that pipeline is ONLY a pre-filter here,
+  // never the live trigger. The REAL trade is genuinely new and genuinely different from every other
+  // OPG sibling: at 09:30:40 NY, for each candidate ticker that is open, compare its CURRENT live
+  // price to the price it had at 09:30:00 (the tape's own minute-570 TOpen print) — price now ABOVE
+  // that anchor sends a BUY, price now BELOW sends a SELL (momentum/continuation, the opposite thesis
+  // from OPG•Reversal's own fade), with the ORDER'S LIMIT PRICE set to the 09:30 anchor itself, not
+  // the current price. This live decision does not run through ServerStrategyRunner's per-minute
+  // EvaluateAsync loop at all (it is sub-minute) — see OPGRootationEntryTriggerService on the bridge.
+  // AutoEnabled still defaults false — no real order can go out until the operator explicitly enables
+  // the strategy. holdsOvernight is false: the position is taken and exited same calendar day.
+  // priority 13 — one below opgride (14), the newest and least-proven member of the OPG family.
+  opgrootation: {
+    key: "opgrootation",
+    bridgeStrategyId: "stream.opgrootation",
+    nav: {
+      stream: "/opg-rootation/stream",
+      scanner: "/opg-rootation/scanner",
+      sonar: "/opg-rootation/sonar",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
+    priority: 13,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/opgrootation", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.opgrootation", sonarPrefix: "bridge.opgrootation", streamPrefix: "stream.opgrootation" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0945", "exit1000", "exit1030"],
+      labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
   // Morning Launch: the OPG family's clock run backwards. The signal is the SIZE OF A ONE-MINUTE MOVE
   // inside 03:50-04:20 (a DELTA, not a level at a checkpoint), the position is taken against it the
   // moment the move prints, and the settled Gap% prices the EXIT at 9:30 — the mirror of OPG•Reversal,
@@ -584,29 +618,37 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
   },
 
   // LIMITER (operator, 2026-10-27): "Сигнали так само як в LAUNCH групі - список тікерів які
-  // пройшли фільтри, але для цієї стратегії рейтинги беруться із файлу арбітража". Same shape as
-  // launchevening below (SONAR ONLY so far — no tape engine, paper scanner or server strategy, so
-  // nothing here can send an order; Scanner/Stream pages exist but have no backend behind them
-  // yet), except the universe/filter window spans the full session like Arbitrage's own (PRE-POST),
-  // not a narrow morning/evening slice, and ratings are read directly off ARBITRAGE's own published
-  // file under its PRE class (LimiterSonarLiveParamsService/LimiterSonarSnapshotService on the
-  // bridge — the same "second strategy rides Arbitrage's ratings with its own toolbar" mechanism
-  // PairFlux's bucket grid already uses) rather than a strategy-of-its-own notebook file that does
-  // not exist. ratingClasses below therefore has exactly ONE key, "pre" — there is no other class to
-  // pick, by design, not a placeholder waiting to be filled in.
+  // пройшли фільтри, але для цієї стратегії рейтинги беруться із файлу арбітража" — the
+  // universe/filter window spans the full session like Arbitrage's own (PRE-POST), not a narrow
+  // morning/evening slice, and ratings are read directly off ARBITRAGE's own published file under
+  // its PRE class (SpreadometerSonarLiveParamsService/SpreadometerSonarSnapshotService, renamed from
+  // LimiterSonarLiveParamsService/LimiterSonarSnapshotService 2026-11-02, on the bridge — the same
+  // "second strategy rides Arbitrage's ratings with its own toolbar" mechanism PairFlux's bucket grid
+  // already uses) rather than a strategy-of-its-own notebook file that does not exist. ratingClasses
+  // below therefore has exactly ONE key, "pre" — there is no other class to pick, by design, not a
+  // placeholder waiting to be filled in.
   //
-  // priority 6: below morlaunch (5), above nothing that matters since EvaluateAsync has nothing to
-  // submit yet (no entry/exit logic defined — operator's own answer, 2026-10-27: "ще не відомо").
+  // NOW A REAL, SEPARATE LIVE STRATEGY (2026-11-02, the operator's own instruction — "LIMITER
+  // SPREADOMETER це дві різних стратегії не об'єднуй їх"): LimiterServerStrategy.cs pastes its own
+  // filtered universe into the SAME physical TradingApp Basket Window SPREADOMETER's own strategy
+  // uses, on its own independent PERIOD, split into a LONG paste (Ctrl+A/F11/Ctrl+F11) and a SHORT
+  // paste (Ctrl+A/F12/Ctrl+F12) rather than one mixed list — see that class's own header comment.
+  // Was Sonar-only until this; EvaluateAsync now genuinely submits claimed-fill intents, so priority
+  // 6 (below morlaunch's 5) is live, not cosmetic.
+  //
+  // OWN PAGES, ALL THREE (2026-11-02): Scanner/Stream/Sonar each got their own route back
+  // (pages/limiter/*), separate from pages/spreadometer/* — the two strategies share the underlying
+  // paper/backtest engine and the filtered-universe data, but never a page, a PERIOD, a priority or a
+  // storage prefix. LimiterScanner.tsx/LimiterSonar.tsx are this entry's own titled surfaces
+  // ("LIMITER•SCANNER"/"LIMITER•STREAM"/"LIMITER•SONAR"), not SpreadometerScanner.tsx/
+  // SpreadometerSonar.tsx's twins under a different mount any more.
   limiter: {
     key: "limiter",
     bridgeStrategyId: "stream.limiter",
-    // Shares spreadometer's own pages (pages/spreadometer/*, renamed from pages/limiter/* 2026-11-01
-    // alongside the displayed title) — see that entry's own comment for why they are not the same
-    // strategy despite the shared route.
     nav: {
-      stream: "/spreadometer/stream",
-      scanner: "/spreadometer/scanner",
-      sonar: "/spreadometer/sonar",
+      stream: "/limiter/stream",
+      scanner: "/limiter/scanner",
+      sonar: "/limiter/sonar",
     },
     tradingWindow: { fromMinuteIdx: -180, toMinuteIdx: 1200 },
     priority: 6,

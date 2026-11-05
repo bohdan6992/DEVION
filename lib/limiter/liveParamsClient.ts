@@ -10,8 +10,10 @@ import type { ArbitrageFilterConfigV1 } from "../filters/arbitrageFilterConfigV1
  * push is therefore a harmless no-op today; it stays wired rather than deleted so re-enabling it
  * later is a backend change, not a frontend one. The real, working half of LIMITER's data — the
  * filtered ticker list with its Arbitrage PRE-class rating attached — is
- * lib/sonar/limiterRatingsClient.ts, not this file. See LimiterSonar.tsx's own header comment for
- * the full story, 2026-10-27.
+ * lib/sonar/spreadometerRatingsClient.ts (renamed from limiterRatingsClient.ts 2026-11-02 — this
+ * file was deliberately left out of that rename: it is genuinely LIMITER's own, dead, unwired
+ * STREAM-tab client, not Spreadometer's), not this file. See SpreadometerSonar.tsx's own header
+ * comment for the full story, 2026-10-27.
  */
 export type LimiterThresholdUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 

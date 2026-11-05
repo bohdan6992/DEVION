@@ -23,7 +23,6 @@ import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { pushArbitrageLiveParams, toArbitrageLiveParams } from "../../lib/arbitrage/liveParamsClient";
-import { useDirectionBalanceStatus } from "../../lib/arbitrage/directionBalanceClient";
 import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
@@ -72,7 +71,7 @@ import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTI
 import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
-import ExecutionSettingsPanel, { DirectionBalanceControls, SaveModeButton } from "./shell/panels/ExecutionSettingsPanel";
+import ExecutionSettingsPanel, { SaveModeButton } from "./shell/panels/ExecutionSettingsPanel";
 /**
  * EVENT FILTERS split by side (2026-10-11, the operator's own instruction), e.g. "START" becomes
  * "START LONG"/"START SHORT" as two separate cards. Deliberately NOT built by calling
@@ -1124,39 +1123,12 @@ export default function ArbitrageScanner({
   const rangeValueOrNull = (key: SharedRangeFilterKey, value: string) =>
     sharedRangeFilterModes[key] === "off" ? null : optNumOrNull(value);
 
-  // Direction auto-balance. The switch, its trigger ratio and the HEDGED mode flag are the operator's;
-  // the DECISIONS (sum the book's BPUsed by side every few minutes, then either lower the under-
-  // represented side's entry threshold or send real QQQ hedge orders) are the bridge's, so they keep
-  // working with this tab closed. See DirectionBalancer on the bridge.
-  const [autoBalance, setAutoBalance] = useState<boolean>(false);
-  const [autoBalanceRatio, setAutoBalanceRatio] = useState<number>(2);
-  // Absolute trigger in BP; 0 = off (the ratio rule decides). See DirectionBalanceSettings.MinGapBp.
-  const [autoBalanceMinGapBp, setAutoBalanceMinGapBp] = useState<number>(0);
-  const [autoBalanceHedged, setAutoBalanceHedged] = useState<boolean>(false);
-  const directionBalanceStatus = useDirectionBalanceStatus(autoBalance);
-
-  // BALANCE and HEDGED are two mutually exclusive MODES of the one switch, not two independent
-  // toggles: at most one is ever active. Pressing the active one turns everything off; pressing the
-  // other one switches straight to it (off -> that mode, or mode A -> mode B in one click).
-  const setDirectionBalanceMode = useCallback((mode: "off" | "balance" | "hedged") => {
-    setAutoBalance(mode !== "off");
-    setAutoBalanceHedged(mode === "hedged");
-  }, []);
-  const toggleBalanceMode = useCallback(
-    () => setDirectionBalanceMode(autoBalance && !autoBalanceHedged ? "off" : "balance"),
-    [autoBalance, autoBalanceHedged, setDirectionBalanceMode],
-  );
-  const toggleHedgedMode = useCallback(
-    () => setDirectionBalanceMode(autoBalance && autoBalanceHedged ? "off" : "hedged"),
-    [autoBalance, autoBalanceHedged, setDirectionBalanceMode],
-  );
-
   /**
    * SAVE mode (2026-10-07): Arbitrage's own hourly maintenance cycle on the bridge — Ctrl+Q cancels
    * whatever limit is still unfilled, then any position still awaiting its fill is forgotten so the
-   * ordinary entry path re-sends it if it is still signalling. Nothing to do with QQQ or with
-   * AutoBalance/BALANCE/HEDGED above — that switch is the only thing that ever sizes or sends a QQQ
-   * hedge order. SAVE and HEDGED are independent switches and may both be on at once.
+   * ordinary entry path re-sends it if it is still signalling. The direction hedge (formerly
+   * AutoBalance/BALANCE/HEDGED on this same toolbar) moved to Caesar, 2026-11-05 — this switch is
+   * unaffected and unchanged, still purely Arbitrage's own resting-limit cancel.
    */
   const [saveMode, setSaveMode] = useState<boolean>(false);
   const toggleSaveMode = useCallback(() => setSaveMode((prev) => !prev), []);
@@ -1421,10 +1393,6 @@ export default function ArbitrageScanner({
         if (typeof s.startAbs === "number") setStartAbs(s.startAbs);
         if (typeof s.startAbsMax === "string") setStartAbsMax(s.startAbsMax);
         if (typeof s.startAbsNeg === "string") setStartAbsNeg(s.startAbsNeg);
-        if (typeof s.autoBalance === "boolean") setAutoBalance(s.autoBalance);
-        if (typeof s.autoBalanceRatio === "number" && s.autoBalanceRatio >= 1.1) setAutoBalanceRatio(s.autoBalanceRatio);
-        if (typeof s.autoBalanceMinGapBp === "number" && s.autoBalanceMinGapBp >= 0) setAutoBalanceMinGapBp(s.autoBalanceMinGapBp);
-        if (typeof s.autoBalanceHedged === "boolean") setAutoBalanceHedged(s.autoBalanceHedged);
         if (typeof s.saveMode === "boolean") setSaveMode(s.saveMode);
         if (typeof s.endAbs === "number") setEndAbs(s.endAbs);
         if (typeof s.minHoldCandles === "number") setMinHoldCandles(s.minHoldCandles);
@@ -1678,10 +1646,6 @@ export default function ArbitrageScanner({
       startAbs,
       startAbsMax,
       startAbsNeg,
-      autoBalance,
-      autoBalanceRatio,
-      autoBalanceMinGapBp,
-      autoBalanceHedged,
       saveMode,
       endAbs,
       minHoldCandles,
@@ -1857,7 +1821,7 @@ export default function ArbitrageScanner({
     }),
     [
       primaryPanel, tab, ruleBand, zapMode, showSharedMinMax, dateMode, dateNy, dateFrom, dateTo,
-      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, autoBalance, autoBalanceRatio, autoBalanceMinGapBp, saveMode, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
+      session, metric, closeMode, startAbs, startAbsMax, startAbsNeg, saveMode, endAbs, minHoldCandles, startCutoffTime, preStartTime, priceMode, pnlMode,
       // Sizing/dilution/TOP/optimizer are read by the object above but were missing here, so
       // changing any of them left persistedFilters identical and the debounced write never fired —
       // they reached localStorage only by accident, whenever some other field changed next. All of
@@ -2586,7 +2550,6 @@ export default function ArbitrageScanner({
         signalsMinRate: streamRatingRule.minRate,
         signalsMinTotal: streamRatingRule.minTotal,
         ignoreRatings: arbitrageIgnoreRatings,
-        autoBalance: { enabled: autoBalance, ratio: autoBalanceRatio, hedged: autoBalanceHedged, minGapBp: autoBalanceMinGapBp },
         saveMode,
         source: "arbitrage-scanner",
       }));
@@ -2602,10 +2565,6 @@ export default function ArbitrageScanner({
     ratingType,
     streamRatingRule,
     arbitrageIgnoreRatings,
-    autoBalance,
-    autoBalanceRatio,
-    autoBalanceMinGapBp,
-    autoBalanceHedged,
     saveMode,
   ]);
 
@@ -6795,23 +6754,13 @@ export default function ArbitrageScanner({
             </div>
           )}
           </div>
-          {/* BALANCE + RATIO: opposite the auto-start buttons, flush to the right edge. In the Stream
-              view the auto group is alone on the left, so this group takes the free space (ml-auto);
-              on the other tabs the auto group already sits right and this simply follows it. */}
+          {/* SAVE: opposite the auto-start buttons, flush to the right edge. In the Stream view the
+              auto group is alone on the left, so this group takes the free space (ml-auto); on the
+              other tabs the auto group already sits right and this simply follows it. The direction
+              hedge (formerly BALANCE/HEDGED/RATIO/GAP here) moved to Caesar's own control bar,
+              2026-11-05 — it now judges the whole PRE segment, not just this strategy's own book, so
+              it no longer belongs on this strategy's toolbar. See SegmentDirectionBalanceService. */}
           <div className={clsx("flex items-center gap-2", primaryPanel === "stream" && "ml-auto")}>
-            <DirectionBalanceControls
-              directionBalance={{
-                enabled: autoBalance,
-                ratio: autoBalanceRatio,
-                onToggle: toggleBalanceMode,
-                onRatio: (v) => setAutoBalanceRatio(Math.max(1.1, Math.min(20, Number.isFinite(v) ? v : 2))),
-                minGapBp: autoBalanceMinGapBp,
-                onMinGapBp: (v) => setAutoBalanceMinGapBp(Math.max(0, Math.min(1_000_000, Number.isFinite(v) ? Math.round(v) : 0))),
-                hedged: autoBalanceHedged,
-                onToggleHedged: toggleHedgedMode,
-                status: directionBalanceStatus,
-              }}
-            />
             <SaveModeButton
               saveMode={{
                 enabled: saveMode,

@@ -1544,6 +1544,17 @@ export type SonarExactFilterSnapshot = {
    * without anyone asking. Optional and absent on this page; LIMITER's own Sonar fills it in.
    */
   zapMaxAbs?: number | null;
+  /**
+   * LIMITER's OWN deviation gate (2026-11-02) — the SAME short/long-floor shape as zapMode/
+   * zapShowAbs/zapShowAbsNeg/zapMaxAbs above, but maps to SonarFilterConfig.LstPrcLstClsMode, a
+   * SEPARATE bridge-side field reading LstPrcLstClsΔ%/Sigma, never zapS/zapL — see that field's own
+   * doc comment (SonarSignalFilter.cs) for why this is not a reuse of the zap fields. Optional and
+   * absent on this page; only LimiterSonar.tsx fills these in.
+   */
+  lstPrcLstClsMode?: "off" | "pct" | "sigma";
+  lstPrcLstClsShowAbs?: number;
+  lstPrcLstClsShowAbsNeg?: number | null;
+  lstPrcLstClsMaxAbs?: number | null;
 };
 
 const PIN_DOT_CLASS: Record<PinColor, string> = {

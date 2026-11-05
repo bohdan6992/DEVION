@@ -24,9 +24,9 @@ import {
  * against those two types, keeps working unchanged.
  */
 import {
-  fetchLimiterRatingsSnapshot,
-  pushLimiterRatingsLiveParams,
-} from "@/lib/sonar/limiterRatingsClient";
+  fetchSpreadometerRatingsSnapshot,
+  pushSpreadometerRatingsLiveParams,
+} from "@/lib/sonar/spreadometerRatingsClient";
 import { toArbitrageSonarLiveParams, type SonarSignalRow } from "@/lib/sonar/arbitrageSnapshotClient";
 // Aliased: this file already declares its own (narrower, LaunchEvening-inherited) local
 // SonarExactFilterSnapshot further down — this is Arbitrage's own FULL one, the shape
@@ -1955,7 +1955,7 @@ export default function LimiterSonar() {
   // old Arbitrage-inherited plumbing elsewhere in this file untouched.
   const [limiterExitClass, setLimiterExitClass] = useState<"pre">("pre");
   // LimiterGate.Check's one-minute-move rule (a flat floor plus the ticker's own published gamma)
-  // is LimiterScanner.tsx's gate, not this page's: it has no backend here at all — /api/paper/limiter
+  // is SpreadometerScanner.tsx's gate, not this page's: it has no backend here at all — /api/paper/limiter
   // does not exist on the bridge (checked live, 2026-10-30: 404), and this Sonar's list comes from
   // ArbitrageSonarSnapshotService instead. Its four MinDevAbs*/MinGammaTotal values and the
   // %/σ/α/γ/τ/λ unit strip that went with them were frozen to consts on 2026-10-24 and have now been
@@ -1971,13 +1971,13 @@ export default function LimiterSonar() {
   // file did not exist when it was built).
   const [limiterIgnoreRatings, setLimiterIgnoreRatings] = useState(false);
   // MINRATE/MINTOTAL — real bridge-side gate on the matched (class, sign) cell's own published
-  // win_rate/total (LimiterGate.cs), added 2026-09-29: the bridge (LimiterSonarLiveParamsService)
-  // and LimiterScanner.tsx's own toolbar already had these; this Sonar's toolbar never grew the
+  // win_rate/total (LimiterGate.cs), added 2026-09-29: the bridge (SpreadometerSonarLiveParamsService)
+  // and SpreadometerScanner.tsx's own toolbar already had these; this Sonar's toolbar never grew the
   // matching fields, so MinRate/MinTotal defaulted to 0 (off) here no matter what the operator set
-  // on the Scanner. 0 = off, mirrors LimiterScanner.tsx's own defaults exactly.
+  // on the Scanner. 0 = off, mirrors SpreadometerScanner.tsx's own defaults exactly.
   const [limiterMinRate, setLimiterMinRate] = useState(0);
   const [limiterMinTotal, setLimiterMinTotal] = useState(0);
-  // σ/α/γ min/max — the same static-value floor/ceiling LimiterScanner.tsx's own tab-row group
+  // σ/α/γ min/max — the same static-value floor/ceiling SpreadometerScanner.tsx's own tab-row group
   // has (its own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL — a floor/ceiling on a
   // STATIC published value, not a threshold on the trade's own win_rate"). Limiter's own σ/α/γ,
   // not the ρ/β/σ FilterRatingRow above (Arbitrage's corr/beta/sigma — a different, pre-existing
@@ -1990,23 +1990,50 @@ export default function LimiterSonar() {
   const [maxAlpha, setMaxAlpha] = useState("");
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
-  // THE DEVIATION RANGE that used to live here (zapMode/zapShowAbs, an ARBITRAGE-benchmark gate —
-  // the operator's own original instruction, 2026-10-30) was retired 2026-11-01: it filtered on
-  // zapS/zapL, Arbitrage's own deviation off ITS benchmark, not on LIMITER's own raw
-  // LstPrcLstClsΔ% move at all (the operator's own correction). The real gate is
-  // lstPrcLstClsPctMin/Max below — already wired into `bounds` and already pushed live, this page
-  // just also sent a redundant second filter on top of it until now. See the dedicated
-  // LstPrcLstClsΔ% range control further down and LimiterScanner.tsx's own matching removal — same
-  // shared toolbar file, both had to change together.
+  // THE DEVIATION GATE. Retired 2026-11-01 (filtered on zapS/zapL, ARBITRAGE's own benchmark
+  // deviation, not LIMITER's raw LstPrcLstClsΔ%) → replaced same day with a LstPrcLstClsΔ%-reading
+  // gate → UN-RETIRED 2026-11-02, the operator's own explicit instruction: "Цей перемикач повинен
+  // бути ZAPS ZAPL SIGMA. Точно така ж логіка як в ARBITRAGE... відміни лише для Limiter". This
+  // screen's own toggle now drives zapMode/zapShowAbs/zapShowAbsNeg/zapMaxAbs — the EXACT same
+  // bridge fields and sign convention ArbitrageSonar.tsx's own zapMode group does (SHORT = zapS, a
+  // positive benchmark deviation; LONG = zapL, negative) — see the snapshot object below. The
+  // backend's OWN raw-LstPrcLstClsΔ% mechanism (SonarSignalFilter.EvaluateLstPrcLstCls,
+  // LstPrcLstClsMode) is left in place, tested, just no longer what this toggle drives.
+  // SPREADOMETER's own matching page (SpreadometerSonar.tsx) is deliberately NOT touched by this —
+  // "spreadometer лиши як є" — it still filters on its own plain LstPrcLstClsΔ% [min,max] range.
   //
-  // %/σ UNIT TOGGLE on that same control (2026-11-02, the operator's own instruction — "зроби цей
-  // перемикач фіолетовим і додай перемикач між відсотками і значеннями поділеними на сігму"):
-  // switches which bridge-side bound key lstPrcLstClsPctMin/Max target, not a client-side rescale of
-  // the typed digits (no single flat number can be converted across every ticker's own, different,
-  // sigma). σ divides the raw move by the SAME r.sigma the black σ range box (minSigma/maxSigma
-  // above) already reads — LiveRowFilter.ReadBoundValue's own special case for
-  // "LstPrcLstClsPctSigma", mirrored 1-to-1 from LimiterScanner.tsx's own matching toggle.
+  // %/σ UNIT TOGGLE on the same control (2026-11-02): only Zap/Sigma are offered (not ARBITRAGE's
+  // own Δ/γ/α) — Δ is a per-ticker median-print ANCHOR this screen has no use for, and γ/α were
+  // never asked for here; the two pills switch config.ZapMode between SonarZapMode.Zap (zapS/zapL,
+  // the "%" pill) and .Sigma (zapSsigma/zapLsigma, the "σ" pill) exactly as ARBITRAGE's own group
+  // does for those two modes.
   const [lstPrcLstClsUnit, setLstPrcLstClsUnit] = useState<"pct" | "sigma">("pct");
+
+  // SHORT/LONG floors (2026-11-02, the operator's own instruction — "поверни окремі поля для шорт і
+  // Лонг як це зараз в ARBITRAGE"): SAME shape as ARBITRAGE's own zapShowAbs (short, coral)/
+  // zapShowAbsNeg (long, mint, empty = same as short) — these now ARE zapShowAbs/zapShowAbsNeg
+  // (pushed as such below), not a parallel field group any more.
+  //
+  // The OLD lstPrcLstClsPctMin/Max state (declared with the other ~40 min/max pairs above) is left
+  // in place for the shared preset/localStorage plumbing it is part of, but is no longer read by the
+  // live push below or rendered — a floor/floor pair is not a [min,max] RANGE, so it does not fit
+  // that generic shape; two new, independent pieces of state are simpler and safer here than forcing
+  // every one of that plumbing's call sites to understand a non-range field.
+  const [lstPrcLstClsShowAbs, setLstPrcLstClsShowAbs] = useState(0);
+  const [lstPrcLstClsShowAbsNeg, setLstPrcLstClsShowAbsNeg] = useState("");
+  const lstPrcLstClsShowAbsNegNum = (() => {
+    const n = Number(String(lstPrcLstClsShowAbsNeg).replace(",", "."));
+    return lstPrcLstClsShowAbsNeg.trim() !== "" && Number.isFinite(n) ? n : null;
+  })();
+  // UPPER bound on |deviation|, same unit as lstPrcLstClsUnit — now pushed as zapMaxAbs (2026-11-02,
+  // the operator's own follow-up: "схочу ще додати верхню межу (MAX)"). Unlike ARBITRAGE's own page
+  // (whose "silver" box is a client-side highlight, never sent), this one IS the real bridge-side
+  // cap — a name standing further out than it is DROPPED, not tinted. Empty = no cap.
+  const [lstPrcLstClsMaxAbs, setLstPrcLstClsMaxAbs] = useState("");
+  const lstPrcLstClsMaxAbsNum = (() => {
+    const n = Number(String(lstPrcLstClsMaxAbs).replace(",", "."));
+    return lstPrcLstClsMaxAbs.trim() !== "" && Number.isFinite(n) && n > 0 ? n : null;
+  })();
 
   // The unit the per-card "Dev n.nn" span and the ratings detail panel are rendered in
   // (formatLimiterDev below). Frozen to "pct" again (2026-11-01, alongside the %/σ pill's own
@@ -2044,7 +2071,7 @@ export default function LimiterSonar() {
     return `${(raw / alpha).toFixed(2)}α`;
   }
 
-  /** What LimiterSonarSnapshotService's LimiterLiveEngine call approved this poll — the push/fetch
+  /** What SpreadometerSonarSnapshotService's LimiterLiveEngine call approved this poll — the push/fetch
    * effects live further down, since they need filter toolbar state and setError declared below. */
   const [limiterSonarRows, setLimiterSonarRows] = useState<LimiterSonarRow[]>([]);
   /** signals/limiter/limiter_tickers.csv's own flat list, already filtered server-side — see
@@ -2642,6 +2669,9 @@ export default function LimiterSonar() {
         if (typeof s?.limiterMinRate === "number") setLimiterMinRate(s.limiterMinRate);
         if (typeof s?.limiterMinTotal === "number") setLimiterMinTotal(s.limiterMinTotal);
         if (s?.lstPrcLstClsUnit === "pct" || s?.lstPrcLstClsUnit === "sigma") setLstPrcLstClsUnit(s.lstPrcLstClsUnit);
+        if (typeof s?.lstPrcLstClsShowAbs === "number") setLstPrcLstClsShowAbs(s.lstPrcLstClsShowAbs);
+        if (typeof s?.lstPrcLstClsShowAbsNeg === "string") setLstPrcLstClsShowAbsNeg(s.lstPrcLstClsShowAbsNeg);
+        if (typeof s?.lstPrcLstClsMaxAbs === "string") setLstPrcLstClsMaxAbs(s.lstPrcLstClsMaxAbs);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
         if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
         if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
@@ -2880,6 +2910,7 @@ export default function LimiterSonar() {
           preMhHiLstClsPctMin, preMhHiLstClsPctMax,
           preMhLoLstClsPctMin, preMhLoLstClsPctMax,
           lstPrcLstClsPctMin, lstPrcLstClsPctMax, lstPrcLstClsUnit,
+          lstPrcLstClsShowAbs, lstPrcLstClsShowAbsNeg, lstPrcLstClsMaxAbs,
           imbExch925Min, imbExch925Max,
           imbExch1555Min, imbExch1555Max,
         })
@@ -2932,6 +2963,7 @@ export default function LimiterSonar() {
     preMhHiLstClsPctMin, preMhHiLstClsPctMax,
     preMhLoLstClsPctMin, preMhLoLstClsPctMax,
     lstPrcLstClsPctMin, lstPrcLstClsPctMax, lstPrcLstClsUnit,
+    lstPrcLstClsShowAbs, lstPrcLstClsShowAbsNeg, lstPrcLstClsMaxAbs,
     imbExch925Min, imbExch925Max,
     imbExch1555Min, imbExch1555Max,
   ]);
@@ -3245,13 +3277,10 @@ export default function LimiterSonar() {
       PreMhLoLstPrcPct: mm("PreMhLoLstPrcPct", preMhLoLstPrcPctMin, preMhLoLstPrcPctMax),
       PreMhHiLstClsPct: mm("PreMhHiLstClsPct", preMhHiLstClsPctMin, preMhHiLstClsPctMax),
       PreMhLoLstClsPct: mm("PreMhLoLstClsPct", preMhLoLstClsPctMin, preMhLoLstClsPctMax),
-      // The %/σ pill (lstPrcLstClsUnit) picks WHICH key carries the typed numbers — never both at
-      // once, same as LimiterScanner.tsx's own matching toggle. LstPrcLstClsPctSigma is computed
-      // bridge-side (LiveRowFilter.ReadBoundValue's own special case) as the raw move divided by
-      // the row's own published Sigma.
-      ...(lstPrcLstClsUnit === "sigma"
-        ? { LstPrcLstClsPctSigma: mm("LstPrcLstClsPct", lstPrcLstClsPctMin, lstPrcLstClsPctMax) }
-        : { LstPrcLstClsPct: mm("LstPrcLstClsPct", lstPrcLstClsPctMin, lstPrcLstClsPctMax) }),
+      // LstPrcLstClsΔ% is no longer a generic [min,max] Bounds entry (2026-11-02, the operator's own
+      // instruction — separate SHORT/LONG floors instead): see lstPrcLstClsShowAbs/ShowAbsNeg's own
+      // state comment above and the snapshot object below, which carries lstPrcLstClsMode/ShowAbs/
+      // ShowAbsNeg as their own dedicated SonarFilterConfig fields instead.
       ImbExch925: mm("ImbExch925", imbExch925Min, imbExch925Max),
       ImbExch1555: mm("ImbExch1555", imbExch1555Min, imbExch1555Max),
     };
@@ -3291,6 +3320,7 @@ export default function LimiterSonar() {
     preMhHiLstClsPctMin, preMhHiLstClsPctMax,
     preMhLoLstClsPctMin, preMhLoLstClsPctMax,
     lstPrcLstClsPctMin, lstPrcLstClsPctMax, lstPrcLstClsUnit,
+    lstPrcLstClsShowAbs, lstPrcLstClsShowAbsNeg, lstPrcLstClsMaxAbs,
     imbExch925Min, imbExch925Max,
     imbExch1555Min, imbExch1555Max,
   ]);
@@ -3461,7 +3491,7 @@ export default function LimiterSonar() {
   /**
    * The toolbar, to the bridge — same debounce/hydration-guard pattern the Arbitrage/PairFlux and
    * OpenDoor-family Sonar panels already use. Unlike the LaunchEvening-shaped push this replaced,
-   * the payload is ArbitrageSonarLiveParams (LimiterSonarSnapshotService rides
+   * the payload is ArbitrageSonarLiveParams (SpreadometerSonarSnapshotService rides
    * ArbitrageSonarSnapshotService directly — see this file's own header comment on the import),
    * with signalsClass fixed to "pre" and every advanced Arbitrage-only control (corr/beta/sigma
    * ranges, zap mode, TOP mode) left at its inert default since this page exposes none of them.
@@ -3500,22 +3530,35 @@ export default function LimiterSonar() {
         activeMode, includeUSA, includeChina, selCountries, countryEnabled,
         selExchanges, exchangeEnabled, selSectors, sectorEnabled, filterReport, equityType,
         corrMin: "", corrMax: "", betaMin: "", betaMax: "", sigmaMin: "", sigmaMax: "",
-        // Retired 2026-11-01 — the operator's own instruction: this filtered on Arbitrage's own
-        // zapS/zapL (benchmark-relative deviation), not on LIMITER's own raw move at all.
-        // bounds.LstPrcLstClsPct/LstPrcLstClsPctSigma above (already pushed, see the %/σ pill on
-        // the bounds useMemo) is the real gate now — it was ALREADY correct here, this page just
-        // also sent a redundant, wrongly-scoped second filter on top of it.
-        zapMode: "off",
-        zapShowAbs: 0,
-        zapShowAbsNeg: null,
-        zapMaxAbs: null,
+        // RETIRED 2026-11-01, UN-RETIRED 2026-11-02 (the operator's own instruction — "Цей
+        // перемикач повинен бути ZAPS ZAPL SIGMA. Точно така ж логіка як в ARBITRAGE... відміни лише
+        // для Limiter"): this gate reads ARBITRAGE's own zapS (short)/zapL (long)/zapSsigma/
+        // zapLsigma — the benchmark-relative deviation — the SAME fields ArbitrageSonar.tsx's own
+        // zapMode group reads, by the operator's own explicit instruction, reversing the 2026-11-01
+        // retirement that moved this screen onto its raw LstPrcLstClsΔ% instead. The UI (the violet
+        // %/σ strip + coral SHORT/mint LONG/neutral MAX boxes) is UNCHANGED from that LstPrcLstClsΔ%
+        // version — same state (lstPrcLstClsUnit/ShowAbs/ShowAbsNeg/MaxAbs), only WHICH bridge field
+        // group it drives changed. SPREADOMETER's own matching page (SpreadometerSonar.tsx) is
+        // deliberately NOT touched by this — "spreadometer лиши як є" — it keeps the plain
+        // LstPrcLstClsΔ% [min,max] range it already had.
+        zapMode: lstPrcLstClsUnit === "sigma" ? "sigma" : "zap",
+        zapShowAbs: lstPrcLstClsShowAbs,
+        zapShowAbsNeg: lstPrcLstClsShowAbsNegNum,
+        zapMaxAbs: lstPrcLstClsMaxAbsNum,
         zapSilverAbs: 0, zapGoldAbs: 0,
+        // LIMITER's own raw-LstPrcLstClsΔ% gate (2026-11-02's own earlier instruction) — left wired
+        // but OFF: the backend mechanism (SonarSignalFilter.EvaluateLstPrcLstCls) stays in place,
+        // tested and reusable, it is simply not what this screen's own toggle drives any more.
+        lstPrcLstClsMode: "off",
+        lstPrcLstClsShowAbs: 0,
+        lstPrcLstClsShowAbsNeg: null,
+        lstPrcLstClsMaxAbs: null,
       };
-      void pushLimiterRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-sonar" }))
+      void pushSpreadometerRatingsLiveParams(toArbitrageSonarLiveParams({ snapshot, source: "limiter-sonar" }))
         // Don't wait out the rest of the 6s poll interval to see a toolbar edit reflected — the
         // bridge already has the new params by the time this resolves, so the list can catch up
         // right away instead of up to 6s later (operator's own instruction, 2026-10-28).
-        .then(() => forceSharedPollNow("sonar-limiter-snapshot", fetchLimiterRatingsSnapshot));
+        .then(() => forceSharedPollNow("sonar-limiter-snapshot", fetchSpreadometerRatingsSnapshot));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
@@ -3530,7 +3573,7 @@ export default function LimiterSonar() {
 
   useEffect(() => {
     let alive = true;
-    const unsubscribe = subscribeSharedPoll("sonar-limiter-snapshot", fetchLimiterRatingsSnapshot, 6_000, (value, err) => {
+    const unsubscribe = subscribeSharedPoll("sonar-limiter-snapshot", fetchSpreadometerRatingsSnapshot, 6_000, (value, err) => {
       if (!alive) return;
       if (err) return;
       if (value?.timedOut) {
@@ -3558,7 +3601,7 @@ export default function LimiterSonar() {
     return () => { alive = false; unsubscribe(); };
   }, [streamReconnectVersion]);
 
-  // Limiter: which tickers pass, decided server-side (LimiterSonarSnapshotService, the SAME
+  // Limiter: which tickers pass, decided server-side (SpreadometerSonarSnapshotService, the SAME
   // LimiterLiveEngine LimiterServerStrategy trades on) — split into two columns,
   // SHORT on the left, LONG on the right. This replaces the generic benchmark/beta grid below
   // (still present, just disabled) as Sonar's primary Limiter view.
@@ -3835,7 +3878,7 @@ export default function LimiterSonar() {
         {/* ========================= HEADER ========================= */}
         {/* Shared with both Scanners — see components/scanner/shell/panels/ScannerHeader. */}
         <ScannerHeader
-          scannerShellTitle="SPREADOMETER•SONAR"
+          scannerShellTitle="LIMITER•SONAR"
           headerNavGroupClass={secondaryGroupClass}
           headerNavInactiveClass={secondaryButtonInactiveClass}
           navStreamHref={SONAR_NAV.stream}
@@ -3897,7 +3940,7 @@ export default function LimiterSonar() {
               {/* Limiter's whole gate: LimiterGate.Check requires the one-minute MOVE to clear BOTH a flat
                   floor (side-specific — coral for a POSITIVE/Short reading, mint for a NEGATIVE/Long
                   one) AND the ticker's own published gamma for (class, sign) — see LimiterGate.cs.
-                  RATE/UNIVERSE + MINRATE/MINTOTAL + σ/α/γ ported 1-to-1 from LimiterScanner.tsx
+                  RATE/UNIVERSE + MINRATE/MINTOTAL + σ/α/γ ported 1-to-1 from SpreadometerScanner.tsx
                   (2026-09-29). This modeSlot is FilterRatingRow's own "between the strip and the
                   steppers" extension point, and FilterRatingRow is the ACTIVE/INACTIVE/ALL row right
                   under the header — matching where Scanner's own tab-row group sits, confirmed
@@ -4008,7 +4051,7 @@ export default function LimiterSonar() {
                 </div>
               </div>
 
-              {/* σ/α/γ — the black min/max boxes, mirrors LimiterScanner.tsx's own tab-row group
+              {/* σ/α/γ — the black min/max boxes, mirrors SpreadometerScanner.tsx's own tab-row group
                   1-to-1 (that file's own comment: "a DIFFERENT kind of filter than MINRATE/MINTOTAL
                   above: a floor/ceiling on a STATIC published value, not a threshold on the trade's
                   own win_rate"). σ = published static sigma, α = published alpha sign-matched to the
@@ -4300,7 +4343,7 @@ export default function LimiterSonar() {
             the group only ever dimmed and gold-tinted OpenDoor cards by a number that decided
             nothing. ArbitrageSonar still has it. Limiter DOES use strategySlot, though (below) —
             unlike OpenDoor's DEV gate, LimiterGate.Check's floor/cap genuinely drives what this
-            Sonar shows, ported 1-to-1 from LimiterScanner.tsx's own strategySlot placement. */}
+            Sonar shows, ported 1-to-1 from SpreadometerScanner.tsx's own strategySlot placement. */}
         <FilterFlagsRow
           exclusions={[
             { label: "ITB", value: excludeItb, set: setExcludeItb, title: "B5ETB = ITB" },
@@ -4355,24 +4398,25 @@ export default function LimiterSonar() {
           }
           zapSlot={
             <>
-              {/* LstPrcLstClsΔ% RANGE — replaced the ARBITRAGE-benchmark zap gate here (2026-11-01,
-                  the operator's own instruction): that group filtered on zapS/zapL, Arbitrage's own
-                  deviation off ITS benchmark, not on LIMITER's own raw print-vs-yesterday's-close
-                  move at all. Plain [lower, upper] on the SIGNED LstPrcLstClsΔ% value — one range
-                  covers both a down move and an up move, so there is no separate short/long floor.
-                  Violet strip + bare %/σ pills, 2026-11-02 (the operator's own instruction — see
-                  lstPrcLstClsUnit's own comment above): the Unit/ZAP Toggle Standard's own group
-                  (FILTER_GROUP_BASE/FILTER_PILL/FILTER_GROUP_TONES.zap). Mirrors
-                  LimiterScanner.tsx's own matching control 1-to-1, reusing lstPrcLstClsPctMin/Max —
-                  state this page already had, already wired into `bounds` and already pushed live
-                  (see the comment on limiterUnitMode above — a different, unrelated toggle). */}
+              {/* ZAP DEVIATION (zapS/zapL) — SHORT/LONG floors, UN-RETIRED 2026-11-02 reading
+                  ARBITRAGE's own benchmark-relative deviation again (the operator's own instruction:
+                  "Цей перемикач повинен бути ZAPS ZAPL SIGMA. Точно така ж логіка як в ARBITRAGE" —
+                  see lstPrcLstClsUnit's own comment above for the full history). SHORT (coral) is
+                  the floor for POSITIVE zapS, LONG (mint) for NEGATIVE zapL, empty LONG = same
+                  floor as SHORT. Violet %/σ strip picks Zap (zapS/zapL) vs Sigma (zapSsigma/
+                  zapLsigma) — mirrors ARBITRAGE's own zapMode group
+                  (FILTER_GROUP_BASE/FILTER_PILL/FILTER_GROUP_TONES.zap) and its own coral/mint
+                  SHORT-start/LONG-start box pair 1-to-1 (ArbitrageSonar.tsx's own zapShowAbs/
+                  zapShowAbsNeg JSX), down to the border colours. Pushed as
+                  zapMode/ShowAbs/ShowAbsNeg/MaxAbs (SonarFilterConfig's own existing field group —
+                  see the snapshot object below). */}
               <div
                 className={clsx(FILTER_GROUP_BASE, FILTER_GROUP_TONES.zap.group)}
-                title="LstPrcLstClsΔ% — the raw move off yesterday's close. A ticker outside [lower, upper] is dropped from the list (and so never reaches the basket), not just highlighted. Either box empty = that side is unbounded."
+                title="ZAP — the deviation off this ticker's own correlated benchmark basket. A ticker not clearing its own side's floor is dropped from the list (and so never reaches the basket), not just highlighted."
               >
                 {([
-                  { key: "pct", label: "%", title: "Range in PERCENT — the raw move off yesterday's close." },
-                  { key: "sigma", label: "σ", title: "Range in SIGMAS — the raw move divided by the ticker's own published sigma (the same σ the black MINSIGMA/MAXSIGMA box reads)." },
+                  { key: "pct", label: "%", title: "ZAP — the raw benchmark deviation (zapS for a short, zapL for a long)." },
+                  { key: "sigma", label: "σ", title: "SIGZAP — the same deviation divided by the ticker's own published sigma (zapSsigma/zapLsigma)." },
                 ] as const).map((u) => (
                   <button
                     key={u.key}
@@ -4384,64 +4428,102 @@ export default function LimiterSonar() {
                     <span className="leading-none" style={{ textTransform: "none" }}>{u.label}</span>
                   </button>
                 ))}
-                <div className="group relative h-7 w-16 overflow-hidden rounded-md">
+                {/* SHORT start: a positive deviation (coral) — mirrors ArbitrageSonar.tsx's own box 1-to-1. */}
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md border border-[#f3a6b2]/50" title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
                   <input
                     type="number"
                     inputMode="decimal"
-                    step={0.1}
-                    value={lstPrcLstClsPctMin}
-                    onChange={(e) => setLstPrcLstClsPctMin(e.target.value)}
-                    placeholder="min"
-                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-cyan-300 placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    step={lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1}
+                    min={0}
+                    value={lstPrcLstClsShowAbs}
+                    onChange={(e) => setLstPrcLstClsShowAbs(Math.max(0, Number(e.target.value) || 0))}
+                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-[#f3a6b2] placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setLstPrcLstClsPctMin((v) => String(+((optNumOrNull(v) ?? 0) + 0.1).toFixed(2)))}
+                      onClick={() => setLstPrcLstClsShowAbs((v) => Math.max(0, +(v + (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase lower bound"
+                      aria-label="Increase short floor"
                     >
                       ▲
                     </button>
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setLstPrcLstClsPctMin((v) => String(+((optNumOrNull(v) ?? 0) - 0.1).toFixed(2)))}
+                      onClick={() => setLstPrcLstClsShowAbs((v) => Math.max(0, +(v - (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4)))}
                       className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Decrease lower bound"
+                      aria-label="Decrease short floor"
                     >
                       ▼
                     </button>
                   </div>
                 </div>
-                <span className="flex h-7 items-center text-[10px] font-mono text-violet-300/50">—</span>
-                <div className="group relative h-7 w-16 overflow-hidden rounded-md">
+                {/* LONG start: a negative deviation (mint); empty = the same floor as SHORT. */}
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md border border-[#6ee7b7]/45" title="Start threshold for NEGATIVE deviations (a LONG entry). Empty = the same threshold as SHORT. Mint = long.">
                   <input
                     type="number"
                     inputMode="decimal"
-                    step={0.1}
-                    value={lstPrcLstClsPctMax}
-                    onChange={(e) => setLstPrcLstClsPctMax(e.target.value)}
-                    placeholder="max"
-                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-amber-300 placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    step={lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1}
+                    min={0}
+                    value={lstPrcLstClsShowAbsNeg}
+                    onChange={(e) => setLstPrcLstClsShowAbsNeg(e.target.value)}
+                    placeholder="as short"
+                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-[#6ee7b7] placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setLstPrcLstClsPctMax((v) => String(+((optNumOrNull(v) ?? 0) + 0.1).toFixed(2)))}
+                      onClick={() => setLstPrcLstClsShowAbsNeg(() => String(Math.max(0, +((lstPrcLstClsShowAbsNegNum ?? lstPrcLstClsShowAbs) + (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4))))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Increase upper bound"
+                      aria-label="Increase long floor"
                     >
                       ▲
                     </button>
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setLstPrcLstClsPctMax((v) => String(+((optNumOrNull(v) ?? 0) - 0.1).toFixed(2)))}
+                      onClick={() => setLstPrcLstClsShowAbsNeg(() => String(Math.max(0, +((lstPrcLstClsShowAbsNegNum ?? lstPrcLstClsShowAbs) - (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4))))}
                       className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                      aria-label="Decrease upper bound"
+                      aria-label="Decrease long floor"
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </div>
+                {/* MAX: upper bound on |deviation|, same unit — a name standing further out than
+                    this is DROPPED from the list, not tinted (SonarFilterConfig.ZapMaxAbs, the real
+                    bridge-side cap — unlike ARBITRAGE's own "silver" box, which is a client-side
+                    highlight never sent). Empty = no cap. */}
+                <div className="group relative h-7 w-16 overflow-hidden rounded-md border border-zinc-200/35" title="Upper bound (MAX): a ticker whose |deviation| is beyond this, either side, is dropped from the list entirely. Empty = no cap.">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1}
+                    min={0}
+                    value={lstPrcLstClsMaxAbs}
+                    onChange={(e) => setLstPrcLstClsMaxAbs(e.target.value)}
+                    placeholder="max"
+                    className="center-spin h-7 w-full bg-black/20 border-0 rounded-md !pl-2 !pr-4 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                  />
+                  <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setLstPrcLstClsMaxAbs((v) => String(Math.max(0, +((Number(v) || 0) + (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Increase max"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setLstPrcLstClsMaxAbs((v) => String(Math.max(0, +((Number(v) || 0) - (lstPrcLstClsUnit === "sigma" ? 0.05 : 0.1)).toFixed(4))))}
+                      className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                      aria-label="Decrease max"
                     >
                       ▼
                     </button>
@@ -4924,7 +5006,7 @@ export default function LimiterSonar() {
           duplicate set of range inputs; ticker search and column-header sort are the only genuinely
           new controls. The bridge already narrowed the raw list by every OTHER toolbar filter
           (ADV20/SSR/ETF/CRAP/REP/country/exchange/sector/...) via LiveRowFilter before it ever
-          reached the browser — see LimiterSonarSnapshotService.BuildUniverseRowsAsync.
+          reached the browser — see SpreadometerSonarSnapshotService.BuildUniverseRowsAsync.
         */}
         {!error && (
           <div className="mt-4 rounded-2xl border border-white/10 bg-[#0a0a0a]/40 p-3">

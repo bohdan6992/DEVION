@@ -21,6 +21,7 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "opgContinuum", name: "OPG•Continuum", icon: "🌊", description: "Продовження руху навколо відкриття ринку, вхід по ціні оупена." },
   { key: "opgFade", name: "OPG•Fade", icon: "🌅", description: "Фейд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
   { key: "opgRide", name: "OPG•Ride", icon: "🏄", description: "Проїзд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
+  { key: "opgRootation", name: "OPG•Rootation", icon: "🔄", description: "О 9:30:40 порівнює ціну з ціною на 9:30: вище — бай, нижче — сел, лімітна ціна = ціна на 9:30." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
   { key: "pullback", name: "PullBack", icon: "🪝", description: "Стак, що стоїть задалеко від вчорашнього закриття, розвертаємо о 4:30/5:00/5:30, вихід гепом." },
@@ -53,7 +54,8 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "launchEveningBasket", name: "Launch•Evening", icon: "🌇", description: "Лімітки на весь баскет о 15:58, скасування о 16:02 — ловимо різкий рух 15:59-16:00. Вихід ручний." },
   // New strategy (operator, 2026-10-27): weekday signal is the SAME filtered universe mechanism
   // every LAUNCH-family member uses, but the per-ticker rating is read straight off Arbitrage's own
-  // published file under its PRE class (LimiterSonarLiveParamsService/LimiterSonarSnapshotService),
+  // published file under its PRE class (SpreadometerSonarLiveParamsService/SpreadometerSonarSnapshotService,
+  // renamed from LimiterSonarLiveParamsService/LimiterSonarSnapshotService 2026-11-02),
   // not a strategy-of-its-own notebook file. Sonar only so far — no entry/exit logic defined yet, so
   // Scanner/Stream have no backtest or live dispatch behind them. Key lowercases to the registry/
   // bridge key "limiter".

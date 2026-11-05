@@ -36,7 +36,6 @@ import {
   clampPriority,
   clockLabel,
   conflictingPriorities,
-  defaultCaesarPlan,
   loadCaesarPlan,
   nyAxisMinutesNow,
   rankAssignments,
@@ -264,11 +263,6 @@ export default function CaesarSchedule() {
     tick();
     const id = window.setInterval(tick, 30_000);
     return () => window.clearInterval(id);
-  }, []);
-
-  const mutate = useCallback((next: CaesarPlan) => {
-    setPlan(next);
-    saveCaesarPlan(next);
   }, []);
 
   const updateSegment = useCallback(
@@ -622,7 +616,6 @@ export default function CaesarSchedule() {
               scheduleBusy={scheduleBusy}
               scheduleError={scheduleError}
               onToggleSchedule={toggleSchedule}
-              onReset={() => mutate(defaultCaesarPlan())}
             />
 
             {/* A separate operational readout, directly after the clock it describes. Scoped to

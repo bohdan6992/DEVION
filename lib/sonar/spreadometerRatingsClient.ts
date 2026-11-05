@@ -1,0 +1,44 @@
+import { bridgeUrl, fetchWithTimeout } from "../bridgeBase";
+import type { ArbitrageSonarLiveParams, ArbitrageSonarSnapshot } from "./arbitrageSnapshotClient";
+
+/**
+ * Spreadometer/Limiter's own RATING source — separate from limiterSnapshotClient.ts, which carries
+ * the filtered TICKER LIST (the "signals same as the LAUNCH group" half). This half is the
+ * per-ticker RATING value (the operator's own instruction, 2026-10-27: "рейтинги беруться із файлу
+ * арбітража"): same body shape as the Arbitrage Sonar's own params/snapshot (Arbitrage-shaped —
+ * same signals universe, same filter chain), but its own bridge route and its own file, so this
+ * page never writes into the Arbitrage Sonar's rating gate. Same sibling pattern as
+ * pushPairFluxGridSonarLiveParams/fetchPairFluxGridSonarSnapshot in pairfluxSnapshotClient.ts — see
+ * SpreadometerSonarController on the bridge (renamed from LimiterSonarController, route moved from
+ * limiter-ratings to spreadometer-ratings, 2026-11-02, the operator's own instruction — see
+ * SpreadometerScanner.tsx's own header comment). The default ArbitrageSonarLiveParams.signalsClass
+ * the bridge hands back is "pre", not Arbitrage's own "global": this screen's per-ticker rating is
+ * always Arbitrage's own PRE-class value.
+ */
+export async function pushSpreadometerRatingsLiveParams(params: ArbitrageSonarLiveParams): Promise<boolean> {
+  try {
+    const response = await fetch(bridgeUrl("/api/stream/sonar/spreadometer-ratings/params"), {
+      method: "PUT",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) return false;
+    const json = await response.json().catch(() => ({}));
+    return json?.ok !== false;
+  } catch {
+    return false;
+  }
+}
+
+export function fetchSpreadometerRatingsSnapshot(): Promise<ArbitrageSonarSnapshot> {
+  // Same body-timeout guard as fetchArbitrageSonarSnapshot/fetchPairFluxGridSonarSnapshot: the
+  // shared poll must never stay in flight.
+  const bodyTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("spreadometer sonar snapshot body timed out")), 15_000)
+  );
+  bodyTimeout.catch(() => {});
+  return fetchWithTimeout(bridgeUrl("/api/stream/sonar/spreadometer-ratings/snapshot"), { cache: "no-store" })
+    .then((res) => Promise.race([res.json(), bodyTimeout]))
+    .then((body: any) => body.snapshot as ArbitrageSonarSnapshot);
+}

@@ -23,7 +23,7 @@ import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
  */
 export const SEGMENT_STRATEGY_KEYS: Partial<Record<string, readonly string[]>> = {
   pre: ["arbitrage", "morlaunch", "morlaunchbasket", "spreadometer", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
-  open: ["opgreversal", "opgcontinuum", "opgfade", "opgride"],
+  open: ["opgreversal", "opgcontinuum", "opgfade", "opgride", "opgrootation"],
   intra: [],
   post: ["reversal", "continuum", "launcheveningbasket", CLO_HEDGE_KEY],
 };

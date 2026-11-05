@@ -5,11 +5,13 @@ import type { OpenDoorLiveFilters } from "../opendoor/liveParamsClient";
 /**
  * DEAD CLIENT — nothing on the bridge answers fetchLimiterSonarSnapshot/pushLimiterSonarLiveParams
  * below (the renamed copy of LaunchEvening's own stateful one-minute-move-gate client; its own doc
- * comment still described THAT mechanism, which was never LIMITER's). LimiterSonar.tsx's real data
- * now comes from lib/sonar/limiterRatingsClient.ts instead — this file is kept only because
+ * comment still described THAT mechanism, which was never LIMITER's). SpreadometerSonar.tsx's real
+ * data now comes from lib/sonar/spreadometerRatingsClient.ts instead (renamed from
+ * limiterRatingsClient.ts 2026-11-02 — this file keeps its own original name: it is genuinely
+ * LIMITER's own type shape, not Spreadometer's) — this file is kept only because
  * LimiterSonarRow/LimiterUniverseRow are still the shape every render/sort/filter site in
- * LimiterSonar.tsx is written against (translated from Arbitrage's own row shape there). See
- * LimiterSonar.tsx's own header comment for the full story, 2026-10-27.
+ * SpreadometerSonar.tsx is written against (translated from Arbitrage's own row shape there). See
+ * SpreadometerSonar.tsx's own header comment for the full story, 2026-10-27.
  */
 export type LimiterExitClass = "pre";
 

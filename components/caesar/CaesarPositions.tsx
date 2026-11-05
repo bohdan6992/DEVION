@@ -326,6 +326,7 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   opgreversal: "OPG•REVERSAL",
   opgcontinuum: "OPG•CONTINUUM",
   opgfade: "OPG•FADE",
+  opgrootation: "OPG•ROOTATION",
   [CLO_HEDGE_KEY]: "HEDGE•CLO",
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",
   morlaunchbasket: "LAUNCH•MORNING",
