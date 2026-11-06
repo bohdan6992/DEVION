@@ -2508,6 +2508,8 @@ export default function OPGRootationScanner({
         report: excludeHasReport,
         etf: excludeETF,
         crap: excludeCrap,
+        itb: excludeItb,
+        hard: excludeHard,
       },
       include: {
         usaOnly: includeUSA,
@@ -2542,6 +2544,7 @@ export default function OPGRootationScanner({
     minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
     minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
     excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
+    excludeItb, excludeHard,
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
@@ -2583,6 +2586,11 @@ export default function OPGRootationScanner({
         // regardless of what the toolbar showed — see OPGRootationLiveParams.PriceMode's own doc comment.
         priceMode,
         filters: streamFilterConfig,
+        // CORR (operator's own instruction, 2026-11-06): computed inline rather than reusing the
+        // corrThreshold memo below, which is declared later in this component and would be a
+        // temporal-dead-zone reference here — same clamp either way.
+        excludeCorr,
+        corrThreshold: clampSectorCorrThreshold(parseSectorCorrThreshold(corrThresholdInput) ?? SECTOR_CORR_DEFAULT),
         multiModes: { countries: countryEnabled, exchanges: exchangeEnabled, sectors: sectorEnabled },
         source: "opgRootation-scanner",
       }));
@@ -2593,6 +2601,7 @@ export default function OPGRootationScanner({
     opgRootationMinGammaTotal, opgRootationMinRate, opgRootationMinTotal, opgRootationUnitMode, opgRootationIgnoreRatings,
     opgRootationCancelBelowMovePct,
     priceMode, streamFilterConfig, countryEnabled, exchangeEnabled, sectorEnabled,
+    excludeCorr, corrThresholdInput,
   ]);
 
   // Which session a row's report marker is judged against. The marker carries only day/month, so
@@ -8914,6 +8923,24 @@ export default function OPGRootationScanner({
             </div>
           </div>
         )}
+
+        {/* Operator's own instruction, 2026-11-06: "Додай на стрім лог який дозволить перевірити що
+            було не так якщо не відпрацює... додай внизу кнопку скачати" — a plain link to the
+            bridge's downloadable diary of the whole day (GAP%/filter/CORR exclusions, fires,
+            dispatch-time accept/reject, fills, cancels — see OPGRootationDiagnosticLog's own doc
+            comment). A bare <a href> is enough: the endpoint sets Content-Disposition itself, so the
+            browser downloads it like any other file link — no fetch/blob JS needed, and it still
+            works from a phone or a second machine with nothing but this page open. */}
+        <div className="flex justify-center py-4">
+          <a
+            href={bridgeUrl("/api/stream/opgrootation/log")}
+            download
+            className="inline-flex h-8 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-4 text-[10px] font-mono font-bold uppercase tracking-wide text-zinc-400 transition-all hover:border-white/20 hover:bg-white/5 hover:text-white"
+            title="Download today's OPG•Rootation diagnostic log (.txt) — every GAP%/filter/CORR exclusion, fire, dispatch accept/reject, fill and cancel, in order"
+          >
+            ⬇ DOWNLOAD TODAY&apos;S LOG
+          </a>
+        </div>
 
         <ScannerTableStyles />
       </div>

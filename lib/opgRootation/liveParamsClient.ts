@@ -45,6 +45,12 @@ export type OPGRootationStreamLiveParams = {
   thresholdUnit: OPGRootationThresholdUnit;
   priceMode: OPGRootationPriceMode;
   filters: OpenDoorLiveFilters | null;
+  /** CORR toggle (operator's own instruction, 2026-11-06): drop any ticker correlated at or above
+   * corrThreshold with ANY ticker reporting earnings today. Outside `filters` on purpose — it needs
+   * an async whole-universe lookup server-side (UniverseReportCorrService/SectorCorrService), not a
+   * value already sitting on the row the way everything in `filters` is. */
+  excludeCorr: boolean;
+  corrThreshold: number;
   source: string;
 };
 
@@ -62,6 +68,8 @@ export function toOPGRootationStreamLiveParams(args: {
   priceMode: OPGRootationPriceMode;
   filters: ArbitrageFilterConfigV1;
   multiModes: MultiTriModes;
+  excludeCorr: boolean;
+  corrThreshold: number;
   source: string;
 }): OPGRootationStreamLiveParams {
   return {
@@ -77,6 +85,8 @@ export function toOPGRootationStreamLiveParams(args: {
     thresholdUnit: args.thresholdUnit,
     priceMode: args.priceMode,
     filters: toOpenDoorLiveFilters(args.filters, args.multiModes),
+    excludeCorr: args.excludeCorr,
+    corrThreshold: args.corrThreshold,
     source: args.source,
   };
 }
@@ -113,8 +123,9 @@ export async function fetchOPGRootationStreamLiveParams(): Promise<OPGRootationS
 /**
  * One ticker's live state inside OPGRootationEntryTriggerService's own window — mirrors
  * OPGRootationCandidateRowDto (Services/Stream/Engine/OPGRootationCandidateSnapshot.cs) exactly.
- * Anchor930/CurrentPrice/MovePct are null until a 09:30 anchor/live price is known; everything else
- * always has a value.
+ * anchor930/currentPrice are the operator's own "LstPrc" DAS-watchlist field (2026-11-05 FINAL fix —
+ * see the DTO's own doc comment for the full "which field" history this session went through) and
+ * null until a 09:30 anchor/live price is known; everything else always has a value.
  */
 export type OPGRootationCandidateRow = {
   ticker: string;
