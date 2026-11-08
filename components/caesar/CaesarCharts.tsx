@@ -36,6 +36,7 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { subscribeCaesarPositions } from "@/lib/caesar/positionsPoll";
 import {
   SOFT_LOSS_MUTED,
   SOFT_LOSS_SOLID,
@@ -1496,6 +1497,15 @@ function intnLike(n: number): string {
 
 // =========================================================================================
 
+// The parent owns live polling state, while these panels only need to render when their own
+// derived props change. Keeping them memoized prevents an account-position tick from rebuilding
+// every historical SVG path and tooltip tree.
+const MemoDonut = React.memo(Donut);
+const MemoRadarChart = React.memo(RadarChart);
+const MemoEfficiencyConeChart = React.memo(EfficiencyConeChart);
+const MemoLinesChart = React.memo(LinesChart);
+const MemoLongShortHistogram = React.memo(LongShortHistogram);
+
 export default function CaesarCharts({
   instances, fromMin, toMin, nowMin, assignedKeys = null,
   colorByInstanceId, hoveredStrategyKey, onHoverStrategy,
@@ -1550,13 +1560,9 @@ export default function CaesarCharts({
   // CaesarBridgeDecisions' identical poll under the same key rather than running a second one.
   useEffect(() => {
     let alive = true;
-    const fetchAll = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<BridgePositionsResponse>)
-        .then((body) => body.positions);
-    const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, 2000, (value, err) => {
+    const unsubscribe = subscribeCaesarPositions((value, err) => {
       if (!alive) return;
-      if (!err && value) setBridgePositions(value);
+      if (!err && value) setBridgePositions(value.positions);
     });
     return () => { alive = false; unsubscribe(); };
   }, []);
@@ -1577,11 +1583,7 @@ export default function CaesarCharts({
     // every other subscriber of "bridge-closed-owners" actually receives; a differently-shaped
     // fetcher here would read CaesarPositions' own { closedOwners, prunes } object as if it were
     // the bare map, or vice versa, depending on mount order.
-    const fetchClosedOwners = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<BridgePositionsResponse & { prunes?: unknown[] }>)
-        .then((body) => ({ closedOwners: body.closedOwners ?? {}, prunes: body.prunes ?? [] }));
-    const unsubscribe = subscribeSharedPoll("bridge-closed-owners", fetchClosedOwners, 2000, (value, err) => {
+    const unsubscribe = subscribeCaesarPositions((value, err) => {
       if (!alive) return;
       if (!err && value) setClosedOwners(value.closedOwners);
     });
@@ -2239,13 +2241,13 @@ export default function CaesarCharts({
             <span>ACTIVE ACCOUNT BOOK</span>
             <span className="text-zinc-600">{totalActive} total</span>
           </figcaption>
-          <Donut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
+          <MemoDonut series={activeSeries} total={totalActive} hoverKey={hoverKey} onHover={setHoverKey} />
         </figure>
 
         {/* PNL OVER TIME — swapped here with LONGS/SHORTS SENT below (2026-10-23, the operator's
             own instruction: trade BOTH place and size), so it now gets the wide middle column
             instead of half of the row underneath. */}
-        <LinesChart
+        <MemoLinesChart
           series={pnlLineSeries}
           fromMin={fromMin}
           toMin={toMin}
@@ -2265,7 +2267,7 @@ export default function CaesarCharts({
             <span>STRATEGY SHAPE</span>
             <span className="text-zinc-600">now, per axis</span>
           </figcaption>
-          <RadarChart axes={RADAR_AXES} series={radarSeries} hoverKey={hoverKey} onHover={setHoverKey} />
+          <MemoRadarChart axes={RADAR_AXES} series={radarSeries} hoverKey={hoverKey} onHover={setHoverKey} />
         </figure>
       </div>
 
@@ -2472,7 +2474,7 @@ export default function CaesarCharts({
           </figure>
 
           {/* ---------- EFFICIENCY CONES ---------- */}
-          <EfficiencyConeChart
+          <MemoEfficiencyConeChart
             rows={coneRows}
             title="EFFICIENCY"
             meta="height=ККД · hover for volume/result"
@@ -2483,7 +2485,7 @@ export default function CaesarCharts({
           />
 
           {/* ---------- LONGS / SHORTS SENT ---------- */}
-          <LongShortHistogram
+          <MemoLongShortHistogram
             buckets={longShortBuckets}
             fromMin={fromMin}
             toMin={toMin}

@@ -44,7 +44,7 @@ import {
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
@@ -758,6 +758,47 @@ export default function OPGReversalScanner({
   // MINRATE/MINTOTAL are a threshold ON the trade's own rating. 0 (or below) turns each off.
   const [opgReversalMinRate, setOPGReversalMinRate] = useState(0);
   const [opgReversalMinTotal, setOPGReversalMinTotal] = useState(0);
+
+  // Declared HERE, beside the rest of OPGReversal's gate state, and NOT further down next
+  // to buildOPGReversalParams where they started: `persistedFilters` is a useMemo that runs
+  // during render and now reads both of them, so a declaration below it would be a
+  // temporal-dead-zone ReferenceError on the very first paint.
+  /**
+   * WHICH rating table each replayed day is judged by. The default is "asof" deliberately.
+   *
+   * "live" is what this scanner has always done and it is why a day that lost in real trading can
+   * show up positive a week later: every past day is re-judged by TODAY's published file, so a
+   * ticker that had no gamma back then but has one now adds trades the day never took. It is still
+   * a useful view - "what would today's knowledge have done" - but it is not a record of what
+   * happened, and it must not be what the scanner opens on.
+   *
+   * "frozen" is the snapshot taken that morning. Honest, but it only exists from the day freezing
+   * starts, and until 2026-11-08 the freeze service was hard-coded to opendoor alone, so for
+   * OPG-reversal there are currently ZERO frozen days and every one of them falls back to live
+   * (the response's ratingsLookAheadDays lists exactly which).
+   *
+   * "asof" recomputes the table from the trade log already inside the published file, counting only
+   * trades dated strictly BEFORE the replayed day. It is the only one of the three that is both
+   * look-ahead free and available for history, and the same file and day give the same answer
+   * forever - which is what makes a replayed day stop moving.
+   */
+  type RatingsMode = "live" | "frozen" | "asof" | "asofew";
+  const [opgReversalRatingsMode, setOpgReversalRatingsMode] = useState<RatingsMode>("asof");
+
+  /**
+   * CORE - restrict the run to the small, slow-moving set of tickers that have performed well
+   * CONSISTENTLY (depth + breadth + positive in every trailing window + a shrunk LB over zero,
+   * with hysteresis so incumbents are sticky). Rebuilt as of each day, so it carries no look-ahead
+   * and composes with whichever rating mode is selected.
+   *
+   * OFF by default, deliberately. The measurement that preceded it (2026-11-08, 65 sessions) found
+   * the STABILITY real - daily churn 46.5% -> 20.0%, published value moving 0.0008/day - and the
+   * EDGE absent: a ticker's first-half mean pnl predicts its second-half mean at corr +0.006, and
+   * tighter screening came out WORSE out of sample, which is the signature of selecting luck. It
+   * was built on the operator's explicit instruction, with that caveat on record.
+   */
+  const [opgReversalCoreOnly, setOpgReversalCoreOnly] = useState(false);
+
   // RATE/UNIVERSE — the operator's own instruction (2026-09-25): a single button next to MINRATE/
   // MINTOTAL that drops the per-ticker gamma lookup (and MINRATE/MINTOTAL/MinGammaTotal riding on
   // it) entirely, gating on the flat floor/cap alone. This is the SAME ignoreRatings escape hatch
@@ -1517,6 +1558,7 @@ export default function OPGReversalScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1532,7 +1574,7 @@ export default function OPGReversalScanner({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = async (d: string) => {
     try {
@@ -1657,6 +1699,10 @@ export default function OPGReversalScanner({
         if (typeof s.opgReversalMinTotal === "number") setOPGReversalMinTotal(s.opgReversalMinTotal);
         if (s.opgReversalUnitMode === "pct" || s.opgReversalUnitMode === "sigma" || s.opgReversalUnitMode === "alpha" || s.opgReversalUnitMode === "gamma" || s.opgReversalUnitMode === "atr" || s.opgReversalUnitMode === "lambda") setOPGReversalUnitMode(s.opgReversalUnitMode);
         if (typeof s.opgReversalIgnoreRatings === "boolean") setOPGReversalIgnoreRatings(s.opgReversalIgnoreRatings);
+        if (s.opgReversalRatingsMode === "live" || s.opgReversalRatingsMode === "frozen"
+            || s.opgReversalRatingsMode === "asof" || s.opgReversalRatingsMode === "asofew")
+          setOpgReversalRatingsMode(s.opgReversalRatingsMode);
+        if (typeof s.opgReversalCoreOnly === "boolean") setOpgReversalCoreOnly(s.opgReversalCoreOnly);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -1902,6 +1948,12 @@ export default function OPGReversalScanner({
       opgReversalMinTotal,
       opgReversalUnitMode,
       opgReversalIgnoreRatings,
+      // Which rating table the scanner judges by, and whether CORE narrows it. These were the only
+      // two toolbar controls that silently reset on reload - worse than it sounds here, because the
+      // page would come back on ASOF showing different numbers from the ones that were on screen,
+      // with nothing to say why.
+      opgReversalRatingsMode,
+      opgReversalCoreOnly,
       dilutionMode,
       dilutionStep,
       maxAdds,
@@ -2113,6 +2165,7 @@ export default function OPGReversalScanner({
   );
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -2152,7 +2205,7 @@ export default function OPGReversalScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({
@@ -2863,6 +2916,7 @@ export default function OPGReversalScanner({
   // signal/entry/exit minutes are fixed by the clock (OPGReversalTiming.Default), so the only inputs
   // of its own are the exit class, the flat |9:20-9:25 deviation| floor and whether to skip the
   // per-ticker gamma lookup entirely.
+
   function buildOPGReversalParams() {
     const reqTickers = requestScopedTickers;
     return {
@@ -2895,6 +2949,12 @@ export default function OPGReversalScanner({
       // What minDevAbsShort/Long/Max above are MEASURED in — the %/σ/α/γ strip; resolved per
       // ticker inside OPGReversalGate.Check (see that file's own doc comment on OPGReversalThresholdUnit).
       thresholdUnit: opgReversalUnitMode,
+      // Which rating table gates each replayed day - see opgReversalRatingsMode's own comment.
+      // It is in the bridge's VariantKey too, so flipping it genuinely rebuilds rather than
+      // serving the other mode's cached day back.
+      ratingsMode: opgReversalRatingsMode,
+      // CORE narrows the day's rating table to its members; it is in VariantKey server-side too.
+      coreOnly: opgReversalCoreOnly,
       // RATE/UNIVERSE button, next to MINRATE/MINTOTAL — drops the per-ticker gamma lookup (and
       // MINRATE/MINTOTAL/MinGammaTotal riding on it) entirely when on UNIVERSE, gating on the flat
       // floor/cap alone. Re-added 2026-09-25 (the operator's own instruction) — the earlier Γ/Ø
@@ -5943,6 +6003,106 @@ export default function OPGReversalScanner({
             {opgReversalIgnoreRatings ? "UNIVERSE" : "RATE"}
           </button>
 
+          {/* WHICH rating table each replayed day is judged by - AS-OF / AS-OF lambda / FROZEN /
+              LIVE. Placed directly AFTER the RATE button and hidden entirely once UNIVERSE is on
+              (the operator's own call, 2026-11-08; it was dimmed-but-present for one revision).
+              The reasoning is sound: UNIVERSE drops the ticker's published table altogether, so
+              there is no table left to choose between - a visible control that cannot do
+              anything is worse than no control.
+
+              RATE/UNIVERSE decides WHETHER ratings apply; this decides WHICH ones; MINRATE and
+              MINTOTAL after it threshold whatever comes out. Secondary Button Standard
+              (AGENTS.md): shared h-7 container, same pill classes, same active treatment. */}
+          {/* SHOWN ON THE STREAM TOO (the operator's own correction, 2026-11-08, after I
+              wrongly hid it there). A rating is ALWAYS built from history and can never
+              anticipate today, so "as of" is exactly as meaningful live as it is in a
+              replay: the stream wants the table built from trades strictly BEFORE today.
+              And the rating is a primary condition for which candidates the stream picks
+              up at all, not a reporting detail. */}
+          {!opgReversalIgnoreRatings && (
+              <>
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {/* FOUR LETTERS EACH, so the strip reads as a row of equal words rather than a
+                    ragged one (the operator's own instruction, 2026-11-08): ASOF / EXPO / FRZN /
+                    LIVE / CORE.
+
+                    Each carries its OWN colour while inactive, because the five are not
+                    interchangeable and the difference matters BEFORE you click. The palette is the
+                    one already in this toolbar, used for what it already means here: mint for the
+                    sound default, violet for the weighted variant (λ is a violet-strip glyph in
+                    this app), sky for the frozen snapshot, soft coral for LIVE - the one that
+                    flatters the past and should read as a caution - and amber for CORE, matching
+                    the RATE button beside it.
+
+                    Active stays `accent-soft` like every other group on this row: the selected
+                    button is already obvious from its fill and does not also need its hue. */}
+                {([
+                  { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
+                    title: "AS-OF — each replayed day is judged ONLY by trades dated before it, recomputed from the published trade log. No look-ahead, and a day's result never changes again. Default." },
+                  { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
+                    title: "AS-OF λ (exponential) — as AS-OF, but each surviving trade is weighted by how recent it is RELATIVE TO THE REPLAYED DAY (half-life 40 sessions), then shrunk toward that class's own base rate on a faster 20-session clock. Fresher days count for more, without the day's own result ever leaking in." },
+                  { key: "frozen", label: "FRZN", tone: "text-sky-300/80 hover:text-sky-200",
+                    title: "FROZEN — the rating snapshot actually taken that morning: the true record of what was known. Only exists for days that were frozen; the rest fall back to LIVE and are reported as look-ahead days." },
+                  { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
+                    title: "LIVE — TODAY's ratings applied to every replayed day. Answers 'what would today's knowledge have done' — and is why a losing day can later show as positive. Not a record of what happened." },
+                ] as const).map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    title={m.title}
+                    onClick={() => setOpgReversalRatingsMode(m.key)}
+                    className={clsx(
+                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                      opgReversalRatingsMode === m.key
+                        ? "accent-soft"
+                        : clsx("border-transparent hover:bg-white/5", m.tone)
+                    )}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* A SECOND capsule, not a continuation of the first - the four on the left are one
+                  exclusive choice, CORE is an independent switch. One container per group, per the
+                  Secondary Button Standard (AGENTS.md). */}
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {/* CORE, not in a capsule of its own (the operator's
+                    own correction, 2026-11-08 - "не роздільно"). It belongs here visually because
+                    it belongs here logically: it narrows the very table the four buttons to its
+                    left choose between.
+
+                    No divider before it, deliberately. AGENTS.md's unit-strip standard is explicit
+                    that a separator between sub-groups inside one strip is our own invention and
+                    not the pattern - the differing semantics (four exclusive modes, then one
+                    independent on/off) are carried by the active styling, not by a rule.
+
+                    Same pill classes as its neighbours so the row reads as one control. */}
+                <button
+                  type="button"
+                  onClick={() => setOpgReversalCoreOnly((v) => !v)}
+                  title={opgReversalCoreOnly
+                    ? "CORE on - only the consistently-good tickers (depth + breadth + positive in every trailing window + shrunk LB > 0, sticky once in), rebuilt as of each day. NOTE: measured on 65 sessions this list showed NO edge - per-ticker persistence is corr +0.006 and tighter screening came out worse. The stability is real, the edge is not. Click for the full universe."
+                    : "CORE off - every ticker the rating mode admits. Click to restrict to the consistently-good list of tickers that have performed well CONSISTENTLY, not merely on average."}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    // A TOGGLE, not one of the four to its left. Its "on" state is deliberately a
+                    // different SHAPE of highlight - its own hue as a ring and tint, rather than
+                    // accent-soft's solid fill - because the strip holds two kinds of control and
+                    // only the colour can say so. Without this all six look like one radio group and
+                    // "LIVE + CORE + NRRW lit at once" reads as a bug instead of as three answers to
+                    // three questions.
+                    opgReversalCoreOnly
+                      ? "border-amber-400/70 bg-amber-500/15 text-amber-200"
+                      : "border-transparent text-amber-300/80 hover:text-amber-200 hover:bg-white/5"
+                  )}
+                >
+                  CORE
+                </button>
+              </div>
+              </>
+          )}
+
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
               win_rate/total (OPGReversalGate.cs), reaching OPGReversalGate.Check via buildOPGReversalParams.
               Own separate pills, copied 1-to-1 off ArbitrageScanner's own MINRATE/MINTOTAL boxes —
@@ -5962,11 +6122,11 @@ export default function OPGReversalScanner({
               <input
                 type="number"
                 inputMode="decimal"
-                step={0.05}
+                step={5}
                 min={0}
-                max={1}
-                value={opgReversalMinRate}
-                onChange={(e) => setOPGReversalMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                max={100}
+                value={ratePctFromFraction(opgReversalMinRate)}
+                onChange={(e) => setOPGReversalMinRate(ratePctToFraction(e.target.value))}
                 className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -6445,7 +6605,7 @@ export default function OPGReversalScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase short-side floor"
                     >
@@ -6454,7 +6614,7 @@ export default function OPGReversalScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setOPGReversalMinDevAbsShort((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease short-side floor"
                     >

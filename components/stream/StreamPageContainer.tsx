@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
+import { registerStreamAutomation } from "./streamAutomationHub";
+
+// Legacy constants are kept for the inert compatibility callbacks below; the active Caesar path
+// uses the one timer in streamAutomationHub.
+const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 10000;
+const STREAM_AUTOMATION_STATE_POLL_MS = 10000;
 import {
   deriveStreamExecutionDescriptor,
   type StreamAutomationConfig,
@@ -17,7 +23,6 @@ type StreamSession = "BLUE" | "ARK" | "PRE" | "OPEN" | "INTRA" | "POST" | "NIGHT
 const DEFAULT_LS_PREFIX = "stream.arbitrage";
 // The bridge marks a UI host disconnected after 20s. Keep a safety margin so a Caesar-hosted
 // browser engine remains connected between polls, even if one interval is delayed.
-const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 10000;
 /**
  * How often the tab re-reads the bridge's automation flags.
  *
@@ -40,7 +45,6 @@ const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 10000;
  * 10s against the schedule's 15s: worst case is ~25s from a segment boundary to the engine
  * running, and the poll is a single tiny GET.
  */
-const STREAM_AUTOMATION_STATE_POLL_MS = 10000;
 
 function createStreamPageClientId(): string {
   if (typeof globalThis !== "undefined" && typeof globalThis.crypto?.randomUUID === "function") {
@@ -346,6 +350,8 @@ function StreamPageContainerInner({
   const [streamAutoEnabled, setStreamAutoEnabled] = useState(false);
   const [streamPageClientId] = useState(createStreamPageClientId);
   const remoteAutomationGuardUntilRef = useRef(0);
+  const streamAutoEnabledRef = useRef(false);
+  const strategyModeEnabledRef = useRef(automationConfig.strategyModeEnabled);
   const [sharedRatingRules, setSharedRatingRules] = useState<StreamRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
     { band: "ARK", minRate: 0, minTotal: 0 },
@@ -390,12 +396,17 @@ function StreamPageContainerInner({
 
   const applyLocalAutoEnabled = useCallback((enabled: boolean) => {
     remoteAutomationGuardUntilRef.current = Date.now() + 4000;
+    streamAutoEnabledRef.current = enabled;
     setStreamAutoEnabled(enabled);
   }, []);
 
   const applyLocalAutomationConfigPatch = useCallback((patch: Partial<StreamAutomationConfig>) => {
     remoteAutomationGuardUntilRef.current = Date.now() + 4000;
-    setAutomationConfig((prev) => ({ ...prev, ...patch }));
+    setAutomationConfig((prev) => {
+      const next = { ...prev, ...patch };
+      strategyModeEnabledRef.current = next.strategyModeEnabled;
+      return next;
+    });
   }, []);
 
   // See fetchWithTimeout's doc comment — an untimed poll on a setInterval that does not wait for
@@ -405,6 +416,8 @@ function StreamPageContainerInner({
   const heartbeatInFlightRef = useRef(false);
 
   const pullRemoteState = useCallback(async () => {
+    return;
+    /* Legacy per-instance polling retained below for reference; Caesar uses streamAutomationHub. */
     if (pullStateInFlightRef.current) return;
     pullStateInFlightRef.current = true;
     try {
@@ -457,6 +470,8 @@ function StreamPageContainerInner({
   }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
 
   const sendHeartbeat = useCallback(async () => {
+    return;
+    /* Legacy per-instance heartbeat retained below for reference; Caesar uses streamAutomationHub. */
     if (heartbeatInFlightRef.current) return;
     heartbeatInFlightRef.current = true;
     try {
@@ -477,6 +492,7 @@ function StreamPageContainerInner({
   }, [streamPageClientId, strategyId]);
 
   useEffect(() => {
+    return;
     let cancelled = false;
     const syncNow = async () => {
       await sendHeartbeat();
@@ -530,6 +546,33 @@ function StreamPageContainerInner({
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [pullRemoteState, sendHeartbeat, strategyId]);
+
+  useEffect(() => registerStreamAutomation(strategyId, streamPageClientId, (state) => {
+    if (!state) return;
+    const remoteAutoEnabled = Boolean(state.autoEnabled);
+    const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
+    if (
+      Date.now() < remoteAutomationGuardUntilRef.current &&
+      (remoteAutoEnabled !== streamAutoEnabledRef.current || remoteStrategyModeEnabled !== strategyModeEnabledRef.current)
+    ) return;
+    if (streamAutoEnabledRef.current !== remoteAutoEnabled) {
+      console.warn(`[stream-remote-sync] streamAutoEnabled ${streamAutoEnabledRef.current} -> ${remoteAutoEnabled}`, {
+        at: new Date().toISOString(), strategyId, source: "shared-automation-hub",
+      });
+    }
+    if (strategyModeEnabledRef.current !== remoteStrategyModeEnabled) {
+      console.warn(`[stream-remote-sync] strategyModeEnabled ${strategyModeEnabledRef.current} -> ${remoteStrategyModeEnabled}`, {
+        at: new Date().toISOString(), strategyId,
+      });
+    }
+    streamAutoEnabledRef.current = remoteAutoEnabled;
+    strategyModeEnabledRef.current = remoteStrategyModeEnabled;
+    setStreamAutoEnabled((prev) => prev === remoteAutoEnabled ? prev : remoteAutoEnabled);
+    setAutomationConfig((prev) => {
+      const next = { ...prev, strategyModeEnabled: remoteStrategyModeEnabled };
+      return sameStreamAutomationConfig(prev, next) ? prev : next;
+    });
+  }), [strategyId, streamPageClientId]);
 
   const headerBadgeValues = ["EXECUTION", "FILTERED", shellStats.autoEnabled ? "AUTO ON" : "AUTO OFF"];
   const headerMetaLabel = `signals ${shellStats.signals.toLocaleString("en-US")} | ready ${shellStats.ready.toLocaleString("en-US")} | open ${shellStats.open.toLocaleString("en-US")}`;

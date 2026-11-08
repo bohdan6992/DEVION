@@ -44,7 +44,7 @@ import {
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
@@ -1398,6 +1398,7 @@ export default function VWAPBounceScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1413,7 +1414,7 @@ export default function VWAPBounceScanner({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = async (d: string) => {
     try {
@@ -1995,6 +1996,7 @@ export default function VWAPBounceScanner({
   );
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -2034,7 +2036,7 @@ export default function VWAPBounceScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({
@@ -5802,11 +5804,11 @@ export default function VWAPBounceScanner({
               <input
                 type="number"
                 inputMode="decimal"
-                step={0.05}
+                step={5}
                 min={0}
-                max={1}
-                value={vwapBounceMinRate}
-                onChange={(e) => setVWAPBounceMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                max={100}
+                value={ratePctFromFraction(vwapBounceMinRate)}
+                onChange={(e) => setVWAPBounceMinRate(ratePctToFraction(e.target.value))}
                 className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
@@ -6274,7 +6276,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase tech_z floor"
                     >
@@ -6283,7 +6285,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinTechZ((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease tech_z floor"
                     >
@@ -6305,7 +6307,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                       aria-label="Increase rel_z floor"
                     >
@@ -6314,7 +6316,7 @@ export default function VWAPBounceScanner({
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setVWAPBounceMinRelZ((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5"
                       aria-label="Decrease rel_z floor"
                     >

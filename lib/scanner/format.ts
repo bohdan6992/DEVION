@@ -204,3 +204,25 @@ export function sessionTimeChartRange(session: PaperArbSession): { from: number;
     default:      return { from: 0, to: 1199 };
   }
 }
+
+/**
+ * MINRATE is STORED as a fraction (0.6) and SHOWN as a percent (60).
+ *
+ * The storage side is not a preference: every bridge gate compares it against a published
+ * win_rate that lives in 0..1, so a 60 on the wire would reject every ticker that exists. These
+ * two functions are the only place the two representations meet - keep the conversion here rather
+ * than inline in thirty toolbars, or one of them will eventually send the wrong one.
+ */
+export function ratePctFromFraction(v: any): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  // rounded, because 0.65 * 100 is 65.00000000000001 and the box would show that
+  return Math.round(n * 1000) / 10;
+}
+
+/** The inverse: what the user typed as a percent, back to the fraction that is stored and sent. */
+export function ratePctToFraction(raw: any): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.round(n * 10) / 1000);
+}

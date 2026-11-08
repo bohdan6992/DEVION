@@ -214,12 +214,6 @@ export default function CaesarSchedule() {
 
   // Polled on the same cadence as the clock. The switch starts and stops real strategies, so a
   // stale reading of it is worse than no reading.
-  useEffect(() => {
-    void pullSchedule();
-    const id = window.setInterval(() => { void pullSchedule(); }, 30_000);
-    return () => window.clearInterval(id);
-  }, [pullSchedule]);
-
   const pullEngine = useCallback(async () => {
     const status = await fetchBridgeEngineStatus();
     if (status == null) {
@@ -231,10 +225,14 @@ export default function CaesarSchedule() {
   }, []);
 
   useEffect(() => {
+    void pullSchedule();
     void pullEngine();
-    const id = window.setInterval(() => { void pullEngine(); }, 30_000);
+    const id = window.setInterval(() => {
+      void pullSchedule();
+      void pullEngine();
+    }, 30_000);
     return () => window.clearInterval(id);
-  }, [pullEngine]);
+  }, [pullEngine, pullSchedule]);
 
   const toggleEngine = useCallback(async () => {
     if (engineBusy) return;

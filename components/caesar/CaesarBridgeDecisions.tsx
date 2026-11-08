@@ -21,6 +21,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { subscribeCaesarPositions } from "@/lib/caesar/positionsPoll";
 import { resolveClassByBridgeId } from "@/lib/caesar/hedge";
 
 type StreamCandidateRow = {
@@ -176,16 +177,16 @@ function useAllPositions() {
 
   useEffect(() => {
     let alive = true;
-    const fetchAll = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<AllPositionsResponse>)
-        .then((body) => body.positions);
-    const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, POLL_MS, (value, err) => {
+    const unsubscribe = subscribeCaesarPositions((value, err) => {
       if (!alive) return;
       if (err) {
         setError(err);
       } else {
-        setPositions(value);
+        setPositions((value?.positions ?? []).map((position) => ({
+          ...position,
+          priority: position.priority ?? 0,
+          fixedExitAtUtc: position.fixedExitAtUtc ?? null,
+        })));
         setAsOfUtc(new Date().toISOString());
         setError(null);
       }

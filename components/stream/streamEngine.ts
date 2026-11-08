@@ -29,6 +29,10 @@ import { connectStreamOcrFeed } from "./streamOcrFeed";
 import { resetStreamOcrStores } from "./streamOcrStores";
 import { getStreamStores } from "./streamStoreRegistry";
 import { acquireSharedStreamStores, releaseSharedStreamStores, hasOtherSharedStreamUsers } from "./streamSharedStores";
+import { subscribeCaesarPositions } from "../../lib/caesar/positionsPoll";
+import { subscribeCaesarEngine } from "../../lib/caesar/enginePoll";
+import { subscribeSharedPoll } from "../../lib/caesar/sharedPoll";
+import { refreshStreamScreen, subscribeStreamScreen } from "./streamScreenPoll";
 
 export type StreamDecisionStatus = "ENTRY_READY" | "HOLD" | "EXIT_READY" | "EXIT_BLOCKED" | "BLOCKED_SPREAD" | "BLOCKED_EDGE";
 
@@ -608,8 +612,6 @@ type BridgeState = {
   fetchedAt: number;
 };
 
-/** How often the candidate list is re-read while the page is visible. The bridge caches it for ~1.5 s. */
-const SCREEN_POLL_MS = 2000;
 /** How often the tab asks the bridge what it holds and what it sent. Nothing here is time critical. */
 const BRIDGE_STATE_POLL_MS = 4000;
 /** How often the TradingApp queue / panic flag is re-read while the page is visible. */
@@ -812,7 +814,6 @@ export function useStreamEngine({
   const benchmarkByTickerRef = useRef<Map<string, string>>(new Map());
   const bridgeStateRef = useRef<BridgeState | null>(null);
   const bridgePollInFlightRef = useRef(false);
-  const screenPollInFlightRef = useRef(false);
   const publishedRef = useRef({ positions: "", log: "", intents: "" });
 
   const setStreamAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
@@ -824,16 +825,11 @@ export function useStreamEngine({
   // ── THE CANDIDATE LIST ──────────────────────────────────────────────────────────────────────
   // One small document, computed on the bridge from the SAME rows and the SAME screen the engine
   // decides on. Nothing is filtered or judged here.
-  const pollScreen = useCallback(async () => {
-    if (screenPollInFlightRef.current) return;
-    screenPollInFlightRef.current = true;
-    try {
-      const response = await fetchWithTimeout(bridgeUrl(`/api/stream/screen/${encodeURIComponent(resolvedScreenKey)}`), { cache: "no-store" });
-      if (!response.ok) {
-        onErrorRef.current?.(`candidate list unavailable (${response.status})`);
+  const applyScreenSnapshot = useCallback((json: { screen?: any } | null, error: string | null) => {
+      if (error) {
+        onErrorRef.current?.(error);
         return;
       }
-      const json = await response.json().catch(() => null);
       const screen = json?.screen;
       if (!screen) return;
 
@@ -873,12 +869,11 @@ export function useStreamEngine({
       });
       onUpdatedRef.current?.();
       onErrorRef.current?.(null);
-    } catch (error: any) {
-      onErrorRef.current?.(error?.message ?? String(error));
-    } finally {
-      screenPollInFlightRef.current = false;
-    }
-  }, [resolvedScreenKey, streamDecisionStore, streamSignalStore, streamUpdatedAtStore]);
+  }, [streamDecisionStore, streamSignalStore, streamUpdatedAtStore]);
+
+  const pollScreen = useCallback(async () => {
+    refreshStreamScreen(resolvedScreenKey);
+  }, [resolvedScreenKey]);
 
   // ── THE BRIDGE'S POSITIONS AND ORDERS ───────────────────────────────────────────────────────
   // Positions and recent orders come from the engine that made them; this only shapes them into
@@ -1001,20 +996,19 @@ export function useStreamEngine({
   }, [strategyId, streamActionLogStore, streamOrderIntentStore, streamPositionStore]);
 
   const pollBridgeState = useCallback(async () => {
+    return;
+    /* Caesar uses the shared engine subscription below; keep this callback for refresh API shape. */
     if (bridgePollInFlightRef.current) return;
     bridgePollInFlightRef.current = true;
     try {
-      const [positionsResponse, engineResponse] = await Promise.all([
-        fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" }),
-        fetchWithTimeout(bridgeUrl("/api/stream/caesar/engine"), { cache: "no-store" }),
-      ]);
-      const positionsJson = positionsResponse.ok ? await positionsResponse.json().catch(() => null) : null;
+      const engineResponse = await fetchWithTimeout(bridgeUrl("/api/stream/caesar/engine"), { cache: "no-store" });
       const engineJson = engineResponse.ok ? await engineResponse.json().catch(() => null) : null;
-      // Neither answered: keep showing the last picture rather than blanking the tables.
-      if (!positionsJson && !engineJson) return;
+      // Positions arrive through the one Caesar-wide shared snapshot below. Keep showing the
+      // last picture if only the engine endpoint is temporarily unavailable.
+      if (!engineJson && !bridgeStateRef.current) return;
       const previous = bridgeStateRef.current;
       bridgeStateRef.current = {
-        positions: Array.isArray(positionsJson?.positions) ? positionsJson.positions : previous?.positions ?? [],
+        positions: previous?.positions ?? [],
         intents: Array.isArray(engineJson?.engine?.recentIntents) ? engineJson.engine.recentIntents : previous?.intents ?? [],
         fetchedAt: Date.now(),
       };
@@ -1026,8 +1020,74 @@ export function useStreamEngine({
     }
   }, [publishBridgeState]);
 
+  // All Caesar panels and browser strategies consume the same positions response. This prevents
+  // two browser engines plus the schedule panels from independently fetching the same document.
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const unsubscribe = subscribeStreamScreen(resolvedScreenKey, (snapshot, error) => {
+      if (!alive) return;
+      applyScreenSnapshot(snapshot, error);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, [enabled, resolvedScreenKey, applyScreenSnapshot]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const unsubscribe = subscribeCaesarPositions((snapshot, error) => {
+      if (!alive || error || !snapshot) return;
+      bridgeStateRef.current = {
+        positions: snapshot.positions,
+        intents: bridgeStateRef.current?.intents ?? [],
+        fetchedAt: Date.now(),
+      };
+      publishBridgeState();
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, [enabled, publishBridgeState]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const fetchStatus = () => fetchWithTimeout(tradingAppBridgeUrl("/status"), { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`execution status unavailable (${response.status})`);
+        return response.json() as Promise<TradingAppExecutionSnapshot>;
+      });
+    const unsubscribe = subscribeSharedPoll("tradingapp-execution-status", fetchStatus, EXECUTION_STATUS_POLL_MS, (snapshot, error) => {
+      if (!alive || error || !snapshot) return;
+      const signature = JSON.stringify(snapshot);
+      if (signature === executionSnapshotSignatureRef.current) return;
+      executionSnapshotSignatureRef.current = signature;
+      streamExecutionSnapshotRef.current = snapshot;
+      lastStatusRefreshAtRef.current = Date.now();
+      streamExecutionStore.applySnapshot(snapshot);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const unsubscribe = subscribeCaesarEngine((snapshot, error) => {
+      if (!alive || error || !snapshot) return;
+      const intents = Array.isArray(snapshot.engine?.recentIntents)
+        ? snapshot.engine!.recentIntents as BridgeIntent[]
+        : bridgeStateRef.current?.intents ?? [];
+      bridgeStateRef.current = {
+        positions: bridgeStateRef.current?.positions ?? [],
+        intents,
+        fetchedAt: Date.now(),
+      };
+      publishBridgeState();
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, [enabled, publishBridgeState]);
+
   // ── THE TRADINGAPP QUEUE ────────────────────────────────────────────────────────────────────
   const refreshExecutionStatus = useCallback(async (force = false): Promise<TradingAppExecutionSnapshot | null> => {
+    if (!force) return streamExecutionSnapshotRef.current ?? streamExecutionStore.getSnapshot();
     const now = Date.now();
     const currentExecutionSnapshot = streamExecutionSnapshotRef.current;
     if (!force && currentExecutionSnapshot && now - lastStatusRefreshAtRef.current < EXECUTION_STATUS_POLL_MS - 500) {
@@ -1311,13 +1371,10 @@ export function useStreamEngine({
     void refresh();
   }, [enabled, refresh]);
 
-  // Three small documents, fetched only while the page is on screen. A hidden tab does nothing at
-  // all, and catches up the moment it is shown.
+  // The candidate screen has its own shared 2s subscription above. This effect keeps only the
+  // remaining bridge status loops and forces a catch-up when the tab becomes visible.
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
-    const screenTimer = window.setInterval(() => {
-      if (!pageIsHidden()) void pollScreen();
-    }, SCREEN_POLL_MS);
     const bridgeTimer = window.setInterval(() => {
       if (!pageIsHidden()) void pollBridgeState();
     }, BRIDGE_STATE_POLL_MS);
@@ -1329,7 +1386,6 @@ export function useStreamEngine({
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      window.clearInterval(screenTimer);
       window.clearInterval(bridgeTimer);
       window.clearInterval(statusTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);

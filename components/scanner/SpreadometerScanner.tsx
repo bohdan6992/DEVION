@@ -59,7 +59,7 @@ import {
 
 import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPost, apiPostWithTimeout, apiUrl, buildPaperQuery, loadDaysApi, normalizeRows, normalizeRowsWithBestParams } from "../../lib/scanner/api";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
@@ -1567,6 +1567,7 @@ export default function SpreadometerScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1582,7 +1583,7 @@ export default function SpreadometerScanner({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = async (d: string) => {
     try {
@@ -2168,6 +2169,7 @@ export default function SpreadometerScanner({
   );
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -2207,7 +2209,7 @@ export default function SpreadometerScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({
@@ -2831,7 +2833,7 @@ export default function SpreadometerScanner({
         // Don't wait out the rest of the 6s poll interval to see a toolbar edit reflected — the
         // bridge already has the new params by the time this resolves, so the SIGNALS card can
         // catch up right away instead of up to 6s later (operator's own instruction, 2026-10-28).
-        .then(() => forceSharedPollNow("stream-limiter-universe", fetchUniverse));
+        .then(() => forceSharedPollNow("stream-spreadometer-universe", fetchUniverse));
     }, 600);
     return () => window.clearTimeout(timer);
   }, [
@@ -2855,7 +2857,7 @@ export default function SpreadometerScanner({
   useEffect(() => {
     if (primaryPanel !== "stream") return;
     let alive = true;
-    const unsubscribe = subscribeSharedPoll("stream-limiter-universe", fetchUniverse, 6_000, (value, err) => {
+    const unsubscribe = subscribeSharedPoll("stream-spreadometer-universe", fetchUniverse, 6_000, (value, err) => {
       if (!alive || err) return;
       setStreamUniverseRows(value?.rows ?? []);
     });
@@ -6239,11 +6241,11 @@ export default function SpreadometerScanner({
               <input
                 type="number"
                 inputMode="decimal"
-                step={0.05}
+                step={5}
                 min={0}
-                max={1}
-                value={limiterMinRate}
-                onChange={(e) => setLimiterMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                max={100}
+                value={ratePctFromFraction(limiterMinRate)}
+                onChange={(e) => setLimiterMinRate(ratePctToFraction(e.target.value))}
                 className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">

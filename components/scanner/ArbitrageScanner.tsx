@@ -23,7 +23,7 @@ import { useStreamPositionMeta } from "../stream/streamPositionStore";
 import { useStreamSignalMeta } from "../stream/streamSignalStore";
 import { buildStreamFilterConfig, toPreRelativeMinutes, type StreamAutomationConfig, type StreamExecutionDescriptor, useStreamEngine } from "../stream/streamEngine";
 import { pushArbitrageLiveParams, toArbitrageLiveParams } from "../../lib/arbitrage/liveParamsClient";
-import { passesStreamRatingFilter } from "../../lib/arbitrage/ratingFilter";
+import { passesStreamRatingFilter, sessionToClassKey } from "../../lib/arbitrage/ratingFilter";
 import { downloadFilterPassLog, useStreamFilterPassLogCount } from "../stream/streamFilterPassLogStore";
 import { useStreamStores } from "../stream/streamStoreRegistry";
 import { useStreamInstance } from "../stream/streamInstance";
@@ -47,7 +47,7 @@ import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPos
 import { useScheduledStartArm } from "../../lib/scanner/useScheduledStartArm";
 import { useEffectiveStreamRules } from "../../lib/scanner/useEffectiveStreamRules";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
@@ -696,6 +696,60 @@ export default function ArbitrageScanner({
   // on, same escape hatch shape as Reversal/OpenFade/OpenRide/DayTwo/OpenDoor/PairFlux already have.
   const [arbitrageIgnoreRatings, setArbitrageIgnoreRatings] = useState(false);
 
+  /**
+   * WHICH rating table each replayed day is judged by, and whether CORE narrows it.
+   *
+   * ArbitRage's ratings always worked - MINRATE/MINTOTAL really do gate this scanner - but they
+   * judged every past day by TODAY's best_params, because the freeze service was hard-coded to
+   * opendoor and ArbitRage therefore had no frozen snapshot, ever. Measured on OPG, that same leak
+   * made 73% of the trades the scanner showed untakeable and flipped the sign of 36% of days.
+   *
+   * ASOF rebuilds rate/total from the trade log inside rolling_perf, counting only trades dated
+   * strictly before the replayed day; EXPO weights those by recency relative to that day; FRZN
+   * reads the morning snapshot (none exist yet - they only start accumulating now); LIVE is the
+   * old behaviour, kept and honestly labelled.
+   */
+  type ArbRatingsMode = "asof" | "asofew" | "frozen" | "live";
+  const [arbRatingsMode, setArbRatingsMode] = useState<ArbRatingsMode>("asof");
+  const [arbCoreOnly, setArbCoreOnly] = useState(false);
+
+  /**
+   * WHAT COUNTS AS A SUCCESS - a separate axis from the rating MODE, available under all four.
+   *
+   * NORM is the published rule, (hard + soft) / total: the event had to normalise.
+   * NRRW is the operator's own (2026-11-08): the ticker gave ONE deviation past the threshold and
+   * nothing is checked afterwards - no exit rule, no normalisation bar. The only question is
+   * whether the deviation at the class close (09:30 for PRE) was SMALLER than at entry, and any
+   * amount of coming in counts.
+   *
+   * NRRW exists only in the trade log - best_params publishes no such number - so under LIVE and
+   * FROZEN it is computed over the whole log rather than read from the file.
+   */
+  type ArbOutcome = "norm" | "narrow";
+  const [arbOutcome, setArbOutcome] = useState<ArbOutcome>("norm");
+
+  /**
+   * The bridge's rating table for the selected mode - what the STREAM gates on.
+   *
+   * Without it the stream is permanently LIVE: its rows carry rate/total that the BROWSER attached
+   * from its own copy of best_params, which is today's table by definition, so the mode selector
+   * could never reach the one place it matters most - which candidates get picked up at all.
+   *
+   * A rating is always built from history and cannot anticipate today, so "as of" is exactly as
+   * meaningful live as in a replay: the honest table for trading today is the one built from
+   * trades dated strictly BEFORE today, which is what the bridge returns for dateNy = today.
+   *
+   * Null while loading or after a failure, and the filter then falls back to the row's own
+   * numbers - a transient bridge error degrades to the old behaviour rather than emptying the
+   * stream.
+   */
+  const [arbRatingTable, setArbRatingTable] = useState<{
+    rows: Record<string, Record<string, number[]>>;
+    fellBackToLive: boolean;
+  } | null>(null);
+
+
+
 
 
 
@@ -1249,6 +1303,10 @@ export default function ArbitrageScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    // Stream mode needs only the live filter configuration. Historical day discovery belongs to
+    // the Scanner surface and otherwise creates an unnecessary request while Caesar is hosting
+    // this component only as a live engine.
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1263,8 +1321,7 @@ export default function ArbitrageScanner({
         setErr(e?.message ?? String(e));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = useCallback(async (d: string) => {
     try {
@@ -1378,6 +1435,11 @@ export default function ArbitrageScanner({
         if (typeof s.dateNy === "string") setDateNy(s.dateNy);
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
+        if (s.arbRatingsMode === "live" || s.arbRatingsMode === "frozen"
+            || s.arbRatingsMode === "asof" || s.arbRatingsMode === "asofew")
+          setArbRatingsMode(s.arbRatingsMode);
+        if (typeof s.arbCoreOnly === "boolean") setArbCoreOnly(s.arbCoreOnly);
+        if (s.arbOutcome === "norm" || s.arbOutcome === "narrow") setArbOutcome(s.arbOutcome);
 
         if (controlledSession == null && (s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST")) {
           setSession(s.session);
@@ -1641,6 +1703,12 @@ export default function ArbitrageScanner({
       dateFrom,
       dateTo,
       session,
+      // The rating strip: which table judges a day, whether CORE narrows it, and what counts as a
+      // success. They reset on reload otherwise, and the page would come back on ASOF/NORM showing
+      // different numbers from the ones that were on screen, with nothing to say why.
+      arbRatingsMode,
+      arbCoreOnly,
+      arbOutcome,
       metric,
       closeMode,
       startAbs,
@@ -1826,6 +1894,9 @@ export default function ArbitrageScanner({
       // changing any of them left persistedFilters identical and the debounced write never fired —
       // they reached localStorage only by accident, whenever some other field changed next. All of
       // them move the P&L, which is why a reload could return a different result for the same day.
+      // The rating strip, for the same reason spelled out just above: read by the object, so it
+      // must be here or a change to it alone would never trigger the write.
+      arbRatingsMode, arbCoreOnly, arbOutcome,
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
@@ -1860,6 +1931,9 @@ export default function ArbitrageScanner({
   );
 
   useEffect(() => {
+    // Presets are scanner chrome. Stream still keeps the filter values themselves, but does not
+    // need to enumerate historical scanner presets on mount.
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -1899,7 +1973,7 @@ export default function ArbitrageScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({
@@ -2638,7 +2712,9 @@ export default function ArbitrageScanner({
   // What the bridge is ACTUALLY enforcing right now — see that hook's own doc comment for why this
   // can disagree with the START/ENTRY STOP/CUTOFF steppers above the moment Caesar owns this
   // strategy (operator's own report, 2026-10-26: "арбітраж продовжує працювати після 9").
-  const effectiveStreamRules = useEffectiveStreamRules("/api/stream/arbitrage/rules");
+  // The standalone Scanner displays this diagnostic. Stream automation is governed by the shared
+  // Caesar/bridge state and does not need another 30s rules poll per hosted strategy.
+  const effectiveStreamRules = useEffectiveStreamRules(isStreamOnlyShell ? null : "/api/stream/arbitrage/rules");
   const streamExecutionSnapshot = useStreamExecutionSnapshot();
   const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
@@ -2813,6 +2889,9 @@ export default function ArbitrageScanner({
       exitConfirmCandles: normalizedMinHoldCandles + 1,
       ratingType: ratingType ?? "any",
       ignoreRatings: arbitrageIgnoreRatings,
+      ratingsMode: arbRatingsMode,
+      coreOnly: arbCoreOnly,
+      ratingOutcome: arbOutcome,
 
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -2996,6 +3075,10 @@ export default function ArbitrageScanner({
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
       ignoreRatings: arbitrageIgnoreRatings,
+      // Which rating table gates each replayed day, and whether CORE narrows it.
+      ratingsMode: arbRatingsMode,
+      coreOnly: arbCoreOnly,
+      ratingOutcome: arbOutcome,
 
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -4025,6 +4108,43 @@ export default function ArbitrageScanner({
   };
 
   // ========= Client-side filters
+  // Declared HERE, not beside the mode state: it reads `session`, which is destructured
+  // further down, and a hook above that line is a temporal-dead-zone ReferenceError on
+  // the first paint. Same trap as the OPG persisted-filters one.
+  const arbRatingClass = sessionToClassKey(session);
+
+  useEffect(() => {
+    // The historical rating table is used only for client-side Scanner row filtering. Live Stream
+    // candidates are filtered by the bridge using streamFilterConfig/sonar snapshot.
+    // No stream-shell early return here, deliberately. The STREAM is the main consumer of this
+    // table: its rows carry rate/total the browser attached from its own best_params, which is
+    // today's by definition, so without the fetch the stream is permanently LIVE and the selector
+    // cannot reach the one place it matters most. (A guard here was a leftover from briefly hiding
+    // the strip on the stream; it silently defeated the whole fix.)
+    let cancelled = false;
+    // LIVE needs no table: the row's own best_params IS today's, which is what LIVE means.
+    if (arbRatingsMode === "live") { setArbRatingTable(null); return; }
+    const q = new URLSearchParams({
+      mode: arbRatingsMode,
+      cls: arbRatingClass,
+      coreOnly: String(arbCoreOnly),
+      ratingType: ratingType ?? "any",
+      ratingOutcome: arbOutcome,
+    });
+    apiGet<any>(`${STRATEGY.api.base}/ratings/table?${q}`)
+      .then((j) => { if (!cancelled) setArbRatingTable({ rows: j?.rows ?? {}, fellBackToLive: !!j?.fellBackToLive }); })
+      .catch(() => { if (!cancelled) setArbRatingTable(null); });
+    return () => { cancelled = true; };
+  }, [arbRatingsMode, arbRatingClass, arbCoreOnly, ratingType, arbOutcome]);
+
+  /** rate/total for one ticker on one side, from that table. pos = Short, neg = Long. */
+  const arbRatingOverride = useCallback((ticker: string, isLong: boolean) => {
+    const cell = arbRatingTable?.rows?.[String(ticker ?? "").toUpperCase()]?.[isLong ? "neg" : "pos"];
+    return Array.isArray(cell) && cell.length >= 2
+      ? { rate: cell[0], total: cell[1] }
+      : { rate: null, total: null };
+  }, [arbRatingTable]);
+
   const filteredActive = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
     const useBinRatingFilter = scannerBinFilterEnabled({ ratingMode, metric });
@@ -4052,6 +4172,7 @@ export default function ArbitrageScanner({
       // server's response but the count on screen never moved, because this ran unconditionally
       // whenever ratingMode was "SESSION" — which is now ALWAYS true (the toggle for it was removed).
       if (ratingMode === "SESSION" && !arbitrageIgnoreRatings) {
+        const ovr = arbRatingOverride(r.ticker, normalizeSide(r.side).isLong === true);
         if (!passesStreamRatingFilter({
           ratingMode: "SESSION",
           signal: r,
@@ -4061,6 +4182,11 @@ export default function ArbitrageScanner({
           minRate: activeBinRule.minRate,
           minTotal: activeBinRule.minTotal,
           ratingType,
+          // The selected RatingsMode's own numbers, when the bridge has them. Under a non-LIVE
+          // mode a ticker absent from the table has no rating for this class/side at all, and
+          // rate=null makes the filter reject it - which is correct: it did not qualify THEN.
+          overrideRate: ovr.rate,
+          overrideTotal: ovr.total,
         })) return false;
       }
       if (!passesScannerBinRatingFilter({
@@ -4143,6 +4269,9 @@ export default function ArbitrageScanner({
           minRate: episodeBinRule.minRate,
           minTotal: episodeBinRule.minTotal,
           ratingType,
+          // Same authority as filteredActive's own call - see the note there.
+          overrideRate: arbRatingOverride(r.ticker, normalizeSide(r.side).isLong === true).rate,
+          overrideTotal: arbRatingOverride(r.ticker, normalizeSide(r.side).isLong === true).total,
         })) return false;
       }
       if (!passesScannerBinRatingFilter({
@@ -4191,6 +4320,10 @@ export default function ArbitrageScanner({
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
 
   useEffect(() => {
+    // Historical ticker metadata is a Scanner fallback for rows missing corr/beta/sigma. The live
+    // stream receives its candidate document directly from the bridge and never consumes this
+    // map, so do not load the potentially large metadata list in Stream mode.
+    if (isStreamOnlyShell) return;
     if (arbitrageTickerMetaLoadedRef.current) return;
     const hasStaticMetricBounds =
       optNumOrNull(minCorr) != null ||
@@ -4243,7 +4376,7 @@ export default function ArbitrageScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [isStreamOnlyShell, optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -5698,23 +5831,121 @@ export default function ArbitrageScanner({
             {arbitrageIgnoreRatings ? "UNIVERSE" : "RATE"}
           </button>
 
+          {/* WHICH rating table judges each replayed day, plus CORE. Four letters each so the row
+              reads as a column of equal words, each in its own colour while inactive because the
+              five are not interchangeable and the difference matters BEFORE you click.
+
+              Hidden entirely under UNIVERSE: with ratings dropped the gate reads no table at all,
+              so there is nothing to choose between. Same placement, labels and treatment as
+              OPG-Reversal's own strip - the rating system is meant to look and behave identically
+              on every strategy, with only the trade logic differing. */}
+          {/* SHOWN ON THE STREAM TOO (the operator's own correction, 2026-11-08, after I
+              wrongly hid it there). A rating is ALWAYS built from history and can never
+              anticipate today, so "as of" is exactly as meaningful live as it is in a
+              replay: the stream wants the table built from trades strictly BEFORE today.
+              And the rating is a primary condition for which candidates the stream picks
+              up at all, not a reporting detail. */}
+          {!arbitrageIgnoreRatings && (
+            <>
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {([
+                { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
+                  title: "AS-OF - each replayed day is judged ONLY by trades dated before it, rate/total rebuilt from the published trade log. No look-ahead, and a day's result never changes again. Default." },
+                { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
+                  title: "AS-OF exponential - as AS-OF, but each surviving trade is weighted by how recent it is RELATIVE TO THE REPLAYED DAY (half-life 40 sessions), then shrunk toward that class's own base rate." },
+                { key: "frozen", label: "FRZN", tone: "text-sky-300/80 hover:text-sky-200",
+                  title: "FROZEN - the rating snapshot actually taken that morning. ArbitRage has none yet: the freeze service only started covering it on 2026-11-08, so every day still falls back to LIVE until they accumulate." },
+                { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
+                  title: "LIVE - TODAY's best_params applied to every replayed day. The old behaviour, kept because 'what would today's knowledge have done' is a real question - but it is why a losing day can later show as positive." },
+              ] as const).map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  title={m.title}
+                  onClick={() => setArbRatingsMode(m.key)}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                    arbRatingsMode === m.key
+                      ? "accent-soft"
+                      : clsx("border-transparent hover:bg-white/5", m.tone)
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* A SECOND capsule, not a continuation of the first. The four on the left are one
+                exclusive choice; CORE and NORM/NRRW are independent switches, and after they were
+                given their own kind of highlight the next thing missing was simply the gap - one
+                container per group is what the Secondary Button Standard says (AGENTS.md), and it
+                is what stops "LIVE + CORE + NRRW lit at once" from reading as three selections in
+                one radio group. */}
+            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <button
+                type="button"
+                onClick={() => setArbCoreOnly((v) => !v)}
+                title={arbCoreOnly
+                  ? "CORE on - only the consistently-good tickers, rebuilt as of each day. NOTE: measured on OPG this list showed NO edge (per-ticker persistence corr +0.006); the stability is real, the edge is not."
+                  : "CORE off - every ticker the rating mode admits. Click to restrict to the consistently-good list."}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  // A TOGGLE, not one of the four to its left. Its "on" state is deliberately a
+                  // different SHAPE of highlight - its own hue as a ring and tint, rather than
+                  // accent-soft's solid fill - because the strip holds two kinds of control and
+                  // only the colour can say so. Without this all six look like one radio group and
+                  // "LIVE + CORE + NRRW lit at once" reads as a bug instead of as three answers to
+                  // three questions.
+                  arbCoreOnly
+                    ? "border-amber-400/70 bg-amber-500/15 text-amber-200"
+                    : "border-transparent text-amber-300/80 hover:text-amber-200 hover:bg-white/5"
+                )}
+              >
+                CORE
+              </button>
+
+              {/* The SUCCESS RULE, not another mode - it answers "what counted as a win", while the
+                  four to its left answer "which history was it measured over". The two axes
+                  compose. Lime rather than reusing a mode colour, so it reads as a different KIND
+                  of choice at a glance. */}
+              <button
+                type="button"
+                onClick={() => setArbOutcome((v) => (v === "norm" ? "narrow" : "norm"))}
+                title={arbOutcome === "narrow"
+                  ? "NRRW - a situation counts as successful when the deviation at the class close (09:30 for PRE) is SMALLER than it was at entry. One deviation past the threshold, nothing checked after it, and any amount of coming in counts. Not in best_params, so it is computed from the trade log in every mode. Click for the published rule."
+                  : "NORM - the published rule: (hard + soft) / total, i.e. the event had to normalise. Click to score instead on whether the deviation simply came in by the close."}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
+                  // Same reasoning as CORE above: a lit toggle, not a selected mode.
+                  arbOutcome === "narrow"
+                    ? "border-lime-400/70 bg-lime-500/15 text-lime-200"
+                    : "border-transparent text-lime-300/80 hover:text-lime-200 hover:bg-white/5"
+                )}
+              >
+                {arbOutcome === "narrow" ? "NRRW" : "NORM"}
+              </button>
+            </div>
+            </>
+          )}
+
+
           <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", arbitrageIgnoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
               <input
                 type="number"
                 inputMode="decimal"
-                step={0.1}
+                step={5}
                 min={0}
-                value={activeRule.minRate}
-                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                value={ratePctFromFraction(activeRule.minRate)}
+                onChange={(e) => setActiveRulePatch({ minRate: ratePctToFraction(e.target.value) })}
                 className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.05).toFixed(4)) })}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Increase min rate"
                 >
@@ -5723,7 +5954,7 @@ export default function ArbitrageScanner({
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.05).toFixed(4)) })}
                   className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Decrease min rate"
                 >
@@ -5866,17 +6097,17 @@ export default function ArbitrageScanner({
                 <input
                   type="number"
                   inputMode="decimal"
-                  step={0.1}
+                  step={5}
                   min={0}
-                  value={activeRule.minRate}
-                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                  value={ratePctFromFraction(activeRule.minRate)}
+                  onChange={(e) => setActiveRulePatch({ minRate: ratePctToFraction(e.target.value) })}
                   className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.05).toFixed(4)) })}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Increase min rate"
                   >
@@ -5885,7 +6116,7 @@ export default function ArbitrageScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.05).toFixed(4)) })}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Decrease min rate"
                   >
@@ -6407,7 +6638,7 @@ export default function ArbitrageScanner({
                       type="button"
                       disabled={zapMode === "off"}
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                       aria-label="Increase start abs"
                     >
@@ -6417,7 +6648,7 @@ export default function ArbitrageScanner({
                       type="button"
                       disabled={zapMode === "off"}
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease start abs"
                     >

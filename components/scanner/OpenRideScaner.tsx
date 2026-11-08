@@ -700,6 +700,7 @@ export default function OpenRideScanner({
   const [openDoorRatingLoading, setOpenDoorRatingLoading] = useState(false);
   const [openDoorRatingError, setOpenDoorRatingError] = useState<string | null>(null);
   useEffect(() => {
+    if (shellMode === "streamOnly") return;
     let cancelled = false;
     const load = async () => {
       setOpenDoorRatingLoading(true);
@@ -725,7 +726,7 @@ export default function OpenRideScanner({
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [shellMode]);
 
   const openDoorResearch = useMemo(() => {
     const odNum = (v: unknown): number | null => {
@@ -1548,6 +1549,7 @@ export default function OpenRideScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1563,7 +1565,7 @@ export default function OpenRideScanner({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = async (d: string) => {
     try {
@@ -2154,6 +2156,7 @@ export default function OpenRideScanner({
   );
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -2193,7 +2196,7 @@ export default function OpenRideScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({

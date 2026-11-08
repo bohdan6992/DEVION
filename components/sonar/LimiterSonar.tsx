@@ -41,7 +41,7 @@ import { SHARED_FILTER_PRESETS_CHANGED_EVENT, deleteSharedFilterLocalPreset, get
 import type { PresetDto } from "@/types/presets";
 import { parseReportDateAffectsTodaySession, rowReportAffectsTodaySession } from "../../lib/filters/reportTiming";
 import { rowExcludedByBorrow } from "../../lib/filters/borrow";
-import { clampNumber, optNumOrNull } from "../../lib/scanner/format";
+import { clampNumber, optNumOrNull, ratePctFromFraction, ratePctToFraction } from "../../lib/scanner/format";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import ScannerHeader from "../scanner/shell/panels/ScannerHeader";
 import SharedMinMaxPanel from "../scanner/shell/panels/SharedMinMaxPanel";
@@ -3983,11 +3983,11 @@ export default function LimiterSonar() {
                   <input
                     type="number"
                     inputMode="decimal"
-                    step={0.05}
+                    step={5}
                     min={0}
-                    max={1}
-                    value={limiterMinRate}
-                    onChange={(e) => setLimiterMinRate(Math.max(0, clampNumber(e.target.value, 0)))}
+                    max={100}
+                    value={ratePctFromFraction(limiterMinRate)}
+                    onChange={(e) => setLimiterMinRate(ratePctToFraction(e.target.value))}
                     className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
                   />
                   <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">

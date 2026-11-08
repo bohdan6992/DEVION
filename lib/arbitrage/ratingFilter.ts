@@ -161,6 +161,10 @@ export type RatingFilterArgs = {
   minTotal: number;
   /** Which total bucket to check in SESSION mode: "hard" | "soft" | "any" (default "any"). */
   ratingType?: string | null;
+  /** Rate/total from the bridge's ratings/table for the selected RatingsMode, if fetched. When
+   *  set these win over anything on the row - see the note at the use site. */
+  overrideRate?: number | null;
+  overrideTotal?: number | null;
 };
 
 /**
@@ -172,6 +176,7 @@ export type RatingFilterArgs = {
  */
 export function passesStreamRatingFilter(args: RatingFilterArgs): boolean {
   const { ratingMode, signal, session, side, sigmaAbs, minRate, minTotal, ratingType } = args;
+  const { overrideRate, overrideTotal } = args;
   const mode = (ratingMode ?? "SESSION").toUpperCase();
 
   const effRate = Math.max(0, Number(minRate) || 0);
@@ -185,11 +190,23 @@ export function passesStreamRatingFilter(args: RatingFilterArgs): boolean {
     // best_params.best is a fallback (may be global, not session-specific).
     const bestParams = getBestParamsRaw(signal);
     const bpBest = safeObj(bestParams?.best ?? bestParams?.Best);
-    const r = optNum(
-      signal?._bestRating ?? signal?.bestRating ??
-      bpBest?.rating ?? bpBest?.Rating ?? bpBest?.rate ?? bpBest?.Rate ??
-      signal?.rating ?? signal?.Rating
-    );
+    // An OVERRIDE wins outright over everything on the row.
+    //
+    // The row's own rating comes from the browser's copy of best_params, which is by definition
+    // TODAY's table - so without this the stream is permanently in LIVE mode and the ASOF/EXPO/
+    // FRZN/CORE selector cannot reach it. When the caller has fetched the bridge's table for the
+    // selected mode (ratings/table), that table is the authority and the row is ignored.
+    //
+    // Null override => not fetched yet, or the fetch failed: fall through to the old chain rather
+    // than reject everything, so a transient bridge error degrades to the previous behaviour
+    // instead of silently emptying the stream.
+    const r = overrideRate != null
+      ? optNum(overrideRate)
+      : optNum(
+          signal?._bestRating ?? signal?.bestRating ??
+          bpBest?.rating ?? bpBest?.Rating ?? bpBest?.rate ?? bpBest?.Rate ??
+          signal?.rating ?? signal?.Rating
+        );
     // Respect ratingType (hard/soft/any) matching Sonar's getBestTotalByType behavior.
     const type = (ratingType ?? "any").toLowerCase();
     let t: number | null;
@@ -202,7 +219,11 @@ export function passesStreamRatingFilter(args: RatingFilterArgs): boolean {
         ? (hardV ?? 0) + (softV ?? 0)
         : optNum(signal?._bestTotal ?? signal?.bestTotal ?? bpBest?.total ?? bpBest?.Total ?? bpBest?.count ?? bpBest?.Count ?? signal?.ratingTotal ?? signal?.RatingTotal);
     })();
-    if (type === "hard") {
+    if (overrideTotal != null) {
+      // The bridge already applied ratingType when it built the table, so no type branch here -
+      // branching again would apply it twice and silently under-count.
+      t = optNum(overrideTotal);
+    } else if (type === "hard") {
       t = optNum(signal?._bestHard ?? bpBest?.hard ?? bpBest?.Hard) ?? anyTotal;
     } else if (type === "soft") {
       t = optNum(signal?._bestSoft ?? bpBest?.soft ?? bpBest?.Soft) ?? anyTotal;

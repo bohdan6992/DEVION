@@ -48,7 +48,7 @@ import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPos
 import { useScheduledStartArm } from "../../lib/scanner/useScheduledStartArm";
 import { useEffectiveStreamRules } from "../../lib/scanner/useEffectiveStreamRules";
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
-import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
+import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
@@ -1223,6 +1223,7 @@ export default function PairFluxScanner({
 
   // ========= Load available days on mount
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     (async () => {
       try {
         setErr(null);
@@ -1237,8 +1238,7 @@ export default function PairFluxScanner({
         setErr(e?.message ?? String(e));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const handleDeleteDay = useCallback(async (d: string) => {
     try {
@@ -1842,6 +1842,7 @@ export default function PairFluxScanner({
   );
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     let cancelled = false;
 
     function loadScannerPresets() {
@@ -1881,7 +1882,7 @@ export default function PairFluxScanner({
       window.removeEventListener(SHARED_FILTER_PRESETS_CHANGED_EVENT, loadScannerPresets as EventListener);
       window.removeEventListener("focus", loadScannerPresets);
     };
-  }, []);
+  }, [isStreamOnlyShell]);
 
   const buildScannerSharedFilterPresetJson = () =>
     JSON.stringify({
@@ -2595,7 +2596,7 @@ export default function PairFluxScanner({
   // can disagree with the START/ENTRY STOP/CUTOFF steppers above the moment Caesar owns this
   // strategy (same mechanism reported for Arbitrage, 2026-10-26: "арбітраж продовжує працювати
   // після 9").
-  const effectiveStreamRules = useEffectiveStreamRules("/api/stream/pairflux/rules");
+  const effectiveStreamRules = useEffectiveStreamRules(isStreamOnlyShell ? null : "/api/stream/pairflux/rules");
   const streamExecutionSnapshot = useStreamExecutionSnapshot();
   const streamWindowsBound = Boolean(streamExecutionSnapshot?.boundWindow?.isBound && streamExecutionSnapshot?.mainWindow?.isBound);
 
@@ -4180,6 +4181,7 @@ export default function PairFluxScanner({
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
 
   useEffect(() => {
+    if (isStreamOnlyShell) return;
     if (arbitrageTickerMetaLoadedRef.current) return;
     const hasStaticMetricBounds =
       optNumOrNull(minCorr) != null ||
@@ -4232,7 +4234,7 @@ export default function PairFluxScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma]);
+  }, [isStreamOnlyShell, optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -5570,17 +5572,17 @@ export default function PairFluxScanner({
               <input
                 type="number"
                 inputMode="decimal"
-                step={0.1}
+                step={5}
                 min={0}
-                value={activeRule.minRate}
-                onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                value={ratePctFromFraction(activeRule.minRate)}
+                onChange={(e) => setActiveRulePatch({ minRate: ratePctToFraction(e.target.value) })}
                 className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
               />
               <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.05).toFixed(4)) })}
                   className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Increase min rate"
                 >
@@ -5589,7 +5591,7 @@ export default function PairFluxScanner({
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                  onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.05).toFixed(4)) })}
                   className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                   aria-label="Decrease min rate"
                 >
@@ -5715,17 +5717,17 @@ export default function PairFluxScanner({
                 <input
                   type="number"
                   inputMode="decimal"
-                  step={0.1}
+                  step={5}
                   min={0}
-                  value={activeRule.minRate}
-                  onChange={(e) => setActiveRulePatch({ minRate: Math.max(0, clampNumber(e.target.value, 0)) })}
+                  value={ratePctFromFraction(activeRule.minRate)}
+                  onChange={(e) => setActiveRulePatch({ minRate: ratePctToFraction(e.target.value) })}
                   className={clsx("center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]", "accent-text")}
                 />
                 <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.1).toFixed(4)) })}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) + 0.05).toFixed(4)) })}
                     className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Increase min rate"
                   >
@@ -5734,7 +5736,7 @@ export default function PairFluxScanner({
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.1).toFixed(4)) })}
+                    onClick={() => setActiveRulePatch({ minRate: Math.max(0, +((activeRule.minRate ?? 0) - 0.05).toFixed(4)) })}
                     className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
                     aria-label="Decrease min rate"
                   >
@@ -6263,7 +6265,7 @@ export default function PairFluxScanner({
                     <button
                       type="button"
                         onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.1).toFixed(4)))}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v + 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
                       aria-label="Increase start abs"
                     >
@@ -6272,7 +6274,7 @@ export default function PairFluxScanner({
                     <button
                       type="button"
                         onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.1).toFixed(4)))}
+                      onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.05).toFixed(4)))}
                       className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40"
                       aria-label="Decrease start abs"
                     >

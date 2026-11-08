@@ -30,6 +30,7 @@ import { createPortal } from "react-dom";
 
 import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { subscribeCaesarPositions } from "@/lib/caesar/positionsPoll";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import { resolveClassByBridgeId, CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
 import { SEGMENT_STRATEGY_KEYS } from "@/lib/caesar/segmentStrategies";
@@ -503,19 +504,11 @@ export default function CaesarPositions({
   // key rather than running a fourth independent one against the same endpoint.
   useEffect(() => {
     let alive = true;
-    // NOT the full response body: CaesarBridgeDecisions/CaesarCharts already subscribe to this
-    // exact key expecting the fetcher to resolve to `positions` alone — subscribeSharedPoll runs
-    // only the FIRST subscriber's fetcher for a given key, so changing this component's shape
-    // here would silently hand the other two a value they do not expect, or vice versa depending
-    // on mount order. closedOwners rides the same endpoint but its OWN poll key below instead.
-    const fetchAll = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
-        .then((body) => body.positions);
-    const unsubscribe = subscribeSharedPoll("bridge-all-positions", fetchAll, 2000, (value, err) => {
+    // The complete response is shared; claims and closed-owner attribution use one snapshot.
+    const unsubscribe = subscribeCaesarPositions((value, err) => {
       if (!alive || err || !value) return;
       setClaims(
-        value.flatMap((p) => {
+        value.positions.flatMap((p) => {
           const strategy = resolveClassByBridgeId(p.strategyId);
           return strategy
             ? [{ strategyKey: strategy.key, position: positionFromBridge(p), beta: p.beta, corr: p.corr, sigma: p.sigma, awaitingFill: p.awaitingFill === true }]
@@ -527,10 +520,7 @@ export default function CaesarPositions({
   }, []);
 
   /**
-   * Who closed a ticker today — a SEPARATE poll key from the one above, even though it is the
-   * exact same URL: subscribeSharedPoll runs only the first subscriber's fetcher for a given key,
-   * so this cannot ride "bridge-all-positions" without also changing what that key resolves to
-   * for CaesarBridgeDecisions/CaesarCharts. One extra request every 2s is the cost of that safety.
+   * Who closed a ticker today — read from the same complete snapshot as open claims.
    *
    * Without this, a position that CLOSES drops out of `/positions` entirely — the only thing the
    * claims poll above reads — so a closed ticker read UNCLAIMED no matter how sure the operator
@@ -538,11 +528,7 @@ export default function CaesarPositions({
    */
   useEffect(() => {
     let alive = true;
-    const fetchClosedOwners = () =>
-      fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
-        .then((res) => res.json() as Promise<BridgeTrackedPositionsResponse>)
-        .then((body) => ({ closedOwners: body.closedOwners ?? {}, prunes: body.prunes ?? [] }));
-    const unsubscribe = subscribeSharedPoll("bridge-closed-owners", fetchClosedOwners, 2000, (value, err) => {
+    const unsubscribe = subscribeCaesarPositions((value, err) => {
       if (!alive || err || !value) return;
       setClosedOwners(value.closedOwners);
       setPrunes(value.prunes);
