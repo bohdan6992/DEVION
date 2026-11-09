@@ -93,6 +93,19 @@ type ArbitrageStreamViewProps = {
    * ENTRY_READY/entryReadyCount logic the way a real decision row would be.
    */
   universeSignalsRows?: StreamUniverseSignalRow[];
+  /**
+   * Same slot as universeSignalsRows (the EXECUTOR tab's own SIGNALS card), one level further:
+   * replaces the whole card's body with arbitrary content instead of coercing it through
+   * StreamUniverseSignalRow's flat {ticker, rating, total, sigma, alpha} shape. OPG•Rootation's own
+   * instruction, 2026-11-09 ("список сигналів повинен відображатися у цьому вікні", the same ask
+   * universeSignalsRows was built for on 2026-10-23 — see that prop's own doc comment): its real
+   * candidate row (09:30 anchor, live price, move%, Side, GAP%-known status) does not fit that flat
+   * shape without losing exactly the columns the operator cares about, so this renders
+   * OPGRootationCandidatesPanel directly instead of inventing fake rating/total/sigma/alpha values.
+   * Takes priority over universeSignalsRows when both are supplied. `undefined`/omitted keeps every
+   * other strategy's existing SIGNALS card (decision-store table or universeSignalsRows) untouched.
+   */
+  customSignalsPanel?: React.ReactNode;
 };
 
 export type StreamUniverseSignalRow = {
@@ -1471,6 +1484,7 @@ export default function OpenDoorStreamView({
   entryCutoffActive = true,
   hideAutomationButtons = false,
   universeSignalsRows,
+  customSignalsPanel,
 }: ArbitrageStreamViewProps) {
   const [manualTickers, setManualTickers] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
@@ -1838,7 +1852,7 @@ export default function OpenDoorStreamView({
               onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
               onTickerClick={onTickerClick}
             />
-            {universeSignalsRows ? (
+            {customSignalsPanel ? customSignalsPanel : universeSignalsRows ? (
               <StreamUniverseSignalsTable
                 title="SIGNALS"
                 rows={universeSignalsRows}

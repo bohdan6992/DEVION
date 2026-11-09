@@ -120,10 +120,13 @@ function HedgeFieldRow({ label, title, children }: { label: string; title: strin
 }
 
 /** The spinner box itself — Spinner Input Standard: transparent, centered mono digits, arrows flush
- * right, hover/focus only, no colored fill (this control has no coral/mint/silver role split). */
+ * right, hover/focus only. `valueClassName` colors the digits per field (RATIO/GAP/PERIOD each get
+ * their own role color, operator's own instruction — same "one color per role" shape the Spinner
+ * Input Standard's coral/mint/silver/amber boxes already use elsewhere, just applied to the digits
+ * here since this control's three fields share one outer pill rather than three separate ones). */
 function HedgeNumberInput({
-  value, step, min, onChange,
-}: { value: number; step: number; min: number; onChange: (v: number) => void }) {
+  value, step, min, onChange, valueClassName,
+}: { value: number; step: number; min: number; onChange: (v: number) => void; valueClassName?: string }) {
   const [text, setText] = useState(String(value));
   useEffect(() => {
     if (Number(text.replace(",", ".")) !== value) setText(String(value));
@@ -141,7 +144,11 @@ function HedgeNumberInput({
   };
 
   return (
-    <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+    // w-16, not the usual Spinner Input Standard w-14 — this is its own local component (not the
+    // shared SpinnerInput.tsx every other w-14 box in the app reuses), and GAP's own step (500)
+    // reaches 5-digit values (10000+) routinely; w-14's 36px of text room clipped them against the
+    // always-reserved arrow-column padding (operator's own report, 2026-11-09).
+    <div className="group relative h-7 w-16 overflow-hidden rounded-md">
       <input
         type="number"
         inputMode="decimal"
@@ -151,7 +158,10 @@ function HedgeNumberInput({
         onChange={(e) => { setText(e.target.value); commit(e.target.value); }}
         onBlur={() => setText(String(value))}
         aria-label="Hedge setting"
-        className="center-spin h-7 w-full bg-transparent border-0 !pl-1 !pr-4 text-[11px] text-zinc-200 font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+        className={clsx(
+          "center-spin h-7 w-full bg-transparent border-0 !pl-1 !pr-4 text-[11px] font-mono tabular-nums text-center placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]",
+          valueClassName ?? "text-zinc-200"
+        )}
       />
       <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
         <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => bump(1)} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors" aria-label="Increase">▲</button>
@@ -211,6 +221,21 @@ export default function CaesarControlBar({
        OUTER edge, which is what makes it read as a separate thing acting on the plan rather than a
        footer belonging to it. */
     <div className="mt-3 flex items-center justify-between">
+      {/* HedgeNumberInput's own `.center-spin` rule only hides the native number-input steppers on
+          pages that mount ScannerGlobalStyles — the Caesar page never does, so the browser's own
+          up/down arrows were showing doubled up with this component's own ▲▼ buttons (operator's own
+          report, 2026-11-09). Scoped locally here instead of pulling in that whole component (which
+          carries other Scanner-specific rules this page has no business inheriting). */}
+      <style jsx global>{`
+        input.center-spin[type="number"] {
+          -moz-appearance: textfield;
+        }
+        input.center-spin[type="number"]::-webkit-outer-spin-button,
+        input.center-spin[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+      `}</style>
       {/* ---- the keys ---- */}
       <div className="flex items-center gap-2">
         {/*
@@ -367,53 +392,64 @@ export default function CaesarControlBar({
       <div ref={hedgePanelRef} className="flex items-center gap-2">
         {hedgePanelOpen && (
           <>
-            <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
-              <button
-                type="button"
-                aria-pressed={!hedge.enabled}
-                onClick={() => hedge.setEnabled(false)}
-                title="Hedge off."
-                className={clsx(
-                  "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  !hedge.enabled ? "accent-soft" : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                OFF
-              </button>
-              <button
-                type="button"
-                aria-pressed={hedge.enabled}
-                onClick={() => hedge.setEnabled(true)}
-                title="On a skew, send real QQQ buy/sell orders across the whole PRE segment's combined book to close the BP gap."
-                className={clsx(
-                  "px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  hedge.enabled ? "accent-soft" : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                HEDGE
-              </button>
-            </div>
+            {/* ONE toggle, not a segmented OFF/HEDGE pair — a single mode is active at a time by
+                construction now (operator's own instruction, 2026-11-09), click flips hedge.enabled.
+                Active = green, inactive = red (operator's own explicit color choice) — not this
+                control's own former violet accent, which stays on the icon key only. */}
+            <button
+              type="button"
+              onClick={() => hedge.setEnabled(!hedge.enabled)}
+              aria-pressed={hedge.enabled}
+              title={
+                hedge.enabled
+                  ? "HEDGE on — click to turn off."
+                  : "HEDGE off — click to turn on. On a skew, sends real QQQ buy/sell orders across the whole PRE segment's combined book to close the BP gap."
+              }
+              className={clsx(
+                "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+                hedge.enabled
+                  ? "bg-emerald-500 text-white shadow-[0_0_16px_rgba(16,185,129,0.36)]"
+                  : "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+              )}
+            >
+              {hedge.enabled ? "HEDGE" : "OFF"}
+            </button>
 
             <div
               className={clsx("flex h-7 items-center gap-1 pl-2 pr-2 rounded-lg bg-black/20", !hedge.enabled && "opacity-60")}
-              title="Trigger ratio: how many times more BP one side must hold than the other before the hedge acts. 2 = twice the notional on one side."
             >
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">RATIO</span>
-              <HedgeNumberInput value={hedge.ratio} step={0.5} min={1.1} onChange={hedge.setRatio} />
+              {/* RATIO and GAP are mutually exclusive, not additive — DirectionBalancer.cs's own
+                  `gapMode = s.MinGapBp > 0` is a flat switch, RATIO is not even read once GAP>0
+                  (operator's own question, 2026-11-09: "як зрозуміти який режим зараз працює").
+                  Dims whichever rule is NOT currently deciding, same "grayed out while inert" treatment
+                  OPGRootationScanner.tsx's own RATE/UNIVERSE pair already uses for MINRATE/MINTOTAL. */}
               <span
-                className="flex h-7 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
-                title="MIN GAP (BP). 0 = off, RATIO decides. Above 0 it replaces the ratio rule: any difference of at least this many BP is a skew."
+                className={clsx("flex h-7 items-center text-[10px] font-mono uppercase tracking-wide", hedge.minGapBp > 0 ? "text-zinc-600" : "text-zinc-500")}
+                title={hedge.minGapBp > 0 ? "RATIO is inactive — GAP above 0 overrides it." : "Trigger ratio: how many times more BP one side must hold than the other before the hedge acts. 2 = twice the notional on one side. Active now."}
+              >
+                RATIO
+              </span>
+              <HedgeNumberInput
+                value={hedge.ratio} step={0.5} min={1.1} onChange={hedge.setRatio}
+                valueClassName={hedge.minGapBp > 0 ? "text-violet-300/40" : "text-violet-300"}
+              />
+              <span
+                className={clsx("flex h-7 items-center pl-1 text-[10px] font-mono uppercase tracking-wide", hedge.minGapBp > 0 ? "text-zinc-500" : "text-zinc-600")}
+                title={hedge.minGapBp > 0 ? "MIN GAP (BP) — active now, overriding RATIO: any difference of at least this many BP is a skew." : "MIN GAP (BP). 0 = off, RATIO decides. Above 0 it replaces the ratio rule entirely."}
               >
                 GAP
               </span>
-              <HedgeNumberInput value={hedge.minGapBp} step={500} min={0} onChange={hedge.setMinGapBp} />
+              <HedgeNumberInput
+                value={hedge.minGapBp} step={500} min={0} onChange={hedge.setMinGapBp}
+                valueClassName={hedge.minGapBp > 0 ? "text-amber-300" : "text-amber-300/40"}
+              />
               <span
                 className="flex h-7 items-center pl-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wide"
                 title="How often the combined book is checked and, if skewed, re-hedged — in minutes."
               >
                 PERIOD
               </span>
-              <HedgeNumberInput value={hedge.checkIntervalMinutes} step={5} min={1} onChange={hedge.setCheckIntervalMinutes} />
+              <HedgeNumberInput value={hedge.checkIntervalMinutes} step={5} min={1} onChange={hedge.setCheckIntervalMinutes} valueClassName="text-sky-300" />
               {hedge.enabled && (
                 <span className="flex h-7 items-center gap-1.5 pl-2 text-[10px] font-mono tabular-nums select-none">
                   {hedge.status?.hedgedEpisode ? (

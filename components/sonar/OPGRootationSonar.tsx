@@ -11,7 +11,6 @@ import {
   fetchOPGRootationSonarSnapshot,
   type OPGRootationSonarRow,
 } from "@/lib/sonar/opgRootationSnapshotClient";
-import OPGRootationCandidatesPanel from "@/components/scanner/OPGRootationCandidatesPanel";
 // REPURPOSED 2026-11-04 (operator's own instruction, following their own Sonar screenshot): this
 // toolbar used to push to its own OPGRootationSonarLiveParams store via pushOPGRootationSonarLiveParams
 // — but that store's backend controller was never actually built (the fork's own "Sonar-display
@@ -3877,8 +3876,6 @@ export default function OPGRootationSonar() {
           busy={loading}
           variantString="Reconnect stream"
         />
-
-        <OPGRootationCandidatesPanel />
 
         {showPresets && (
           <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">

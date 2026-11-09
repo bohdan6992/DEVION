@@ -5864,8 +5864,6 @@ export default function OPGRootationScanner({
           variantString={variantString}
         />
 
-        <OPGRootationCandidatesPanel />
-
         {showPresets && (
           <div className="rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 backdrop-blur-md">
             <PresetPicker
@@ -6888,6 +6886,7 @@ export default function OPGRootationScanner({
             automationLaunchEnabled={streamViewModeOverride === "auto" || streamViewModeOverride === "stream-auto-tab"}
             entryCutoffActive={streamSignalClass === "ark"}
             hideAutomationButtons
+            customSignalsPanel={<OPGRootationCandidatesPanel />}
           />
         )}
 

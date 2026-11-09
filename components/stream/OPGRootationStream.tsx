@@ -3,14 +3,15 @@
 import clsx from "clsx";
 import AutoSizer from "react-virtualized-auto-sizer";
 import { List, type RowComponentProps } from "react-window";
-import React, { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import React, { memo, useCallback, useMemo, useState } from "react";
 import { useStreamActionLogRows } from "./streamActionLogStore";
-import { useStreamDecisionIds, useStreamDecisionRow, useStreamDecisionVersion } from "./streamDecisionStore";
+import { useStreamDecisionIds, useStreamDecisionVersion } from "./streamDecisionStore";
 import { useStreamExecutionSnapshot } from "./streamExecutionStore";
 import { useStreamOrderIntentMeta, useStreamOrderIntentRows } from "./streamOrderIntentStore";
 import { useStreamBookSnapshotState, useStreamMainWindowSnapshotState } from "./streamOcrStores";
 import { useStreamActiveDecisionRows, useStreamPositionMeta, useStreamPositionRows } from "./streamPositionStore";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
+import OPGRootationCandidatesPanel from "../scanner/OPGRootationCandidatesPanel";
 import { setActiveTicker, useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
 import { useStreamUpdatedAt } from "./streamUpdatedAtStore";
 import { downloadStreamLog, useStreamLogEntries } from "./streamLogStore";
@@ -532,39 +533,6 @@ function StreamDecisionVirtualRow({
   );
 }
 
-function StreamDecisionStoreVirtualRow({
-  ariaAttributes,
-  index,
-  style,
-  rowIds,
-  onTickerClick,
-}: RowComponentProps<{ rowIds: string[]; onTickerClick?: (ticker: string) => void }>) {
-  const rowId = rowIds[index];
-  const row = useStreamDecisionRow(rowId);
-  if (!row) return <div style={style} />;
-
-  return (
-    <div
-      {...ariaAttributes}
-      style={style}
-      onClick={() => onTickerClick?.(row.ticker)}
-      className={clsx(
-        "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center gap-0 border-t border-white/5 px-0 text-xs font-mono transition-colors",
-        index % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-        onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
-      )}
-    >
-      <div className="px-2 text-zinc-100 font-semibold">{row.ticker}</div>
-      <div className="px-2 text-zinc-400">{row.benchmark}</div>
-      <div className="px-2"><SideBadge side={row.side} /></div>
-      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-      <div className="px-2 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-      <div className="px-2 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-      <div className="px-2"><StreamStatusBadge status={row.status} /></div>
-    </div>
-  );
-}
 
 /**
  * Height of every panel on the stream board. The four blocks sit in two rows of two and
@@ -706,96 +674,6 @@ const StreamDecisionTable = memo(function StreamDecisionTable({
   );
 });
 
-const StreamSignalsDecisionTable = memo(function StreamSignalsDecisionTable({
-  title,
-  rowIds,
-  emptyMessage,
-  onTickerClick,
-}: {
-  title: string;
-  rowIds: string[];
-  emptyMessage: string;
-  onTickerClick?: (ticker: string) => void;
-}) {
-  const deferredRowIds = useDeferredValue(rowIds);
-  const decisionStore = useStreamStores().decision;
-  const useVirtualRows = deferredRowIds.length > STREAM_DECISION_VIRTUAL_THRESHOLD;
-
-  return (
-    <div className={clsx("scanner-panel-surface flex flex-col overflow-hidden rounded-xl bg-[#0a0a0a]/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]", STREAM_PANEL_HEIGHT)}>
-      <div className="flex shrink-0 items-center justify-between gap-3 bg-[#0a0a0a]/40 px-3 py-2 backdrop-blur-xl">
-        <div className="text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-zinc-500">
-          {title}
-        </div>
-        <div className="text-[10px] font-mono uppercase text-zinc-500">
-          {intn(deferredRowIds.length)}
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        <div>
-          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap bg-[#0a0a0a]/55 text-xs font-mono text-zinc-300 backdrop-blur-xl">
-            <div className="px-2 py-2.5 text-left text-zinc-200">Ticker</div>
-            <div className="px-2 py-2.5 text-left text-sky-300/70">Bench</div>
-            <div className="px-2 py-2.5 text-left text-violet-300/80">Side</div>
-            <div className="px-2 py-2.5 text-right text-violet-300">Signal</div>
-            <div className="px-2 py-2.5 text-right text-amber-400/80">SpreadBid%</div>
-            <div className="px-2 py-2.5 text-right text-emerald-300/80">Net Edge</div>
-            <div className="px-2 py-2.5 text-left text-pink-400/80">REP</div>
-            <div className="px-2 py-2.5 text-left text-teal-300/80">Status</div>
-          </div>
-
-          {!deferredRowIds.length ? (
-            <div className="p-8 text-center text-xs font-mono text-zinc-500">
-              {emptyMessage}
-            </div>
-          ) : useVirtualRows ? (
-            <div className="h-[248px]">
-              <AutoSizer>
-                {({ height, width }) => (
-                  <List
-                    rowComponent={StreamDecisionStoreVirtualRow}
-                    rowCount={deferredRowIds.length}
-                    rowHeight={STREAM_DECISION_ROW_HEIGHT}
-                    rowProps={{ rowIds: deferredRowIds, onTickerClick }}
-                    overscanCount={8}
-                    style={{ width, height }}
-                  />
-                )}
-              </AutoSizer>
-            </div>
-          ) : (
-            <div className="text-xs font-mono">
-              {deferredRowIds.map((id, i) => {
-                const row = decisionStore.getRow(id);
-                if (!row) return null;
-                return (
-                  <div
-                    key={`${title}|${row.ticker}|${i}`}
-                    onClick={() => onTickerClick?.(row.ticker)}
-                    className={clsx(
-                      "grid grid-cols-[minmax(0,1.48fr)_minmax(0,1.2fr)_minmax(0,1.16fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.72fr)_minmax(0,1.72fr)] [&>div]:min-w-0 [&>div]:overflow-hidden [&>div]:whitespace-nowrap items-center border-t border-white/5 transition-colors",
-                      i % 2 === 0 ? "bg-white/[0.01]" : "bg-transparent",
-                      onTickerClick ? "cursor-pointer hover:bg-white/[0.05]" : "hover:bg-white/[0.03]"
-                    )}
-                  >
-                    <div className="px-2 py-2.5 text-zinc-100 font-semibold">{row.ticker}</div>
-                    <div className="px-2 py-2.5 text-zinc-400">{row.benchmark}</div>
-                    <div className="px-2 py-2.5"><SideBadge side={row.side} /></div>
-                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.signal, 2)}</div>
-                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.spreadBidPct, 3)}</div>
-                    <div className="px-2 py-2.5 text-right tabular-nums text-zinc-200">{num(row.netEdge, 3)}</div>
-                    <div className="px-2 py-2.5 text-left font-mono text-[11px] text-pink-400">{row.report ?? "-"}</div>
-                    <div className="px-2 py-2.5"><StreamStatusBadge status={row.status} /></div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-});
 
 function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || ms < 0) return "—";
@@ -1702,12 +1580,17 @@ export default function OpenDoorStreamView({
               onDismissAll={onDismissActivePositions && activeTableRows.length > 0 ? () => onDismissActivePositions(activeTableRows.map((r) => r.ticker)) : undefined}
               onTickerClick={onTickerClick}
             />
-            <StreamSignalsDecisionTable
-              title="SIGNALS"
-              rowIds={signalDecisionIds}
-              emptyMessage="No filtered signals waiting in STREAM."
-              onTickerClick={onTickerClick}
-            />
+            {/* 2026-11-09, operator's own instruction: "список сигналів повинен відображатися у
+                цьому вікні" — StreamSignalsDecisionTable above read signalDecisionIds, which comes
+                from the shared cross-strategy decision store (useStreamDecisionIds) that
+                OPGRootationEntryTriggerService never writes to — it dispatches straight through its
+                own trigger loop, bypassing ServerStrategyRunner's normal intents/decision pipeline
+                every Arbitrage-style strategy uses. That slot could never show anything for this
+                strategy. OPGRootationCandidatesPanel already is this strategy's own live candidate
+                list (GAP% still empty AND own move% threshold cleared, server-pushed, 1s poll — see
+                that component's own doc comment), it just used to render only on the Scanner/Sonar
+                pages, not here. Swapped in directly, same slot. */}
+            <OPGRootationCandidatesPanel />
           </div>
           <StreamSimLog />
         </div>
