@@ -26,7 +26,12 @@ export default function OPGRootationCandidatesPanel() {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
 
   useEffect(() => {
-    const unsubscribe = subscribeSharedPoll("opgrootation-candidates", fetchOPGRootationCandidates, 5_000, (value) => {
+    // 2s, not the 5s this panel started at — matches OPGRootationEntryTriggerService's own
+    // SignalCheckInterval (the backend re-reads GAP% off a live row that often, not slower; see
+    // that service's own header note). Narrowed 2026-11-09, operator's own instruction: the
+    // gapKnown filter below is only as fresh as this poll, and only one subscriber ever uses the
+    // "opgrootation-candidates" channel key, so this interval is this panel's alone to set.
+    const unsubscribe = subscribeSharedPoll("opgrootation-candidates", fetchOPGRootationCandidates, 2_000, (value) => {
       setAllRows(Array.isArray(value) ? value : []);
       setUpdatedAt(Date.now());
     });
