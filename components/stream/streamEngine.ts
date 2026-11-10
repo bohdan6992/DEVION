@@ -385,6 +385,9 @@ export type StreamFilterBuilderArgs = {
     /** B5ETB = ITB / NO (hard to borrow). Optional: only the Arbitrage toolbar has these two. */
     itb?: boolean;
     hard?: boolean;
+    /** Post-market zap-sigma anomaly — see PostAnomalyService.cs. The bridge resolves its own
+     * clean set; this is live-only (Sonar/Stream), not honoured by the historical Scanner replay. */
+    anom?: boolean;
   };
   include: {
     usaOnly: boolean;

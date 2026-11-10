@@ -21,7 +21,6 @@ import { IconSonar, IconScanner, IconScope, IconSwagger, IconSpectr, IconSwift, 
 
 const QuarterCalendar = dynamic(() => import("@/components/mainPage/QuarterCalendar"), { ssr: false });
 const MarketPulse    = dynamic(() => import("@/components/mainPage/MarketPulse"),     { ssr: false });
-const SonarScan      = dynamic(() => import("@/components/mainPage/SonarScan"),       { ssr: false });
 const AssetCards     = dynamic(() => import("@/components/mainPage/AssetCards"),       { ssr: false });
 const BenchmarkStrip = dynamic(() => import("@/components/mainPage/BenchmarksStrip"), { ssr: false });
 const GlitchArtPanel  = dynamic(() => import("@/components/mainPage/GlitchArtPanel"),   { ssr: false });
@@ -556,38 +555,7 @@ function ClockWidget({ accent }: { accent: ThemeAccent }) {
   const fg   = "rgba(255,255,255,0.92)";
 
   return (
-    <div className="flex flex-col justify-center shrink-0 gap-2">
-      {/* HH : MM */}
-      <div className="flex items-end" style={{ fontFamily: mono, lineHeight: 1 }}>
-        <span style={{
-          fontSize: 58, fontWeight: 900, letterSpacing: "-0.05em",
-          color: "rgba(255,255,255,0.95)",
-          textShadow: `0 0 40px rgba(255,255,255,0.08)`,
-        }}>
-          {hh}
-        </span>
-        <span style={{
-          fontSize: 44, fontWeight: 900, letterSpacing: "-0.05em",
-          color: `rgba(${accent.rgb},0.35)`,
-          margin: "0 2px 6px",
-        }}>:</span>
-        <span style={{
-          fontSize: 58, fontWeight: 900, letterSpacing: "-0.05em",
-          color: "rgba(255,255,255,0.95)",
-          textShadow: `0 0 40px rgba(255,255,255,0.08)`,
-        }}>
-          {min}
-        </span>
-        <span style={{
-          fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em",
-          color: accent.hex,
-          marginLeft: 5, marginBottom: 8,
-          textShadow: `0 0 20px ${accent.hex}cc`,
-        }}>
-          :{ss}
-        </span>
-      </div>
-
+    <div className="flex flex-col justify-start shrink-0 gap-2.5">
       {/* Date row */}
       <div className="flex items-center gap-2">
         <div style={{ width: 18, height: 1, background: `rgba(${accent.rgb},0.35)`, borderRadius: 1 }} />
@@ -598,6 +566,15 @@ function ClockWidget({ accent }: { accent: ThemeAccent }) {
         }}>
           {dayName},&nbsp;{monthStr}&nbsp;{dateNum},&nbsp;{year}
         </span>
+      </div>
+
+      {/* HH : MM — cap height (57px) spans the two facts opposite: top of the digits = top of the first
+          year, baseline = baseline of the second year. lineHeight .73 makes the line box the cap height. */}
+      <div className="flex items-baseline" style={{ fontFamily: mono, lineHeight: 0.73, margin: "3px 0" }}>
+        <span style={{ fontSize: 80, fontWeight: 900, letterSpacing: "-0.05em", color: "rgba(255,255,255,0.95)", textShadow: "0 0 40px rgba(255,255,255,0.08)" }}>{hh}</span>
+        <span style={{ fontSize: 56, fontWeight: 900, letterSpacing: "-0.05em", color: `rgba(${accent.rgb},0.35)`, margin: "0 2px", transform: "translateY(-0.1em)" }}>:</span>
+        <span style={{ fontSize: 80, fontWeight: 900, letterSpacing: "-0.05em", color: "rgba(255,255,255,0.95)", textShadow: "0 0 40px rgba(255,255,255,0.08)" }}>{min}</span>
+        <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: "-0.04em", color: accent.hex, marginLeft: 8, textShadow: `0 0 18px ${accent.hex}55` }}>:{ss}</span>
       </div>
     </div>
   );
@@ -635,39 +612,52 @@ function OnThisDayWidget({ accent }: { accent: ThemeAccent }) {
   const mono     = "'JetBrains Mono', monospace";
   const sans     = "'Space Grotesk', 'Inter', sans-serif";
 
-  return (
-    <div className="flex flex-col justify-center shrink-0 gap-2" style={{ width: 320 }}>
-      {loading ? (
-        <span style={{ fontFamily: mono, fontSize: 8, color: `rgba(${accent.rgb},0.4)` }}>
-          завантаження<span className="centurion-cursor">▌</span>
-        </span>
-      ) : events.length === 0 ? (
-        <span style={{ fontFamily: mono, fontSize: 8, color: `rgba(${accent.rgb},0.3)` }}>немає подій</span>
-      ) : (
-        events.map((ev, i) => (
-          <div key={i} className="flex flex-col gap-0.5"
-            style={i > 0 ? { paddingTop: 6, borderTop: `1px solid rgba(${accent.rgb},0.08)` } : {}}>
+  const label = (
+    <div className="flex items-center gap-2">
+      <div style={{ width: 18, height: 1, background: `rgba(${accent.rgb},0.35)`, borderRadius: 1 }} />
+      <span style={{
+        fontFamily: sans, fontSize: 9, fontWeight: 600, letterSpacing: "0.22em",
+        textTransform: "uppercase", color: "rgba(255,255,255,0.28)",
+      }}>
+        On this day&nbsp;·&nbsp;{monthStr}&nbsp;{dateNum}
+      </span>
+    </div>
+  );
 
-            <div className="flex items-center gap-2">
+  // Same grammar as the clock: big mono numerals in the accent, Space Grotesk small caps label under,
+  // and the label sits on the same top line as the clock's date row.
+  return (
+    <div className="flex flex-col justify-start gap-2.5 min-w-0" style={{ width: "clamp(230px, 24vw, 380px)" }}>
+      {label}
+      <div className="flex flex-col gap-2.5">
+        {loading ? (
+          <span style={{ fontFamily: mono, fontSize: 8, color: `rgba(${accent.rgb},0.4)` }}>
+            завантаження<span className="centurion-cursor">▌</span>
+          </span>
+        ) : events.length === 0 ? (
+          <span style={{ fontFamily: mono, fontSize: 8, color: `rgba(${accent.rgb},0.3)` }}>немає подій</span>
+        ) : (
+          events.map((ev, i) => (
+            <div key={i} className="flex items-baseline gap-3"
+              style={i > 0 ? { paddingTop: 8, borderTop: `1px solid rgba(${accent.rgb},0.08)` } : {}}>
               <span style={{
-                fontFamily: mono, fontSize: 15, fontWeight: 900,
-                color: accent.hex, lineHeight: 1,
-                textShadow: `0 0 16px ${accent.hex}66`,
-                letterSpacing: "-0.02em",
+                fontFamily: mono, fontSize: 22, fontWeight: 900, lineHeight: 1, flexShrink: 0,
+                color: accent.hex, letterSpacing: "-0.04em",
+                textShadow: `0 0 18px ${accent.hex}55`,
               }}>
                 {ev.year}
               </span>
-              {ev.emoji && <span style={{ fontSize: 13, opacity: 0.7 }}>{ev.emoji}</span>}
+              <span style={{
+                fontFamily: sans, fontSize: 12, fontWeight: 500, lineHeight: 1.45,
+                color: "rgba(255,255,255,0.6)",
+                display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", minWidth: 0,
+              }}>
+                {ev.text}
+              </span>
             </div>
-            <span style={{
-              fontFamily: sans, fontSize: 11.5, fontWeight: 400,
-              color: "rgba(255,255,255,0.65)", lineHeight: 1.5,
-            }}>
-              {ev.text.length > 100 ? ev.text.slice(0, 100) + "…" : ev.text}
-            </span>
-          </div>
-        ))
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -953,7 +943,7 @@ function TickerStrip({ quotes, accent }: { quotes: Quote[]; accent: ThemeAccent 
   const quad = [...quotes, ...quotes, ...quotes, ...quotes];
 
   return (
-    <div className="relative w-full overflow-hidden" style={{ height: 42 }}>
+    <div className="relative w-full h-full overflow-hidden">
       <div style={{ display: "flex", alignItems: "center", height: "100%", width: "max-content", animation: "main-ticker-scroll-anim 55s linear infinite", willChange: "transform" }}>
         {quad.map((q, i) => {
           const up  = q.chgPct >= 0;
@@ -984,23 +974,28 @@ function TickerStrip({ quotes, accent }: { quotes: Quote[]; accent: ThemeAccent 
 function SectionLabel({ children, sub, accent }: { children: React.ReactNode; sub?: string; accent: ThemeAccent }) {
   const ref    = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true });
+  // Same display face as the hero wordmark (Bebas Neue), so every section title reads as part of one system.
   return (
     <motion.div
       ref={ref}
       initial={{ opacity: 0, x: -10 }}
       animate={inView ? { opacity: 1, x: 0 } : {}}
       transition={{ duration: 0.45 }}
-      className="flex items-center gap-2.5 mb-4"
+      className="flex items-center gap-3 mb-4"
     >
-      <div className="w-[2px] h-4 rounded-full" style={{ background: accent.hex, boxShadow: `0 0 8px ${accent.hex}55` }} />
-      <div>
-        <div style={{ fontFamily: "'Space Grotesk', 'Inter', sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(255,255,255,0.42)" }}>
+      <div className="w-[3px] self-stretch min-h-[24px] rounded-full" style={{ background: accent.hex, opacity: 0.55, boxShadow: `0 0 8px ${accent.hex}44` }} />
+      <div className="flex items-baseline gap-3 min-w-0">
+        <div style={{
+          fontFamily: "'Bebas Neue','Rajdhani',system-ui,sans-serif", fontSize: 22, fontWeight: 700, lineHeight: 1,
+          letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap",
+        }}>
           {children}
         </div>
         {sub && (
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, color: accent.muted, marginTop: 1 }}>{sub}</div>
+          <div className="truncate" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.08em", color: accent.muted }}>{sub}</div>
         )}
       </div>
+      <div className="flex-1 h-px ml-2" style={{ background: `linear-gradient(90deg, rgba(${accent.rgb},0.12), transparent)` }} />
     </motion.div>
   );
 }
@@ -1463,7 +1458,7 @@ export default function MainPage() {
       {/* ══════════════════════════════════════
           HERO — compact command-center style
       ══════════════════════════════════════ */}
-      <section className="relative w-full overflow-hidden pb-6" style={{ borderRadius: "0 0 24px 24px" }}>
+      <section className="relative w-full overflow-hidden" style={{ borderRadius: "0 0 24px 24px", containerType: "inline-size" }}>
 
         {/* Dark overlay — same tone as strategy cards */}
         <div className="absolute inset-0 pointer-events-none"
@@ -1503,13 +1498,15 @@ export default function MainPage() {
               initial={{ opacity: 0, y: 22 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.85, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
-              className="flex items-center gap-5 flex-1"
+              className="flex items-center gap-5 flex-1 min-w-0"
             >
               <GlitchTitle accent={accent} />
             </motion.div>
 
             <motion.div
-              className="hidden xl:flex flex-row items-center gap-6 shrink-0"
+              className="hidden xl:flex flex-row items-stretch gap-7 shrink-0"
+              // 100cqw = the hero section's real width, so the cluster reaches its true right edge past the 1800px column
+              style={{ marginRight: "calc(-1 * max(0px, (100cqw - 1800px) / 2))" }}
               initial={{ opacity: 0, x: 28 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, delay: 0.28, ease: [0.22, 1, 0.36, 1] }}
@@ -1517,7 +1514,7 @@ export default function MainPage() {
               <ClockWidget accent={accent} />
               <div style={{
                 width: 1, alignSelf: "stretch",
-                background: `linear-gradient(180deg, transparent, rgba(${accent.rgb},0.25) 30%, rgba(${accent.rgb},0.25) 70%, transparent)`,
+                background: `linear-gradient(180deg, transparent, rgba(${accent.rgb},0.3) 25%, rgba(${accent.rgb},0.3) 75%, transparent)`,
               }} />
               <OnThisDayWidget accent={accent} />
             </motion.div>
@@ -1580,9 +1577,9 @@ export default function MainPage() {
       {/* ══════════════════════════════════════
           MARKET CARDS + GLITCH ART PANEL
       ══════════════════════════════════════ */}
-      <div className="pt-2 pb-4">
-        <div className="px-6 mb-3">
-          <SectionLabel accent={accent} sub="Live V4 · Strategy Engine · Signal Density">
+      <div className="pt-2">
+        <div className="px-6 pt-4 mb-1">
+          <SectionLabel accent={accent}>
             Active Strategies
           </SectionLabel>
         </div>
@@ -1597,25 +1594,6 @@ export default function MainPage() {
       </div>
 
       {/* ══════════════════════════════════════
-          SIGNAL MAP
-      ══════════════════════════════════════ */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: "-40px" }}
-        transition={{ duration: 0.5 }}
-        className="pt-2 pb-4"
-        style={{ borderTop: `1px solid rgba(${accent.rgb},0.06)` }}
-      >
-        <div className="px-6 mb-3">
-          <SectionLabel accent={accent} sub="Live V4 · Sonar Engine · Situation Density">
-            Signal Map
-          </SectionLabel>
-        </div>
-        <SonarScan accent={accent} />
-      </motion.div>
-
-      {/* ══════════════════════════════════════
           QUARTERLY CALENDAR
       ══════════════════════════════════════ */}
       <motion.div
@@ -1623,10 +1601,9 @@ export default function MainPage() {
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true, margin: "-80px" }}
         transition={{ duration: 0.55 }}
-        style={{ borderTop: `1px solid rgba(${accent.rgb},0.07)` }}
       >
-        <div className="px-6 pt-4 mb-3">
-          <SectionLabel accent={accent} sub="Q2 2026 · Scheduled Catalysts · Earnings & Events">
+        <div className="px-6 pt-4 mb-1">
+          <SectionLabel accent={accent}>
             Quarterly Calendar
           </SectionLabel>
         </div>
@@ -1643,8 +1620,8 @@ export default function MainPage() {
         transition={{ duration: 0.5 }}
         style={{ borderTop: `1px solid rgba(${accent.rgb},0.06)` }}
       >
-        <div className="max-w-[1800px] mx-auto px-6 pt-6 pb-1">
-          <SectionLabel accent={accent} sub="Yahoo Finance · Mini Charts · 20s refresh">
+        <div className="max-w-[1800px] mx-auto px-6 pt-4 mb-1">
+          <SectionLabel accent={accent}>
             Markets Overview
           </SectionLabel>
         </div>

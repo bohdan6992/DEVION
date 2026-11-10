@@ -78,6 +78,9 @@ export type ArbitrageFilterConfigV1 = {
     crap?: boolean; // LastClose < 5
     itb?: boolean; // B5ETB = ITB
     hard?: boolean; // B5ETB = NO (hard to borrow)
+    /** Post-market zap-sigma anomaly — see PostAnomalyService.cs. The bridge resolves its own
+     * clean set; not a client-side predicate, so applyArbitrageFilters below does not read it. */
+    anom?: boolean;
   };
 
   include?: {

@@ -175,32 +175,31 @@ function FactorCard({ f }: { f: Factor }) {
   const up = f.chgPct >= 0;
 
   return (
-    <div className="rounded-[14px] flex flex-col gap-1.5 px-3 py-2.5"
+    <div className="rounded-[16px] flex flex-col justify-center gap-2 px-3"
       style={{
         background: "rgba(10,10,10,0.55)",
         border: "1px solid rgba(255,255,255,0.07)",
         backdropFilter: "blur(12px)",
         width: "fit-content",
-        minWidth: 72,
-        minHeight: 72,
+        height: 62, // same as the QuickNav tiles on the right
       }}>
-      {/* top: ticker */}
-      <span style={{ fontFamily: MONO, fontSize: 7.5, fontWeight: 700, letterSpacing: "0.18em",
-        textTransform: "uppercase", color: "rgba(255,255,255,0.35)" }}>
-        {f.label}
-        {f.isPreMarket && (
-          <span style={{ marginLeft: 4, color: "#f59e0b", fontSize: 6, fontWeight: 700 }}>·PRE</span>
-        )}
-      </span>
-
-      {/* price */}
-      <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 900,
-        color: "rgba(255,255,255,0.92)", letterSpacing: "-0.02em", lineHeight: 1 }}>
-        {f.priceLabel}
+      {/* top row: ticker + price */}
+      <div className="flex items-baseline gap-2">
+        <span style={{ fontFamily: MONO, fontSize: 7.5, fontWeight: 700, letterSpacing: "0.18em",
+          textTransform: "uppercase", color: "rgba(255,255,255,0.35)" }}>
+          {f.label}
+          {f.isPreMarket && (
+            <span style={{ marginLeft: 4, color: "#f59e0b", fontSize: 6, fontWeight: 700 }}>·PRE</span>
+          )}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 900,
+          color: "rgba(255,255,255,0.92)", letterSpacing: "-0.02em", lineHeight: 1 }}>
+          {f.priceLabel}
+        </span>
       </div>
 
       {/* bottom row: signal + change — both left */}
-      <div className="flex items-center gap-2 mt-auto">
+      <div className="flex items-center gap-2">
         <span className="flex items-center gap-1">
           <span style={{ width: 4, height: 4, borderRadius: "50%", flexShrink: 0,
             background: sigColor, boxShadow: `0 0 4px ${sigColor}` }} />
@@ -300,21 +299,18 @@ export default function MarketPulse({ accent, noHeader }: { accent: Accent; noHe
 
       {/* ── SectionLabel-style header ── */}
       {!noHeader && <div className="px-6 mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3 min-w-0 flex-1 mr-4">
           {/* accent bar */}
-          <div className="w-[2px] h-4 rounded-full"
-            style={{ background: accent.hex, boxShadow: `0 0 8px ${accent.hex}55` }} />
-          <div>
-            <div style={{ fontFamily: "'Space Grotesk','Inter',sans-serif", fontSize: 10,
-              fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase",
-              color: "rgba(255,255,255,0.42)" }}>
+          <div className="w-[3px] self-stretch min-h-[24px] rounded-full"
+            style={{ background: accent.hex, opacity: 0.55, boxShadow: `0 0 8px ${accent.hex}44` }} />
+          <div className="flex items-baseline gap-3 min-w-0">
+            <div style={{ fontFamily: "'Bebas Neue','Rajdhani',system-ui,sans-serif", fontSize: 22,
+              fontWeight: 700, lineHeight: 1, letterSpacing: "0.12em", textTransform: "uppercase",
+              color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap" }}>
               Market Pulse
             </div>
-            <div style={{ fontFamily: MONO, fontSize: 7.5, color: accent.muted, marginTop: 1 }}>
-              {preMarket ? "Pre-market session · " : "Live session · "}
-              8 factors · 30s refresh{lastUpd ? ` · upd ${lastUpd}` : ""}
-            </div>
           </div>
+          <div className="flex-1 h-px ml-2" style={{ background: `linear-gradient(90deg, rgba(${accent.rgb},0.12), transparent)` }} />
         </div>
 
         {/* sentiment badge — right side */}

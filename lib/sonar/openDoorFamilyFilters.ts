@@ -34,6 +34,9 @@ export type OpenDoorSonarFilterSource = {
   excludeReport: boolean;
   excludeETF: boolean;
   excludeCrap: boolean;
+  /** See PostAnomalyService.cs / LiveRowFilterConfig.AnomClean — the bridge resolves its own
+   * clean set, this is just the toggle. Optional: not every OpenDoor-family caller sets it yet. */
+  excludeAnom?: boolean;
   filterReport: "ALL" | "YES" | "NO";
   equityType: string;
 };
@@ -90,6 +93,7 @@ export function toOpenDoorSonarFilters(f: OpenDoorSonarFilterSource): OpenDoorLi
       report: !!f.excludeReport,
       etf: !!f.excludeETF,
       crap: !!f.excludeCrap,
+      anom: !!f.excludeAnom,
     },
     include: {
       usaOnly: !!f.includeUSA,

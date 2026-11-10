@@ -2191,6 +2191,8 @@ export default function OpenRideSonar() {
   // CORR drops names correlated with today's reporting tickers; the box holds the |corr| cutoff.
   const [excludeCorr, setExcludeCorr] = useState(false);
   const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
+  // ANOM: see PostAnomalyService.cs — the bridge resolves its own clean set, this is just the toggle.
+  const [excludeAnom, setExcludeAnom] = useState(false);
   const [activeMode, setActiveMode] = useState<ActiveMode>("off");
 
 
@@ -2559,7 +2561,7 @@ export default function OpenRideSonar() {
           'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
           // ITB/HARD/CORR reached the shared FilterFlagsRow but never this list, so they were
           // the only toolbar toggles that silently reset on every reload.
-          'excludeItb','excludeHard','excludeCorr',
+          'excludeItb','excludeHard','excludeCorr','excludeAnom',
           'includeUSA','includeChina',
         ] as const) {
           if (typeof s?.[k] === 'boolean') {
@@ -2575,6 +2577,7 @@ export default function OpenRideSonar() {
               case 'excludeItb': setExcludeItb(v); break;
               case 'excludeHard': setExcludeHard(v); break;
               case 'excludeCorr': setExcludeCorr(v); break;
+              case 'excludeAnom': setExcludeAnom(v); break;
               case 'includeUSA': setIncludeUSA(v); break;
               case 'includeChina': setIncludeChina(v); break;
             }
@@ -2738,7 +2741,7 @@ export default function OpenRideSonar() {
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-          excludeItb, excludeHard, excludeCorr, corrThresholdInput,
+          excludeItb, excludeHard, excludeCorr, excludeAnom, corrThresholdInput,
           includeUSA, includeChina,
           filterReport, equityType,
 
@@ -2795,7 +2798,7 @@ export default function OpenRideSonar() {
     activeMode,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    excludeItb, excludeHard, excludeCorr, corrThresholdInput,
+    excludeItb, excludeHard, excludeCorr, excludeAnom, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
@@ -3556,7 +3559,7 @@ export default function OpenRideSonar() {
           includeUSA, includeChina, selCountries, countryEnabled,
           selExchanges, exchangeEnabled, selSectors, sectorEnabled,
           bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
-          excludeReport, excludeETF, excludeCrap, filterReport, equityType,
+          excludeReport, excludeETF, excludeCrap, excludeAnom, filterReport, equityType,
         },
         source: "openride-sonar",
       }));
@@ -3571,7 +3574,7 @@ export default function OpenRideSonar() {
     includeUSA, includeChina, selCountries, countryEnabled,
     selExchanges, exchangeEnabled, selSectors, sectorEnabled,
     bounds, excludeDividend, excludeNews, excludePTP, excludeSSR,
-    excludeReport, excludeETF, excludeCrap, filterReport, equityType,
+    excludeReport, excludeETF, excludeCrap, excludeAnom, filterReport, equityType,
   ]);
 
   useEffect(() => {
@@ -3659,6 +3662,7 @@ export default function OpenRideSonar() {
     if (excludeReport) hints.push("ex REPORT");
     if (excludeETF) hints.push("ex ETF");
     if (excludeCrap) hints.push("ex < $5");
+    if (excludeAnom) hints.push("ex ANOM");
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
     if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
@@ -3677,6 +3681,7 @@ export default function OpenRideSonar() {
     equityType,
     exchangeEnabled,
     excludeCrap,
+    excludeAnom,
     excludeDividend,
     excludeETF,
     excludeNews,
@@ -4231,6 +4236,7 @@ export default function OpenRideSonar() {
             { label: "SSR", value: excludeSSR, set: setExcludeSSR },
             { label: "ETF", value: excludeETF, set: setExcludeETF },
             { label: "CRAP", value: excludeCrap, set: setExcludeCrap, title: "LstClose < 5" },
+            { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. The bridge resolves its own clean set." },
           ]}
           report={{ label: "REP", value: excludeReport, set: setExcludeReport, title: "Exclude report=true" }}
           corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}

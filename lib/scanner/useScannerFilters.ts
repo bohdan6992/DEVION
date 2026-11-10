@@ -274,6 +274,12 @@ export function useScannerFilters(
   const [excludeHard, setExcludeHard] = useState<boolean>(false);
   // Toggle only for now — no filter rule is wired to it yet, by request.
   const [excludeCorr, setExcludeCorr] = useState<boolean>(false);
+  // ANOM (operator's own instruction, 2026-11-10): drop a ticker whose post-market zap-sigma
+  // spiked past 1.5 sigma in its own 16:01-19:59 window. The actual gate is server-side
+  // (PostAnomalyService.ApplyAsync, SonarSignalFilter.ExcludeAnom/LiveRowFilter.Exclude.Anom) —
+  // this toggle is the boolean each page threads into its own live-params push, same shape as
+  // excludeCrap above, not a client-side predicate.
+  const [excludeAnom, setExcludeAnom] = useState<boolean>(false);
   const [includeUSA, setIncludeUSA] = useState<boolean>(false);
   const [includeChina, setIncludeChina] = useState<boolean>(false);
   const [minMdnPreMhVol90, setMinMdnPreMhVol90] = useState<string>("");
@@ -528,6 +534,7 @@ export function useScannerFilters(
     excludeItb, setExcludeItb,
     excludeHard, setExcludeHard,
     excludeCorr, setExcludeCorr,
+    excludeAnom, setExcludeAnom,
     includeUSA, setIncludeUSA,
     includeChina, setIncludeChina,
     minMdnPreMhVol90, setMinMdnPreMhVol90,

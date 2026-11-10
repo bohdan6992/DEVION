@@ -581,6 +581,7 @@ export default function OPGRideScanner({
     excludeItb, setExcludeItb,
     excludeHard, setExcludeHard,
     excludeCorr, setExcludeCorr,
+    excludeAnom, setExcludeAnom,
     setExcludeCrap,
     includeUSA,
     setIncludeUSA,
@@ -1341,7 +1342,7 @@ export default function OPGRideScanner({
       requireHasNews || excludeHasNews || requireHasReport || excludeHasReport ||
       includeUSA || includeChina ||
       requireIsPTP || requireIsSSR || requireIsETF || requireIsCrap ||
-      excludeDividend || excludePTP || excludeSSR || excludeETF || excludeCrap
+      excludeDividend || excludePTP || excludeSSR || excludeETF || excludeCrap || excludeAnom
     );
   }, [
     minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma,
@@ -1362,7 +1363,7 @@ export default function OPGRideScanner({
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
-    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap,
+    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap, excludeAnom,
   ]);
 
   // ========= Preflight validation
@@ -1853,6 +1854,7 @@ export default function OPGRideScanner({
         if (typeof s.excludeItb === "boolean") setExcludeItb(s.excludeItb);
         if (typeof s.excludeHard === "boolean") setExcludeHard(s.excludeHard);
         if (typeof s.excludeCorr === "boolean") setExcludeCorr(s.excludeCorr);
+        if (typeof s.excludeAnom === "boolean") setExcludeAnom(s.excludeAnom);
         // The raw input, not the clamped number: corrThreshold is derived from it.
         if (typeof s.corrThresholdInput === "string") setCorrThresholdInput(s.corrThresholdInput);
         if (typeof s.includeUSA === "boolean") setIncludeUSA(s.includeUSA);
@@ -2023,6 +2025,7 @@ export default function OPGRideScanner({
       excludeItb,
       excludeHard,
       excludeCorr,
+      excludeAnom,
       corrThresholdInput,
       includeUSA,
       includeChina,
@@ -2093,7 +2096,7 @@ export default function OPGRideScanner({
       maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls,
       minLstClsNewsCnt, maxLstClsNewsCnt, minVolNFfromLstCls, maxVolNFfromLstCls, requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, minNewsCnt,
       maxNewsCnt, requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap, excludeDividend, excludePTP,
-      excludeSSR, excludeETF, excludeCrap, excludeItb, excludeHard, excludeCorr, corrThresholdInput, minMdnPreMhVol90, maxMdnPreMhVol90,
+      excludeSSR, excludeETF, excludeCrap, excludeItb, excludeHard, excludeCorr, excludeAnom, corrThresholdInput, minMdnPreMhVol90, maxMdnPreMhVol90,
       includeUSA, includeChina,
       minPreMhMDV90NF, maxPreMhMDV90NF, minPreMhMDV20NF, maxPreMhMDV20NF,
       minMdnPostMhVol90NF, maxMdnPostMhVol90NF,
@@ -2498,6 +2501,7 @@ export default function OPGRideScanner({
         report: excludeHasReport,
         etf: excludeETF,
         crap: excludeCrap,
+        anom: excludeAnom,
       },
       include: {
         usaOnly: includeUSA,
@@ -2531,7 +2535,7 @@ export default function OPGRideScanner({
     minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90,
     minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minVolRel, maxVolRel,
     minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF,
-    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap,
+    excludeDividend, excludeHasNews, excludePTP, excludeSSR, excludeHasReport, excludeETF, excludeCrap, excludeAnom,
     includeUSA, includeChina, selCountries, selExchanges, selSectors, metric, startAbs,
   ]);
 
@@ -6336,6 +6340,7 @@ export default function OPGRideScanner({
               { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); } },
               { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); } },
               { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); } },
+              { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. LIVE Stream/Sonar only." },
             ]}
             report={{
               label: "REP",

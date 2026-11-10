@@ -112,6 +112,10 @@ export type ArbitrageServerSonarFilters = {
   corrExcluded: string[];
   /** |corr| cutoff the bridge resolves the whole-universe CORR peers at (0.5..1). */
   corrThreshold: number;
+  /** Drop a ticker whose post-market zap-sigma spiked past 1.5 sigma in its own 16:01-19:59
+   * window. The bridge resolves its own clean set (SonarFilterConfig.AnomClean via
+   * PostAnomalyService.ApplyAsync) — this is the only field that travels. */
+  excludeAnom: boolean;
   includeUsa: boolean;
   includeChina: boolean;
   countries: string[];
@@ -257,6 +261,7 @@ export function toArbitrageServerSonarFilters(f: SonarExactFilterSnapshot): Arbi
     excludeCorr: !!f.excludeCorr,
     corrExcluded: upper(f.corrExcluded),
     corrThreshold: num(f.corrThreshold) ?? 0.8,
+    excludeAnom: !!f.excludeAnom,
     includeUsa: !!f.includeUSA,
     includeChina: !!f.includeChina,
     countries: upper(f.selCountries),

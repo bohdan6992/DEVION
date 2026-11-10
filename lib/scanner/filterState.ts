@@ -51,6 +51,10 @@ export type ScannerFilterState = {
   setExcludeHard: (v: boolean | ((p: boolean) => boolean)) => void;
   excludeCorr: boolean;
   setExcludeCorr: (v: boolean | ((p: boolean) => boolean)) => void;
+  /** Drop a ticker whose post-market zap-sigma spiked past 1.5σ in its own 16:01-19:59 window —
+   * see PostAnomalyService.cs. The bridge resolves its own clean set; this is just the toggle. */
+  excludeAnom: boolean;
+  setExcludeAnom: (v: boolean | ((p: boolean) => boolean)) => void;
   excludeDividend: boolean;
   excludeETF: boolean;
   excludeHasNews: boolean;

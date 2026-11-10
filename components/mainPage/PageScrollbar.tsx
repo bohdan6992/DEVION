@@ -5,7 +5,6 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUi } from "@/components/UiProvider";
 import type { ThemeKey, LangKey } from "@/components/UiProvider";
-import { IconCaesar } from "@/components/nav/AppIcons";
 
 /* ─── vertical scroll helpers (body is scroll container) ─── */
 const getScrollY  = () => document.body.scrollTop  || document.documentElement.scrollTop  || window.scrollY  || 0;
@@ -86,104 +85,117 @@ const LANGS: { key: LangKey; label: string }[] = [
   { key: "EN", label: "EN" },
 ];
 
-/* ─── nav ─── */
+/* ─── icons ───
+   One family: 24×24 grid, drawn edge-to-edge (2px safe margin) so each glyph fills its 34px tile,
+   2 round strokes, and a soft 14% body fill on the main shape so they read as a set. */
+const SOFT = { fill: "currentColor", fillOpacity: 0.14 } as const;
+const Ico = ({ children }: { children: React.ReactNode }) => (
+  <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+
 const NAV = [
   {
     href: "/main", label: "Main",
     Icon: () => (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M1.5 7.5L8 2L14.5 7.5V14H10.5V10H5.5V14H1.5V7.5Z"/>
-      </svg>
+      <Ico>
+        <path d="M3.5 11.5L12 4l8.5 7.5V20.5h-17z" {...SOFT}/>
+      </Ico>
+    ),
+  },
+  {
+    // Roman centurion helmet, side profile: dome, tall solid transverse crest, brim, neck guard, cheek plate.
+    href: "/caesar", label: "Caesar",
+    Icon: () => (
+      <Ico>
+        <path d="M21.5 14.5C21.5 9.6 17.8 7 12.6 7 8 7 4 10 4 14.5L2.2 21H8l1.2-4h5.4l1.6 4.8 4.2-2.6.8-4.7z" {...SOFT}/>
+        <path d="M4.6 8.6C5.4 1.8 17.6 1.8 19.4 8.6z" fill="currentColor"/>
+        <path d="M4 14.5h17.5"/>
+      </Ico>
     ),
   },
   {
     href: "/signals", label: "Strategies",
     Icon: () => (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="1.5" y="9" width="3" height="5" rx="0.75"/>
-        <rect x="6.5" y="5.5" width="3" height="8.5" rx="0.75"/>
-        <rect x="11.5" y="1.5" width="3" height="12" rx="0.75"/>
-      </svg>
+      <Ico>
+        <rect x="3" y="13" width="5" height="8" rx="1.4" {...SOFT}/>
+        <rect x="9.5" y="8" width="5" height="13" rx="1.4" {...SOFT}/>
+        <rect x="16" y="3" width="5" height="18" rx="1.4" {...SOFT}/>
+      </Ico>
     ),
   },
   {
     href: "/news", label: "Market",
     Icon: () => (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="1.5,11 4.5,7 7,9.5 10.5,4 14.5,7.5"/>
-        <line x1="1.5" y1="14" x2="14.5" y2="14"/>
-      </svg>
+      <Ico>
+        <path d="M3 17l5-6 4 3 5-7 4 3v10H3z" fill="currentColor" fillOpacity="0.1" stroke="none"/>
+        <path d="M3 17l5-6 4 3 5-7 4 3"/>
+        <path d="M3 21h18"/>
+      </Ico>
     ),
   },
   {
     href: "/guide", label: "Explorer",
     Icon: () => (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="7" cy="7" r="5"/>
-        <line x1="11" y1="11" x2="14" y2="14"/>
-        <path d="M9 5L8 8.5L4.5 9.5L6 6L9 5Z"/>
-      </svg>
+      <Ico>
+        <circle cx="10.5" cy="10.5" r="7.5" {...SOFT}/>
+        <path d="M16 16l5.5 5.5"/>
+        <path d="M13.8 7.2l-2 4.6-4.6 2 2-4.6z"/>
+      </Ico>
     ),
   },
   {
     href: "/overview", label: "Overview",
     Icon: () => (
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/>
-        <rect x="9"   y="1.5" width="5.5" height="5.5" rx="1"/>
-        <rect x="1.5" y="9"   width="5.5" height="5.5" rx="1"/>
-        <rect x="9"   y="9"   width="5.5" height="5.5" rx="1"/>
-      </svg>
+      <Ico>
+        <rect x="3" y="3" width="7.5" height="7.5" rx="2" {...SOFT}/>
+        <rect x="13.5" y="3" width="7.5" height="7.5" rx="2" {...SOFT}/>
+        <rect x="3" y="13.5" width="7.5" height="7.5" rx="2" {...SOFT}/>
+        <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2" {...SOFT}/>
+      </Ico>
     ),
-  },
-  {
-    // Same helmet mark used everywhere else Caesar is linked (AppDock, main.tsx's QuickNavButtons)
-    // — reused rather than redrawn, so the operator learns one glyph for it, not three.
-    href: "/caesar", label: "Caesar",
-    Icon: () => <IconCaesar width={15} height={15} />,
   },
 ];
 
-/* ─── icon components ─── */
 const SlidersIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-    <line x1="2" y1="4"  x2="14" y2="4"/>
-    <line x1="2" y1="8"  x2="14" y2="8"/>
-    <line x1="2" y1="12" x2="14" y2="12"/>
-    <circle cx="5.5"  cy="4"  r="1.7"/>
-    <circle cx="10.5" cy="8"  r="1.7"/>
-    <circle cx="6.5"  cy="12" r="1.7"/>
-  </svg>
+  <Ico>
+    <path d="M3 6h5M13 6h8M3 12h10M18 12h3M3 18h3.5M11.5 18H21"/>
+    <circle cx="10.5" cy="6" r="2.5" {...SOFT}/>
+    <circle cx="15.5" cy="12" r="2.5" {...SOFT}/>
+    <circle cx="9" cy="18" r="2.5" {...SOFT}/>
+  </Ico>
 );
 const GlobeIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="8" cy="8" r="6"/>
-    <line x1="2" y1="8" x2="14" y2="8"/>
-    <path d="M8 2a10 10 0 0 1 3 6 10 10 0 0 1-3 6 10 10 0 0 1-3-6 10 10 0 0 1 3-6z"/>
-  </svg>
+  <Ico>
+    <circle cx="12" cy="12" r="9.5" {...SOFT}/>
+    <path d="M2.5 12h19"/>
+    <path d="M12 2.5c3 2.8 4.4 6 4.4 9.5S15 18.7 12 21.5C9 18.7 7.6 15.5 7.6 12S9 5.3 12 2.5z"/>
+  </Ico>
 );
 const HScrollIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    {/* track */}
-    <line x1="1" y1="8" x2="15" y2="8" strokeOpacity="0.35" strokeWidth="3.5"/>
-    {/* thumb */}
-    <rect x="5" y="5.5" width="6" height="5" rx="2.5" fill="currentColor" stroke="none"/>
-    {/* arrows */}
-    <path d="M3 11.5 L1.5 13 L3 14.5" strokeWidth="1.4"/>
-    <path d="M13 11.5 L14.5 13 L13 14.5" strokeWidth="1.4"/>
-  </svg>
+  <Ico>
+    <path d="M6 7.5L2 12l4 4.5M18 7.5l4 4.5-4 4.5"/>
+    <rect x="8.5" y="8.5" width="7" height="7" rx="3.5" fill="currentColor" fillOpacity="0.5"/>
+  </Ico>
 );
 const BookmarkIcon = ({ filled }: { filled: boolean }) => (
-  <svg width="13" height="14" viewBox="0 0 14 16" fill={filled ? "currentColor" : "none"}
-    stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M2 1.5h10V14L7 11 2 14V1.5z"/>
-  </svg>
+  <Ico>
+    <path d="M6 3h12v18l-6-4.5L6 21z" fill="currentColor" fillOpacity={filled ? 1 : 0.14}/>
+  </Ico>
 );
 const PinIcon = ({ filled }: { filled: boolean }) => (
-  <svg width="13" height="14" viewBox="0 0 14 16" fill={filled ? "currentColor" : "none"}
-    stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M7 1L9.5 5.5H13L10 9.5 11 14 7 11.5 3 14 4 9.5 1 5.5H4.5L7 1Z"/>
-  </svg>
+  <Ico>
+    <path d="M12 2.5l2.9 6.3 6.8.8-5.1 4.6 1.4 6.8-6-3.4-6 3.4 1.4-6.8-5.1-4.6 6.8-.8z"
+      fill="currentColor" fillOpacity={filled ? 1 : 0.14}/>
+  </Ico>
+);
+const ArrowUpIcon = () => (
+  <Ico><path d="M12 5l8.5 14h-17z" {...SOFT}/></Ico>
+);
+const ArrowDownIcon = () => (
+  <Ico><path d="M12 19L3.5 5h17z" {...SOFT}/></Ico>
 );
 
 /* ─── Tooltip ─── */
@@ -692,7 +704,7 @@ export default function PageScrollbar() {
           onClick={scrollUp} style={pill(false, atTop)}
           onMouseEnter={() => setHov("up")} onMouseLeave={() => setHov(null)}
         >
-          ▲
+          <ArrowUpIcon />
           <Tip label="Top" visible={hov === "up" && !atTop} rgb={accent.rgb} />
         </button>
 
@@ -701,7 +713,7 @@ export default function PageScrollbar() {
           onClick={scrollDown} style={pill(false, atBottom)}
           onMouseEnter={() => setHov("dn")} onMouseLeave={() => setHov(null)}
         >
-          ▼
+          <ArrowDownIcon />
           <Tip label="Bottom" visible={hov === "dn" && !atBottom} rgb={accent.rgb} />
         </button>
       </div>

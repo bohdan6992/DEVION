@@ -1513,6 +1513,12 @@ export type SonarExactFilterSnapshot = {
   corrExcluded: Set<string>;
   /** |corr| cutoff. The bridge resolves reporters over the WHOLE universe at this value itself. */
   corrThreshold?: number;
+  /** Drop a ticker whose post-market zap-sigma spiked past 1.5 sigma in its own 16:01-19:59
+   * window. The bridge resolves its OWN clean set (PostAnomalyService.ApplyAsync) — nothing about
+   * which tickers are clean is sent from here, only this one boolean. Optional: PairFlux/Limiter/
+   * Spreadometer build this same shape without it, since none of the three wire CORR either (see
+   * PairFluxServerStrategy's own doc comment on why its leg filter skips the universe-wide set). */
+  excludeAnom?: boolean;
   activeMode: ActiveMode;
   includeUSA: boolean;
   includeChina: boolean;
@@ -2370,6 +2376,8 @@ export default function ArbitrageSonar() {
   // CORR drops names correlated with today's reporting tickers; the box holds the |corr| cutoff.
   const [excludeCorr, setExcludeCorr] = useState(false);
   const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
+  // ANOM: see PostAnomalyService.cs — the bridge resolves its own clean set, this is just the toggle.
+  const [excludeAnom, setExcludeAnom] = useState(false);
   const [activeMode, setActiveMode] = useState<ActiveMode>("off");
 
 
@@ -2749,7 +2757,7 @@ export default function ArbitrageSonar() {
           'excludeDividend','excludeNews','excludePTP','excludeSSR','excludeReport','excludeETF','excludeCrap',
           // ITB/HARD/CORR reached the shared FilterFlagsRow but never this list, so they were
           // the only toolbar toggles that silently reset on every reload.
-          'excludeItb','excludeHard','excludeCorr',
+          'excludeItb','excludeHard','excludeCorr','excludeAnom',
           'includeUSA','includeChina',
         ] as const) {
           if (typeof s?.[k] === 'boolean') {
@@ -2765,6 +2773,7 @@ export default function ArbitrageSonar() {
               case 'excludeItb': setExcludeItb(v); break;
               case 'excludeHard': setExcludeHard(v); break;
               case 'excludeCorr': setExcludeCorr(v); break;
+              case 'excludeAnom': setExcludeAnom(v); break;
               case 'includeUSA': setIncludeUSA(v); break;
               case 'includeChina': setIncludeChina(v); break;
             }
@@ -2928,7 +2937,7 @@ export default function ArbitrageSonar() {
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-          excludeItb, excludeHard, excludeCorr, corrThresholdInput,
+          excludeItb, excludeHard, excludeCorr, excludeAnom, corrThresholdInput,
           includeUSA, includeChina,
           filterReport, equityType,
 
@@ -2985,7 +2994,7 @@ export default function ArbitrageSonar() {
     zapMode, activeMode, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
     ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax, arbitrageIgnoreRatings, sonarPriceMode,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    excludeItb, excludeHard, excludeCorr, corrThresholdInput,
+    excludeItb, excludeHard, excludeCorr, excludeAnom, corrThresholdInput,
     includeUSA, includeChina,
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
@@ -3223,7 +3232,7 @@ export default function ArbitrageSonar() {
         // produces identical results regardless of prior per-device localStorage state.
         excludeDividend: false, excludeNews: false, excludePTP: false, excludeSSR: false,
         excludeReport: false, excludeETF: false, excludeCrap: false,
-        excludeItb: false, excludeHard: false, excludeCorr: false,
+        excludeItb: false, excludeHard: false, excludeCorr: false, excludeAnom: false,
         includeUSA: false, includeChina: false,
         filterReport: "ALL", equityType: "",
         countryEnabled: "off", selCountries: [],
@@ -3456,6 +3465,7 @@ export default function ArbitrageSonar() {
       excludeCorr,
       corrExcluded: sectorCorr.excluded,
       corrThreshold,
+      excludeAnom,
       activeMode,
 
       includeUSA,
@@ -3495,7 +3505,7 @@ export default function ArbitrageSonar() {
     listMode, ignoreSet, applySet,pinMap,
     bounds,
     excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
-    excludeItb, excludeHard, excludeCorr, sectorCorr.excluded,
+    excludeItb, excludeHard, excludeCorr, sectorCorr.excluded, excludeAnom,
     activeMode, // include in dependencies
     includeUSA, includeChina,
     selCountries, countryEnabled, selExchanges, exchangeEnabled, selSectors, sectorEnabled,
@@ -3831,6 +3841,7 @@ export default function ArbitrageSonar() {
     if (excludeItb) hints.push("ex ITB");
     if (excludeHard) hints.push("ex HARD-to-borrow");
     if (excludeCorr) hints.push(`ex CORR peers ${sectorCorr.excluded.size}`);
+    if (excludeAnom) hints.push("ex ANOM");
     if (includeUSA) hints.push("USA only");
     if (includeChina) hints.push("CHINA only");
     if (countryEnabled !== "off" && selCountries.size > 0) hints.push(`countries ${selCountries.size}`);
@@ -3859,6 +3870,7 @@ export default function ArbitrageSonar() {
     excludeHard,
     excludeItb,
     excludeCorr,
+    excludeAnom,
     excludeNews,
     excludePTP,
     excludeReport,
@@ -4455,6 +4467,7 @@ export default function ArbitrageSonar() {
             { label: "SSR", value: excludeSSR, set: setExcludeSSR, title: "Exclude SSR = YES, short-sale restricted (a row with no SSR flag is rejected)" },
             { label: "ETF", value: excludeETF, set: setExcludeETF, title: "Exclude ETF = YES or EquityType ETF (a row with no ETF flag is rejected)" },
             { label: "CRAP", value: excludeCrap, set: setExcludeCrap, title: "Exclude YCls (yesterday's close) below $5; a row with no YCls is rejected" },
+            { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. The bridge resolves its own clean set." },
           ]}
           report={{ label: "REP", value: excludeReport, set: setExcludeReport, title: "Exclude report=true" }}
           corr={{ label: "CORR", value: excludeCorr, set: setExcludeCorr }}
