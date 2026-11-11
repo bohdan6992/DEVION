@@ -6539,103 +6539,16 @@ export default function VWAPBounceScanner({
               </div>
             </div>
           )}
+          {/* Window-capture/book-reading/auto-start controls removed 2026-11-11 (operator's own
+              instruction): these duplicated controls Caesar already owns outright —
+              CaesarControlBar's crosshair (CaesarWindowBinding.tsx) binds the SAME machine-level
+              Market Maker window for every strategy, and CaesarPlanService.Apply() already flips
+              AutoEnabled/StrategyModeEnabled on a schedule, autonomously, with no dependency on any
+              Stream tab being open. Order-book reading had no Caesar-side equivalent — see
+              CaesarWindowBinding.tsx's own toggle, added the same day to keep that one capability
+              from being stranded with no UI anywhere. */}
           <div className="flex items-center gap-2">
-          {primaryPanel === "stream" ? (
-            streamAutomationLaunchEnabled ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void captureStreamWindowsFromHeader()}
-                  disabled={streamWindowCaptureBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    streamWindowCaptureBusy && "cursor-not-allowed opacity-60"
-                  )}
-                  title={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
-                      : (streamWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
-                  }
-                  aria-label={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows" : "Capturing windows")
-                      : (streamWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
-                  }
-                >
-                  <CrosshairIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamWindowsBound && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamWindowsBound ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamBookReadingFromHeader()}
-                  disabled={!streamWindowsBound || streamBookToggleBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    (!streamWindowsBound || streamBookToggleBusy) && "cursor-not-allowed opacity-40"
-                  )}
-                  title={
-                    !streamWindowsBound
-                      ? "Bind the Market Maker window first"
-                      : streamBookReading
-                        ? "Stop reading the order book"
-                        : "Start reading the order book"
-                  }
-                  aria-label={streamBookReading ? "Stop reading the order book" : "Start reading the order book"}
-                >
-                  <BookLevelsIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamBookReading && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamBookReading ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStreamAutoStartLocked((prev) => !prev)}
-                  className={SCANNER_EYE_BUTTON}
-                  title={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                  aria-label={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                >
-                  <LockToggleIcon
-                    open={streamAutoStartLocked}
-                    className="text-zinc-300 group-hover:text-white transition-colors"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamAutomationRunFromHeader()}
-                  disabled={streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    streamAutomationRunning
-                      ? autoStopButtonClass
-                      : autoStartButtonClass,
-                    (streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)) && "cursor-not-allowed opacity-40"
-                  )}
-                >
-                  {streamAutomationTogglePending === "start"
-                    ? "STARTING"
-                    : streamAutomationTogglePending === "stop"
-                      ? "STOPPING"
-                      : streamAutomationRunning
-                        ? "STOP AUTO"
-                        : streamAutoStartLocked
-                          ? "START LOCKED"
-                          : "START AUTO"}
-                </button>
-              </>
-            ) : (
-              <span className={autoLockedPillClass}>
-                AUTO LOCKED
-              </span>
-            )
-          ) : (
+          {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
               {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
             </div>

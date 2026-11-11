@@ -90,7 +90,7 @@ export default function ThemeDollarSpinner() {
   const isSparkle = theme === "sparkle";
   const isAsher = theme === "asher";
   const isMagma = theme === "magma";
-  const isMercury = theme === "mercury";
+  const isMercury = theme === "mercury" || theme === "fluid";
   const modelPath = isNeon
     ? FLAMINGO_PATH
     : isLight

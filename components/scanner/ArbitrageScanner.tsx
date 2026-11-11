@@ -706,12 +706,30 @@ export default function ArbitrageScanner({
    * made 73% of the trades the scanner showed untakeable and flipped the sign of 36% of days.
    *
    * ASOF rebuilds rate/total from the trade log inside rolling_perf, counting only trades dated
-   * strictly before the replayed day; EXPO weights those by recency relative to that day; FRZN
-   * reads the morning snapshot (none exist yet - they only start accumulating now); LIVE is the
-   * old behaviour, kept and honestly labelled.
+   * strictly before the replayed day; EXPO weights those by recency relative to that day; LIVE is
+   * the old behaviour, kept and honestly labelled.
+   *
+   * The morning snapshot is no longer a mode of its own: it is LIVE under the separate FROZEN flag
+   * below (none exist for ArbitRage yet - they only start accumulating now, so those days fall
+   * back to live and the response's ratingsLookAheadDays lists exactly which).
    */
-  type ArbRatingsMode = "asof" | "asofew" | "frozen" | "live";
+  type ArbRatingsMode = "asof" | "asofew" | "live";
   const [arbRatingsMode, setArbRatingsMode] = useState<ArbRatingsMode>("asof");
+
+  /**
+   * FROZEN, on its own axis (the operator's own factorisation, 2026-11-11). The MODE says how the
+   * rating is computed; this says WHEN it is measured - one table for the whole range, or a
+   * separate one per day, as of that day.
+   *
+   *            frozen OFF                        frozen ON
+   *   LIVE     today's published best_params     the snapshot taken that morning
+   *   ASOF     rebuilt from the whole log        rebuilt from trades BEFORE each day
+   *   EXPO     rebuilt, weighted to the newest   rebuilt, weighted to each day
+   *
+   * It used to be a fourth MODE, which forced a false choice: point-in-time discipline OR recency
+   * weighting, never both. They are different questions and now have different controls.
+   */
+  const [arbFrozen, setArbFrozen] = useState(false);
   const [arbCoreOnly, setArbCoreOnly] = useState(false);
 
   /**
@@ -1436,9 +1454,12 @@ export default function ArbitrageScanner({
         if (typeof s.dateNy === "string") setDateNy(s.dateNy);
         if (typeof s.dateFrom === "string") setDateFrom(s.dateFrom);
         if (typeof s.dateTo === "string") setDateTo(s.dateTo);
-        if (s.arbRatingsMode === "live" || s.arbRatingsMode === "frozen"
-            || s.arbRatingsMode === "asof" || s.arbRatingsMode === "asofew")
+        // "frozen" is no longer a mode; a stored one maps onto LIVE with the flag set, so a
+        // reload after the change lands on the same behaviour rather than silently on ASOF.
+        if (s.arbRatingsMode === "frozen") { setArbRatingsMode("live"); setArbFrozen(true); }
+        else if (s.arbRatingsMode === "live" || s.arbRatingsMode === "asof" || s.arbRatingsMode === "asofew")
           setArbRatingsMode(s.arbRatingsMode);
+        if (typeof s.arbFrozen === "boolean") setArbFrozen(s.arbFrozen);
         if (typeof s.arbCoreOnly === "boolean") setArbCoreOnly(s.arbCoreOnly);
         if (s.arbOutcome === "norm" || s.arbOutcome === "narrow") setArbOutcome(s.arbOutcome);
 
@@ -1709,6 +1730,7 @@ export default function ArbitrageScanner({
       // success. They reset on reload otherwise, and the page would come back on ASOF/NORM showing
       // different numbers from the ones that were on screen, with nothing to say why.
       arbRatingsMode,
+      arbFrozen,
       arbCoreOnly,
       arbOutcome,
       metric,
@@ -1899,7 +1921,7 @@ export default function ArbitrageScanner({
       // them move the P&L, which is why a reload could return a different result for the same day.
       // The rating strip, for the same reason spelled out just above: read by the object, so it
       // must be here or a change to it alone would never trigger the write.
-      arbRatingsMode, arbCoreOnly, arbOutcome,
+      arbRatingsMode, arbFrozen, arbCoreOnly, arbOutcome,
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
@@ -2895,6 +2917,7 @@ export default function ArbitrageScanner({
       ratingType: ratingType ?? "any",
       ignoreRatings: arbitrageIgnoreRatings,
       ratingsMode: arbRatingsMode,
+      ratingsFrozen: arbFrozen,
       coreOnly: arbCoreOnly,
       ratingOutcome: arbOutcome,
 
@@ -3082,6 +3105,7 @@ export default function ArbitrageScanner({
       ignoreRatings: arbitrageIgnoreRatings,
       // Which rating table gates each replayed day, and whether CORE narrows it.
       ratingsMode: arbRatingsMode,
+      ratingsFrozen: arbFrozen,
       coreOnly: arbCoreOnly,
       ratingOutcome: arbOutcome,
 
@@ -4127,20 +4151,26 @@ export default function ArbitrageScanner({
     // cannot reach the one place it matters most. (A guard here was a leftover from briefly hiding
     // the strip on the stream; it silently defeated the whole fix.)
     let cancelled = false;
-    // LIVE needs no table: the row's own best_params IS today's, which is what LIVE means.
-    if (arbRatingsMode === "live") { setArbRatingTable(null); return; }
+    // Only ONE shape needs no table: plain LIVE on the published rule, which is exactly what the
+    // row's own best_params already is. LIVE+frozen is a different table (the morning snapshot),
+    // and NARROW is a rule best_params never carried, so both still have to be fetched.
+    if (arbRatingsMode === "live" && !arbFrozen && arbOutcome === "norm") {
+      setArbRatingTable(null);
+      return;
+    }
     const q = new URLSearchParams({
       mode: arbRatingsMode,
       cls: arbRatingClass,
       coreOnly: String(arbCoreOnly),
       ratingType: ratingType ?? "any",
       ratingOutcome: arbOutcome,
+      frozen: String(arbFrozen),
     });
     apiGet<any>(`${STRATEGY.api.base}/ratings/table?${q}`)
       .then((j) => { if (!cancelled) setArbRatingTable({ rows: j?.rows ?? {}, fellBackToLive: !!j?.fellBackToLive }); })
       .catch(() => { if (!cancelled) setArbRatingTable(null); });
     return () => { cancelled = true; };
-  }, [arbRatingsMode, arbRatingClass, arbCoreOnly, ratingType, arbOutcome]);
+  }, [arbRatingsMode, arbRatingClass, arbCoreOnly, ratingType, arbOutcome, arbFrozen]);
 
   /** rate/total for one ticker on one side, from that table. pos = Short, neg = Long. */
   const arbRatingOverride = useCallback((ticker: string, isLong: boolean) => {
@@ -5836,9 +5866,9 @@ export default function ArbitrageScanner({
             {arbitrageIgnoreRatings ? "UNIVERSE" : "RATE"}
           </button>
 
-          {/* WHICH rating table judges each replayed day, plus CORE. Four letters each so the row
-              reads as a column of equal words, each in its own colour while inactive because the
-              five are not interchangeable and the difference matters BEFORE you click.
+          {/* WHICH rating table judges each replayed day, plus the ❄ and CORE. Four letters each so
+              the row reads as a column of equal words, each in its own colour while inactive
+              because they are not interchangeable and the difference matters BEFORE you click.
 
               Hidden entirely under UNIVERSE: with ratings dropped the gate reads no table at all,
               so there is nothing to choose between. Same placement, labels and treatment as
@@ -5857,9 +5887,7 @@ export default function ArbitrageScanner({
                 { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
                   title: "AS-OF - each replayed day is judged ONLY by trades dated before it, rate/total rebuilt from the published trade log. No look-ahead, and a day's result never changes again. Default." },
                 { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
-                  title: "AS-OF exponential - as AS-OF, but each surviving trade is weighted by how recent it is RELATIVE TO THE REPLAYED DAY (half-life 40 sessions), then shrunk toward that class's own base rate." },
-                { key: "frozen", label: "FRZN", tone: "text-sky-300/80 hover:text-sky-200",
-                  title: "FROZEN - the rating snapshot actually taken that morning. ArbitRage has none yet: the freeze service only started covering it on 2026-11-08, so every day still falls back to LIVE until they accumulate." },
+                  title: "AS-OF exponential - the same situations AS-OF counts, rated differently. Sessions are grouped into blocks of 5; every trade inside a block weighs the same, and each block back from the replayed day weighs half as much every 4 blocks (1.00 / 0.84 / 0.71 / 0.59 / 0.50 / ... ~0.13 at three months). Fresh weeks carry the rate; the situation count, MINTOTAL and the evidence needed for gamma are untouched, and the day's own result never leaks in." },
                 { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
                   title: "LIVE - TODAY's best_params applied to every replayed day. The old behaviour, kept because 'what would today's knowledge have done' is a real question - but it is why a losing day can later show as positive." },
               ] as const).map((m) => (
@@ -5887,6 +5915,26 @@ export default function ArbitrageScanner({
                 is what stops "LIVE + CORE + NRRW lit at once" from reading as three selections in
                 one radio group. */}
             <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              {/* FROZEN. A snowflake rather than a word because it qualifies the three modes to its
+                  left rather than naming a fourth one - a label here would read as a sibling of
+                  ASOF/EXPO/LIVE, which is the confusion that made it a mode in the first place. */}
+              <button
+                type="button"
+                onClick={() => setArbFrozen((v) => !v)}
+                title={arbFrozen
+                  ? "FROZEN on - every day is judged as of ITSELF. LIVE reads the snapshot taken that morning; ASOF and EXPO cut the trade log at each day, so nothing a day could not have known reaches it. Click for one table over the whole range."
+                  : "FROZEN off - one table for the whole range. LIVE is today's published file, ASOF the whole trade log, EXPO the whole log weighted toward its newest session. Click to measure each day as of itself."}
+                className={clsx(
+                  "px-3 py-1.5 rounded-lg text-[11px] font-mono font-bold leading-none transition-all border",
+                  arbFrozen
+                    ? "border-sky-400/70 bg-sky-500/15 text-sky-200"
+                    : "border-transparent text-sky-300/70 hover:text-sky-200 hover:bg-white/5"
+                )}
+                aria-label="Frozen: judge each day as of itself"
+              >
+                ❄
+              </button>
+
               <button
                 type="button"
                 onClick={() => setArbCoreOnly((v) => !v)}
@@ -6889,103 +6937,16 @@ export default function ArbitrageScanner({
               </div>
             </div>
           )}
+          {/* Window-capture/book-reading/auto-start controls removed 2026-11-11 (operator's own
+              instruction): these duplicated controls Caesar already owns outright —
+              CaesarControlBar's crosshair (CaesarWindowBinding.tsx) binds the SAME machine-level
+              Market Maker window for every strategy, and CaesarPlanService.Apply() already flips
+              AutoEnabled/StrategyModeEnabled on a schedule, autonomously, with no dependency on any
+              Stream tab being open. Order-book reading had no Caesar-side equivalent — see
+              CaesarWindowBinding.tsx's own toggle, added the same day to keep that one capability
+              from being stranded with no UI anywhere. */}
           <div className={clsx("flex items-center gap-2", primaryPanel !== "stream" && "ml-auto")}>
-          {primaryPanel === "stream" ? (
-            streamAutomationLaunchEnabled ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void captureStreamWindowsFromHeader()}
-                  disabled={streamWindowCaptureBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    streamWindowCaptureBusy && "cursor-not-allowed opacity-60"
-                  )}
-                  title={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
-                      : (streamWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
-                  }
-                  aria-label={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows" : "Capturing windows")
-                      : (streamWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
-                  }
-                >
-                  <CrosshairIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamWindowsBound && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamWindowsBound ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamBookReadingFromHeader()}
-                  disabled={!streamWindowsBound || streamBookToggleBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    (!streamWindowsBound || streamBookToggleBusy) && "cursor-not-allowed opacity-40"
-                  )}
-                  title={
-                    !streamWindowsBound
-                      ? "Bind the Market Maker window first"
-                      : streamBookReading
-                        ? "Stop reading the order book"
-                        : "Start reading the order book"
-                  }
-                  aria-label={streamBookReading ? "Stop reading the order book" : "Start reading the order book"}
-                >
-                  <BookLevelsIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamBookReading && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamBookReading ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStreamAutoStartLocked((prev) => !prev)}
-                  className={SCANNER_EYE_BUTTON}
-                  title={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                  aria-label={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                >
-                  <LockToggleIcon
-                    open={streamAutoStartLocked}
-                    className="text-zinc-300 group-hover:text-white transition-colors"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamAutomationRunFromHeader()}
-                  disabled={streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    streamAutomationRunning
-                      ? autoStopButtonClass
-                      : autoStartButtonClass,
-                    (streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)) && "cursor-not-allowed opacity-40"
-                  )}
-                >
-                  {streamAutomationTogglePending === "start"
-                    ? "STARTING"
-                    : streamAutomationTogglePending === "stop"
-                      ? "STOPPING"
-                      : streamAutomationRunning
-                        ? "STOP AUTO"
-                        : streamAutoStartLocked
-                          ? "START LOCKED"
-                          : "START AUTO"}
-                </button>
-              </>
-            ) : (
-              <span className={autoLockedPillClass}>
-                AUTO LOCKED
-              </span>
-            )
-          ) : (
+          {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
               {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
             </div>

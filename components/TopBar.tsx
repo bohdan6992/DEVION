@@ -176,6 +176,7 @@ const getThemeDropdownAccent = (key: string, isDark: boolean) => {
         buttonBorder: "border-sky-500/20",
       };
     case "mercury":
+    case "fluid":
       return {
         selectedItem: "bg-slate-400/10 text-slate-200 font-bold",
         dot: "bg-slate-300 shadow-[0_0_8px_rgba(176,182,190,0.55)]",
@@ -387,6 +388,7 @@ export default function TopBar() {
           activeLine: "bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.55)]",
         };
       case "mercury":
+    case "fluid":
         return {
           activeText: "text-slate-200 drop-shadow-[0_0_8px_rgba(176,182,190,0.28)]",
           activeBg: "bg-slate-400/10 opacity-100 border border-transparent",
@@ -548,6 +550,7 @@ export default function TopBar() {
                 { key: "dark", label: "Dark" },
                 { key: "space", label: "Space" },
                 { key: "mercury", label: "Mercury" },
+                { key: "fluid", label: "Fluid" },
               ]}
               isDark={isDark}
               accentMode="theme"

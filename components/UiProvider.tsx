@@ -7,7 +7,7 @@ export type ThemeKey =
   | "light" | "dark" | "neon" | "pastel"
   | "solaris" | "cyberpunk" | "oceanic" | "sakura" | "matrix" | "asher" | "inferno"
   | "sparkle" | "desert" | "midnight" | "forest" | "candy" | "monochrome" | "space" | "rain"
-  | "mercury" | "magma" | "khaki" | "zebra" | "flamingo" | "money";
+  | "mercury" | "fluid" | "magma" | "khaki" | "zebra" | "flamingo" | "money";
 
 export type LangKey = "UA" | "EN" | "UK";
 
@@ -39,7 +39,7 @@ function normalizeThemeKey(theme?: string | null): ThemeKey {
     value === "solaris" || value === "cyberpunk" || value === "oceanic" || value === "sakura" ||
     value === "matrix" || value === "asher" || value === "inferno" || value === "desert" ||
     value === "midnight" || value === "forest" || value === "candy" || value === "monochrome" ||
-    value === "space" || value === "rain" || value === "mercury" || value === "magma" ||
+    value === "space" || value === "rain" || value === "mercury" || value === "fluid" || value === "magma" ||
     value === "khaki" || value === "zebra" || value === "flamingo" || value === "money"
   ) {
     return value as ThemeKey;

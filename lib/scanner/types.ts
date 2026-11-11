@@ -314,15 +314,20 @@ export type ScannerLogContext = {
 
 // Big request: Analytics + EpisodesSearch
 export type PaperArbAnalyticsRequest = {
-  /** "live" | "frozen" | "asof" | "asofew" - which rating table each replayed day is judged by.
+  /** "live" | "asof" | "asofew" - which rating table each replayed day is judged by. ("frozen" was
+   *  a fourth value until 2026-11-11; it is now the separate ratingsFrozen flag below, so it can
+   *  combine with any of the three. The parser still accepts the old spelling.)
    *  Bound server-side on PaperStrategyRequest, so every strategy accepts it. */
   ratingsMode?: string;
   /** Restrict the run to the CORE list of consistently-good tickers. */
   coreOnly?: boolean;
   /** "norm" (default) | "narrow" - what counts as a successful situation. "narrow" asks only
    *  whether the deviation at the class close was SMALLER than at entry. Orthogonal to
-   *  ratingsMode; both rules are available under all four. */
+   *  ratingsMode; both rules are available under every mode. */
   ratingOutcome?: string;
+  /** Apply the rating PER DAY, as of that day, instead of one table for the whole range.
+   *  Orthogonal to ratingsMode: the mode says HOW, this says WHEN. */
+  ratingsFrozen?: boolean;
   dateFrom: string;
   dateTo: string;
 

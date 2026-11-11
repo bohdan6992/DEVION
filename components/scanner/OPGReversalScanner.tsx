@@ -773,18 +773,33 @@ export default function OPGReversalScanner({
    * a useful view - "what would today's knowledge have done" - but it is not a record of what
    * happened, and it must not be what the scanner opens on.
    *
-   * "frozen" is the snapshot taken that morning. Honest, but it only exists from the day freezing
-   * starts, and until 2026-11-08 the freeze service was hard-coded to opendoor alone, so for
-   * OPG-reversal there are currently ZERO frozen days and every one of them falls back to live
-   * (the response's ratingsLookAheadDays lists exactly which).
-   *
    * "asof" recomputes the table from the trade log already inside the published file, counting only
    * trades dated strictly BEFORE the replayed day. It is the only one of the three that is both
    * look-ahead free and available for history, and the same file and day give the same answer
    * forever - which is what makes a replayed day stop moving.
+   *
+   * "asofew" is "asof" with the surviving trades weighted toward the newest session, so a regime
+   * change is felt sooner. Same cutoff, same scale - only the weights differ.
+   *
+   * The morning snapshot is no longer one of these: it is LIVE under the separate FROZEN flag
+   * below. See that comment for why the two axes were split.
    */
-  type RatingsMode = "live" | "frozen" | "asof" | "asofew";
+  type RatingsMode = "live" | "asof" | "asofew";
   const [opgReversalRatingsMode, setOpgReversalRatingsMode] = useState<RatingsMode>("asof");
+
+  /**
+   * FROZEN, on its own axis. The MODE says how the rating is computed; this says WHEN it is
+   * measured - one table for the whole range, or a separate one per day, as of that day.
+   *
+   *            frozen OFF                        frozen ON
+   *   LIVE     today's published file            the snapshot taken that morning
+   *   ASOF     rebuilt from the whole log        rebuilt from trades BEFORE each day
+   *   EXPO     rebuilt, weighted to the newest   rebuilt, weighted to each day
+   *
+   * It was a fourth MODE until 2026-11-11, which forced a false choice: point-in-time discipline
+   * OR recency weighting, never both.
+   */
+  const [opgReversalFrozen, setOpgReversalFrozen] = useState(false);
 
   /**
    * CORE - restrict the run to the small, slow-moving set of tickers that have performed well
@@ -1700,9 +1715,13 @@ export default function OPGReversalScanner({
         if (typeof s.opgReversalMinTotal === "number") setOPGReversalMinTotal(s.opgReversalMinTotal);
         if (s.opgReversalUnitMode === "pct" || s.opgReversalUnitMode === "sigma" || s.opgReversalUnitMode === "alpha" || s.opgReversalUnitMode === "gamma" || s.opgReversalUnitMode === "atr" || s.opgReversalUnitMode === "lambda") setOPGReversalUnitMode(s.opgReversalUnitMode);
         if (typeof s.opgReversalIgnoreRatings === "boolean") setOPGReversalIgnoreRatings(s.opgReversalIgnoreRatings);
-        if (s.opgReversalRatingsMode === "live" || s.opgReversalRatingsMode === "frozen"
-            || s.opgReversalRatingsMode === "asof" || s.opgReversalRatingsMode === "asofew")
+        // "frozen" is no longer a mode; a stored one maps onto LIVE with the flag set, so a
+        // reload after the change keeps the same behaviour instead of silently landing on ASOF.
+        if (s.opgReversalRatingsMode === "frozen") { setOpgReversalRatingsMode("live"); setOpgReversalFrozen(true); }
+        else if (s.opgReversalRatingsMode === "live" || s.opgReversalRatingsMode === "asof"
+                 || s.opgReversalRatingsMode === "asofew")
           setOpgReversalRatingsMode(s.opgReversalRatingsMode);
+        if (typeof s.opgReversalFrozen === "boolean") setOpgReversalFrozen(s.opgReversalFrozen);
         if (typeof s.opgReversalCoreOnly === "boolean") setOpgReversalCoreOnly(s.opgReversalCoreOnly);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
@@ -1955,6 +1974,7 @@ export default function OPGReversalScanner({
       // page would come back on ASOF showing different numbers from the ones that were on screen,
       // with nothing to say why.
       opgReversalRatingsMode,
+      opgReversalFrozen,
       opgReversalCoreOnly,
       dilutionMode,
       dilutionStep,
@@ -2957,6 +2977,7 @@ export default function OPGReversalScanner({
       // It is in the bridge's VariantKey too, so flipping it genuinely rebuilds rather than
       // serving the other mode's cached day back.
       ratingsMode: opgReversalRatingsMode,
+      ratingsFrozen: opgReversalFrozen,
       // CORE narrows the day's rating table to its members; it is in VariantKey server-side too.
       coreOnly: opgReversalCoreOnly,
       // RATE/UNIVERSE button, next to MINRATE/MINTOTAL — drops the per-ticker gamma lookup (and
@@ -6027,16 +6048,17 @@ export default function OPGReversalScanner({
               <>
               <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
                 {/* FOUR LETTERS EACH, so the strip reads as a row of equal words rather than a
-                    ragged one (the operator's own instruction, 2026-11-08): ASOF / EXPO / FRZN /
-                    LIVE / CORE.
+                    ragged one (the operator's own instruction, 2026-11-08): ASOF / EXPO / LIVE,
+                    then CORE. FRZN left this row on 2026-11-11 - it is a ❄ in the next capsule,
+                    because it qualifies all three rather than naming a fourth.
 
-                    Each carries its OWN colour while inactive, because the five are not
+                    Each carries its OWN colour while inactive, because they are not
                     interchangeable and the difference matters BEFORE you click. The palette is the
                     one already in this toolbar, used for what it already means here: mint for the
                     sound default, violet for the weighted variant (λ is a violet-strip glyph in
-                    this app), sky for the frozen snapshot, soft coral for LIVE - the one that
-                    flatters the past and should read as a caution - and amber for CORE, matching
-                    the RATE button beside it.
+                    this app), soft coral for LIVE - the one that flatters the past and should read
+                    as a caution - sky for the ❄, and amber for CORE, matching the RATE button
+                    beside it.
 
                     Active stays `accent-soft` like every other group on this row: the selected
                     button is already obvious from its fill and does not also need its hue. */}
@@ -6044,9 +6066,7 @@ export default function OPGReversalScanner({
                   { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
                     title: "AS-OF — each replayed day is judged ONLY by trades dated before it, recomputed from the published trade log. No look-ahead, and a day's result never changes again. Default." },
                   { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
-                    title: "AS-OF λ (exponential) — as AS-OF, but each surviving trade is weighted by how recent it is RELATIVE TO THE REPLAYED DAY (half-life 40 sessions), then shrunk toward that class's own base rate on a faster 20-session clock. Fresher days count for more, without the day's own result ever leaking in." },
-                  { key: "frozen", label: "FRZN", tone: "text-sky-300/80 hover:text-sky-200",
-                    title: "FROZEN — the rating snapshot actually taken that morning: the true record of what was known. Only exists for days that were frozen; the rest fall back to LIVE and are reported as look-ahead days." },
+                    title: "AS-OF exponential - the same situations AS-OF counts, rated differently. Sessions are grouped into blocks of 5; every trade inside a block weighs the same, and each block back from the replayed day weighs half as much every 4 blocks (1.00 / 0.84 / 0.71 / 0.59 / 0.50 / ... ~0.13 at three months). Fresh weeks carry the rate; the situation count, MINTOTAL and the evidence needed for gamma are untouched, and the day's own result never leaks in." },
                   { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
                     title: "LIVE — TODAY's ratings applied to every replayed day. Answers 'what would today's knowledge have done' — and is why a losing day can later show as positive. Not a record of what happened." },
                 ] as const).map((m) => (
@@ -6071,6 +6091,26 @@ export default function OPGReversalScanner({
                   exclusive choice, CORE is an independent switch. One container per group, per the
                   Secondary Button Standard (AGENTS.md). */}
               <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+                {/* FROZEN. A snowflake rather than a word because it qualifies the three modes to
+                    its left rather than naming a fourth one - a label here would read as their
+                    sibling, which is the confusion that made it a mode in the first place. */}
+                <button
+                  type="button"
+                  onClick={() => setOpgReversalFrozen((v) => !v)}
+                  title={opgReversalFrozen
+                    ? "FROZEN on - every day is judged as of ITSELF. LIVE reads the snapshot taken that morning; ASOF and EXPO cut the trade log at each day, so nothing a day could not have known reaches it. Click for one table over the whole range."
+                    : "FROZEN off - one table for the whole range. LIVE is today's published file, ASOF the whole trade log, EXPO the whole log weighted toward its newest session. Click to measure each day as of itself."}
+                  className={clsx(
+                    "px-3 py-1.5 rounded-lg text-[11px] font-mono font-bold leading-none transition-all border",
+                    opgReversalFrozen
+                      ? "border-sky-400/70 bg-sky-500/15 text-sky-200"
+                      : "border-transparent text-sky-300/70 hover:text-sky-200 hover:bg-white/5"
+                  )}
+                  aria-label="Frozen: judge each day as of itself"
+                >
+                  ❄
+                </button>
+
                 {/* CORE, not in a capsule of its own (the operator's
                     own correction, 2026-11-08 - "не роздільно"). It belongs here visually because
                     it belongs here logically: it narrows the very table the four buttons to its
@@ -6880,103 +6920,16 @@ export default function OPGReversalScanner({
               </div>
             </div>
           )}
+          {/* Window-capture/book-reading/auto-start controls removed 2026-11-11 (operator's own
+              instruction): these duplicated controls Caesar already owns outright —
+              CaesarControlBar's crosshair (CaesarWindowBinding.tsx) binds the SAME machine-level
+              Market Maker window for every strategy, and CaesarPlanService.Apply() already flips
+              AutoEnabled/StrategyModeEnabled on a schedule, autonomously, with no dependency on any
+              Stream tab being open. Order-book reading had no Caesar-side equivalent — see
+              CaesarWindowBinding.tsx's own toggle, added the same day to keep that one capability
+              from being stranded with no UI anywhere. */}
           <div className="flex items-center gap-2">
-          {primaryPanel === "stream" ? (
-            streamAutomationLaunchEnabled ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void captureStreamWindowsFromHeader()}
-                  disabled={streamWindowCaptureBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    streamWindowCaptureBusy && "cursor-not-allowed opacity-60"
-                  )}
-                  title={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows..." : "Capturing windows...")
-                      : (streamWindowsBound ? "Disconnect Market Maker + Main Window" : "Capture Market Maker + Main Window")
-                  }
-                  aria-label={
-                    streamWindowCaptureBusy
-                      ? (streamWindowsBound ? "Disconnecting windows" : "Capturing windows")
-                      : (streamWindowsBound ? "Disconnect Market Maker and Main Window" : "Capture Market Maker and Main Window")
-                  }
-                >
-                  <CrosshairIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamWindowsBound && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamWindowsBound ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamBookReadingFromHeader()}
-                  disabled={!streamWindowsBound || streamBookToggleBusy}
-                  className={clsx(
-                    SCANNER_EYE_BUTTON,
-                    (!streamWindowsBound || streamBookToggleBusy) && "cursor-not-allowed opacity-40"
-                  )}
-                  title={
-                    !streamWindowsBound
-                      ? "Bind the Market Maker window first"
-                      : streamBookReading
-                        ? "Stop reading the order book"
-                        : "Start reading the order book"
-                  }
-                  aria-label={streamBookReading ? "Stop reading the order book" : "Start reading the order book"}
-                >
-                  <BookLevelsIcon
-                    className={clsx(
-                      "transition-colors",
-                      !streamBookReading && "text-zinc-300 group-hover:text-white"
-                    )}
-                    style={streamBookReading ? { color: STREAM_FIXED_ICON_GREEN } : undefined}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStreamAutoStartLocked((prev) => !prev)}
-                  className={SCANNER_EYE_BUTTON}
-                  title={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                  aria-label={streamAutoStartLocked ? "Unlock auto start" : "Lock auto start"}
-                >
-                  <LockToggleIcon
-                    open={streamAutoStartLocked}
-                    className="text-zinc-300 group-hover:text-white transition-colors"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void toggleStreamAutomationRunFromHeader()}
-                  disabled={streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)}
-                  className={clsx(
-                    "inline-flex h-7 items-center justify-center px-3 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                    streamAutomationRunning
-                      ? autoStopButtonClass
-                      : autoStartButtonClass,
-                    (streamAutomationToggleBusy || (streamAutoStartLocked && !streamAutomationRunning)) && "cursor-not-allowed opacity-40"
-                  )}
-                >
-                  {streamAutomationTogglePending === "start"
-                    ? "STARTING"
-                    : streamAutomationTogglePending === "stop"
-                      ? "STOPPING"
-                      : streamAutomationRunning
-                        ? "STOP AUTO"
-                        : streamAutoStartLocked
-                          ? "START LOCKED"
-                          : "START AUTO"}
-                </button>
-              </>
-            ) : (
-              <span className={autoLockedPillClass}>
-                AUTO LOCKED
-              </span>
-            )
-          ) : (
+          {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
               {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
             </div>

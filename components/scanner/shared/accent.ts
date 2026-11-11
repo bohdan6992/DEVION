@@ -90,6 +90,7 @@ export function getScannerAccent(theme?: string | null): ScannerAccent {
         outlineButton: "border-rose-400/50 text-rose-200 hover:bg-rose-500/10 shadow-[0_0_12px_rgba(255,82,72,0.12)]",
       };
     case "mercury":
+    case "fluid":
       return {
         selection: "selection:bg-slate-200/25",
         dot: "bg-slate-200",
@@ -189,7 +190,7 @@ export function getScannerHeaderButtonActiveClass(theme?: string | null): string
   if (theme === "neon") return "border border-fuchsia-500 text-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.28)] bg-fuchsia-500/10";
   if (theme === "space") return "border border-sky-500 text-sky-400 shadow-[0_0_10px_rgba(14,165,233,0.28)] bg-sky-500/10";
   if (theme === "magma") return "border border-rose-400 text-rose-200 shadow-[0_0_12px_rgba(255,82,72,0.28)] bg-rose-500/10";
-  if (theme === "mercury") return "border border-slate-200/55 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.24)] bg-slate-200/12";
+  if (theme === "mercury" || theme === "fluid") return "border border-slate-200/55 text-slate-100 shadow-[0_0_12px_rgba(212,216,228,0.24)] bg-slate-200/12";
   if (theme === "oceanic") return "accent-soft";
   return "border border-zinc-300 text-zinc-200 shadow-[0_0_10px_rgba(212,212,216,0.18)] bg-zinc-200/10";
 }
@@ -211,7 +212,7 @@ export const getSonarPrimaryMsColor = (theme?: string | null): MsColor => {
   if (theme === "neon") return "fuchsia";
   if (theme === "space") return "cyan";
   if (theme === "magma") return "rose";
-  if (theme === "mercury") return "zinc";
+  if (theme === "mercury" || theme === "fluid") return "zinc";
   if (theme === "oceanic") return "cyan";
   if (theme === "khaki") return "amber";
   if (theme === "zebra") return "zinc";

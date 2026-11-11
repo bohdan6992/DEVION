@@ -739,7 +739,8 @@ html[data-theme] {
   box-shadow: 0 35px 96px rgba(0, 0, 0, 0.95), 0 0 22px rgba(255, 82, 72, 0.16);
 }
 
-:root[data-theme="mercury"] .tt-card:hover {
+:root[data-theme="mercury"] .tt-card:hover,
+:root[data-theme="fluid"] .tt-card:hover {
   border-color: rgba(176, 182, 190, 0.28);
   box-shadow: 0 35px 96px rgba(0, 0, 0, 0.9), 0 0 18px rgba(176, 182, 190, 0.1);
 }
@@ -888,7 +889,8 @@ html[data-theme="light"] .dashboard-scope [class*="bg-zinc"] {
 }
 
 /* ---------------- MERCURY (Рідкий Графіт — Liquid Mercury) ---------------- */
-:root[data-theme="mercury"] {
+:root[data-theme="mercury"],
+:root[data-theme="fluid"] {
   --bg: #0f1011;
   --fg: #e8e9ea;
   --muted: #8a8d91;
@@ -1180,6 +1182,7 @@ html.dark [class*="to-emerald-"] { --tw-gradient-to: rgba(228, 228, 231, 0.02) v
 :root[data-theme="space"]          { --dash-accent-rgb: 147, 197, 253; --dash-accent-on: #020318; }
 :root[data-theme="magma"]          { --dash-accent-rgb: 255, 82, 72;   --dash-accent-on: #ffffff; }
 :root[data-theme="mercury"]        { --dash-accent-rgb: 212, 216, 228; --dash-accent-on: #0a0b0e; }
+:root[data-theme="fluid"]        { --dash-accent-rgb: 212, 216, 228; --dash-accent-on: #0a0b0e; }
 :root[data-theme="khaki"]          { --dash-accent-rgb: 138, 154, 82;  --dash-accent-on: #050602; }
 :root[data-theme="zebra"]          { --dash-accent-rgb: 17, 16, 14;    --dash-accent-on: #f6f4ee; }
 :root[data-theme="flamingo"]       { --dash-accent-rgb: 244, 92, 122;  --dash-accent-on: #ffffff; }

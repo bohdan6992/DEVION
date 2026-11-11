@@ -19,10 +19,66 @@
 
 import React from "react";
 
+import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import { useMarketMakerWindow } from "./useMarketMakerWindow";
+
+/**
+ * Order-book reading toggle — moved here 2026-11-11 (operator's own instruction) when the
+ * per-strategy Stream header's own crosshair/book/lock/auto-start row was removed from every
+ * Scanner (ArbitrageScanner.tsx and its ~19 siblings): the crosshair and auto-start buttons were
+ * already pure duplicates of what this panel and CaesarPlanService already do machine-wide, but
+ * book-reading had no Caesar-side equivalent — this is that replacement, so the capability is not
+ * stranded with no UI anywhere. Bridge-level, same as the window bind above it: one switch for the
+ * whole bridge, not per-strategy (see TradingTool/components/stream/streamEngine.ts's own
+ * `/book-reading` endpoint — no strategy id in the URL).
+ */
+function useBookReading() {
+  const [reading, setReadingState] = React.useState<boolean | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const alive = React.useRef(true);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const res = await fetchWithTimeout(bridgeUrl("/api/execution/tradingapp/book-reading"));
+      const json = await res.json().catch(() => ({}));
+      if (alive.current && res.ok && json?.ok !== false) setReadingState(Boolean(json?.bookReading));
+    } catch {
+      // Advisory only — a failed poll leaves the toggle showing what it last knew.
+    }
+  }, []);
+
+  React.useEffect(() => {
+    alive.current = true;
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 10_000);
+    return () => { alive.current = false; window.clearInterval(id); };
+  }, [refresh]);
+
+  const toggle = React.useCallback(async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${bridgeUrl("/api/execution/tradingapp/book-reading")}?enabled=${enabled ? "true" : "false"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) throw new Error(json?.error || `Failed to switch book reading (${res.status})`);
+      if (alive.current) setReadingState(Boolean(json?.bookReading));
+    } catch (e: any) {
+      if (alive.current) setError(String(e?.message ?? e));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }, []);
+
+  return { reading, busy, error, toggle };
+}
 
 export default function CaesarWindowBinding() {
   const mm = useMarketMakerWindow();
+  const book = useBookReading();
 
   return (
     /* Recessed rather than framed: this is a strip inside the engines panel, not a panel of its
@@ -60,15 +116,32 @@ export default function CaesarWindowBinding() {
           </div>
         </div>
 
-        <button
-          type="button"
-          disabled={mm.busy != null}
-          onClick={() => void mm.bindNow()}
-          className="rounded-lg border border-white/[0.08] bg-black/25 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-500 transition-all hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40"
-          title="Finds the Market Maker Window by title and binds it immediately — same call the crosshair under the timeline makes; this one is here for a keyboard shortcut or a second machine."
-        >
-          Bind now
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!mm.isBound || book.busy}
+            onClick={() => void book.toggle(!book.reading)}
+            className="rounded-lg border border-white/[0.08] bg-black/25 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-500 transition-all hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40"
+            title={
+              !mm.isBound
+                ? "Bind the Market Maker window first"
+                : book.reading
+                  ? "Stop reading the order book"
+                  : "Start reading the order book"
+            }
+          >
+            {book.reading ? "Stop book" : "Read book"}
+          </button>
+          <button
+            type="button"
+            disabled={mm.busy != null}
+            onClick={() => void mm.bindNow()}
+            className="rounded-lg border border-white/[0.08] bg-black/25 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-500 transition-all hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40"
+            title="Finds the Market Maker Window by title and binds it immediately — same call the crosshair under the timeline makes; this one is here for a keyboard shortcut or a second machine."
+          >
+            Bind now
+          </button>
+        </div>
       </div>
 
       <div className="mt-2 font-mono text-[10px] leading-relaxed text-white/25">

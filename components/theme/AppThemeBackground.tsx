@@ -9,6 +9,7 @@ import BlackSpheresBackground from "@/components/theme/BlackSpheresBackground";
 import RainThemeBackground from "@/components/theme/RainThemeBackground";
 import SpaceThemeBackground from "@/components/theme/SpaceThemeBackground";
 import MercuryThemeBackground from "@/components/theme/MercuryThemeBackground";
+import FluidThemeBackground from "@/components/theme/FluidThemeBackground";
 import MagmaThemeBackground from "@/components/theme/MagmaThemeBackground";
 import OceanicThemeBackground from "@/components/theme/OceanicThemeBackground";
 import KhakiThemeBackground from "@/components/theme/KhakiThemeBackground";
@@ -38,6 +39,10 @@ export default function AppThemeBackground() {
 
   if (theme === "space") {
     return <SpaceThemeBackground />;
+  }
+
+  if (theme === "fluid") {
+    return <FluidThemeBackground />;
   }
 
   if (theme === "mercury") {
