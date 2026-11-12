@@ -1738,6 +1738,11 @@ export default function ArbitrageScanner({
       arbFrozen,
       arbCoreOnly,
       arbOutcome,
+      // RATE/UNIVERSE — the restore line for this already existed (reading s.arbitrageIgnoreRatings),
+      // but this object never actually carried the field, so there was never anything to restore:
+      // the save silently dropped it and every reload landed back on RATE. Found 2026-11-13 while
+      // fixing exactly this complaint — the earlier fix only added the read half.
+      arbitrageIgnoreRatings,
       metric,
       closeMode,
       startAbs,
@@ -1926,7 +1931,7 @@ export default function ArbitrageScanner({
       // them move the P&L, which is why a reload could return a different result for the same day.
       // The rating strip, for the same reason spelled out just above: read by the object, so it
       // must be here or a change to it alone would never trigger the write.
-      arbRatingsMode, arbFrozen, arbCoreOnly, arbOutcome,
+      arbRatingsMode, arbFrozen, arbCoreOnly, arbOutcome, arbitrageIgnoreRatings,
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
       topMode, topSigmaOn, topBenchOn, topTimeOn,
