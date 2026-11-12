@@ -2888,6 +2888,7 @@ export default function OpenDoorScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      excludeAnom: excludeAnom ? true : null,
 
       // USA / CHINA. PaperFilters.PassesStaticMetaFilters has matched on these all along (it reads
       // the country string, so "UNITED STATES"/"US" and CHINA/"HONG KONG" both land); they were
@@ -3043,6 +3044,7 @@ export default function OpenDoorScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      excludeAnom: excludeAnom ? true : null,
       includeUSA: includeUSA ? true : null,
       includeChina: includeChina ? true : null,
 
@@ -3193,6 +3195,7 @@ export default function OpenDoorScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      excludeAnom: excludeAnom ? true : null,
       includeUSA: includeUSA ? true : null,
       includeChina: includeChina ? true : null,
 
@@ -6069,7 +6072,7 @@ export default function OpenDoorScanner({
               { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); } },
               { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); } },
               { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); } },
-              { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. LIVE Stream/Sonar only." },
+              { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. Applies live (Stream/Sonar) AND in the historical Scanner — there, each past day is judged against its OWN POST window, never today's." },
             ]}
             report={{
               label: "REP",

@@ -455,6 +455,7 @@ export type PaperArbAnalyticsRequest = {
   excludeSSR?: boolean | null;
   excludeETF?: boolean | null;
   excludeCrap?: boolean | null;
+  excludeAnom?: boolean | null;
   includeUSA?: boolean | null;
   includeChina?: boolean | null;
 

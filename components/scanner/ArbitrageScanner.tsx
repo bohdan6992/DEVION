@@ -3028,6 +3028,7 @@ export default function ArbitrageScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      excludeAnom: excludeAnom ? true : null,
       includeUSA: includeUSA ? true : null,
       includeChina: includeChina ? true : null,
 
@@ -3187,6 +3188,7 @@ export default function ArbitrageScanner({
       excludeSSR: excludeSSR ? true : null,
       excludeETF: excludeETF ? true : null,
       excludeCrap: excludeCrap ? true : null,
+      excludeAnom: excludeAnom ? true : null,
       includeUSA: includeUSA ? true : null,
       includeChina: includeChina ? true : null,
 
@@ -6566,6 +6568,18 @@ export default function ArbitrageScanner({
           downloadEpisodesLog={downloadEpisodesLog}
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
           priceModeAffectsLive
+          // SAVE moved here 2026-11-12 (operator's own instruction: "розмісти після started") —
+          // extraControls renders right after the started/missed/armed status span and before the
+          // START/ENTRY STOP/CUTOFF TimePills (ExecutionSettingsPanel.tsx line ~814), exactly that
+          // slot. Previously its own standalone header row, "opposite the auto-start buttons."
+          extraControls={
+            <SaveModeButton
+              saveMode={{
+                enabled: saveMode,
+                onToggle: toggleSaveMode,
+              }}
+            />
+          }
         />
 
           {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
@@ -6583,7 +6597,7 @@ export default function ArbitrageScanner({
               { label: "SSR", value: excludeSSR, set: (v) => { setExcludeSSR(v); setRequireIsSSR(false); }, title: "Exclude SSR = YES, short-sale restricted (a row with no SSR flag is rejected). Applies to the Scanner rows and to the live Stream engine." },
               { label: "ETF", value: excludeETF, set: (v) => { setExcludeETF(v); setRequireIsETF(false); }, title: "Exclude ETF = YES (a row with no ETF flag is rejected). Applies to the Scanner rows and to the live Stream engine." },
               { label: "CRAP", value: excludeCrap, set: (v) => { setExcludeCrap(v); setRequireIsCrap(false); }, title: "Exclude YCls (yesterday's close) below $5; a row with no YCls is rejected. Applies to the Scanner rows and to the live Stream engine." },
-              { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. LIVE Stream/Sonar only — the bridge resolves its own clean set; historical Scanner rows are not filtered by it." },
+              { label: "ANOM", value: excludeAnom, set: setExcludeAnom, title: "Exclude a ticker whose post-market zap-sigma spiked past 1.5σ anywhere in its own 16:01-19:59 window, or that has no usable reading there at all. Applies live (Stream/Sonar, the bridge's own current clean set) AND in the historical Scanner — there, each past day is judged against its OWN POST window, never today's, so there is no look-ahead." },
             ]}
             report={{
               label: "REP",
@@ -6951,20 +6965,6 @@ export default function ArbitrageScanner({
               {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
             </div>
           )}
-          </div>
-          {/* SAVE: opposite the auto-start buttons, flush to the right edge. In the Stream view the
-              auto group is alone on the left, so this group takes the free space (ml-auto); on the
-              other tabs the auto group already sits right and this simply follows it. The direction
-              hedge (formerly BALANCE/HEDGED/RATIO/GAP here) moved to Caesar's own control bar,
-              2026-11-05 — it now judges the whole PRE segment, not just this strategy's own book, so
-              it no longer belongs on this strategy's toolbar. See SegmentDirectionBalanceService. */}
-          <div className={clsx("flex items-center gap-2", primaryPanel === "stream" && "ml-auto")}>
-            <SaveModeButton
-              saveMode={{
-                enabled: saveMode,
-                onToggle: toggleSaveMode,
-              }}
-            />
           </div>
         </div>
 
