@@ -1462,6 +1462,11 @@ export default function ArbitrageScanner({
         if (typeof s.arbFrozen === "boolean") setArbFrozen(s.arbFrozen);
         if (typeof s.arbCoreOnly === "boolean") setArbCoreOnly(s.arbCoreOnly);
         if (s.arbOutcome === "norm" || s.arbOutcome === "narrow") setArbOutcome(s.arbOutcome);
+        // RATE/UNIVERSE — saved (persistedFilters carries ignoreRatings: arbitrageIgnoreRatings)
+        // but never read back here, so a reload always landed on RATE regardless of what was
+        // actually chosen (operator-reported, 2026-11-13). The ASOF/EXPO/LIVE/FROZEN/CORE group
+        // right next to it, above, was already restored correctly — this one was the gap.
+        if (typeof s.arbitrageIgnoreRatings === "boolean") setArbitrageIgnoreRatings(s.arbitrageIgnoreRatings);
 
         if (controlledSession == null && (s.session === "PRE" || s.session === "OPEN" || s.session === "INTRA" || s.session === "POST")) {
           setSession(s.session);
