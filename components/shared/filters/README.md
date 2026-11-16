@@ -51,6 +51,31 @@ is the thing worth avoiding.
    parameter, not a second copy.
 3. Run `npm run check:ui`.
 
+## Layout rules the check enforces
+
+**No phantom gap.** A wrapper that always renders but whose only child is conditional is an EMPTY
+flex child when that condition is false — and the parent's `gap-*` still reserves the space, so the
+row above it reads as having more padding below than above. Hoist the condition outside the wrapper:
+
+```jsx
+{meta && (
+  <div className="...">...</div>
+)}
+```
+
+not
+
+```jsx
+<div className="...">
+  {meta && (...)}
+</div>
+```
+
+It was in 18 files before it was noticed, and it was reported as "why is the bottom padding larger"
+— the symptom points at the row, not at the empty element under it. `scripts/lib/no-phantom-gap.mjs`
+now fails `npm run check:ui` on it. A div with SEVERAL conditional children is a different case:
+each can appear on its own, so guard the wrapper on all of them together rather than hoisting one.
+
 ## Known duplication
 
 `scripts/check-shared-ui.mjs` holds a ratchet for controls that are still forked:

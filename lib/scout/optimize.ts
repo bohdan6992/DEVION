@@ -18,7 +18,7 @@ export function scoutOptTable(meta: ScoutMeta, slices: ScoutSlice[], p: ScoutPar
   const scanScope: ScoutParams = { ...p, window: tableWindow as ScoutWindow, mode: "pct", start: 0, to: 0, minRate: 0, minTotal: 0, ranges: { corr: OFF, beta: OFF, sigma: OFF, alpha: OFF } };
 
   const pnl: number[] = [], date: number[] = [];
-  const unitVals: Record<ScoutMode, number[]> = { pct: [], sigma: [], gamma: [], delta: [] };
+  const unitVals: Record<ScoutMode, number[]> = { pct: [], sigma: [], gamma: [], delta: [], alpha: [] };
   const corr: number[] = [], beta: number[] = [], sigma: number[] = [], alpha: number[] = [];
   const rate: number[] = [], total: number[] = [];
 

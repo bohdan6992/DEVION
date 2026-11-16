@@ -22,10 +22,23 @@ export type ScoutSide = "short" | "long" | "both";
  *  - gamma — a MULTIPLE of the ticker's own gamma level (its best reversal-entry deviation)
  *  - delta — a MULTIPLE of the ticker's own |delta| (median dev_sig at the 09:30 open, last 5 days)
  */
-export type ScoutMode = "pct" | "sigma" | "gamma" | "delta";
+// "alpha" is the fifth unit the Scanner's own strip has: the ticker's published per-side alpha
+// level, already on every ScoutTicker (`alpha: [pos, neg]`) and read exactly like gamma/delta.
+export type ScoutMode = "pct" | "sigma" | "gamma" | "delta" | "alpha";
 
 export type ScoutWindow = 5 | 20 | 40 | 65;
 export type ScoutCurveMode = "daily" | "trade";
+
+/**
+ * Which kind of night a trade's own session followed, from SPY+QQQ over 16:00 -> 00:00
+ * (OvernightRegimeService on the bridge publishes one label per session).
+ *
+ * "unk" is a REAL bucket, not a synonym for flat: a third of sessions have no usable midnight
+ * print, and the two answers "nobody measured this night" and "this night did not move" must not
+ * be merged. "all" is the only setting that does no filtering at all.
+ */
+export type ScoutRegime = "all" | "up" | "down" | "flat" | "mixed" | "unk";
+
 
 export type ScoutSortKey =
   | "ticker"
@@ -60,6 +73,11 @@ export type ScoutMetaWire = {
     windowsDays: number[];
     /** Oldest → newest. A trade's date index points into this list. */
     recentDates: string[];
+    /**
+     * One label per entry of `recentDates`, same order and length. Absent on a bridge that
+     * predates the overnight-regime file; then every session reads as UNKNOWN.
+     */
+    regimes?: string[];
   };
   /** Row order == the ticker index every trade slice refers to. */
   tickers: Array<{
@@ -82,8 +100,31 @@ export type ScoutMetaWire = {
     etf?: boolean | null;
     country?: string | null;
     sector?: string | null;
+    /** listing venue, same two sources as country/sector */
+    exchange?: string | null;
+    /** Session constants off the tape's static sidecar: PTP, the OUTSIDE-HOURS short-sale flag,
+     * the sub-price marker and the day's report marker. Absent when the tape never saw the ticker. */
+    ptp?: boolean | null;
+    ssrOut?: boolean | null;
+    crap?: boolean | null;
+    rep?: boolean | null;
+    /** Borrow status, raw YES/NO/ITB, AS OF the newest tape day that knows the ticker - a day
+     * snapshot, not a property of it (~2% of tickers change it intraday). ITB/HARD read it through
+     * lib/filters/borrow.ts so every surface shares one reader. */
+    etb?: string | null;
+    /** Whether that day carried any news marker. The COUNT is not served: it moves all session. */
+    news?: boolean | null;
     /** PUBLISHED all-history rating per class and sign: [rate, total, hard, soft] (best_params ratings). */
     rt?: Partial<Record<ScoutClass, { p?: number[]; n?: number[] }>>;
+    /**
+     * Spectr's ASOF/EXPO pills: the same [rate, total, hard, soft] shape as `rt`, but rebuilt from
+     * the whole trade log (ASOF) or the same thing recency-weighted (EXPO) instead of read off the
+     * published file — see ArbitrageScoutService.WriteAsOfRatings. Absent entirely on a bridge build
+     * from before this existed, and sparse per-class like `rt` (a class with no cell either side is
+     * omitted).
+     */
+    rtAsOf?: Partial<Record<ScoutClass, { p?: number[]; n?: number[] }>>;
+    rtExpo?: Partial<Record<ScoutClass, { p?: number[]; n?: number[] }>>;
   }>;
 };
 
@@ -166,10 +207,22 @@ export type ScoutTicker = {
   alpha: [number, number];
   /** PUBLISHED rating per class and side — general for the class, NOT recomputed per day-window */
   rating: Record<ScoutClass, { pos: ScoutRating | null; neg: ScoutRating | null }>;
+  /** Same shape, rebuilt from the whole trade log (ASOF) or recency-weighted (EXPO) — undefined
+   * entirely on a bridge build from before these were published; SPECTR falls back to `rating`. */
+  ratingAsOf?: Record<ScoutClass, { pos: ScoutRating | null; neg: ScoutRating | null }>;
+  ratingExpo?: Record<ScoutClass, { pos: ScoutRating | null; neg: ScoutRating | null }>;
   /** null = unknown (DailyStaticStore has not filled today's D1 window yet) */
   etf: boolean | null;
   country: string | null;
   sector: string | null;
+  exchange: string | null;
+  ptp: boolean | null;
+  ssrOut: boolean | null;
+  crap: boolean | null;
+  rep: boolean | null;
+  /** raw YES / NO / ITB as of the newest tape day; null when the tape has never seen the ticker */
+  etb: string | null;
+  news: boolean | null;
 };
 
 export type ScoutMeta = {
@@ -181,6 +234,15 @@ export type ScoutMeta = {
   model0402: boolean;
   pnlBasis: string | null;
   recentDates: string[];
+  /**
+   * Parallel to recentDates: entry i is how the market stood when session i OPENED - SPY+QQQ over
+   * 16:00 -> 09:30. The window ends at that session's own open, so there is no offset and, for
+   * anything entering at or after 09:30, the label is strictly known before entry. For a PRE class
+   * that TRADES 21:00 -> 09:30 it overlaps the trade's own window; the published file carries a
+   * strictly-earlier 16:00 -> 00:00 set for that case. "UNKNOWN" where it could not be measured -
+   * a real bucket, never folded into FLAT.
+   */
+  regimes: string[];
   tickers: ScoutTicker[];
 };
 
@@ -195,19 +257,62 @@ export type ScoutRanges = { corr: ScoutBound; beta: ScoutBound; sigma: ScoutBoun
 
 export type ScoutParams = {
   window: ScoutWindow;
+  /** Keep only the sessions whose 16:00->00:00 night carried this label; "all" = no gate. */
+  regime: ScoutRegime;
   mode: ScoutMode;
   /** lower bound in `mode` units; 0 = no bound */
   start: number;
+  /**
+   * The LONG side's own lower threshold, as the Scanner splits it (coral short / mint long).
+   * 0 means "as short" - the same number for both sides, which is how it behaved before the
+   * split and what the mint box's placeholder says.
+   */
+  startNeg: number;
   /** upper bound in `mode` units; 0 (or ≤ start) = no bound */
   to: number;
   minRate: number;
   minTotal: number;
+  /**
+   * Which published table the gate reads. ASOF/EXPO fall back to the plain `rating` when the
+   * bridge has not been rebuilt with them, exactly as ArbitrageSpectr does, so the two pages
+   * never disagree about the same ticker.
+   */
+  ratingMode: "live" | "asof" | "asofew";
+  /**
+   * ANY/HARD/SOFT. Per ArbitrageAsOfRatings.TryGet on the bridge: the RATE is the same number
+   * whatever the type, and only the TOTAL changes - so this moves MINTOTAL, never MINRATE.
+   */
+  outcomeType: "any" | "hard" | "soft";
+  /** UNIVERSE: drop the MINRATE/MINTOTAL gate entirely. */
+  ratingsIgnored: boolean;
   ranges: ScoutRanges;
   /** |pnl| above this (percentage points) is a data fault, not a trade; 0 = keep everything */
   capPct: number;
   sizeUsd: number;
   /** true = drop every ticker DailyStaticStore says is an ETF (unknown ETF status still passes) */
   excludeEtf: boolean;
+  /**
+   * The rest of the tape-sourced toggle row. Each keeps ITS OWN rule for an unknown value:
+   * ITB/HARD go through lib/filters/borrow.ts, where a MISSING borrow status is also dropped
+   * ("unknown is not freely borrowable"); the others follow this page's existing excludeEtf
+   * convention, where a ticker the tape has no answer for still passes, so a cold tape does
+   * not empty the table. Region flags read the same `country` field COUNTRY filters on.
+   */
+  excludeItb: boolean;
+  excludeHard: boolean;
+  excludePtp: boolean;
+  excludeSsr: boolean;
+  excludeCrap: boolean;
+  excludeNews: boolean;
+  excludeReport: boolean;
+  includeUsa: boolean;
+  includeChina: boolean;
+  /** Here to mirror the Sonar's row exactly; no tape field backs either yet, so both
+   * hold state and reject nothing (see the pills' own tooltips). */
+  excludeDividend: boolean;
+  excludeAnom: boolean;
+  exchangeMode: "off" | "include" | "exclude";
+  exchanges: Set<string>;
   /**
    * true = the "trading only STARTS at 04:02" model: PRE shows the notebook's second track (births only from 04:02, every
    * deviation already open then picked up at its 04:02 price) INSTEAD of the 21:00 one. Other classes are unaffected.

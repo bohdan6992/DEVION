@@ -18,6 +18,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { findPhantomGaps } from "./lib/no-phantom-gap.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
@@ -32,6 +33,38 @@ const SURFACES = [
 ];
 
 const STREAMS = ["components/stream/ArbitrageStreamView.tsx", "components/stream/OpenDoorStream.tsx"];
+
+/**
+ * The Scout pages. They are reference tables over a published rolling_perf file rather than scanner
+ * panels, so they do NOT render the whole toolbar — but they do render the same header, and every
+ * one of them used to carry a private copy of it. Those copies had already drifted far enough to
+ * ship the wrong page title on three of them (MorLaunch, OPGRide and OPGRootation all announced
+ * themselves as "OPG-FADE SCOUT"). Listing them here is what makes the next copy fail loudly.
+ */
+/**
+ * The Spectr pages. Same reference-table shape as the Scouts and the same history: each had a
+ * private header, and only Arbitrage's had a filter row at all. PairFluxSpectr is NOT listed - its
+ * rows are PAIRS (a/b), its scout service publishes no per-ticker flag block, so the shared toggle
+ * row has nothing to read there yet. Add it the day that service grows one.
+ */
+const SPECTRS = [
+  "components/spectr/ArbitrageSpectr.tsx",
+  "components/spectr/OPGFadeSpectr.tsx",
+  "components/spectr/OPGReversalSpectr.tsx",
+  "components/spectr/ReversalSpectr.tsx",
+  "components/spectr/MorLaunchSpectr.tsx",
+];
+
+const SCOUTS = [
+  "components/opgFadeScout/OPGFadeScout.tsx",
+  "components/opgReversalScout/OPGReversalScout.tsx",
+  "components/opgRideScout/OPGRideScout.tsx",
+  "components/opgRootationScout/OPGRootationScout.tsx",
+  "components/opgContinuumScout/OPGContinuumScout.tsx",
+  "components/morLaunchScout/MorLaunchScout.tsx",
+  "components/reversalScout/ReversalScout.tsx",
+  "components/pairfluxScout/PairFluxScout.tsx",
+];
 
 /**
  * Components a surface must IMPORT, never declare. Re-declaring one is how every past divergence
@@ -127,9 +160,21 @@ for (const file of [...SURFACES, ...STREAMS]) {
  * makes the Sonar fail loudly instead of quietly lagging.
  */
 const REQUIRED_PANELS = {
+  ScannerHeader: {
+    from: "shell/panels/ScannerHeader",
+    surfaces: [...SURFACES, ...SCOUTS, ...SPECTRS],
+    why: "Title, the five-surface nav and IGN/APP/PIN are one header. A page that draws its own drifts — that is how three Scouts shipped another strategy's title. Surfaces without ticker lists pass showLists={false}.",
+  },
   FilterFlagsRow: {
     from: "shared/filters/FilterFlagsRow",
-    surfaces: SURFACES,
+    // PairFlux is excluded on BOTH its reference pages: its rows are pairs (a/b) and its scout
+    // service publishes no per-ticker flag block, so there is nothing for the toggle row to read.
+    // The header above is still required of it - that part has no data dependency.
+    surfaces: [
+      ...SURFACES,
+      ...SCOUTS.filter((f) => !f.includes("pairflux")),
+      ...SPECTRS,
+    ],
     why: "The filter row must not be hand-rolled.",
   },
   ActiveTickerCard: {
@@ -211,6 +256,13 @@ for (const [name, allowed] of Object.entries(DUPLICATION_RATCHET)) {
     notes.push(`\`${name}\`: ${found} definitions, known debt.`);
   }
 }
+
+
+// ---- 5. No phantom gap ------------------------------------------------------------------------
+// A wrapper that always renders but can be empty still costs its parent one `gap-*`, which reads
+// as uneven padding on the row above it. See scripts/lib/no-phantom-gap.mjs for the shape, the
+// fix, and why the check is deliberately strict about the single-child case.
+for (const finding of findPhantomGaps(ROOT)) errors.push(finding);
 
 // ---- report -----------------------------------------------------------------------------------
 for (const note of notes) console.log(`note: ${note}`);

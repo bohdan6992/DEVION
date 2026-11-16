@@ -5,13 +5,16 @@ import { GlitchTitle } from "../../../ui/GlitchTitle";
 import type { PaperListMode, PrimaryPanelKey } from "../../../../lib/scanner/types";
 
 /**
- * The header shared by Scanner AND Sonar: title, STREAM/SCANNER/SONAR nav, the IGN/APP/PIN
+ * The header every surface shares: title, STREAM/SCANNER/SONAR/SCOUT/SPECTR nav, the IGN/APP/PIN
  * list-mode group and the RUN button. Identical for every strategy, so prop names match the
  * identifiers the scanner components already use and the markup is unchanged.
  *
  * The Sonars carried their own 215-line copy of this, which had drifted: no icons beside the nav
- * labels, and a boxed refresh button instead of the bare one. `primaryPanel` accepts "sonar" so
- * the third link can be the current page.
+ * labels, and a boxed refresh button instead of the bare one. The Scouts and Spectrs each carried
+ * a THIRD copy, which had drifted further still — their own `navPill` class literal, no IGN/APP/PIN
+ * group, and no way to mark themselves current. `primaryPanel` now accepts all five surfaces, and
+ * `showLists={false}` drops the one group a reference table genuinely has no state for, so those
+ * pages can render this component instead of copying it.
  */
 export type ScannerHeaderProps = {
   scannerShellTitle: string;
@@ -20,24 +23,39 @@ export type ScannerHeaderProps = {
   navStreamHref: string;
   navScannerHref: string;
   navSonarHref: string;
-  /** Renders a fourth SCOUT link when set; only Arbitrage has a Scout page. */
+  /** Renders a fourth SCOUT link when set. */
   navScoutHref?: string;
-  /** "sonar" marks the third link as the current page; the Scanner never passes it. */
-  primaryPanel: PrimaryPanelKey | "sonar";
-  listMode: PaperListMode;
-  ignCount: number;
-  appCount: number;
-  pinCount: number;
-  showIgnore: boolean;
-  showApply: boolean;
-  showPin: boolean;
-  setShowIgnore: (v: boolean) => void;
-  setShowApply: (v: boolean) => void;
-  setShowPin: (v: boolean) => void;
-  setShowAdvanced: (v: boolean) => void;
-  setModeIgnore: () => void;
-  setModeApply: () => void;
-  setModePin: () => void;
+  /** Renders a fifth SPECTR link when set. */
+  navSpectrHref?: string;
+  /**
+   * Which of the five links is the current page. "stream"/"scanner" come from PrimaryPanelKey;
+   * the other three are surfaces that render this same header without being a scanner panel.
+   * Every surface passes its own, so no surface needs a hand-rolled copy of this nav to mark
+   * itself current — which is exactly how the Scout and Spectr headers drifted in the first place.
+   */
+  primaryPanel: PrimaryPanelKey | "sonar" | "scout" | "spectr";
+  /**
+   * The IGN/APP/PIN group. Optional because it is the one part of this header that needs state a
+   * surface may genuinely not have: Scout and Spectr are reference tables over a published file,
+   * with no per-ticker ignore/apply/pin lists behind them. Those surfaces pass `showLists={false}`
+   * and omit the rest — they still get THIS header rather than a hand-rolled copy of it, which is
+   * the whole point. Default true so no existing caller changes.
+   */
+  showLists?: boolean;
+  listMode?: PaperListMode;
+  ignCount?: number;
+  appCount?: number;
+  pinCount?: number;
+  showIgnore?: boolean;
+  showApply?: boolean;
+  showPin?: boolean;
+  setShowIgnore?: (v: boolean) => void;
+  setShowApply?: (v: boolean) => void;
+  setShowPin?: (v: boolean) => void;
+  setShowAdvanced?: (v: boolean) => void;
+  setModeIgnore?: () => void;
+  setModeApply?: () => void;
+  setModePin?: () => void;
   canRun: boolean;
   run: () => void;
   variantString: string;
@@ -53,21 +71,23 @@ export default function ScannerHeader({
   navScannerHref,
   navSonarHref,
   navScoutHref,
+  navSpectrHref,
   primaryPanel,
-  listMode,
-  ignCount,
-  appCount,
-  pinCount,
-  showIgnore,
-  showApply,
-  showPin,
-  setShowIgnore,
-  setShowApply,
-  setShowPin,
-  setShowAdvanced,
-  setModeIgnore,
-  setModeApply,
-  setModePin,
+  showLists = true,
+  listMode = "off",
+  ignCount = 0,
+  appCount = 0,
+  pinCount = 0,
+  showIgnore = false,
+  showApply = false,
+  showPin = false,
+  setShowIgnore = () => {},
+  setShowApply = () => {},
+  setShowPin = () => {},
+  setShowAdvanced = () => {},
+  setModeIgnore = () => {},
+  setModeApply = () => {},
+  setModePin = () => {},
   canRun,
   run,
   variantString,
@@ -131,9 +151,9 @@ export default function ScannerHeader({
               href={navScoutHref}
               className={clsx(
                 "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
-                headerNavInactiveClass
+                primaryPanel === "scout" ? "accent-soft" : headerNavInactiveClass
               )}
-              title="Open SCOUT"
+              title={primaryPanel === "scout" ? "SCOUT (current)" : "Open SCOUT"}
             >
               <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
@@ -141,8 +161,24 @@ export default function ScannerHeader({
               SCOUT
             </Link>
           )}
+          {navSpectrHref && (
+            <Link
+              href={navSpectrHref}
+              className={clsx(
+                "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5",
+                primaryPanel === "spectr" ? "accent-soft" : headerNavInactiveClass
+              )}
+              title={primaryPanel === "spectr" ? "SPECTR (current)" : "Open SPECTR"}
+            >
+              <svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="4" y1="19" x2="4" y2="10"/><line x1="10" y1="19" x2="10" y2="5"/><line x1="16" y1="19" x2="16" y2="13"/><line x1="22" y1="19" x2="22" y2="9"/>
+              </svg>
+              SPECTR
+            </Link>
+          )}
         </div>
 
+        {showLists && (
         <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
           <div
             className={clsx(
@@ -282,6 +318,7 @@ export default function ScannerHeader({
             </button>
           </div>
         </div>
+        )}
 
         <button
           type="button"

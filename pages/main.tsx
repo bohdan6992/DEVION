@@ -8,6 +8,7 @@ import { useUi } from "@/components/UiProvider";
 import Link from "next/link";
 import { STRATEGY_CATALOG } from "@/lib/strategyCatalog";
 import { Activity, BarChart2, Zap } from "lucide-react";
+import { bridgeUrl, fetchWithTimeout } from "@/lib/bridgeBase";
 import {
   DndContext, closestCenter, PointerSensor, KeyboardSensor,
   useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay,
@@ -1018,6 +1019,19 @@ const STRATEGY_COLORS: Record<string, { hex: string; bg: string; border: string 
   dayTwo:      { hex: "#2dd4bf", bg: "rgba(45,212,191,0.08)",  border: "rgba(45,212,191,0.2)"  },
   chrono:      { hex: "#22d3ee", bg: "rgba(34,211,238,0.08)",  border: "rgba(34,211,238,0.2)"  },
   powerHour:   { hex: "#f97316", bg: "rgba(249,115,22,0.08)",  border: "rgba(249,115,22,0.2)"  },
+  continuum:     { hex: "#38bdf8", bg: "rgba(56,189,248,0.08)",  border: "rgba(56,189,248,0.2)"  },
+  opgReversal:   { hex: "#f472b6", bg: "rgba(244,114,182,0.08)", border: "rgba(244,114,182,0.2)" },
+  opgContinuum:  { hex: "#2dd4bf", bg: "rgba(45,212,191,0.08)",  border: "rgba(45,212,191,0.2)"  },
+  opgFade:       { hex: "#c084fc", bg: "rgba(192,132,252,0.08)", border: "rgba(192,132,252,0.2)" },
+  opgRide:       { hex: "#34d399", bg: "rgba(52,211,153,0.08)",  border: "rgba(52,211,153,0.2)"  },
+  opgRootation:  { hex: "#fb923c", bg: "rgba(251,146,60,0.08)",  border: "rgba(251,146,60,0.2)"  },
+  pullback:      { hex: "#a3e635", bg: "rgba(163,230,53,0.08)",  border: "rgba(163,230,53,0.2)"  },
+  morLaunch:     { hex: "#facc15", bg: "rgba(250,204,21,0.08)",  border: "rgba(250,204,21,0.2)"  },
+  launchEvening: { hex: "#818cf8", bg: "rgba(129,140,248,0.08)", border: "rgba(129,140,248,0.2)" },
+  spreadometer:  { hex: "#22d3ee", bg: "rgba(34,211,238,0.08)",  border: "rgba(34,211,238,0.2)"  },
+  morLaunchBasket:     { hex: "#eab308", bg: "rgba(234,179,8,0.08)",   border: "rgba(234,179,8,0.2)"   },
+  launchEveningBasket: { hex: "#a5b4fc", bg: "rgba(165,180,252,0.08)", border: "rgba(165,180,252,0.2)" },
+  limiter:             { hex: "#f87171", bg: "rgba(248,113,113,0.08)", border: "rgba(248,113,113,0.2)" },
 };
 const DEFAULT_COL = { hex: "#94a3b8", bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)" };
 
@@ -1028,7 +1042,13 @@ type StrategyTile = {
 };
 
 function buildTiles(): StrategyTile[] {
-  const SHOW_KEYS = ["arbitrage","pairflux","vwapBounce","reversal","openride","openfade","opendoor","dayTwo"];
+  // Every strategy with live surfaces (lib/strategies/registry.ts): 18 tiles = always 3 full rows of 6 (Open Ride/Open Fade/Day Two deliberately left off).
+  const SHOW_KEYS = [
+    "arbitrage","pairflux","vwapBounce","reversal","continuum","pullback",
+    "opgReversal","opgContinuum","opgFade","opgRide","opgRootation","morLaunch",
+    "launchEvening","spreadometer","opendoor",
+    "morLaunchBasket","launchEveningBasket","limiter",
+  ];
   return STRATEGY_CATALOG.filter(s => SHOW_KEYS.includes(s.key))
     .sort((a, b) => SHOW_KEYS.indexOf(a.key) - SHOW_KEYS.indexOf(b.key))
     .map(s => ({
@@ -1041,12 +1061,28 @@ function buildTiles(): StrategyTile[] {
   }));
 }
 
-const TICKERS_MAIN = [
-  { t: "MOA", s: 92 }, { t: "ETH", s: 88 }, { t: "BTC", s: 76 },
-];
 
-function TileCardContent({ tile, inView, isDragOverlay = false }: {
-  tile: StrategyTile; inView: boolean; isDragOverlay?: boolean;
+/* The same static line icons as the STREAM / SCANNER / SPECTR links in ScannerHeader (no animation). */
+const RailSvg = ({ className, children }: { className?: string; children: React.ReactNode }) => (
+  <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+);
+const RailStreamIcon = ({ className }: { className?: string }) => (
+  <RailSvg className={className}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></RailSvg>
+);
+const RailScannerIcon = ({ className }: { className?: string }) => (
+  <RailSvg className={className}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></RailSvg>
+);
+const RailSpectrIcon = ({ className }: { className?: string }) => (
+  <RailSvg className={className}>
+    <line x1="4" y1="19" x2="4" y2="10" /><line x1="10" y1="19" x2="10" y2="5" /><line x1="16" y1="19" x2="16" y2="13" /><line x1="22" y1="19" x2="22" y2="9" />
+  </RailSvg>
+);
+
+/** Real per-strategy numbers from the bridge's stream engine; null = not known (yet). */
+type TileStats = { signals: number | null; open: number | null };
+
+function TileCardContent({ tile, inView, isDragOverlay = false, stats }: {
+  tile: StrategyTile; inView: boolean; isDragOverlay?: boolean; stats?: TileStats;
 }) {
   const col = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
   // A strategy with live surfaces links to its own three; a catalog-only one keeps the generic
@@ -1055,106 +1091,73 @@ function TileCardContent({ tile, inView, isDragOverlay = false }: {
   // next strategy three more again.
   const live = getLiveStrategy(tile.key);
   const sgnHref = live ? live.nav.sonar : `/signals/${tile.key}`;
-  const stsHref = live ? live.nav.scanner : `/stats/${tile.key}`;
-  const prfHref = live ? live.nav.stream : `/perform/${tile.key}`;
-  const pct = Math.round((tile.score / tile.maxScore) * 100);
+  const streamHref  = live?.nav.stream  ?? null;
+  const scannerHref = live?.nav.scanner ?? null;
+  const spectrHref  = live?.nav.spectr  ?? null;
   return (
     <>
-      <div className="flex-1 flex flex-col p-5 relative min-w-0">
+      <div className="flex-1 flex flex-col p-3 relative min-w-0">
         {!isDragOverlay && <Link href={sgnHref} className="absolute inset-0 z-0" />}
-        <div className="flex items-start justify-between mb-3 relative z-10">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-xl text-xl shrink-0"
+        <div className="flex items-start justify-between mb-2 relative z-10 gap-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg text-base shrink-0"
               style={{ background: col.bg, border: `1px solid ${col.border}` }}>
               {tile.icon}
             </div>
-            <div>
-              <div style={{ fontFamily: "'Space Grotesk','Inter',sans-serif", fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,0.92)", lineHeight: 1.2 }}>
+            <div className="min-w-0">
+              <div className="truncate" style={{ fontFamily: "'Space Grotesk','Inter',sans-serif", fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,0.92)", lineHeight: 1.2 }}>
                 {tile.name}
-              </div>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="px-1.5 py-0.5 rounded font-mono text-[8px] font-bold uppercase"
-                  style={{ background: col.bg, border: `1px solid ${col.border}`, color: col.hex }}>
-                  LIVE V4
-                </span>
               </div>
             </div>
           </div>
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 99, padding: "2px 8px" }}>
-            {pct}%
-          </span>
         </div>
-        <div className="flex items-center gap-1.5 mb-auto relative z-10">
-          {TICKERS_MAIN.map(t => (
-            <div key={t.t} className="flex items-center gap-1.5 px-2 py-1 rounded-lg"
-              style={{ background: "rgba(10,10,10,0.6)", border: "1px solid rgba(255,255,255,0.05)" }}>
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.75)", letterSpacing: "0.05em" }}>{t.t}</span>
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "rgba(255,255,255,0.35)" }}>{t.s}</span>
+        {/* Real numbers from the bridge: signals fired today (entries, dispatched or shadow) and positions open now. */}
+        <div className="flex items-center gap-4 mt-auto mb-1 relative z-10">
+          {([
+            { Icon: Zap,      value: stats?.signals ?? null, title: "Signals today" },
+            { Icon: Activity, value: stats?.open ?? null,    title: "Open positions" },
+          ] as const).map(({ Icon, value, title }) => (
+            <div key={title} className="flex items-center gap-1.5" title={title}>
+              <Icon size={13} style={{ color: col.hex, opacity: 0.85 }} />
+              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 26, fontWeight: 900, lineHeight: 1,
+                letterSpacing: "-0.03em", color: value === null ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.9)" }}>
+                {value === null ? "–" : value}
+              </span>
             </div>
           ))}
         </div>
-        <div className="flex items-end justify-between mt-4 mb-5 relative z-10">
-          <div>
-            <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 8, letterSpacing: "0.28em", textTransform: "uppercase", color: "rgba(255,255,255,0.22)", marginBottom: 2 }}>
-              SIGNAL DENSITY
-            </div>
-            <div className="flex items-baseline gap-1.5">
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 36, fontWeight: 900, color: "rgba(255,255,255,0.9)", lineHeight: 1, letterSpacing: "-0.03em" }}>
-                {tile.score}
-              </span>
-              <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "rgba(255,255,255,0.25)", fontWeight: 700 }}>
-                / {tile.maxScore}
-              </span>
-            </div>
-          </div>
-          <div style={{ width: 100, height: 36, opacity: 0.18 }}>
-            <svg viewBox="0 0 100 36" className="w-full h-full overflow-visible">
-              <polyline
-                points={tile.spark.map((v, i) => `${(i / 9) * 100},${36 - (v / 100) * 28 - 2}`).join(" ")}
-                fill="none" stroke={col.hex} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-        </div>
-        <div className="absolute bottom-0 left-5 right-[65px] h-[3px] rounded-full overflow-hidden"
-          style={{ background: "rgba(255,255,255,0.04)" }}>
-          <motion.div
-            className="h-full rounded-full relative"
-            initial={{ width: 0 }}
-            animate={inView ? { width: `${pct}%` } : { width: 0 }}
-            transition={{ delay: 0.5, duration: 1, ease: "easeOut" }}
-            style={{ background: col.hex, boxShadow: `0 0 10px ${col.hex}66` }}
-          >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full"
-              style={{ background: col.hex, filter: "blur(1px)", boxShadow: `0 0 8px ${col.hex}` }} />
-          </motion.div>
-        </div>
       </div>
-      <div className="w-[52px] shrink-0 flex flex-col border-l rounded-r-[20px] overflow-hidden"
+      <div className="w-[40px] shrink-0 flex flex-col border-l rounded-r-[20px] overflow-hidden"
         style={{ borderColor: "rgba(255,255,255,0.05)", background: "rgba(13,13,15,0.9)" }}>
-        <Link href={sgnHref}
-          className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
-          style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-          <Zap size={14} className="text-zinc-600 group-hover/btn:text-orange-400 transition-colors" />
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>SGN</span>
-        </Link>
-        <Link href={stsHref}
-          className="flex-1 flex flex-col items-center justify-center border-b hover:bg-white/[0.06] transition-all group/btn"
-          style={{ borderColor: "rgba(255,255,255,0.05)" }}>
-          <BarChart2 size={14} className="text-zinc-600 group-hover/btn:text-violet-400 transition-colors" />
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>STS</span>
-        </Link>
-        <Link href={prfHref}
-          className="flex-1 flex flex-col items-center justify-center hover:bg-white/[0.06] transition-all group/btn">
-          <Activity size={14} className="text-zinc-600 group-hover/btn:text-emerald-400 transition-colors" />
-          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 7, color: "rgba(255,255,255,0.2)", letterSpacing: "0.15em", marginTop: 3 }}>PRF</span>
-        </Link>
+        {/* This strategy's own Stream / Scanner / Spectr, with the same icons as the top nav. */}
+        {([
+          { href: streamHref,  Icon: RailStreamIcon,  hover: "group-hover/btn:text-rose-400",   title: "Stream" },
+          { href: scannerHref, Icon: RailScannerIcon, hover: "group-hover/btn:text-cyan-400",   title: "Scanner" },
+          { href: spectrHref,  Icon: RailSpectrIcon,  hover: "group-hover/btn:text-violet-400", title: "Spectr" },
+        ] as const).map(({ href, Icon, hover, title }, idx) => {
+          const cls = `flex-1 flex items-center justify-center ${idx < 2 ? "border-b" : ""}`;
+          const bd = { borderColor: "rgba(255,255,255,0.05)" };
+          // No page for this strategy: keep the slot, dimmed and inert (never hidden).
+          if (!href) {
+            return (
+              <div key={title} title={`${title} — not available for this strategy`} className={`${cls} cursor-not-allowed`} style={bd}>
+                <Icon className="h-[16px] w-[16px] text-zinc-700 opacity-40" />
+              </div>
+            );
+          }
+          return (
+            <Link key={title} href={href} title={title}
+              className={`${cls} hover:bg-white/[0.06] transition-all group/btn`} style={bd}>
+              <Icon className={`h-[16px] w-[16px] text-zinc-500 transition-colors ${hover}`} />
+            </Link>
+          );
+        })}
       </div>
     </>
   );
 }
 
-function SortableTile({ tile, inView }: { tile: StrategyTile; inView: boolean }) {
+function SortableTile({ tile, inView, stats }: { tile: StrategyTile; inView: boolean; stats?: TileStats }) {
   const col = STRATEGY_COLORS[tile.key] ?? DEFAULT_COL;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tile.key });
   const style = {
@@ -1182,11 +1185,11 @@ function SortableTile({ tile, inView }: { tile: StrategyTile; inView: boolean })
           background: "rgba(10,10,10,0.55)",
           border: `1px solid rgba(255,255,255,0.07)`,
           backdropFilter: "blur(12px)",
-          minHeight: 180,
+          minHeight: 96,
           transition: "border 0.2s, box-shadow 0.2s",
         }}
       >
-        <TileCardContent tile={tile} inView={inView} />
+        <TileCardContent tile={tile} inView={inView} stats={stats} />
       </div>
     </div>
   );
@@ -1210,6 +1213,41 @@ function StrategyCards({ accent }: { accent: ThemeAccent }) {
     return buildTiles();
   });
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Real numbers per strategy, polled from the bridge: entries today (GET caesar/entries) and
+  // positions tracked right now (GET caesar/positions), both keyed by the bridge strategy id.
+  const [bridgeNow, setBridgeNow] = useState<{ entries: Record<string, unknown[]> | null; positions: { strategyId: string }[] | null }>({ entries: null, positions: null });
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const [e, p] = await Promise.all([
+        fetchWithTimeout(bridgeUrl("/api/stream/caesar/entries"), { cache: "no-store" })
+          .then(r => (r.ok ? r.json() : null)).catch(() => null),
+        fetchWithTimeout(bridgeUrl("/api/stream/caesar/positions"), { cache: "no-store" })
+          .then(r => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      if (!alive) return;
+      setBridgeNow(prev => ({
+        entries: e?.entries ?? prev.entries,
+        positions: Array.isArray(p?.positions) ? p.positions : prev.positions,
+      }));
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const statsFor = (key: string): TileStats => {
+    const bid = getLiveStrategy(key)?.bridgeStrategyId?.toLowerCase();
+    if (!bid) return { signals: null, open: null };
+    const entries = bridgeNow.entries;
+    const signals = entries
+      ? Object.entries(entries).find(([k]) => k.toLowerCase() === bid)?.[1]?.length ?? 0
+      : null;
+    const open = bridgeNow.positions
+      ? bridgeNow.positions.filter(x => x.strategyId?.toLowerCase() === bid).length
+      : null;
+    return { signals, open };
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -1243,7 +1281,7 @@ function StrategyCards({ accent }: { accent: ThemeAccent }) {
       <SortableContext items={tiles.map(t => t.key)} strategy={rectSortingStrategy}>
         <motion.div
           ref={ref}
-          className="w-full h-full grid grid-cols-4 gap-3"
+          className="w-full h-full grid grid-cols-6 gap-3"
           initial="hidden"
           animate={inView ? "show" : "hidden"}
           variants={{ hidden: {}, show: { transition: { staggerChildren: 0.08 } } }}
@@ -1256,7 +1294,7 @@ function StrategyCards({ accent }: { accent: ThemeAccent }) {
                 show:   { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1] } },
               }}
             >
-              <SortableTile tile={tile} inView={inView} />
+              <SortableTile tile={tile} inView={inView} stats={statsFor(tile.key)} />
             </motion.div>
           ))}
         </motion.div>
@@ -1273,11 +1311,11 @@ function StrategyCards({ accent }: { accent: ThemeAccent }) {
               background: "rgba(10,10,10,0.85)",
               border: `1px solid ${activeCol.hex}`,
               backdropFilter: "blur(24px)",
-              minHeight: 180,
+              minHeight: 96,
               boxShadow: `0 24px 60px rgba(0,0,0,0.6), 0 0 30px ${activeCol.hex}33`,
             }}
           >
-            <TileCardContent tile={activeTile} inView={true} isDragOverlay />
+            <TileCardContent tile={activeTile} inView={true} isDragOverlay stats={statsFor(activeTile.key)} />
           </div>
         )}
       </DragOverlay>

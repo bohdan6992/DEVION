@@ -112,6 +112,7 @@ export type ScannerStrategy = {
     scanner: string;
     sonar: string;
     scout?: string;
+    spectr?: string;
   };
 
   /** Research axes/metrics this strategy can actually produce. */

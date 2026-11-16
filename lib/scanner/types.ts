@@ -659,6 +659,14 @@ export type LimiterAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 // PullBack's own copy — identical shape (see PaperPullBackController.cs).
 export type PullBackAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
 
+// STRETCH•FADE's own copy — identical shape (PaperStretchFadeController, renamed from
+// PaperOPGStretchController, 2026-11-16).
+export type StretchFadeAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
+// STRETCH•RIDE's own copy — the opposite-direction mirror of STRETCH•FADE (PaperStretchRideController,
+// 2026-11-16). Same shape; no shared type between the two siblings, same as every other OPG-family pair.
+export type StretchRideAnalyticsSummaryDto = ReversalAnalyticsSummaryDto;
+
 export type PaperArbOptimizerRangeBucketDto = {
   bucketId: string;
   label: string;

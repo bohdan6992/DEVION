@@ -285,7 +285,7 @@ export default function GlitchArtPanel({ accent }: { accent: ThemeAccent }) {
         borderRadius: 20,
         border: "1px solid rgba(255,255,255,0.07)",
         backdropFilter: "blur(12px)",
-        minHeight: 380,
+        minHeight: 312,
       }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ background: "transparent" }} />

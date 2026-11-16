@@ -74,14 +74,38 @@ export function EquityChartImpl({
   const padTop = 34;
   const padBottom = 40;
 
+  /**
+   * Accepts BOTH date spellings, normalising to YYYY-MM-DD.
+   *
+   * The notebooks publish `recent_dates` compactly (`20260813`) while the older files use dashes.
+   * This only matched the dashed form, so a compact key parsed as "no date at all" and the axis
+   * fell through to printing the raw key — which is why it read `20260813` instead of a date.
+   */
   const parseKey = (key: string): { date: string | null; minuteIdx: number | null } => {
-    const m = String(key ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})(?:\s+(\d+))?$/);
+    const raw = String(key ?? "").trim();
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2}|\d{8})(?:\s+(\d+))?$/);
     if (!m) return { date: null, minuteIdx: null };
+    const d = m[1] ?? "";
     return {
-      date: m[1] ?? null,
+      date: d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : d || null,
       minuteIdx: m[2] == null ? null : clampInt(m[2], 0),
     };
   };
+
+  /**
+   * The year is dropped from the axis — it is the same one on every tick of a normal window and
+   * costs four characters per label. It comes back only when the range actually crosses a year
+   * boundary, where MM-DD alone would put two different Januaries on the same label.
+   */
+  const spansYears = (() => {
+    const years = new Set<string>();
+    for (const p of points ?? []) {
+      const d = parseKey((p as { key?: string }).key ?? "").date;
+      if (d) years.add(d.slice(0, 4));
+      if (years.size > 1) return true;
+    }
+    return false;
+  })();
 
   const formatX = (key: string, sameDay: boolean) => {
     const { date, minuteIdx } = parseKey(key);
@@ -93,7 +117,7 @@ export function EquityChartImpl({
       const mm = (totalMin % 60).toString().padStart(2, "0");
       return sameDay ? `${hh}:${mm}` : `${date?.slice(5)} ${hh}:${mm}`;
     }
-    if (date) return sameDay ? date.slice(5) : date;
+    if (date) return spansYears ? date : date.slice(5);
     return String(key ?? "");
   };
 

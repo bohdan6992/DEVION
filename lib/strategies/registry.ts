@@ -43,6 +43,8 @@ export type StrategyNav = {
   sonar: string;
   /** Only strategies that have a Scout page (rolling 5/20/40-session performance) set this. */
   scout?: string;
+  /** Only strategies that have a Spectr page (flat per-ticker reference table) set this. */
+  spectr?: string;
 };
 
 export type StrategyRatingClasses = {
@@ -140,6 +142,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       // diagnostic component — so the old value sent the SONAR button somewhere else entirely.
       sonar: "/signals/arbitrage",
       scout: "/arbitrage/scout",
+      spectr: "/arbitrage/spectr",
     },
     // Full session: PRE starts at -180 (21:00 the evening before) and POST ends at 19:59, i.e.
     // 1200 exclusive.
@@ -238,6 +241,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       scanner: "/reversal/scanner",
       sonar: "/reversal/sonar",
       scout: "/reversal/scout",
+      spectr: "/reversal/spectr",
     },
     tradingWindow: { fromMinuteIdx: 15 * 60 + 45, toMinuteIdx: 16 * 60 + 5 },
     priority: 24,
@@ -311,6 +315,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/opg-reversal/stream",
       scanner: "/opg-reversal/scanner",
       sonar: "/opg-reversal/sonar",
+      scout: "/opg-reversal/scout",
+      spectr: "/opg-reversal/spectr",
     },
     tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
     priority: 19,
@@ -344,6 +350,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/opg-continuum/stream",
       scanner: "/opg-continuum/scanner",
       sonar: "/opg-continuum/sonar",
+      scout: "/opg-continuum/scout",
+      spectr: "/opg-continuum/spectr",
     },
     tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
     priority: 18,
@@ -375,6 +383,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/opg-fade/stream",
       scanner: "/opg-fade/scanner",
       sonar: "/opg-fade/sonar",
+      scout: "/opg-fade/scout",
+      spectr: "/opg-fade/spectr",
     },
     tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
     priority: 16,
@@ -396,6 +406,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/opg-ride/stream",
       scanner: "/opg-ride/scanner",
       sonar: "/opg-ride/sonar",
+      scout: "/opg-ride/scout",
+      spectr: "/opg-ride/spectr",
     },
     tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
     priority: 14,
@@ -430,6 +442,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/opg-rootation/stream",
       scanner: "/opg-rootation/scanner",
       sonar: "/opg-rootation/sonar",
+      scout: "/opg-rootation/scout",
+      spectr: "/opg-rootation/spectr",
     },
     tradingWindow: { fromMinuteIdx: 9 * 60 + 20, toMinuteIdx: 9 * 60 + 35 },
     priority: 13,
@@ -441,6 +455,93 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       dimension: "EXIT",
       keys: ["exit0945", "exit1000", "exit1030"],
       labels: { exit0945: "09:45", exit1000: "10:00", exit1030: "10:30" },
+    },
+  },
+
+  // STRETCH•FADE (renamed from OPG•STRETCH, 2026-11-16 - operator's own instruction): fade a stock
+  // that is ALREADY stretched away from its benchmark before the open (spec:
+  // OriON-strategies/notebooks/OPG-STRETCH.ipynb - notebook/file names on disk were not renamed).
+  // Scan 09:15-09:21 forward; the first minute at which |ZAP SIG| clears the floor AND a price
+  // exists IS the entry; exit at the 09:30 open. A positive reading is a SHORT, a negative one a
+  // LONG - "fade" the stretch.
+  //
+  // TWO THINGS THAT MAKE IT UNLIKE EVERY OTHER OPG ENTRY HERE:
+  //   * THE SIGNAL IS IN SIGMAS, not percentage points. It is final.parquet's own `dev_sig` column -
+  //     what the operator calls ZAP SIG - and so are the published alpha and gamma. A threshold of
+  //     1.0 on this strategy is one sigma and is NOT comparable to the identically-named dial on
+  //     OPG•Fade or OPG•Ride. (It is also NOT convertible back to pp with the published static
+  //     `sigma`: CRACEN divides by the ROLLING sigma_day, a different number on most rows.)
+  //   * THE ENTRY IS NOT THE 09:30 OPEN. Every sibling signals pre-open and fills at the open; here
+  //     the triggering pre-open minute IS the fill and 09:30 is the EXIT. The hold is 9-15 minutes.
+  //
+  // ONE rating class, EXIT0930 - the notebook's own EXIT_CLASSES, and the operator's spec
+  // ("клас лише 1 - 9:30").
+  //
+  // As of 2026-11-16 the bridge backend IS built and wired (renamed StretchFade* alongside this
+  // rename) - the earlier "frontend-only, no bridge backend" state (2026-11-15) no longer applies.
+  //
+  // tradingWindow spans entry to exit (09:15 -> 09:31) because the position is held across it.
+  // priority 12, below every live OPG strategy (13+): this one has never traded and its window
+  // overlaps all of theirs, so it must lose every conflict.
+  stretchfade: {
+    key: "stretchfade",
+    bridgeStrategyId: "stream.stretchfade",
+    nav: {
+      stream: "/stretch-fade/stream",
+      scanner: "/stretch-fade/scanner",
+      sonar: "/stretch-fade/sonar",
+      scout: "/stretch-fade/scout",
+      spectr: "/stretch-fade/spectr",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 15, toMinuteIdx: 9 * 60 + 31 },
+    priority: 12,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/stretchfade", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.stretchfade", sonarPrefix: "bridge.stretchfade", streamPrefix: "stream.stretchfade" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0930"],
+      labels: { exit0930: "09:30" },
+    },
+  },
+
+  // STRETCH•RIDE: STRETCH•FADE's own exact opposite-direction mirror (operator, 2026-11-16,
+  // verbatim: "зроби точну копію [STRETCH•FADE] але напрямок трейда протилежний, позитивне
+  // відхилення це бай" - exact copy, opposite trade direction, positive deviation is a BUY). Same
+  // 09:15-09:21 ZAP SIG > 1σ signal/entry window and 09:30 exit as STRETCH•FADE; the sign is
+  // flipped: a POSITIVE reading is a LONG, a NEGATIVE one a SHORT - "ride" the stretch instead of
+  // fading it.
+  //
+  // THE BACKEND EXISTS (2026-11-16, StretchRideGate/StretchRideServerStrategy etc., built as a
+  // full mirror of StretchFade's own) but NO RATINGS DATA EXISTS YET: this is a genuinely new,
+  // never-backtested trade rule - STRETCH-FADE.ipynb (née OPG-STRETCH.ipynb) only ever answered
+  // the opposite question - so the ratings service is wired to a real, not-yet-published
+  // `stretchride_rolling_perf.json.gz`. Every page here renders correctly with "0 tickers rated"
+  // rather than 404ing, same bootstrap state this registry already accepts for OpenFade/OpenRide.
+  //
+  // priority 11, directly below its sibling's 12 (still below every live OPG strategy, 13+): this
+  // one has never traded either and its window overlaps all of theirs.
+  stretchride: {
+    key: "stretchride",
+    bridgeStrategyId: "stream.stretchride",
+    nav: {
+      stream: "/stretch-ride/stream",
+      scanner: "/stretch-ride/scanner",
+      sonar: "/stretch-ride/sonar",
+      scout: "/stretch-ride/scout",
+      spectr: "/stretch-ride/spectr",
+    },
+    tradingWindow: { fromMinuteIdx: 9 * 60 + 15, toMinuteIdx: 9 * 60 + 31 },
+    priority: 11,
+    holdsOvernight: false,
+    api: { paperBase: "/api/paper/stretchride", signalsBase: "/api/arbitrage" },
+    streamEngine: "bridge",
+    storage: { scannerPrefix: "paper.stretchride", sonarPrefix: "bridge.stretchride", streamPrefix: "stream.stretchride" },
+    ratingClasses: {
+      dimension: "EXIT",
+      keys: ["exit0930"],
+      labels: { exit0930: "09:30" },
     },
   },
 
@@ -472,6 +573,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/mor-launch/stream",
       scanner: "/mor-launch/scanner",
       sonar: "/mor-launch/sonar",
+      scout: "/mor-launch/scout",
+      spectr: "/mor-launch/spectr",
     },
     tradingWindow: { fromMinuteIdx: 3 * 60 + 50, toMinuteIdx: 9 * 60 + 31 },
     priority: 5,
@@ -563,6 +666,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/launch-evening/stream",
       scanner: "/launch-evening/scanner",
       sonar: "/launch-evening/sonar",
+      scout: "/launch-evening/scout",
+      spectr: "/launch-evening/spectr",
     },
     tradingWindow: { fromMinuteIdx: 15 * 60 + 58, toMinuteIdx: 16 * 60 + 3 },
     priority: 2,
@@ -602,6 +707,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/launch-evening/stream",
       scanner: "/launch-evening/scanner",
       sonar: "/launch-evening/sonar",
+      scout: "/launch-evening/scout",
+      spectr: "/launch-evening/spectr",
     },
     tradingWindow: { fromMinuteIdx: 15 * 60 + 50, toMinuteIdx: 16 * 60 + 21 },
     priority: 1,
@@ -745,6 +852,8 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       stream: "/pull-back/scanner",
       scanner: "/pull-back/scanner",
       sonar: "/pull-back/sonar",
+      scout: "/pull-back/scout",
+      spectr: "/pull-back/spectr",
     },
     tradingWindow: { fromMinuteIdx: 4 * 60 + 30, toMinuteIdx: 9 * 60 + 31 },
     priority: 4,
@@ -847,6 +956,7 @@ export const LIVE_STRATEGIES: Readonly<Record<string, LiveStrategy>> = {
       scanner: "/pairflux/scanner",
       sonar: "/pairflux/sonar",
       scout: "/pairflux/scout",
+      spectr: "/pairflux/spectr",
     },
     // The union of the three PairFlux classes: PRE opens at 21:00 the evening before (-180) and
     // INTRA ends at 16:00. OPEN (09:00-10:00) sits inside that span, so the window is one range

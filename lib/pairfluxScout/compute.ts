@@ -62,6 +62,9 @@ export function decodePfMeta(w: PfScoutMetaWire): PfScoutMeta {
     model0402: w.meta.model0402 === true,
     pnlBasis: w.meta.pnlBasis,
     recentDates: w.meta.recentDates,
+    // Pad rather than trust the lengths to agree: a short array would otherwise read
+    // `undefined` for the newest sessions and drop them from every bucket at once.
+    regimes: w.meta.recentDates.map((_, i) => w.meta.regimes?.[i] ?? "UNKNOWN"),
     pairs: w.pairs.map((r) => {
       const levels = {} as Record<PfScoutClass, PfScoutLevels>;
       for (const cls of PF_CLASSES) {
@@ -129,6 +132,9 @@ function pairStatsPass(lv: PfScoutLevels, p: PfScoutParams): boolean {
 }
 
 function ratingPasses(cell: PfScoutRating | null, p: PfScoutParams): boolean {
+  // UNIVERSE drops the gate but NOT the range boxes above it - same split every other
+  // strategy's gate makes, so RATE/UNIVERSE means one thing across the app.
+  if (p.ignoreRatings) return true;
   if (p.minRate <= 0 && p.minTotal <= 0) return true;
   if (!cell) return false;
   return cell.total >= p.minTotal && cell.rate + EPS >= p.minRate;
@@ -160,6 +166,11 @@ export function scan(
 ): number {
   const D = meta.recentDates.length;
   const minDate = Math.max(0, D - p.window);
+  // Which nights count. meta.regimes is parallel to recentDates, so the trade's own date index
+  // reads its label directly. An empty array means the bridge has not published the file yet -
+  // then "all" is the only setting that can match and the others legitimately show nothing.
+  const regimeWanted = p.regime === "all" ? null : p.regime.toUpperCase();
+
   const hasStart = p.start > 0;
   const hasTo = p.to > 0 && p.to > p.start;
   const needsScale = p.mode !== "pct";
@@ -169,6 +180,7 @@ export function scan(
     const s = slices[si];
     for (let i = 0; i < s.n; i++) {
       if (s.date[i] < minDate) continue;
+      if (regimeWanted !== null && meta.regimes[s.date[i]] !== regimeWanted) continue;
       // PRE has two separate sets of episodes: the ordinary model and the 04:02 one; the toggle picks which
       if (s.cls === "pre" && s.alt[i] !== (p.model0402 ? 1 : 0)) continue;
       if (!ratingPasses(meta.pairs[s.pair[i]].rating[s.cls][s.sign], p)) continue;

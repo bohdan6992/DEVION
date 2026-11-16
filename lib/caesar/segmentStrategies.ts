@@ -23,7 +23,13 @@ import { CLO_HEDGE_KEY, ARBITRAGE_HEDGE_KEY } from "@/lib/caesar/hedge";
  */
 export const SEGMENT_STRATEGY_KEYS: Partial<Record<string, readonly string[]>> = {
   pre: ["arbitrage", "morlaunch", "morlaunchbasket", "spreadometer", "reversal", "continuum", ARBITRAGE_HEDGE_KEY, CLO_HEDGE_KEY],
-  open: ["opgreversal", "opgcontinuum", "opgfade", "opgride", "opgrootation"],
+  // stretchfade (renamed from opgstretch, 2026-11-16) and stretchride (its own opposite-direction
+  // mirror, same day) sit in OPEN with the rest of their family even though their whole trade
+  // (entry 09:15-09:21, exit 09:30) runs BEFORE OPEN's own 09:30 start: the exit IS the open
+  // print, and splitting one family across two segments is how an owner lookup starts missing
+  // positions. Their early entries are covered by chartFromMinFor's widened OPEN window - see
+  // schedule.ts.
+  open: ["opgreversal", "opgcontinuum", "opgfade", "opgride", "opgrootation", "stretchfade", "stretchride"],
   intra: [],
   post: ["reversal", "continuum", "launcheveningbasket", CLO_HEDGE_KEY],
 };

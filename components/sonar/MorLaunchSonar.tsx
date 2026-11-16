@@ -3675,6 +3675,7 @@ export default function MorLaunchSonar() {
           navScannerHref={SONAR_NAV.scanner}
           navSonarHref={SONAR_NAV.sonar}
           navScoutHref={SONAR_NAV.scout}
+          navSpectrHref={SONAR_NAV.spectr}
           primaryPanel="sonar"
           listMode={listMode}
           ignCount={ignoreSet.size}

@@ -27,6 +27,16 @@ export type ReversalMode = "pct" | "sigma" | "alpha" | "gamma";
 
 export type ReversalWindow = 5 | 20 | 40 | 65;
 export type ReversalCurveMode = "daily" | "trade";
+/**
+ * Which kind of night a trade's own session followed, from SPY+QQQ over 16:00 -> 00:00
+ * (OvernightRegimeService on the bridge publishes one label per session).
+ *
+ * "unk" is a REAL bucket, not a synonym for flat: a third of sessions have no usable midnight
+ * print, and the two answers "nobody measured this night" and "this night did not move" must not
+ * be merged. "all" is the only setting that does no filtering at all.
+ */
+export type ReversalRegime = "all" | "up" | "down" | "flat" | "mixed" | "unk";
+
 
 export type ReversalSortKey = "ticker" | "alpha" | "rating" | "start" | "entryTime" | "trades" | "pnl" | "avgPnl" | "win";
 
@@ -43,6 +53,11 @@ export type ReversalMetaWire = {
     windowsDays: number[];
     /** Oldest → newest. A trade's date index points into this list. */
     recentDates: string[];
+    /**
+     * One label per entry of `recentDates`, same order and length. Absent on a bridge that
+     * predates the overnight-regime file; then every session reads as UNKNOWN.
+     */
+    regimes?: string[];
   };
   /** Row order == the ticker index every trade slice refers to. */
   tickers: Array<{
@@ -64,6 +79,20 @@ export type ReversalMetaWire = {
     etf?: boolean | null;
     country?: string | null;
     sector?: string | null;
+    /** listing venue, same two sources as country/sector */
+    exchange?: string | null;
+    /** Session constants off the tape's static sidecar: PTP, the OUTSIDE-HOURS short-sale flag,
+     * the sub-price marker and the day's report marker. Absent when the tape never saw the ticker. */
+    ptp?: boolean | null;
+    ssrOut?: boolean | null;
+    crap?: boolean | null;
+    rep?: boolean | null;
+    /** Borrow status, raw YES/NO/ITB, AS OF the newest tape day that knows the ticker - a day
+     * snapshot, not a property of it (~2% of tickers change it intraday). ITB/HARD read it through
+     * lib/filters/borrow.ts so every surface shares one reader. */
+    etb?: string | null;
+    /** Whether that day carried any news marker. The COUNT is not served: it moves all session. */
+    news?: boolean | null;
   }>;
 };
 
@@ -123,6 +152,14 @@ export type ReversalTicker = {
   etf: boolean | null;
   country: string | null;
   sector: string | null;
+  exchange: string | null;
+  ptp: boolean | null;
+  ssrOut: boolean | null;
+  crap: boolean | null;
+  rep: boolean | null;
+  /** raw YES / NO / ITB as of the newest tape day; null when the tape has never seen the ticker */
+  etb: string | null;
+  news: boolean | null;
 };
 
 export type ReversalMeta = {
@@ -132,6 +169,15 @@ export type ReversalMeta = {
   minDev: number;
   pnlBasis: string | null;
   recentDates: string[];
+  /**
+   * Parallel to recentDates: entry i is how the market stood when session i OPENED - SPY+QQQ over
+   * 16:00 -> 09:30. The window ends at that session's own open, so there is no offset and, for
+   * anything entering at or after 09:30, the label is strictly known before entry. For a PRE class
+   * that TRADES 21:00 -> 09:30 it overlaps the trade's own window; the published file carries a
+   * strictly-earlier 16:00 -> 00:00 set for that case. "UNKNOWN" where it could not be measured -
+   * a real bucket, never folded into FLAT.
+   */
+  regimes: string[];
   tickers: ReversalTicker[];
 };
 
@@ -139,20 +185,46 @@ export type ReversalBound = { min: number | null; max: number | null };
 /** The α/σ range boxes. α is a constant of the TICKER's SIGN (the modal |15:50 reading|),
  * sign-matched against alphaPos/alphaNeg the same way the α unit mode is; σ is the ticker's
  * published static dispersion figure (unrelated to sign). */
-export type ReversalRanges = { alpha: ReversalBound; sigma: ReversalBound };
+export type ReversalRanges = { alpha: ReversalBound; sigma: ReversalBound; gamma: ReversalBound };
 
 export type ReversalParams = {
   window: ReversalWindow;
+  /** Keep only the sessions whose 16:00->00:00 night carried this label; "all" = no gate. */
+  regime: ReversalRegime;
   mode: ReversalMode;
   start: number;
   to: number;
   minRate: number;
   minTotal: number;
+  /** UNIVERSE: drop the MINRATE/MINTOTAL gate. The gamma RANGE is a level filter and stays. */
+  ignoreRatings: boolean;
   ranges: ReversalRanges;
   /** |pnl| above this (percentage points) is a data fault, not a trade; 0 = keep everything */
   capPct: number;
   sizeUsd: number;
   excludeEtf: boolean;
+  /**
+   * The rest of the tape-sourced toggle row. Each keeps ITS OWN rule for an unknown value:
+   * ITB/HARD go through lib/filters/borrow.ts, where a MISSING borrow status is also dropped
+   * ("unknown is not freely borrowable"); the others follow this page's existing excludeEtf
+   * convention, where a ticker the tape has no answer for still passes, so a cold tape does
+   * not empty the table. Region flags read the same `country` field COUNTRY filters on.
+   */
+  excludeItb: boolean;
+  excludeHard: boolean;
+  excludePtp: boolean;
+  excludeSsr: boolean;
+  excludeCrap: boolean;
+  excludeNews: boolean;
+  excludeReport: boolean;
+  includeUsa: boolean;
+  includeChina: boolean;
+  /** Here to mirror the Sonar's row exactly; no tape field backs either yet, so both
+   * hold state and reject nothing (see the pills' own tooltips). */
+  excludeDividend: boolean;
+  excludeAnom: boolean;
+  exchangeMode: "off" | "include" | "exclude";
+  exchanges: Set<string>;
   countryMode: "off" | "include" | "exclude";
   countries: Set<string>;
   sectorMode: "off" | "include" | "exclude";

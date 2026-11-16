@@ -32,6 +32,12 @@ type ZapNumberInputProps = {
   placeholder: string;
   title: string;
   ariaLabel: string;
+  /**
+   * The box's own border, one colour per ROLE — the Scanner's convention, and the only thing that
+   * says which threshold is which once there is more than one box: coral short, mint long, zinc
+   * max, amber cap. Omitted = the plain borderless box the two-input bars use.
+   */
+  tone?: string;
 };
 
 const INPUT_CLASS =
@@ -41,7 +47,7 @@ const ARROWS_CLASS =
 
 const show = (v: number) => (v === 0 ? "" : String(v));
 
-function ZapNumberInput({ value, onChange, step, placeholder, title, ariaLabel }: ZapNumberInputProps) {
+function ZapNumberInput({ value, onChange, step, placeholder, title, ariaLabel, tone }: ZapNumberInputProps) {
   const [text, setText] = useState(show(value));
 
   // An outside change (unit switch, restore, arrows) rewrites the text; typing does not, because
@@ -65,7 +71,7 @@ function ZapNumberInput({ value, onChange, step, placeholder, title, ariaLabel }
   };
 
   return (
-    <div className="group relative w-[78px]" title={title}>
+    <div className={clsx("group relative w-[78px]", tone && `rounded-md border ${tone}`)} title={title}>
       <input
         type="number"
         inputMode="decimal"
@@ -115,10 +121,24 @@ export type ScoutUnitBarProps<K extends string> = {
   subject: string;
   /** The current unit's own explanation, appended to the START tooltip. */
   unitHint: string;
+  /**
+   * Replaces the start/to pair with an explicit list, for a bar that carries the Scanner's four
+   * role-coloured boxes. Left out, the bar keeps the two it always had, so the Scouts that have
+   * only a lower and an upper bound are untouched.
+   */
+  inputs?: Array<{
+    value: number;
+    onChange: (v: number) => void;
+    placeholder: string;
+    title: string;
+    ariaLabel: string;
+    tone?: string;
+    step?: number;
+  }>;
 };
 
 export default function ScoutUnitBar<K extends string>({
-  options, mode, onMode, start, to, onStart, onTo, step, subject, unitHint,
+  options, mode, onMode, start, to, onStart, onTo, step, subject, unitHint, inputs,
 }: ScoutUnitBarProps<K>) {
   return (
     <div className={clsx(FILTER_GROUP_BASE, FILTER_GROUP_TONES.zap.group)} title="What START / TO are measured in">
@@ -141,22 +161,39 @@ export default function ScoutUnitBar<K extends string>({
           </button>
         );
       })}
-      <ZapNumberInput
-        value={start}
-        onChange={onStart}
-        step={step}
-        placeholder="start"
-        ariaLabel="start"
-        title={`Only ${subject} at least this large (${unitHint}). Empty / 0 = no lower bound.`}
-      />
-      <ZapNumberInput
-        value={to}
-        onChange={onTo}
-        step={step}
-        placeholder="to"
-        ariaLabel="to"
-        title={`Only ${subject} at most this large, in the same unit. Empty / 0 = no upper bound.`}
-      />
+      {inputs
+        ? inputs.map((f) => (
+            <ZapNumberInput
+              key={f.ariaLabel}
+              value={f.value}
+              onChange={f.onChange}
+              step={f.step ?? step}
+              placeholder={f.placeholder}
+              ariaLabel={f.ariaLabel}
+              title={f.title}
+              tone={f.tone}
+            />
+          ))
+        : (
+          <>
+            <ZapNumberInput
+              value={start}
+              onChange={onStart}
+              step={step}
+              placeholder="start"
+              ariaLabel="start"
+              title={`Only ${subject} at least this large (${unitHint}). Empty / 0 = no lower bound.`}
+            />
+            <ZapNumberInput
+              value={to}
+              onChange={onTo}
+              step={step}
+              placeholder="to"
+              ariaLabel="to"
+              title={`Only ${subject} at most this large, in the same unit. Empty / 0 = no upper bound.`}
+            />
+          </>
+        )}
     </div>
   );
 }

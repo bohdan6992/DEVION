@@ -23,6 +23,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import clsx from "clsx";
 import { GlitchTitle } from "../ui/GlitchTitle";
+import ScannerHeader from "../scanner/shell/panels/ScannerHeader";
+import SharedFilterPresetBar from "../shared/filters/SharedFilterPresetBar";
+import SharedRatingModeRow from "../shared/filters/SharedRatingModeRow";
+import SharedClassRow from "../shared/filters/SharedClassRow";
+import PresetPicker from "../presets/PresetPicker";
+import { SHARED_FILTER_PRESET_API_KIND } from "../../lib/presets/sharedFilterPreset";
+import { useTickerLists } from "../shared/filters/useTickerLists";
+import TickerListPanels from "../shared/filters/TickerListPanels";
+import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
+import type { SectorCorrExclusion } from "../../lib/filters/sectorCorr";
+import { SECTOR_CORR_DEFAULT } from "../../lib/filters/sectorCorr";
 import { useUi } from "../UiProvider";
 import { EquityChart, PeakReversionTwoThirdsChart, PeakStrengthByTimeChart, StartsByTimeChart, StartsEndsByTimeChart } from "../scanner/shared/charts";
 import { ScannerTableStyles, ScannerThemeStyles } from "../scanner/shared/ScannerGlobalStyles";
@@ -30,7 +41,7 @@ import { SOFT_LOSS_TEXT_CLASS } from "../scanner/shared/styles";
 import { GlassCard, MultiSelectFilter, SummaryMetricCard } from "../scanner/shared/ui";
 import { TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
 import { getLiveStrategy } from "../../lib/strategies/registry";
-import { intn, minuteIdxToClockLabel, sessionTimeChartRange } from "../../lib/scanner/format";
+import { intn, minuteIdxToClockLabel, sessionTimeChartRange, fmtSessionDate } from "../../lib/scanner/format";
 import type { PaperArbSession, TriMode } from "../../lib/scanner/types";
 import {
   buildCurve,
@@ -52,6 +63,7 @@ import type {
   ScoutMeta,
   ScoutMode,
   ScoutParams,
+  ScoutRegime,
   ScoutSide,
   ScoutSlice,
   ScoutSortKey,
@@ -79,7 +91,22 @@ const SIDES: Array<{ key: ScoutSide; label: string; hint: string }> = [
   { key: "both", label: "BOTH", hint: "both directions together" },
 ];
 const WINDOWS: ScoutWindow[] = [5, 20, 40, 65];
-const MODES: ScoutMode[] = ["pct", "sigma", "delta", "gamma"];
+
+// How SPY and QQQ stand at the open: the 16:00 -> 09:30 move, published per session by the bridge
+// (OvernightRegimeService). The operator asked for 21:00 -> 09:30; the END is the same and the
+// anchor moved to the official close because the 21:00 print is a thin-book quote - measured, see
+// that service's header. The bands are 0.5 of each index's OWN sigma, since no published standard
+// exists: practitioners count a "real gap" from a flat 0.1% and call 1% big, and this file lands
+// on those same figures. UNK is a real bucket, never a synonym for FLAT.
+const REGIMES: Array<{ key: ScoutRegime; label: string; hint: string }> = [
+  { key: "all", label: "ALL", hint: "every session in the window, however the market opened" },
+  { key: "up", label: "UP", hint: "BOTH SPY and QQQ open above +0.5 sigma of the 16:00->09:30 move (SPY +0.316%, QQQ +0.428%)" },
+  { key: "down", label: "DOWN", hint: "BOTH SPY and QQQ open below -0.5 sigma of the 16:00->09:30 move (SPY -0.316%, QQQ -0.428%)" },
+  { key: "flat", label: "FLAT", hint: "BOTH SPY and QQQ open inside the band - the session starts where it closed" },
+  { key: "mixed", label: "MIXED", hint: "SPY and QQQ disagree about the open - one cleared its band, the other did not" },
+  { key: "unk", label: "UNK", hint: "no usable 09:30 print for one of them - a real bucket, never folded into FLAT" },
+];
+const MODES: ScoutMode[] = ["pct", "sigma", "delta", "gamma", "alpha"];
 const SORT_BUTTONS: Array<{ key: ScoutSortKey; label: string }> = [
   { key: "beta", label: "BETA" },
   { key: "rating", label: "RATING" },
@@ -91,15 +118,30 @@ const SORT_BUTTONS: Array<{ key: ScoutSortKey; label: string }> = [
 const UI_KEY = "scout.arb.ui.v1";
 const PAGE_ROWS = 200;
 
-type Bounds = Record<ScoutMode, { start: number; to: number }>;
+// start = the SHORT side's floor, startNeg = the LONG side's (0 = "as short"), to = the upper
+// bound on start. Same three roles the Scanner's coral / mint / zinc boxes carry.
+type Bounds = Record<ScoutMode, { start: number; startNeg: number; to: number }>;
 type UiState = {
   cls: ScoutClass;
   side: ScoutSide;
   window: ScoutWindow;
+  regime: ScoutRegime;
   mode: ScoutMode;
   bounds: Bounds;
   minRate: number;
   minTotal: number;
+  ratingMode: "live" | "asof" | "asofew";
+  outcomeType: "any" | "hard" | "soft";
+  ratingsIgnored: boolean;
+  /** FROZEN / CORE / NORM-NRRW: three independent switches beside the mode radio, as on the
+   * Scanner. They need a per-day replay this page does not have, so they hold their state and
+   * say so - the row is the Scanner's, control for control, at the operator's own request. */
+  ratingsFrozen: boolean;
+  coreOnly: boolean;
+  outcomeRule: "norm" | "narrow";
+  /** ALL shows every ticker; TOP caps the table at the best `topN` by the current sort. */
+  scopeMode: "ALL" | "TOP";
+  topN: number;
   ranges: RangeText;
   model0402: boolean;
   capPct: number;
@@ -108,25 +150,52 @@ type UiState = {
   sortDir: SortDir;
   curveMode: ScoutCurveMode;
   excludeEtf: boolean;
+  excludeItb: boolean;
+  excludeHard: boolean;
+  excludePtp: boolean;
+  excludeSsr: boolean;
+  excludeCrap: boolean;
+  excludeNews: boolean;
+  excludeReport: boolean;
+  includeUsa: boolean;
+  includeChina: boolean;
+  excludeDividend: boolean;
+  excludeAnom: boolean;
+  exchangeMode: TriMode;
+  exchanges: string[];
   countryMode: TriMode;
   countries: string[];
   sectorMode: TriMode;
   sectors: string[];
 };
 
+/** This page has no episode replay to seed a sector-correlation set from, so the CORR pill
+ * holds its state and rejects nothing - the same shape ArbitrageSpectr uses. */
+const EMPTY_CORR_STATUS: SectorCorrExclusion = { excluded: new Set<string>(), seedCount: 0, loading: false, error: null };
+
 const DEFAULT_UI: UiState = {
   cls: "open",
   side: "both",
   window: 20,
+  regime: "all",
   mode: "sigma",
   bounds: {
-    pct: { start: 0, to: 0 },
-    sigma: { start: 0, to: 0 },
-    gamma: { start: 0, to: 0 },
-    delta: { start: 0, to: 0 },
+    pct: { start: 0, startNeg: 0, to: 0 },
+    sigma: { start: 0, startNeg: 0, to: 0 },
+    gamma: { start: 0, startNeg: 0, to: 0 },
+    delta: { start: 0, startNeg: 0, to: 0 },
+    alpha: { start: 0, startNeg: 0, to: 0 },
   },
   minRate: 0,
   minTotal: 2,
+  ratingMode: "asof",
+  outcomeType: "any",
+  ratingsIgnored: false,
+  ratingsFrozen: false,
+  coreOnly: false,
+  outcomeRule: "norm",
+  scopeMode: "ALL",
+  topN: 100,
   ranges: EMPTY_RANGE_TEXT,
   model0402: false,
   // GAMMA drops any single result past 25pp as "a data fault, not a trade"; the published file has
@@ -137,6 +206,19 @@ const DEFAULT_UI: UiState = {
   sortDir: "desc",
   curveMode: "daily",
   excludeEtf: false,
+  excludeItb: false,
+  excludeHard: false,
+  excludePtp: false,
+  excludeSsr: false,
+  excludeCrap: false,
+  excludeNews: false,
+  excludeReport: false,
+  includeUsa: false,
+  includeChina: false,
+  excludeDividend: false,
+  excludeAnom: false,
+  exchangeMode: "off",
+  exchanges: [],
   countryMode: "off",
   countries: [],
   sectorMode: "off",
@@ -154,16 +236,25 @@ function loadUi(): UiState {
     const bounds = { ...DEFAULT_UI.bounds };
     for (const m of MODES) {
       const b = (j.bounds as Partial<Bounds> | undefined)?.[m];
-      if (b) bounds[m] = { start: numOr(b.start, 0), to: numOr(b.to, 0) };
+      if (b) bounds[m] = { start: numOr(b.start, 0), startNeg: numOr(b.startNeg, 0), to: numOr(b.to, 0) };
     }
     return {
       cls: pick(j.cls, CLASSES.map((c) => c.key), DEFAULT_UI.cls),
       side: pick(j.side, SIDES.map((s) => s.key), DEFAULT_UI.side),
       window: pick(j.window, WINDOWS, DEFAULT_UI.window),
+      regime: pick(j.regime, REGIMES.map((r) => r.key), DEFAULT_UI.regime),
       mode: pick(j.mode, MODES, DEFAULT_UI.mode),
       bounds,
       minRate: numOr(j.minRate, DEFAULT_UI.minRate),
       minTotal: numOr(j.minTotal, DEFAULT_UI.minTotal),
+      ratingMode: pick(j.ratingMode, ["live", "asof", "asofew"] as const, DEFAULT_UI.ratingMode),
+      outcomeType: pick(j.outcomeType, ["any", "hard", "soft"] as const, DEFAULT_UI.outcomeType),
+      ratingsIgnored: j.ratingsIgnored === true,
+      ratingsFrozen: j.ratingsFrozen === true,
+      coreOnly: j.coreOnly === true,
+      outcomeRule: pick(j.outcomeRule, ["norm", "narrow"] as const, DEFAULT_UI.outcomeRule),
+      scopeMode: pick(j.scopeMode, ["ALL", "TOP"] as const, DEFAULT_UI.scopeMode),
+      topN: numOr(j.topN, DEFAULT_UI.topN),
       ranges: loadRangeText(j.ranges),
       model0402: j.model0402 === true,
       capPct: numOr(j.capPct, DEFAULT_UI.capPct),
@@ -172,6 +263,19 @@ function loadUi(): UiState {
       sortDir: pick(j.sortDir, ["asc", "desc"] as SortDir[], DEFAULT_UI.sortDir),
       curveMode: pick(j.curveMode, ["daily", "trade"] as ScoutCurveMode[], DEFAULT_UI.curveMode),
       excludeEtf: j.excludeEtf === true,
+      excludeItb: j.excludeItb === true,
+      excludeHard: j.excludeHard === true,
+      excludePtp: j.excludePtp === true,
+      excludeSsr: j.excludeSsr === true,
+      excludeCrap: j.excludeCrap === true,
+      excludeNews: j.excludeNews === true,
+      excludeReport: j.excludeReport === true,
+      includeUsa: j.includeUsa === true,
+      includeChina: j.includeChina === true,
+      excludeDividend: j.excludeDividend === true,
+      excludeAnom: j.excludeAnom === true,
+      exchangeMode: pick(j.exchangeMode, ["off", "include", "exclude"] as TriMode[], DEFAULT_UI.exchangeMode),
+      exchanges: Array.isArray(j.exchanges) ? j.exchanges.filter((v): v is string => typeof v === "string") : DEFAULT_UI.exchanges,
       countryMode: pick(j.countryMode, ["off", "include", "exclude"] as TriMode[], DEFAULT_UI.countryMode),
       countries: Array.isArray(j.countries) ? j.countries.filter((v): v is string => typeof v === "string") : DEFAULT_UI.countries,
       sectorMode: pick(j.sectorMode, ["off", "include", "exclude"] as TriMode[], DEFAULT_UI.sectorMode),
@@ -239,6 +343,17 @@ export default function ArbitrageScout() {
   const nav = getLiveStrategy("arbitrage")!.nav;
 
   const [ui, setUi] = useState<UiState>(loadUi);
+  // Keyed per PAGE, not per strategy: a Scout ignore list ("not interesting in my
+  // research table") is a different statement from a Sonar one ("do not trade today").
+  const lists = useTickerLists("arbitrage-scout");
+  // The eye at the end of the preset group. On the Scanner it reveals the shared min/max
+  // panel; the equivalent here is the full preset manager, which is the one thing this page
+  // has that does not fit in the compact bar.
+  const [showPresetPanel, setShowPresetPanel] = useState(false);
+  // The CORR box keeps its own text so a half-typed value is not clamped mid-edit - the same
+  // shape every other surface uses for it.
+  const [corrThresholdInput, setCorrThresholdInput] = useState(String(SECTOR_CORR_DEFAULT));
+  const corrThreshold = Number(corrThresholdInput) || SECTOR_CORR_DEFAULT;
   const patch = useCallback((p: Partial<UiState>) => setUi((prev) => ({ ...prev, ...p })), []);
 
   useEffect(() => {
@@ -285,23 +400,57 @@ export default function ArbitrageScout() {
   // ---- compute (re-runs on every control change; a few ms even for 130k trades)
   const countriesSet = useMemo(() => new Set(ui.countries), [ui.countries]);
   const sectorsSet = useMemo(() => new Set(ui.sectors), [ui.sectors]);
+  const exchangesSet = useMemo(() => new Set(ui.exchanges), [ui.exchanges]);
   const params: ScoutParams = useMemo(() => ({
     window: ui.window,
+    regime: ui.regime,
     mode: ui.mode,
     start: ui.bounds[ui.mode].start,
+    startNeg: ui.bounds[ui.mode].startNeg,
     to: ui.bounds[ui.mode].to,
     minRate: ui.minRate,
     minTotal: ui.minTotal,
+    ratingMode: ui.ratingMode,
+    outcomeType: ui.outcomeType,
+    ratingsIgnored: ui.ratingsIgnored,
     ranges: parseRanges(ui.ranges),
     model0402: ui.model0402,
     capPct: ui.capPct,
     sizeUsd: ui.sizeUsd,
     excludeEtf: ui.excludeEtf,
+    excludeItb: ui.excludeItb,
+    excludeHard: ui.excludeHard,
+    excludePtp: ui.excludePtp,
+    excludeSsr: ui.excludeSsr,
+    excludeCrap: ui.excludeCrap,
+    excludeNews: ui.excludeNews,
+    excludeReport: ui.excludeReport,
+    includeUsa: ui.includeUsa,
+    includeChina: ui.includeChina,
+    excludeDividend: ui.excludeDividend,
+    excludeAnom: ui.excludeAnom,
+    exchangeMode: ui.exchangeMode,
+    exchanges: exchangesSet,
     countryMode: ui.countryMode,
     countries: countriesSet,
     sectorMode: ui.sectorMode,
     sectors: sectorsSet,
-  }), [ui.window, ui.mode, ui.bounds, ui.minRate, ui.minTotal, ui.ranges, ui.model0402, ui.capPct, ui.sizeUsd, ui.excludeEtf, ui.countryMode, countriesSet, ui.sectorMode, sectorsSet]);
+  }), [ui.window, ui.regime, ui.mode, ui.bounds, ui.minRate, ui.minTotal, ui.ratingMode, ui.outcomeType, ui.ratingsIgnored, ui.ranges, ui.model0402, ui.capPct, ui.sizeUsd, ui.excludeEtf, ui.excludeItb, ui.excludeHard, ui.excludePtp, ui.excludeSsr, ui.excludeCrap, ui.excludeNews, ui.excludeReport, ui.includeUsa, ui.includeChina, ui.excludeDividend, ui.excludeAnom, ui.exchangeMode, exchangesSet, ui.countryMode, countriesSet, ui.sectorMode, sectorsSet]);
+
+  // How many of the sessions the WINDOW admits carry each label. Without it, picking UP on a 5D
+  // window just shows an empty table, which reads as a broken page rather than as "none of these
+  // five nights was an up night".
+  const regimeCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    if (!meta) return out;
+    const from = Math.max(0, meta.recentDates.length - ui.window);
+    for (let i = from; i < meta.recentDates.length; i++) {
+      const k = (meta.regimes[i] ?? "UNKNOWN").toLowerCase();
+      out[k] = (out[k] ?? 0) + 1;
+      out.all = (out.all ?? 0) + 1;
+    }
+    return out;
+  }, [meta, ui.window]);
 
   // distinct COUNTRY/SECTOR values observed across the published ticker universe
   const countryOptions = useMemo(() => {
@@ -312,6 +461,10 @@ export default function ArbitrageScout() {
     if (!meta) return [];
     return [...new Set(meta.tickers.map((t) => t.sector).filter((v): v is string => !!v))].sort();
   }, [meta]);
+  const exchangeOptions = useMemo(() => {
+    if (!meta) return [];
+    return [...new Set(meta.tickers.map((t) => t.exchange).filter((v): v is string => !!v))].sort();
+  }, [meta]);
 
   const result = useMemo(
     () => (meta && activeSlices ? computeScout(meta, activeSlices, params) : null),
@@ -319,8 +472,20 @@ export default function ArbitrageScout() {
   );
 
   const sorted = useMemo(
-    () => (meta && result ? sortRows(meta, result.rows, ui.sortKey, ui.sortDir) : []),
-    [meta, result, ui.sortKey, ui.sortDir],
+    () => {
+      // IGNORE/APPLY hide rows; PIN only reorders them. Only the mode the header has
+      // selected applies - see useTickerLists.allows/pinRank.
+      if (!meta || !result) return [];
+      const bySort = sortRows(meta, result.rows, ui.sortKey, ui.sortDir);
+      const kept = bySort.filter((r) => lists.allows(meta.tickers[r.i].t));
+      const ranked = lists.listMode === "pin"
+        ? [...kept].sort((a, b) => lists.pinRank(meta.tickers[a.i].t) - lists.pinRank(meta.tickers[b.i].t))
+        : kept;
+      // TOP keeps the head of the CURRENT sort, so it narrows what you are looking at
+      // rather than re-ranking it.
+      return ui.scopeMode === "TOP" ? ranked.slice(0, Math.max(1, ui.topN)) : ranked;
+    },
+    [meta, result, ui.sortKey, ui.sortDir, lists],
   );
 
   const [selected, setSelected] = useState<number | null>(null);
@@ -389,7 +554,7 @@ export default function ArbitrageScout() {
       sortDir: prev.sortKey === key ? (prev.sortDir === "asc" ? "desc" : "asc") : "desc",
     }));
 
-  const setBound = (which: "start" | "to", v: number) =>
+  const setBound = (which: "start" | "startNeg" | "to", v: number) =>
     setUi((prev) => ({ ...prev, bounds: { ...prev.bounds, [prev.mode]: { ...prev.bounds[prev.mode], [which]: v } } }));
 
   // ---- header chrome, copied from the scanner
@@ -399,10 +564,12 @@ export default function ArbitrageScout() {
   const headerNavInactiveClass = isLightTheme
     ? "border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-900/[0.05]"
     : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5";
-  const navPill = "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border flex items-center gap-1.5";
   const btn = (active: boolean, disabled = false) =>
     clsx(TOOLBAR_BUTTON_BASE, disabled ? "cursor-not-allowed border-transparent text-zinc-700" : active ? TOOLBAR_BUTTON_ACTIVE : TOOLBAR_BUTTON_INACTIVE);
   const groupClass = "flex h-7 items-center gap-2 rounded-lg bg-black/20";
+  // The class row's own groups carry NO container tint - that is how the Scanner draws them, and
+  // the tinted version is what made this row read as three boxed strips instead of three groups.
+  const rowGroupClass = "flex h-7 items-center gap-2";
   const separator = <div className="h-7 w-px self-center bg-white/5" />;
 
   const modeInfo = SCOUT_MODES[ui.mode];
@@ -445,56 +612,63 @@ export default function ArbitrageScout() {
 
       <div className="relative z-10 max-w-[1920px] mx-auto space-y-4">
         {/* Header */}
-        <header className="scanner-header-surface bg-[#0a0a0a]/50 backdrop-blur-md border border-white/[0.06] rounded-2xl p-4 shadow-xl flex flex-wrap justify-between items-center gap-4">
-          <div className="flex items-center gap-3">
-            <GlitchTitle text="ARBITRAGE SCOUT" />
-          </div>
+        {/* The header every surface shares - components/scanner/shell/panels/ScannerHeader. This
+            page kept a private copy longest, because it sits in components/scout/ rather than
+            components/<x>Scout/ and so missed the pass that converted its seven siblings. */}
+        <ScannerHeader
+          scannerShellTitle="ARBITRAGE•SCOUT"
+          headerNavGroupClass={headerNavGroupClass}
+          headerNavInactiveClass={headerNavInactiveClass}
+          navStreamHref={nav.stream}
+          navScannerHref={nav.scanner}
+          navSonarHref={nav.sonar}
+          navScoutHref={nav.scout}
+          navSpectrHref={nav.spectr}
+          primaryPanel="scout"
+          showLists
+          listMode={lists.listMode}
+          ignCount={lists.ignoreSet.size}
+          appCount={lists.applySet.size}
+          pinCount={lists.pinSet.size}
+          showIgnore={lists.showIgnore}
+          showApply={lists.showApply}
+          showPin={lists.showPin}
+          setShowIgnore={lists.setShowIgnore}
+          setShowApply={lists.setShowApply}
+          setShowPin={lists.setShowPin}
+          setModeIgnore={lists.setModeIgnore}
+          setModeApply={lists.setModeApply}
+          setModePin={lists.setModePin}
+          canRun={!metaBusy}
+          run={() => { setSelected(null); loadMeta(true); }}
+          busy={busy}
+          variantString="Reload the published rolling_perf file and the gamma/delta levels from the bridge"
+        />
 
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className={headerNavGroupClass}>
-              <Link href={nav.stream} className={clsx(navPill, headerNavInactiveClass)} title="Open STREAM">
-                <svg {...svgProps}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>
-                STREAM
-              </Link>
-              <Link href={nav.scanner} className={clsx(navPill, headerNavInactiveClass)} title="Open SCANNER">
-                <svg {...svgProps}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
-                SCANNER
-              </Link>
-              <Link href={nav.sonar} className={clsx(navPill, headerNavInactiveClass)} title="Open SONAR">
-                <svg {...svgProps}><circle cx="12" cy="12" r="2" /><path d="M16.24 7.76a6 6 0 0 1 0 8.49" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
-                SONAR
-              </Link>
-              <span className={clsx(navPill, "accent-soft")} title="SCOUT (current)">
-                <svg {...svgProps}><circle cx="12" cy="12" r="10" /><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" /></svg>
-                SCOUT
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => { setSelected(null); loadMeta(true); }}
-              disabled={metaBusy}
-              className={clsx(
-                "h-7 w-7 flex items-center justify-center rounded-full transition-all active:scale-95",
-                metaBusy ? "text-zinc-600 cursor-not-allowed" : "accent-text hover:opacity-80",
-              )}
-              title="Reload the published rolling_perf file and the gamma/delta levels from the bridge"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={busy ? "animate-spin" : ""}>
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </svg>
-            </button>
-          </div>
-        </header>
+        <TickerListPanels lists={lists} />
 
         {/* Controls — laid out like the Scanner: rating row on the right above the card, the
             class / side / window card, then the filter row with the ZAP unit group at its right end */}
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <SpinnerInput label="MINRATE" ariaLabel="min rate" title="Published rating of the class and side (all history, not the window): (hard + soft) / total must be at least this"
-            value={ui.minRate} onChange={(v) => patch({ minRate: v })} step={0.05} min={0} max={1} decimals={2} />
-          <SpinnerInput label="MINTOTAL" ariaLabel="min total" title="Published rating of the class and side must rest on at least this many situations"
-            value={ui.minTotal} onChange={(v) => patch({ minTotal: Math.trunc(v) })} step={1} min={0} decimals={0} />
+        {/* The Scanner's rating row, as ONE component — components/shared/filters/SharedRatingModeRow.
+            RATE/UNIVERSE, ASOF/EXPO/LIVE, the ❄/CORE/NORM switches and MINRATE/MINTOTAL all live
+            there now; only the range boxes, which genuinely differ per strategy, stay here. */}
+        <SharedRatingModeRow
+          ratingsIgnored={ui.ratingsIgnored}
+          setRatingsIgnored={(v) => patch({ ratingsIgnored: v })}
+          ratingMode={ui.ratingMode}
+          setRatingMode={(v) => patch({ ratingMode: v })}
+          frozen={ui.ratingsFrozen}
+          setFrozen={(v) => patch({ ratingsFrozen: v })}
+          coreOnly={ui.coreOnly}
+          setCoreOnly={(v) => patch({ coreOnly: v })}
+          outcomeRule={ui.outcomeRule}
+          setOutcomeRule={(v) => patch({ outcomeRule: v })}
+          minRate={ui.minRate}
+          setMinRate={(v) => patch({ minRate: v })}
+          minTotal={ui.minTotal}
+          setMinTotal={(v) => patch({ minTotal: Math.trunc(v) })}
+          switchesInert
+          rangesSlot={
           <ScoutRangeBoxes
             value={ui.ranges}
             onChange={(ranges) => patch({ ranges })}
@@ -505,94 +679,255 @@ export default function ArbitrageScout() {
               alpha: "Alpha — the ticker's own level per side (magnitude), for the side of each trade",
             }}
           />
-        </div>
+          }
+        />
 
-        <div className="scanner-control-surface flex flex-col gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className={groupClass}>
-              {CLASSES.map((c) => (
-                <button key={c.key} type="button" onClick={() => { patch({ cls: c.key }); setSelected(null); }} className={btn(ui.cls === c.key)} title={`${c.label} ${c.closes} — P&L marked at its close`}>
-                  {c.label}
-                </button>
-              ))}
-            </div>
-            {separator}
-            <div className={groupClass}>
-              {SIDES.map((s) => (
-                <button key={s.key} type="button" onClick={() => { patch({ side: s.key }); setSelected(null); }} className={btn(ui.side === s.key)} title={s.hint}>
-                  {s.label}
-                </button>
-              ))}
-            </div>
-            {separator}
-            <div className={groupClass}>
-              {WINDOWS.map((w) => (
-                <button key={w} type="button" onClick={() => patch({ window: w })} className={btn(ui.window === w)} title={`the last ${w} sessions in the file`}>
-                  {w}D
-                </button>
-              ))}
-            </div>
-            <div className="ml-auto flex flex-wrap items-center gap-3">
-              <div className={groupClass} title="Sort the table (click the active one again to flip)">
-                {SORT_BUTTONS.map((s) => (
-                  <button key={s.key} type="button" onClick={() => onSort(s.key)} className={btn(ui.sortKey === s.key)}>
-                    {s.label}{sortMark(ui.sortKey === s.key, ui.sortDir)}
-                  </button>
-                ))}
-              </div>
-              {separator}
-              <div className={groupClass}>
-                {(["daily", "trade"] as ScoutCurveMode[]).map((m) => (
-                  <button key={m} type="button" onClick={() => patch({ curveMode: m })} className={btn(ui.curveMode === m)}
-                    title={m === "daily" ? "one point per session" : "one point per trade, in date order"}>
-                    {m === "daily" ? "DAILY" : "TRADE"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+                <SharedClassRow
+          classes={CLASSES.map((c) => ({ key: c.key, label: c.label, title: `${c.label} ${c.closes} — P&L marked at its close` }))}
+          cls={ui.cls}
+          setCls={(k) => { patch({ cls: k }); setSelected(null); }}
+          scopeMode={ui.scopeMode}
+          setScopeMode={(m2) => patch({ scopeMode: m2 })}
+          topN={ui.topN}
+          outcomeType={ui.outcomeType}
+          setOutcomeType={(rt) => patch({ outcomeType: rt })}
+          rightSlot={
+  <SharedFilterPresetBar
+                  getConfigJson={() => JSON.stringify({
+                    minCorr: ui.ranges.corr.min, maxCorr: ui.ranges.corr.max,
+                    minBeta: ui.ranges.beta.min, maxBeta: ui.ranges.beta.max,
+                    minSigma: ui.ranges.sigma.min, maxSigma: ui.ranges.sigma.max,
+                  })}
+                  applyConfigJson={(json) => {
+                    try {
+                      const j = JSON.parse(json) as Record<string, unknown>;
+                      const txt = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+                      patch({ ranges: {
+                        ...ui.ranges,
+                        corr: { min: txt(j.minCorr), max: txt(j.maxCorr) },
+                        beta: { min: txt(j.minBeta), max: txt(j.maxBeta) },
+                        sigma: { min: txt(j.minSigma), max: txt(j.maxSigma) },
+                      } });
+                      return true;
+                    } catch {
+                      return false; // older build, or hand-edited - leave the filters alone
+                    }
+                  }}
+                  onClear={() => patch({ ranges: {
+                    ...ui.ranges,
+                    corr: { min: "", max: "" }, beta: { min: "", max: "" }, sigma: { min: "", max: "" },
+                  } })}
+                  showPanel={showPresetPanel}
+                  setShowPanel={setShowPresetPanel}
+                />
+          }
+          infoSlot={meta ? (
+            <>
+                    <span>SESSIONS {fmtSessionDate(winFrom, true)} → {fmtSessionDate(winTo, true)}</span>
+                    {ui.model0402 && model0402Ready && <span className="accent-text">MODEL: trading starts 04:02</span>}
+                    <span>{ui.cls.toUpperCase()} · {ui.side === "both" ? "SHORT+LONG" : ui.side.toUpperCase()} · ${ui.sizeUsd.toLocaleString("en-US")}/trade · exit = last print inside the window</span>
+                    {result && result.cappedOut > 0 && <span>{result.cappedOut.toLocaleString("en-US")} trades excluded by CAP</span>}
+                    {meta.generatedAt && <span>file {meta.generatedAt.slice(0, 16).replace("T", " ")}Z</span>}
+                    {!levelsOk && <span className="text-amber-300/80">γ/δ not published yet — % and σ only</span>}
+            </>
+          ) : null}
+        />
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-mono text-zinc-600">
-            {meta && (
-              <>
-                <span>SESSIONS {winFrom} → {winTo}</span>
-                {ui.model0402 && model0402Ready && <span className="accent-text">MODEL: trading starts 04:02</span>}
-                <span>{ui.cls.toUpperCase()} · {ui.side === "both" ? "SHORT+LONG" : ui.side.toUpperCase()} · ${ui.sizeUsd.toLocaleString("en-US")}/trade · exit = last print inside the window</span>
-                {result && result.cappedOut > 0 && <span>{result.cappedOut.toLocaleString("en-US")} trades excluded by CAP</span>}
-                {meta.generatedAt && <span>file {meta.generatedAt.slice(0, 16).replace("T", " ")}Z</span>}
-                {!levelsOk && <span className="text-amber-300/80">γ/δ not published yet — % and σ only</span>}
-              </>
-            )}
-          </div>
-        </div>
+        {showPresetPanel && (
+          <PresetPicker
+            kind={SHARED_FILTER_PRESET_API_KIND}
+            scope="BOTH"
+            sharedFilterOnly
+            getCurrentConfigJson={() => JSON.stringify({
+              minCorr: ui.ranges.corr.min, maxCorr: ui.ranges.corr.max,
+              minBeta: ui.ranges.beta.min, maxBeta: ui.ranges.beta.max,
+              minSigma: ui.ranges.sigma.min, maxSigma: ui.ranges.sigma.max,
+            })}
+            onApplyPresetJson={(presetJson) => {
+              try {
+                const j = JSON.parse(presetJson) as Record<string, unknown>;
+                const txt = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+                patch({ ranges: {
+                  ...ui.ranges,
+                  corr: { min: txt(j.minCorr), max: txt(j.maxCorr) },
+                  beta: { min: txt(j.minBeta), max: txt(j.maxBeta) },
+                  sigma: { min: txt(j.minSigma), max: txt(j.maxSigma) },
+                } });
+              } catch {
+                // older build, or hand-edited - leave the filters alone
+              }
+            }}
+          />
+        )}
 
+        {/* The SAME toggle row the Scanner and Sonar render - components/shared/filters/FilterFlagsRow.
+            Every pill here filters for real: the flags come off the tape (the session-static sidecar
+            for ETF/PTP/SSR/CRAP/REP, the newest tape day for ITB/HARD and NEWS), the source the
+            Scanner reads too. DIV is deliberately absent rather than drawn dead - `Dividend` is in
+            the live DTO but has never existed on TapeRowV1, so no tape day carries it and the pill
+            would reject nothing while looking like it works. ANOM likewise has no POST-window
+            anomaly on a reference table. */}
+        <FilterFlagsRow
+          exclusions={[
+            { label: "ITB", value: ui.excludeItb, set: (v) => patch({ excludeItb: v }), title: "Drop tickers whose borrow status is ITB, as of the newest tape day that knows them. A ticker with NO borrow status is dropped too - unknown is not freely borrowable." },
+            { label: "HARD", value: ui.excludeHard, set: (v) => patch({ excludeHard: v }), title: "Drop tickers whose borrow status is NO (hard to borrow), as of the newest tape day. A ticker with no status is dropped too." },
+            { label: "Div", value: ui.excludeDividend, set: (v) => patch({ excludeDividend: v }), title: "No dividend field reaches this page: `Dividend` exists in the live DTO but has never been a column on TapeRowV1, so no tape day carries it. The pill is here to match the Sonar row exactly; it holds its state and rejects nothing until the tape writer records the field." },
+            { label: "News", value: ui.excludeNews, set: (v) => patch({ excludeNews: v }), title: "Drop tickers the newest tape day marked as carrying news. The news COUNT is not used: it moves all session, the marker does not." },
+            { label: "PTP", value: ui.excludePtp, set: (v) => patch({ excludePtp: v }), title: "Drop PTP tickers (session constant, from the tape's static sidecar)." },
+            { label: "SSR", value: ui.excludeSsr, set: (v) => patch({ excludeSsr: v }), title: "Drop tickers under the OUTSIDE-HOURS short-sale restriction. This is not the intraday trigger, which fires on a -10% move and is not published here." },
+            { label: "ETF", value: ui.excludeEtf, set: (v) => patch({ excludeEtf: v }), title: "Drop every ticker the tape says is an ETF (a ticker with no ETF data yet still passes)." },
+            { label: "CRAP", value: ui.excludeCrap, set: (v) => patch({ excludeCrap: v }), title: "Drop sub-price tickers (session constant, from the tape's static sidecar)." },
+            { label: "ANOM", value: ui.excludeAnom, set: (v) => patch({ excludeAnom: v }), title: "The POST-window anomaly set is resolved by the bridge from an episode replay, which a reference table over the published file does not have. Here to match the Sonar row exactly; holds its state and rejects nothing." },
+          ]}
+          report={{ label: "REP", value: ui.excludeReport, set: (v) => patch({ excludeReport: v }), title: "Drop tickers the newest tape day marked as reporting." }}
+          corr={{ label: "CORR", value: false, set: () => {}, title: "Sector-correlation exclusion needs the per-day seed set the Scanner builds from an episode replay; this page has no replay to seed from." }}
+          corrThresholdInput={corrThresholdInput}
+          setCorrThresholdInput={setCorrThresholdInput}
+          corrThreshold={corrThreshold}
+          corrStatus={EMPTY_CORR_STATUS}
+          regions={[
+            { label: "USA", value: ui.includeUsa, set: (v) => patch({ includeUsa: v }) },
+            { label: "CHINA", value: ui.includeChina, set: (v) => patch({ includeChina: v }) },
+          ]}
+          zapSlot={
+            // The violet unit strip belongs at the RIGHT END OF THIS ROW rather than on a line of
+            // its own: that is where the Scanner keeps it, and FilterFlagsRow has a zapSlot for
+            // exactly this. The row's own `flex-1` pushes it to the edge, which only works while it
+            // is a child of the row itself.
+                <ScoutUnitBar
+                  options={MODES.map((m) => ({
+                    key: m,
+                    label: SCOUT_MODES[m].label === "δ" ? "Δ" : SCOUT_MODES[m].label,
+                    title: (m === "gamma" || m === "delta") && !levelsOk ? "gamma/delta are not published in the current best_params file" : SCOUT_MODES[m].hint,
+                    locked: (m === "gamma" || m === "delta") && !levelsOk,
+                  }))}
+                  mode={ui.mode}
+                  onMode={(m) => patch({ mode: m })}
+                  start={ui.bounds[ui.mode].start}
+                  to={ui.bounds[ui.mode].to}
+                  onStart={(v) => setBound("start", v)}
+                  onTo={(v) => setBound("to", v)}
+                  // The Scanner's four boxes, one colour per ROLE: coral short, mint long, zinc max,
+                  // amber cap. The mint one left empty means "as short" - the single floor this page
+                  // had before the split. The amber box is the |P&L| fault cap and is deliberately in
+                  // PERCENTAGE POINTS whatever unit the pills are on; its own tooltip says so.
+                  inputs={[
+                    {
+                      value: ui.bounds[ui.mode].start,
+                      onChange: (v) => setBound("start", v),
+                      placeholder: "start",
+                      ariaLabel: "start short",
+                      tone: "border-[#f3a6b2]/50",
+                      title: `Floor on the entry deviation for POSITIVE readings (a SHORT entry), in ${modeInfo.hint}. 0 = no floor.`,
+                    },
+                    {
+                      value: ui.bounds[ui.mode].startNeg,
+                      onChange: (v) => setBound("startNeg", v),
+                      placeholder: "as short",
+                      ariaLabel: "start long",
+                      tone: "border-[#6ee7b7]/45",
+                      title: "Floor for NEGATIVE readings (a LONG entry). Empty = the same number as the short side.",
+                    },
+                    {
+                      value: ui.bounds[ui.mode].to,
+                      onChange: (v) => setBound("to", v),
+                      placeholder: "start max",
+                      ariaLabel: "start max",
+                      tone: "border-zinc-200/35",
+                      title: "Upper bound on the entry deviation, same unit. 0 = no upper bound.",
+                    },
+                    {
+                      value: ui.capPct,
+                      onChange: (v) => patch({ capPct: v }),
+                      placeholder: "cap",
+                      ariaLabel: "pnl cap",
+                      tone: "border-amber-400/55",
+                      step: 5,
+                      title: "CAP: a trade whose |P&L| exceeds this many PERCENTAGE POINTS is a Stack% data fault, not a trade, and is dropped. Always in pp, whatever unit the pills are on. 0 = keep everything.",
+                    },
+                  ]}
+                  step={modeInfo.step}
+                  subject="entries"
+                  unitHint={modeInfo.hint}
+                />
+          }
+          selectsSlot={
+            <>
+                <MultiSelectFilter
+                label="COUNTRY"
+                options={countryOptions}
+                selected={countriesSet}
+                setSelected={(s) => patch({ countries: [...s] })}
+                enabled={ui.countryMode}
+                toggleEnabled={() => patch({ countryMode: ui.countryMode === "off" ? "include" : ui.countryMode === "include" ? "exclude" : "off" })}
+              />
+                <MultiSelectFilter
+                  label="EXCHANGE"
+                  options={exchangeOptions}
+                  selected={exchangesSet}
+                  setSelected={(s) => patch({ exchanges: [...s] })}
+                  enabled={ui.exchangeMode}
+                  toggleEnabled={() => patch({ exchangeMode: ui.exchangeMode === "off" ? "include" : ui.exchangeMode === "include" ? "exclude" : "off" })}
+                />
+              <MultiSelectFilter
+                label="SECTOR"
+                options={sectorOptions}
+                selected={sectorsSet}
+                setSelected={(s) => patch({ sectors: [...s] })}
+                enabled={ui.sectorMode}
+                toggleEnabled={() => patch({ sectorMode: ui.sectorMode === "off" ? "include" : ui.sectorMode === "include" ? "exclude" : "off" })}
+              />
+            </>
+          }
+        />
+
+        {/* Below the shared row: the controls that are this page's own. */}
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => patch({ excludeEtf: !ui.excludeEtf })}
-            className={btn(ui.excludeEtf)}
-            title="Drop every ticker DailyStaticStore says is an ETF (a ticker with no ETF data yet still passes)"
-          >
-            EXCL ETF
-          </button>
-          <MultiSelectFilter
-            label="COUNTRY"
-            options={countryOptions}
-            selected={countriesSet}
-            setSelected={(s) => patch({ countries: [...s] })}
-            enabled={ui.countryMode}
-            toggleEnabled={() => patch({ countryMode: ui.countryMode === "off" ? "include" : ui.countryMode === "include" ? "exclude" : "off" })}
-          />
-          <MultiSelectFilter
-            label="SECTOR"
-            options={sectorOptions}
-            selected={sectorsSet}
-            setSelected={(s) => patch({ sectors: [...s] })}
-            enabled={ui.sectorMode}
-            toggleEnabled={() => patch({ sectorMode: ui.sectorMode === "off" ? "include" : ui.sectorMode === "include" ? "exclude" : "off" })}
-          />
-          <SpinnerInput label="CAP %" ariaLabel="cap" title="A trade whose |P&L| exceeds this many percentage points is a Stack% data fault, not a trade, and is dropped. 0 = keep everything."
-            value={ui.capPct} onChange={(v) => patch({ capPct: v })} step={5} min={0} decimals={1} />
+          {/* SIDE / WINDOW / SORT / DAILY-TRADE: this page's own controls, so they sit on its
+              own line rather than in the class row, which is the Scanner's row and holds only
+              what the Scanner has there. */}
+          {separator}
+          <div className={groupClass}>
+            {SIDES.map((s) => (
+              <button key={s.key} type="button" onClick={() => { patch({ side: s.key }); setSelected(null); }} className={btn(ui.side === s.key)} title={s.hint}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          {separator}
+          <div className={groupClass}>
+            {WINDOWS.map((w) => (
+              <button key={w} type="button" onClick={() => patch({ window: w })} className={btn(ui.window === w)} title={`the last ${w} sessions in the file`}>
+                {w}D
+              </button>
+            ))}
+          </div>
+          {separator}
+          <div className={groupClass} title="How the market stands at the open: SPY+QQQ from the previous 16:00 close to 09:30">
+            {REGIMES.map((r) => (
+              <button key={r.key} type="button" onClick={() => patch({ regime: r.key })} className={btn(ui.regime === r.key)}
+              title={`${r.hint} — ${regimeCounts[r.key] ?? 0} of ${regimeCounts.all ?? 0} sessions in the current window`}>
+                {r.label}
+              </button>
+            ))}
+          </div>
+            {separator}
+            <div className={groupClass} title="Sort the table (click the active one again to flip)">
+              {SORT_BUTTONS.map((s) => (
+                <button key={s.key} type="button" onClick={() => onSort(s.key)} className={btn(ui.sortKey === s.key)}>
+                  {s.label}{sortMark(ui.sortKey === s.key, ui.sortDir)}
+                </button>
+              ))}
+            </div>
+            {separator}
+            <div className={groupClass}>
+              {(["daily", "trade"] as ScoutCurveMode[]).map((m) => (
+                <button key={m} type="button" onClick={() => patch({ curveMode: m })} className={btn(ui.curveMode === m)}
+                  title={m === "daily" ? "one point per session" : "one point per trade, in date order"}>
+                  {m === "daily" ? "DAILY" : "TRADE"}
+                </button>
+              ))}
+            </div>
           <SpinnerInput label="SIZE $" ariaLabel="position size" title="Position size per trade"
             value={ui.sizeUsd} onChange={(v) => patch({ sizeUsd: v })} step={100} min={0} decimals={0} widthClass="w-16" />
           <button
@@ -623,25 +958,6 @@ export default function ArbitrageScout() {
               {selectedTicker} <span aria-hidden="true">✕</span>
             </button>
           )}
-          <div className="ml-auto">
-            <ScoutUnitBar
-              options={MODES.map((m) => ({
-                key: m,
-                label: SCOUT_MODES[m].label === "δ" ? "Δ" : SCOUT_MODES[m].label,
-                title: (m === "gamma" || m === "delta") && !levelsOk ? "gamma/delta are not published in the current best_params file" : SCOUT_MODES[m].hint,
-                locked: (m === "gamma" || m === "delta") && !levelsOk,
-              }))}
-              mode={ui.mode}
-              onMode={(m) => patch({ mode: m })}
-              start={ui.bounds[ui.mode].start}
-              to={ui.bounds[ui.mode].to}
-              onStart={(v) => setBound("start", v)}
-              onTo={(v) => setBound("to", v)}
-              step={modeInfo.step}
-              subject="entries"
-              unitHint={modeInfo.hint}
-            />
-          </div>
         </div>
 
         {optOpen && (
@@ -920,7 +1236,7 @@ export default function ArbitrageScout() {
                     {tradeRows.slice(0, tradesShown).map((t, idx) => (
                       <tr key={idx} className="border-t border-white/[0.04] hover:bg-white/[0.03]">
                         <td className="whitespace-nowrap px-2.5 py-[5px] text-left font-bold text-zinc-100">{t.ticker}</td>
-                        <td className="whitespace-nowrap px-2.5 py-[5px] text-left text-zinc-400">{meta.recentDates[t.date] ?? "—"}</td>
+                        <td className="whitespace-nowrap px-2.5 py-[5px] text-left text-zinc-400">{fmtSessionDate(meta.recentDates[t.date]) || "—"}</td>
                         <td className={clsx("whitespace-nowrap px-2.5 py-[5px] text-right font-bold", t.side === "short" ? "text-sky-300" : "text-amber-300")}>
                           {t.side.toUpperCase()}
                         </td>

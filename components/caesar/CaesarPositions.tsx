@@ -327,6 +327,8 @@ const STRATEGY_DISPLAY_LABEL: Record<string, string> = {
   opgreversal: "OPG•REVERSAL",
   opgcontinuum: "OPG•CONTINUUM",
   opgfade: "OPG•FADE",
+  stretchfade: "STRETCH•FADE",
+  stretchride: "STRETCH•RIDE",
   opgrootation: "OPG•ROOTATION",
   [CLO_HEDGE_KEY]: "HEDGE•CLO",
   [ARBITRAGE_HEDGE_KEY]: "HEDGE•ARBITRAGE",

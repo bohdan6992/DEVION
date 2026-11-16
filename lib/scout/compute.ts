@@ -6,6 +6,8 @@
  * tested against an independent implementation.
  */
 
+import { inSelectedRegions } from "../filters/region";
+import { rowExcludedByBorrow } from "../filters/borrow";
 import type {
   ScoutAnalyticsSummary,
   ScoutClass,
@@ -32,6 +34,7 @@ export const SCOUT_MODES: Record<ScoutMode, { label: string; unit: string; step:
   sigma: { label: "σ", unit: "σ", step: 0.1, hint: "|dev_sig| at entry — the unit the classes trigger on" },
   gamma: { label: "γ", unit: "×γ", step: 0.1, hint: "multiple of the ticker's own gamma level (best reversal-entry deviation)" },
   delta: { label: "δ", unit: "×δ", step: 0.1, hint: "multiple of the ticker's own |delta| (median dev_sig at the 09:30 open, last 5 days)" },
+  alpha: { label: "α", unit: "×α", step: 0.1, hint: "multiple of the ticker's own published alpha level for the side of the trade" },
 };
 
 const NAN = Number.NaN;
@@ -63,6 +66,9 @@ export function decodeMeta(w: ScoutMetaWire): ScoutMeta {
     model0402: w.meta.model0402 === true,
     pnlBasis: w.meta.pnlBasis,
     recentDates: w.meta.recentDates,
+    // Pad rather than trust the lengths to agree: a short array would otherwise read
+    // `undefined` for the newest sessions and drop them from every bucket at once.
+    regimes: w.meta.recentDates.map((_, i) => w.meta.regimes?.[i] ?? "UNKNOWN"),
     tickers: w.tickers.map((r) => ({
       t: r.t,
       bench: r.bench,
@@ -73,9 +79,18 @@ export function decodeMeta(w: ScoutMetaWire): ScoutMeta {
       delta: [num(r.dp), num(r.dn)],
       alpha: [num(r.ap), num(r.an)],
       rating: decodeRatings(r.rt),
+      ratingAsOf: r.rtAsOf !== undefined ? decodeRatings(r.rtAsOf) : undefined,
+      ratingExpo: r.rtExpo !== undefined ? decodeRatings(r.rtExpo) : undefined,
       etf: r.etf ?? null,
       country: r.country ?? null,
       sector: r.sector ?? null,
+      exchange: r.exchange ?? null,
+      ptp: r.ptp ?? null,
+      ssrOut: r.ssrOut ?? null,
+      crap: r.crap ?? null,
+      rep: r.rep ?? null,
+      etb: r.etb ?? null,
+      news: r.news ?? null,
     })),
   };
 }
@@ -142,6 +157,13 @@ function startValue(mode: ScoutMode, s: ScoutSlice, i: number, signIdx: 0 | 1, m
       const d = Math.abs(meta.tickers[s.ticker[i]].delta[signIdx]);
       return d > 0 ? s.startDev[i] / d : NAN;
     }
+    case "alpha": {
+      // Same shape as gamma/delta: the entry deviation as a multiple of the ticker's own level for
+      // THIS side. A ticker with no published alpha yields NaN and drops out of the bound, which is
+      // the house rule for a row missing the field a filter reads.
+      const a = Math.abs(meta.tickers[s.ticker[i]].alpha[signIdx]);
+      return a > 0 ? s.startDev[i] / a : NAN;
+    }
   }
 }
 
@@ -160,6 +182,22 @@ function inBound(v: number, b: { min: number | null; max: number | null }): bool
 function tickerAllowed(meta: ScoutMeta, p: ScoutParams, t: number): boolean {
   const tk = meta.tickers[t];
   if (p.excludeEtf && tk.etf === true) return false;
+  // ITB/HARD go through the ONE borrow reader every surface shares, so the ITB/NO/YES spelling
+  // and the "missing status is also excluded" rule live in a single place. `etb` is as of the
+  // newest tape day that knew this ticker - a day snapshot, which is what a reference table wants.
+  if ((p.excludeItb || p.excludeHard) && rowExcludedByBorrow({ b5etb: tk.etb }, p.excludeItb, p.excludeHard)) return false;
+  if (p.excludePtp && tk.ptp === true) return false;
+  if (p.excludeSsr && tk.ssrOut === true) return false;
+  if (p.excludeCrap && tk.crap === true) return false;
+  if (p.excludeNews && tk.news === true) return false;
+  if (p.excludeReport && tk.rep === true) return false;
+  if (p.exchangeMode !== "off" && p.exchanges.size > 0) {
+    const has = tk.exchange != null && p.exchanges.has(tk.exchange);
+    if (p.exchangeMode === "include" && !has) return false;
+    if (p.exchangeMode === "exclude" && has) return false;
+  }
+  // The tape spells it "UNITED STATES"; see lib/filters/region.ts for why this is not inline.
+  if (!inSelectedRegions(tk.country, p.includeUsa, p.includeChina)) return false;
   if (!inBound(tk.corr, p.ranges.corr)) return false;
   if (!inBound(Math.abs(tk.beta), p.ranges.beta)) return false; // magnitude, like the Scanner's box
   if (!inBound(tk.sigma, p.ranges.sigma)) return false;
@@ -183,10 +221,34 @@ function tickerAllowed(meta: ScoutMeta, p: ScoutParams, t: number): boolean {
  * with no published rating is rejected, like every other filter on a missing field; with both
  * gates at 0 nothing is being asked, so it passes.
  */
+/**
+ * ASOF/EXPO fall back to the always-present published `rating` when the bridge has not been rebuilt
+ * with `ratingAsOf`/`ratingExpo` yet - the same fallback ArbitrageSpectr makes, so a ticker reads
+ * the same on both pages rather than one of them silently showing nothing.
+ */
+function pickRatingTable(t: ScoutTicker, mode: ScoutParams["ratingMode"]): ScoutTicker["rating"] {
+  if (mode === "asof") return t.ratingAsOf ?? t.rating;
+  if (mode === "asofew") return t.ratingExpo ?? t.rating;
+  return t.rating;
+}
+
+/**
+ * ANY/HARD/SOFT changes which count is the TOTAL - all situations, or just the ones that hit the
+ * hard bar, or just the soft one - and NEVER the rate. That is ArbitrageAsOfRatings.TryGet's own
+ * documented contract on the bridge. A zero count under a rule that does not define it falls back
+ * to the plain total rather than reading as "no evidence".
+ */
+function effectiveTotal(r: ScoutRating, outcome: ScoutParams["outcomeType"]): number {
+  if (outcome === "hard") return r.hard > 0 ? r.hard : r.total;
+  if (outcome === "soft") return r.soft > 0 ? r.soft : r.total;
+  return r.total;
+}
+
 function ratingPasses(cell: ScoutRating | null, p: ScoutParams): boolean {
+  if (p.ratingsIgnored) return true;
   if (p.minRate <= 0 && p.minTotal <= 0) return true;
   if (!cell) return false;
-  return cell.total >= p.minTotal && cell.rate + EPS >= p.minRate;
+  return effectiveTotal(cell, p.outcomeType) >= p.minTotal && cell.rate + EPS >= p.minRate;
 }
 
 /**
@@ -206,8 +268,16 @@ export function scan(
 ): number {
   const D = meta.recentDates.length;
   const minDate = Math.max(0, D - p.window);
-  const hasStart = p.start > 0;
-  const hasTo = p.to > 0 && p.to > p.start;
+  // Which nights count. meta.regimes is parallel to recentDates, so the trade's own date index
+  // reads its label directly. An empty array means the bridge has not published the file yet -
+  // then "all" is the only setting that can match and the others legitimately show nothing.
+  const regimeWanted = p.regime === "all" ? null : p.regime.toUpperCase();
+
+  // Split threshold, as on the Scanner: coral is the SHORT (pos) side, mint the LONG (neg) one.
+  // A mint of 0 means "as short", so the pair behaves exactly as the single box did before.
+  const startPos = p.start;
+  const startNeg = p.startNeg > 0 ? p.startNeg : p.start;
+  const hasTo = p.to > 0 && p.to > Math.min(startPos, startNeg);
   const needsScale = p.mode === "gamma" || p.mode === "delta";
   let cappedOut = 0;
 
@@ -216,10 +286,11 @@ export function scan(
     const signIdx: 0 | 1 = s.sign === "pos" ? 0 : 1;
     for (let i = 0; i < s.n; i++) {
       if (s.date[i] < minDate) continue;
+      if (regimeWanted !== null && meta.regimes[s.date[i]] !== regimeWanted) continue;
       if (!tickerAllowed(meta, p, s.ticker[i])) continue;
       // PRE has two separate sets of trades: the ordinary 21:00 model and the 04:02 one; the toggle picks which
       if (s.cls === "pre" && s.alt[i] !== (p.model0402 ? 1 : 0)) continue;
-      if (!ratingPasses(meta.tickers[s.ticker[i]].rating[s.cls][s.sign], p)) continue;
+      if (!ratingPasses(pickRatingTable(meta.tickers[s.ticker[i]], p.ratingMode)[s.cls][s.sign], p)) continue;
       if (!inBound(Math.abs(meta.tickers[s.ticker[i]].alpha[signIdx]), p.ranges.alpha)) continue; // the trade's own side
 
       const pnl = s.pnl[i];
@@ -230,9 +301,10 @@ export function scan(
 
       const v = startValue(p.mode, s, i, signIdx, meta);
       if (v !== v) {
-        if (needsScale || hasStart || hasTo) continue;
+        if (needsScale || startPos > 0 || startNeg > 0 || hasTo) continue;
       } else {
-        if (hasStart && v + EPS < p.start) continue;
+        const floor = signIdx === 0 ? startPos : startNeg;
+        if (floor > 0 && v + EPS < floor) continue;
         if (hasTo && v - EPS > p.to) continue;
       }
       visit(si, i, v);
@@ -242,12 +314,13 @@ export function scan(
 }
 
 /** The entry deviation in every unit the START/TO threshold can be set in, for one trade. */
-export function devAllModes(meta: ScoutMeta, s: ScoutSlice, i: number, signIdx: 0 | 1): { pct: number; sigma: number; gamma: number; delta: number } {
+export function devAllModes(meta: ScoutMeta, s: ScoutSlice, i: number, signIdx: 0 | 1): { pct: number; sigma: number; gamma: number; delta: number; alpha: number } {
   return {
     pct: Math.abs(s.gap[i]),
     sigma: s.startDev[i],
     gamma: startValue("gamma", s, i, signIdx, meta),
     delta: startValue("delta", s, i, signIdx, meta),
+    alpha: startValue("alpha", s, i, signIdx, meta),
   };
 }
 
@@ -316,12 +389,16 @@ export function computeScout(meta: ScoutMeta, slices: ScoutSlice[], p: ScoutPara
     tickersInScope++;
     pass[t] = 1;
 
+    // The SAME table the gate read in scan(), not the published one: a RATING column showing LIVE
+    // while the gate admitted on ASOF is the kind of disagreement that reads as a broken filter.
+    // The TOTAL follows ANY/HARD/SOFT for the same reason - it is what MINTOTAL was compared with.
+    const rtbl = pickRatingTable(meta.tickers[t], p.ratingMode);
     let pubTotal = 0, pubRate = 0, pubHard = 0, pubSoft = 0;
     for (const s of slices) {
-      const c = meta.tickers[t].rating[s.cls][s.sign];
+      const c = rtbl[s.cls][s.sign];
       if (!c) continue;
-      pubTotal += c.total;
-      pubRate += c.rate * c.total;
+      pubTotal += effectiveTotal(c, p.outcomeType);
+      pubRate += c.rate * effectiveTotal(c, p.outcomeType);
       pubHard += c.hard;
       pubSoft += c.soft;
     }

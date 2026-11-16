@@ -190,6 +190,7 @@ type ArbitrageScannerProps = {
   navScannerHref?: string;
   navSonarHref?: string;
   navScoutHref?: string;
+  navSpectrHref?: string;
 };
 
 const ACTIVE_TICKER_STRATEGY = "reversal" as const;
@@ -238,6 +239,7 @@ export default function ReversalScanner({
   navScannerHref = STRATEGY.nav.scanner,
   navSonarHref = STRATEGY.nav.sonar,
   navScoutHref = STRATEGY.nav.scout,
+  navSpectrHref = STRATEGY.nav.spectr,
 }: ArbitrageScannerProps) {
   const filtersLsKey = `${lsKeyPrefix}.filters.v1`;
   const presetIdLsKey = `${lsKeyPrefix}.shared-preset.active-id`;
@@ -5860,6 +5862,7 @@ export default function ReversalScanner({
           navScannerHref={navScannerHref}
           navSonarHref={navSonarHref}
           navScoutHref={navScoutHref}
+          navSpectrHref={navSpectrHref}
           primaryPanel={primaryPanel}
           listMode={listMode}
           ignCount={ignCount}

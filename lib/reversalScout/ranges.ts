@@ -7,12 +7,12 @@
 
 import type { ReversalBound, ReversalRanges } from "./types";
 
-export type RangeKey = "alpha" | "sigma";
+export type RangeKey = "alpha" | "sigma" | "gamma";
 export type RangeText = Record<RangeKey, { min: string; max: string }>;
 
-export const RANGE_KEYS: readonly RangeKey[] = ["alpha", "sigma"];
+export const RANGE_KEYS: readonly RangeKey[] = ["alpha", "sigma", "gamma"];
 
-export const EMPTY_RANGE_TEXT: RangeText = { alpha: { min: "", max: "" }, sigma: { min: "", max: "" } };
+export const EMPTY_RANGE_TEXT: RangeText = { alpha: { min: "", max: "" }, sigma: { min: "", max: "" }, gamma: { min: "", max: "" } };
 
 export function parseBoundText(raw: string): number | null {
   const t = raw.trim().replace(",", ".");
@@ -25,11 +25,12 @@ export function parseRanges(t: RangeText): ReversalRanges {
   return {
     alpha: { min: parseBoundText(t.alpha.min), max: parseBoundText(t.alpha.max) } as ReversalBound,
     sigma: { min: parseBoundText(t.sigma.min), max: parseBoundText(t.sigma.max) } as ReversalBound,
+    gamma: { min: parseBoundText(t.gamma.min), max: parseBoundText(t.gamma.max) } as ReversalBound,
   };
 }
 
 export function loadRangeText(raw: unknown): RangeText {
-  const out: RangeText = { alpha: { min: "", max: "" }, sigma: { min: "", max: "" } };
+  const out: RangeText = { alpha: { min: "", max: "" }, sigma: { min: "", max: "" }, gamma: { min: "", max: "" } };
   if (!raw || typeof raw !== "object") return out;
   for (const k of RANGE_KEYS) {
     const b = (raw as Record<string, unknown>)[k] as { min?: unknown; max?: unknown } | undefined;

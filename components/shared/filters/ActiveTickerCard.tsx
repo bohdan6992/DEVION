@@ -127,6 +127,11 @@ export default function ActiveTickerCard({
           )}
         </div>
 
+        {/* Three independent children; with none of them present this row is an EMPTY flex
+            child and the card's own gap still reserves the space, which reads as uneven
+            padding. Guarded on the three together rather than hoisting any one of them,
+            because unlike the single-child case each of these can appear on its own. */}
+        {(lists || expanded || collapsed) && (
         <div className="flex flex-wrap items-center gap-2 self-start lg:self-center">
           {lists && (
             <>
@@ -184,6 +189,7 @@ export default function ActiveTickerCard({
             </button>
           )}
         </div>
+        )}
       </div>
 
       {(!collapsed || !collapsed.value) && children}

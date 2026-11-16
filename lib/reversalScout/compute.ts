@@ -5,6 +5,8 @@
  * hard/soft, no peak/gap.
  */
 
+import { inSelectedRegions } from "../filters/region";
+import { rowExcludedByBorrow } from "../filters/borrow";
 import type {
   ReversalAnalyticsSummary,
   ReversalClass,
@@ -60,6 +62,9 @@ export function decodeMeta(w: ReversalMetaWire): ReversalMeta {
     minDev: w.meta.minDev,
     pnlBasis: w.meta.pnlBasis,
     recentDates: w.meta.recentDates,
+    // Pad rather than trust the lengths to agree: a short array would otherwise read
+    // `undefined` for the newest sessions and drop them from every bucket at once.
+    regimes: w.meta.recentDates.map((_, i) => w.meta.regimes?.[i] ?? "UNKNOWN"),
     tickers: w.tickers.map((r) => {
       const rating = {} as ReversalTicker["rating"];
       for (const c of CLASS_KEYS) rating[c] = { pos: ratingCell(r.rt, c, "pos"), neg: ratingCell(r.rt, c, "neg") };
@@ -72,6 +77,13 @@ export function decodeMeta(w: ReversalMetaWire): ReversalMeta {
         etf: r.etf ?? null,
         country: r.country ?? null,
         sector: r.sector ?? null,
+        exchange: r.exchange ?? null,
+        ptp: r.ptp ?? null,
+        ssrOut: r.ssrOut ?? null,
+        crap: r.crap ?? null,
+        rep: r.rep ?? null,
+        etb: r.etb ?? null,
+        news: r.news ?? null,
       };
     }),
   };
@@ -137,6 +149,22 @@ function inBound(v: number, b: { min: number | null; max: number | null }): bool
 function tickerAllowed(meta: ReversalMeta, p: ReversalParams, t: number, sign: "pos" | "neg"): boolean {
   const tk = meta.tickers[t];
   if (p.excludeEtf && tk.etf === true) return false;
+  // ITB/HARD go through the ONE borrow reader every surface shares, so the ITB/NO/YES spelling
+  // and the "missing status is also excluded" rule live in a single place. `etb` is as of the
+  // newest tape day that knew this ticker - a day snapshot, which is what a reference table wants.
+  if ((p.excludeItb || p.excludeHard) && rowExcludedByBorrow({ b5etb: tk.etb }, p.excludeItb, p.excludeHard)) return false;
+  if (p.excludePtp && tk.ptp === true) return false;
+  if (p.excludeSsr && tk.ssrOut === true) return false;
+  if (p.excludeCrap && tk.crap === true) return false;
+  if (p.excludeNews && tk.news === true) return false;
+  if (p.excludeReport && tk.rep === true) return false;
+  if (p.exchangeMode !== "off" && p.exchanges.size > 0) {
+    const has = tk.exchange != null && p.exchanges.has(tk.exchange);
+    if (p.exchangeMode === "include" && !has) return false;
+    if (p.exchangeMode === "exclude" && has) return false;
+  }
+  // The tape spells it "UNITED STATES"; see lib/filters/region.ts for why this is not inline.
+  if (!inSelectedRegions(tk.country, p.includeUsa, p.includeChina)) return false;
   if (!inBound(alphaForSign(tk, sign), p.ranges.alpha)) return false;
   if (!inBound(tk.sigma, p.ranges.sigma)) return false;
   if (p.countryMode !== "off" && p.countries.size > 0) {
@@ -157,6 +185,13 @@ function tickerAllowed(meta: ReversalMeta, p: ReversalParams, t: number, sign: "
  * all-history figure, never a rate recomputed inside the 5/20/40/65D window.
  */
 function ratingPasses(cell: ReversalRating | null, p: ReversalParams): boolean {
+  // gamma belongs to the (class, sign) CELL, so it is checked here where the cell is in
+  // hand - tickerAllowed never sees the class. A level filter, so it also applies under
+  // UNIVERSE, which only drops the rating gate below it.
+  // NaN, not null: inBound already rejects NaN, which is the house rule - a cell with no
+  // published gamma fails a gamma bound rather than slipping through it.
+  if (!inBound(cell?.gamma ?? NaN, p.ranges.gamma)) return false;
+  if (p.ignoreRatings) return true;
   if (p.minRate <= 0 && p.minTotal <= 0) return true;
   if (!cell) return false;
   return cell.total >= p.minTotal && cell.winRate + EPS >= p.minRate;
@@ -170,6 +205,11 @@ export function scan(
 ): number {
   const D = meta.recentDates.length;
   const minDate = Math.max(0, D - p.window);
+  // Which nights count. meta.regimes is parallel to recentDates, so the trade's own date index
+  // reads its label directly. An empty array means the bridge has not published the file yet -
+  // then "all" is the only setting that can match and the others legitimately show nothing.
+  const regimeWanted = p.regime === "all" ? null : p.regime.toUpperCase();
+
   const hasStart = p.start > 0;
   const hasTo = p.to > 0 && p.to > p.start;
   const needsScale = p.mode !== "pct";
@@ -179,6 +219,7 @@ export function scan(
     const s = slices[si];
     for (let i = 0; i < s.n; i++) {
       if (s.date[i] < minDate) continue;
+      if (regimeWanted !== null && meta.regimes[s.date[i]] !== regimeWanted) continue;
       if (!tickerAllowed(meta, p, s.ticker[i], s.sign)) continue;
       if (!ratingPasses(meta.tickers[s.ticker[i]].rating[s.cls][s.sign], p)) continue;
 

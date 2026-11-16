@@ -30,6 +30,16 @@ export type PfScoutMode = "pct" | "sigma" | "gamma" | "alpha";
 
 export type PfScoutWindow = 5 | 20 | 40 | 65;
 export type PfScoutCurveMode = "daily" | "trade";
+/**
+ * Which kind of night a trade's own session followed, from SPY+QQQ over 16:00 -> 00:00
+ * (OvernightRegimeService on the bridge publishes one label per session).
+ *
+ * "unk" is a REAL bucket, not a synonym for flat: a third of sessions have no usable midnight
+ * print, and the two answers "nobody measured this night" and "this night did not move" must not
+ * be merged. "all" is the only setting that does no filtering at all.
+ */
+export type PfScoutRegime = "all" | "up" | "down" | "flat" | "mixed" | "unk";
+
 
 export type PfScoutSortKey =
   | "pair"
@@ -60,6 +70,11 @@ export type PfScoutMetaWire = {
     windowsDays: number[];
     /** Oldest → newest. An episode's date index points into this list. */
     recentDates: string[];
+    /**
+     * One label per entry of `recentDates`, same order and length. Absent on a bridge that
+     * predates the overnight-regime file; then every session reads as UNKNOWN.
+     */
+    regimes?: string[];
   };
   /** Row order == the pair index every episode slice refers to. */
   pairs: Array<{
@@ -142,11 +157,22 @@ export type PfScoutMeta = {
   model0402: boolean;
   pnlBasis: string | null;
   recentDates: string[];
+  /**
+   * Parallel to recentDates: entry i is how the market stood when session i OPENED - SPY+QQQ over
+   * 16:00 -> 09:30. The window ends at that session's own open, so there is no offset and, for
+   * anything entering at or after 09:30, the label is strictly known before entry. For a PRE class
+   * that TRADES 21:00 -> 09:30 it overlaps the trade's own window; the published file carries a
+   * strictly-earlier 16:00 -> 00:00 set for that case. "UNKNOWN" where it could not be measured -
+   * a real bucket, never folded into FLAT.
+   */
+  regimes: string[];
   pairs: PfScoutPair[];
 };
 
 export type PfScoutParams = {
   window: PfScoutWindow;
+  /** Keep only the sessions whose 16:00->00:00 night carried this label; "all" = no gate. */
+  regime: PfScoutRegime;
   mode: PfScoutMode;
   /** lower bound, in `mode` units; 0 = no bound */
   start: number;
@@ -154,6 +180,8 @@ export type PfScoutParams = {
   to: number;
   minRate: number;
   minTotal: number;
+  /** UNIVERSE: drop the MINRATE/MINTOTAL gate entirely (the range boxes still apply). */
+  ignoreRatings: boolean;
   /** ρ/β/σ/α of the PAIR for the episode's own class; a set bound rejects a pair with no such number */
   ranges: ScoutRanges;
   /**

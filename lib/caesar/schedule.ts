@@ -195,12 +195,18 @@ export function segmentRangeLabel(seg: CaesarSegment): string {
  * from its own left edge forward, so an entry at 09:22 simply never happened as far as that chart's
  * own window could see, even though it is completely real (operator's own report, 2026-10-21).
  *
+ * Widened again to 09:15 (2026-11-15) for OPG•STRETCH, whose window starts there and whose entry
+ * is the triggering minute itself rather than the open — so an entry at 09:16 is a real fill, not
+ * a signal waiting for 09:30, and the 09:20 edge would have clipped the first four minutes of them.
+ * This constant is now the EARLIEST SignalFromMin in the OPEN family, not a round number: a new OPG
+ * strategy that signals earlier has to move it again.
+ *
  * Visual/data-window only — the ruler/SessionBar (DISPLAY_SEGMENTS/caesarSegmentsForDisplay) still
  * show OPEN starting at its own real 09:30, and the plan/cutoff logic this function never touches
  * stays on 09:30 too; only the charts' own window widens backward to show what already happened.
  */
 export function chartFromMinFor(segmentKey: CaesarSegmentKey, segment: CaesarSegment): number {
-  if (segmentKey === "open") return axisMinutes(9, 20);
+  if (segmentKey === "open") return axisMinutes(9, 15);
   return segment.fromMin;
 }
 

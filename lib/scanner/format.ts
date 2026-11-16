@@ -226,3 +226,18 @@ export function ratePctToFraction(raw: any): number {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.round(n * 10) / 1000);
 }
+
+/**
+ * A session date as people read it: `13.08`, or `13.08.2026` when the year matters.
+ *
+ * The notebooks publish session dates compactly (`20260813`) and the older files use dashes, so
+ * both spellings reach the UI. Printing the raw key is what put `20260813` on a chart axis and in
+ * the SESSIONS line; this is the one place that decides how a session date looks.
+ */
+export function fmtSessionDate(raw: string | null | undefined, withYear = false): string {
+  const t = String(raw ?? "").trim();
+  const m = t.match(/^(\d{4})-?(\d{2})-?(\d{2})$/);
+  if (!m) return t;
+  const [, y, mo, d] = m;
+  return withYear ? `${d}.${mo}.${y}` : `${d}.${mo}`;
+}

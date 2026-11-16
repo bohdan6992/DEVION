@@ -22,6 +22,11 @@ export const STRATEGY_CATALOG: StrategyMeta[] = [
   { key: "opgFade", name: "OPG•Fade", icon: "🌅", description: "Фейд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
   { key: "opgRide", name: "OPG•Ride", icon: "🏄", description: "Проїзд відхилення від бенчмарку (ZAP%) навколо відкриття ринку, вхід по ціні оупена." },
   { key: "opgRootation", name: "OPG•Rootation", icon: "🔄", description: "О 9:30:40 порівнює ціну з ціною на 9:30: вище — бай, нижче — сел, лімітна ціна = ціна на 9:30." },
+  // The only OPG-family entry that does NOT fill at the open: the triggering minute inside
+  // 09:15-09:21 is the fill and 09:30 is the exit. Its signal is ZAP SIG (dev_sig), in SIGMAS, not
+  // ZAP% — see StretchFadeGate.cs. Key lowercases to the registry/bridge key "stretchfade".
+  { key: "stretchFade", name: "STRETCH•FADE", icon: "📐", description: "Тікери, що вже стоять більше ніж на 1σ від бенчмарку на 9:15-9:21 (ZAP SIG): плюс — продаємо, мінус — купуємо. Вхід на тій же хвилині, вихід о 9:30." },
+  { key: "stretchRide", name: "STRETCH•RIDE", icon: "🏄", description: "Те саме відхилення (ZAP SIG, 9:15-9:21), але за рухом: плюс — купуємо, мінус — продаємо. Вхід на тій же хвилині, вихід о 9:30." },
   { key: "earnings", name: "Earnings", icon: "🧳", description: "Рухи навколо звітності та пост-ефект." },
   { key: "gap", name: "Gap Play", icon: "⛳️", description: "Гепи та їх відпрацювання." },
   { key: "pullback", name: "PullBack", icon: "🪝", description: "Стак, що стоїть задалеко від вчорашнього закриття, розвертаємо о 4:30/5:00/5:30, вихід гепом." },
